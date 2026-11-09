@@ -1,5 +1,5 @@
 //! Pure two-way merge, following SyncKit's numbered rules (brief rules 1–7).
-use mypass_kdbx::{Database, DeletedObject, Entry, Group, Timestamp};
+use mypass_kdbx::{Database, DeletedObject, Entry, Group, Timestamp, MAX_GROUP_DEPTH};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use uuid::Uuid;
 
@@ -77,6 +77,7 @@ fn merge_entry(l: &Entry, r: &Entry) -> Entry {
     };
     let mut out = winner.clone();
     let mut seen = HashSet::new();
+    // Swift parity: retain existing snapshots even when identical to current.
     out.history = winner
         .history
         .iter()
@@ -98,9 +99,9 @@ fn merge_entry(l: &Entry, r: &Entry) -> Entry {
 
 /// Merge without I/O or mutation. Children and tombstones are sorted by UUID bytes.
 /// Duplicate UUIDs within either side keep the first preorder occurrence. Group
-/// parent ambiguity prefers local (Swift has no group-move clock rule). Cyclic or
-/// missing parent chains attach to root. Output depth is capped at the KDBX limit
-/// of 93 groups by reattaching deeper groups to root, retaining their contents.
+/// parents follow the greater location_changed clock, with local winning ties.
+/// Cyclic or missing parent chains attach to root. Output depth is capped at
+/// MAX_GROUP_DEPTH by reattaching deeper groups to root, retaining their contents.
 pub fn merge(local: &Database, remote: &Database) -> Database {
     let root = local.root.uuid;
     // D1 / Swift rule 9: unlike Swift's early return, alias different roots and
@@ -136,6 +137,8 @@ pub fn merge(local: &Database, remote: &Database) -> Database {
             .max()
             .is_none_or(|modified| modified <= *time)
     });
+    // The root is always live, including when a peer tombstones its UUID.
+    deleted.remove(&root);
     let ids: HashSet<_> = l.groups.keys().chain(r.groups.keys()).copied().collect();
     let mut groups = HashMap::new();
     let mut parents = BTreeMap::new();
@@ -145,20 +148,34 @@ pub fn merge(local: &Database, remote: &Database) -> Database {
         }
         let a = l.groups.get(&id);
         let b = r.groups.get(&id);
-        let (newer, older, parent) = match (a, b) {
-            (Some((a, p)), Some((b, _)))
+        // Rule 6 applies to groups as well as entries. Content and location
+        // clocks arbitrate independently; preserve the winning parent's clock.
+        let (parent, location_changed) = match (a, b) {
+            (Some((a, ap)), Some((b, bp))) => {
+                if a.location_changed >= b.location_changed {
+                    (*ap, a.location_changed)
+                } else {
+                    (*bp, b.location_changed)
+                }
+            }
+            (Some((g, p)), None) | (None, Some((g, p))) => (*p, g.location_changed),
+            (None, None) => continue,
+        };
+        let (newer, older) = match (a, b) {
+            (Some((a, _)), Some((b, _)))
                 if a.modified >= b.modified
                     || (id == root && local.root.uuid != remote.root.uuid) =>
             {
-                (*a, Some(*b), *p)
+                (*a, Some(*b))
             }
-            (Some((a, p)), Some((b, _))) => (*b, Some(*a), *p),
-            (Some((a, p)), None) | (None, Some((a, p))) => (*a, None, *p),
+            (Some((a, _)), Some((b, _))) => (*b, Some(*a)),
+            (Some((a, _)), None) | (None, Some((a, _))) => (*a, None),
             (None, None) => continue,
         };
         // Rule 3: metadata and custom-data union are independent of child merge.
         let mut g = metadata(newer);
         g.uuid = id;
+        g.location_changed = location_changed;
         let mut custom = BTreeMap::new();
         for c in older
             .into_iter()
@@ -194,7 +211,7 @@ pub fn merge(local: &Database, remote: &Database) -> Database {
         }
         order.push(id);
         for child in children.remove(&id).unwrap_or_default() {
-            let (parent, next_depth) = if depth >= 93 {
+            let (parent, next_depth) = if depth >= MAX_GROUP_DEPTH {
                 (root, 2)
             } else {
                 (id, depth + 1)
@@ -219,14 +236,14 @@ pub fn merge(local: &Database, remote: &Database) -> Database {
         let (entry, parent) = match (l.entries.get(&id), r.entries.get(&id)) {
             (Some((a, ap)), Some((b, bp))) => {
                 // Rule 6: location, independently of content; ties favour local.
-                (
-                    merge_entry(a, b),
-                    if a.location_changed >= b.location_changed {
-                        *ap
-                    } else {
-                        *bp
-                    },
-                )
+                let (parent, location) = if a.location_changed >= b.location_changed {
+                    (*ap, a.location_changed)
+                } else {
+                    (*bp, b.location_changed)
+                };
+                let mut entry = merge_entry(a, b);
+                entry.location_changed = location;
+                (entry, parent)
             }
             (Some((a, p)), None) | (None, Some((a, p))) => ((*a).clone(), *p), // Rule 1
             (None, None) => continue,
@@ -445,6 +462,87 @@ mod tests {
     #[test]
     fn move_tie_prefers_local() {
         moved(1000, 1000, 1);
+    }
+    fn group_moved(lt: i64, rt: i64, want_remote: bool) {
+        let mut l = make_db(vec![]);
+        let mut r = l.clone();
+        let mut a = group(5);
+        a.location_changed = Timestamp(lt);
+        let mut bin = group(9);
+        bin.groups.push(a.clone());
+        l.root.groups.push(bin);
+        a.location_changed = Timestamp(rt);
+        r.root.groups = vec![a, group(9)];
+        let m = merge(&l, &r);
+        if want_remote {
+            assert_eq!(m.root.groups[0].uuid, Uuid::from_u128(5));
+            assert_eq!(m.root.groups[0].location_changed, Timestamp(rt));
+        } else {
+            assert_eq!(m.root.groups[0].groups[0].uuid, Uuid::from_u128(5));
+            assert_eq!(m.root.groups[0].groups[0].location_changed, Timestamp(lt));
+        }
+    }
+    #[test]
+    fn group_move_remote_newer_location_wins() {
+        group_moved(1000, 9000, true);
+    }
+    #[test]
+    fn group_move_local_newer_location_wins() {
+        group_moved(9000, 1000, false);
+    }
+    #[test]
+    fn group_move_tie_prefers_local() {
+        group_moved(1000, 1000, false);
+    }
+    #[test]
+    fn recycle_bin_restore_of_group_is_not_reverted() {
+        let mut l = make_db(vec![]);
+        let mut r = l.clone();
+        let mut bin = group(9);
+        bin.groups.push(group(5));
+        l.root.groups.push(bin);
+        l.meta.recycle_bin_uuid = Some(Uuid::from_u128(9));
+        r.root.groups = vec![group(5), group(9)];
+        r.root.groups[0].location_changed = Timestamp(9000);
+        let m = merge(&l, &r);
+        assert_eq!(m.root.groups[0].uuid, Uuid::from_u128(5));
+        assert_eq!(m.root, merge(&r, &l).root);
+    }
+    #[test]
+    fn location_changed_follows_the_winning_parent() {
+        let mut l = make_db(vec![make_entry(1, "new content", 8000)]);
+        let mut r = make_db(vec![]);
+        l.root.entries[0].location_changed = Timestamp(1000);
+        let mut target = group(2);
+        let mut e = make_entry(1, "old content", 2000);
+        e.location_changed = Timestamp(9000);
+        target.entries.push(e);
+        r.root.groups.push(target);
+        let mut g = group(5);
+        g.modified = Timestamp(8000);
+        g.location_changed = Timestamp(1000);
+        l.root.groups.push(g.clone());
+        g.modified = Timestamp(2000);
+        g.location_changed = Timestamp(9000);
+        r.root.groups[0].groups.push(g);
+        let m = merge(&l, &r);
+        let e = &m.root.groups[0].entries[0];
+        assert_eq!(e.title(), "new content");
+        assert_eq!(e.location_changed, Timestamp(9000));
+        let g = &m.root.groups[0].groups[0];
+        assert_eq!(g.modified, Timestamp(8000));
+        assert_eq!(g.location_changed, Timestamp(9000));
+    }
+    #[test]
+    fn root_tombstone_is_dropped() {
+        let mut l = make_db(vec![]);
+        l.deleted_objects.push(DeletedObject {
+            uuid: l.root.uuid,
+            deleted_at: Timestamp(9000),
+        });
+        let m = merge(&l, &l);
+        assert_eq!(m.root.uuid, l.root.uuid);
+        assert!(m.deleted_objects.is_empty());
     }
     #[test]
     fn deleted_objects_union_keeps_later_deletion_time() {
@@ -691,11 +789,14 @@ mod tests {
         let mut count = 0;
         let mut stack = vec![(&m.root, 1)];
         while let Some((g, depth)) = stack.pop() {
-            assert!(depth <= 93);
+            assert!(depth <= MAX_GROUP_DEPTH);
             count += 1;
             stack.extend(g.groups.iter().map(|g| (g, depth + 1)));
         }
         assert_eq!(count, 2001);
+        let password = secrecy::SecretString::from("test-only");
+        let reopened = Database::open(&m.save(&password).unwrap(), &password).unwrap();
+        assert_eq!(reopened, m);
         // Iteratively dismantle the deliberately hostile input as Group's derived Drop is recursive.
         let mut stack = std::mem::take(&mut l.root.groups);
         while let Some(mut g) = stack.pop() {

@@ -32,5 +32,6 @@ pub(crate) const MAX_DECOMPRESSED_LEN: u64 = 1 << 30;
 /// Deepest accepted XML element nesting.
 pub(crate) const MAX_XML_DEPTH: usize = 100;
 
-/// Group chain budget reserves KeePassFile/Root and Entry/History/Entry/String/Value.
-pub(crate) const MAX_GROUP_DEPTH: usize = MAX_XML_DEPTH - 7;
+/// Maximum serializable group chain depth, including the root group.
+/// Reserves KeePassFile/Root and Entry/History/Entry/String/Value XML nesting.
+pub const MAX_GROUP_DEPTH: usize = MAX_XML_DEPTH - 7;
