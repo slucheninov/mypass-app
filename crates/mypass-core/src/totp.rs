@@ -110,12 +110,14 @@ fn hmac_digest<D: EagerHash>(
 /// characters and empty decoded results are rejected. The caller owns and must
 /// protect the returned bytes; temporary normalized and decoded buffers are wiped.
 pub fn base32_decode(input: &str) -> Option<Vec<u8>> {
-    let mut normalized = Zeroizing::new(
+    // Reserve once, including completion padding, so normalized secret fragments
+    // are not left in old allocations during growth.
+    let mut normalized = Zeroizing::new(String::with_capacity(input.len().checked_add(7)?));
+    normalized.extend(
         input
             .chars()
             .filter(|c| !matches!(c, ' ' | '-' | '='))
-            .map(|c| c.to_ascii_uppercase())
-            .collect::<String>(),
+            .map(|c| c.to_ascii_uppercase()),
     );
     let output_len = normalized.len().checked_mul(5)? / 8;
     if output_len == 0 {
@@ -124,7 +126,7 @@ pub fn base32_decode(input: &str) -> Option<Vec<u8>> {
     // Complete a block with zero symbols, then discard bytes from incomplete bits.
     // This lets the dependency validate the alphabet while matching Swift's
     // permissive length/trailing-bit behavior, without a hand-written codec.
-    while normalized.len() % 8 != 0 {
+    while !normalized.len().is_multiple_of(8) {
         normalized.push('A');
     }
     let encoding = data_encoding::BASE32_NOPAD;
@@ -376,7 +378,7 @@ mod tests {
     }
     #[test]
     fn parse_otpauth_full() {
-        let config=TotpConfig::parse("otpauth://totp/ACME:alice@example.com?secret=JBSWY3DPEHPK3PXP&issuer=ACME&digits=8&period=60&algorithm=SHA256").unwrap();
+        let config = TotpConfig::parse("otpauth://totp/ACME:alice@example.com?secret=JBSWY3DPEHPK3PXP&issuer=ACME&digits=8&period=60&algorithm=SHA256").unwrap();
         assert_eq!(&*config.secret, b"Hello!\xde\xad\xbe\xef");
         assert_eq!(
             (config.digits, config.period, config.algorithm),
@@ -399,7 +401,7 @@ mod tests {
             ("sha256", TotpAlgorithm::Sha256),
             ("sHa512", TotpAlgorithm::Sha512),
         ] {
-            let config=TotpConfig::parse(&format!("otpauth://totp/Label:with spaces<>?secret=%6d%7a%78%77%36%3d%3d%3d&algorithm={name}")).unwrap();
+            let config = TotpConfig::parse(&format!("otpauth://totp/Label:with spaces<>?secret=%6d%7a%78%77%36%3d%3d%3d&algorithm={name}")).unwrap();
             assert_eq!(&*config.secret, b"foo");
             assert_eq!(config.algorithm, algorithm);
         }

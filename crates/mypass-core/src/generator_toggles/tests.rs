@@ -111,7 +111,7 @@ fn effective_options_derives_without_mutating_the_users_own_choice() {
 }
 #[test]
 fn a_non_ascii_custom_class_member_counts_as_a_symbol() {
-    let r=parse_password_rules("minlength: 8; maxlength: 38; required: lower, upper; required: digit; allowed: [-\u{e4}\u{fc}\u{f6}\u{c4}\u{dc}\u{d6}\u{df}!$%&/()=?+#,.:];").unwrap();
+    let r = parse_password_rules("minlength: 8; maxlength: 38; required: lower, upper; required: digit; allowed: [-\u{e4}\u{fc}\u{f6}\u{c4}\u{dc}\u{d6}\u{df}!$%&/()=?+#,.:];").unwrap();
     assert_eq!(toggle_backed_class_of('\u{e4}'), Special);
     assert_eq!(toggle_backed_class_of('7'), Digit);
     assert_eq!(toggle_backed_class_of('Q'), Upper);
