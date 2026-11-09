@@ -264,7 +264,9 @@ skipped. Pause, re-read this file, dispatch the next chunk.
 
 English for code, comments, commit messages, docs, plans and specs. Cyrillic appears only inside tests
 as `\u{..}` escapes, in `*.xcstrings` and in the root `RUN.md` (the Ukrainian manual checklist,
-never translated). Literal Cyrillic is allowed only in `crates/mypass-kdbx/tests/unicode.rs`.
+never translated). Literal Cyrillic is also allowed in `crates/mypass-kdbx/tests/unicode.rs`,
+vendored upstream data under `crates/mypass-core/resources/`, and opaque binary fixtures
+`crates/mypass-kdbx/tests/fixtures/*.kdbx` (fixture README and generator files follow the text rules).
 Pinned by `cyrillic_only_in_allowed_files`.
 
 ## Commits and pull requests

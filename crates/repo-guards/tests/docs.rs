@@ -205,7 +205,7 @@ fn cyrillic_only_in_allowed_files() {
         };
         assert!(
             !has_cyrillic(&text),
-            "{rel} contains Cyrillic; use \\u{{..}} escapes (literal Cyrillic is allowed only in *.xcstrings, RUN.md and crates/mypass-kdbx/tests/unicode.rs)"
+            "{rel} contains Cyrillic; use \\u{{..}} escapes (literal Cyrillic is allowed only in *.xcstrings, RUN.md, crates/mypass-kdbx/tests/unicode.rs, vendored data under crates/mypass-core/resources/ and binary fixtures crates/mypass-kdbx/tests/fixtures/*.kdbx)"
         );
     }
 }
