@@ -52,6 +52,10 @@ place, generated with `cargo metadata` and reviewed by hand.
 | `hmac` | 0.13.0 | MIT OR Apache-2.0 | `mypass-kdbx` header authentication |
 | `subtle` | 2.6.1 | BSD-3-Clause | `mypass-kdbx` constant-time digest comparison |
 | `zeroize` | 1.9.1 | Apache-2.0 OR MIT | `mypass-kdbx` derived key cleanup |
+| `argon2` | 0.6.0 | MIT OR Apache-2.0 | `mypass-kdbx` Argon2d/id key derivation |
+| `aes` | 0.9.4 | MIT OR Apache-2.0 | `mypass-kdbx` AES-KDF |
+| `secrecy` | 0.10.3 | Apache-2.0 OR MIT | `mypass-kdbx` master password protection |
+| `getrandom` | 0.4.3 | MIT OR Apache-2.0 | `mypass-kdbx` OS-generated KDF salts and seeds |
 
 ## Test-only (not part of any shipped artifact)
 
