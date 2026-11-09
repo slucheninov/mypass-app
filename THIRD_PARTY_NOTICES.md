@@ -53,9 +53,12 @@ place, generated with `cargo metadata` and reviewed by hand.
 | `subtle` | 2.6.1 | BSD-3-Clause | `mypass-kdbx` constant-time digest comparison |
 | `zeroize` | 1.9.1 | Apache-2.0 OR MIT | `mypass-kdbx` derived key cleanup |
 | `argon2` | 0.6.0 | MIT OR Apache-2.0 | `mypass-kdbx` Argon2d/id key derivation |
-| `aes` | 0.9.4 | MIT OR Apache-2.0 | `mypass-kdbx` AES-KDF |
+| `aes` | 0.9.4 | MIT OR Apache-2.0 | `mypass-kdbx` AES-KDF and AES-256-CBC outer cipher |
 | `secrecy` | 0.10.3 | Apache-2.0 OR MIT | `mypass-kdbx` master password protection |
 | `getrandom` | 0.4.3 | MIT OR Apache-2.0 | `mypass-kdbx` OS-generated KDF salts and seeds |
+| `cbc` | 0.2.1 | MIT OR Apache-2.0 | `mypass-kdbx` CBC outer cipher mode and PKCS7 padding |
+| `chacha20` | 0.10.2 | MIT OR Apache-2.0 | `mypass-kdbx` ChaCha20 outer cipher |
+| `flate2` | 1.1.11 | MIT OR Apache-2.0 | `mypass-kdbx` gzip compression and bounded decompression |
 
 ## Test-only (not part of any shipped artifact)
 

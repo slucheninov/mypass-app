@@ -21,3 +21,6 @@ argon2 = { workspace = true, features = ["alloc", "zeroize"] }
 aes = { workspace = true, features = ["zeroize"] }
 secrecy.workspace = true
 getrandom.workspace = true
+cbc = { workspace = true, features = ["block-padding", "zeroize"] }
+chacha20 = { workspace = true, features = ["zeroize"] }
+flate2.workspace = true

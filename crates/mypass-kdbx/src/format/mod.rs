@@ -9,3 +9,8 @@ pub(crate) mod outer_header;
 pub(crate) mod reader;
 pub(crate) mod signature;
 pub mod variant_dict;
+
+#[allow(dead_code)] // remove in Task 9
+pub(crate) mod cipher;
+#[allow(dead_code)] // remove in Task 9
+pub(crate) mod compression;
