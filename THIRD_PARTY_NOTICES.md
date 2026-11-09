@@ -63,11 +63,11 @@ place, generated with `cargo metadata` and reviewed by hand.
 | `salsa20` | 0.11.0 | MIT OR Apache-2.0 | `mypass-kdbx` Salsa20 inner random stream |
 | `flate2` | 1.1.11 | MIT OR Apache-2.0 | `mypass-kdbx` gzip compression and bounded decompression |
 | `quick-xml` | 0.42.0 | MIT | `mypass-kdbx` bounded XML decoder |
-| `uuid` | 1.29.2 | Apache-2.0 OR MIT | `mypass-kdbx` model identifiers |
+| `uuid` | 1.29.2 | Apache-2.0 OR MIT | `mypass-kdbx` model identifiers; `mypass-core` generator-history exclusion |
 | `base64` | 0.23.1 | MIT OR Apache-2.0 | `mypass-kdbx` XML binary encoding |
 | `sha1` | 0.11.0 | MIT OR Apache-2.0 | `mypass-core` TOTP HMAC-SHA1 |
 | `data-encoding` | 2.11.1 | MIT | `mypass-core` base32 secret encoding |
-| `url` | 2.5.8 | MIT OR Apache-2.0 | `mypass-core` otpauth URL/query parsing |
+| `url` | 2.5.8 | MIT OR Apache-2.0 | `mypass-core` otpauth parsing and bounded URL entry matching |
 | `serde` | 1.0.229 | MIT OR Apache-2.0 | `mypass-core` password-rules catalog deserialization |
 | `serde_json` | 1.0.154 | MIT OR Apache-2.0 | `mypass-core` password-rules JSON catalog |
 | `thiserror` | 2.0.21 | MIT OR Apache-2.0 | `mypass-kdbx` and `mypass-core` error types |

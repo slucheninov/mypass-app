@@ -657,6 +657,7 @@ dependencies = [
  "sha2",
  "thiserror",
  "url",
+ "uuid",
  "zeroize",
 ]
 

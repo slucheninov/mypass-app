@@ -9,6 +9,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+uuid.workspace = true
 idna.workspace = true
 mypass-kdbx = { path = "../mypass-kdbx" }
 

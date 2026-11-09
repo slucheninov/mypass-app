@@ -37,3 +37,8 @@ pub use generator::{generate, generate_os, GeneratorError, GeneratorOptions};
 
 /// Public suffix matching and canonical ACE hosts.
 pub mod psl;
+
+/// Vault entry URL and matching-mode accessors.
+pub mod entry_ext;
+/// URL-based credential selection.
+pub mod matcher;
