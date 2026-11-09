@@ -99,7 +99,11 @@ fn merge_entry(l: &Entry, r: &Entry) -> Entry {
 
 // Walk each functional-graph component once. A path-local position map
 // distinguishes actual cycle members from tails feeding into the cycle.
-fn cycle_roots(parents: &BTreeMap<Uuid, Uuid>, visited: &HashSet<Uuid>) -> Vec<Uuid> {
+fn cycle_roots(
+    parents: &BTreeMap<Uuid, Uuid>,
+    visited: &HashSet<Uuid>,
+    groups: &HashMap<Uuid, Group>,
+) -> Vec<Uuid> {
     let mut done = visited.clone();
     let mut roots = vec![];
     for &start in parents.keys() {
@@ -108,7 +112,11 @@ fn cycle_roots(parents: &BTreeMap<Uuid, Uuid>, visited: &HashSet<Uuid>) -> Vec<U
         let mut cursor = start;
         while !done.contains(&cursor) {
             if let Some(&offset) = positions.get(&cursor) {
-                if let Some(&id) = path.get(offset..).and_then(|cycle| cycle.iter().min()) {
+                if let Some(&id) = path.get(offset..).and_then(|cycle| {
+                    cycle
+                        .iter()
+                        .min_by_key(|id| (groups.get(id).map(|g| g.location_changed), **id))
+                }) {
                     roots.push(id);
                 }
                 break;
@@ -129,7 +137,7 @@ fn cycle_roots(parents: &BTreeMap<Uuid, Uuid>, visited: &HashSet<Uuid>) -> Vec<U
 /// Merge without I/O or mutation. Children and tombstones are sorted by UUID bytes.
 /// Duplicate UUIDs within either side keep the first preorder occurrence. Group
 /// parents follow the greater location_changed clock, with local winning ties.
-/// Only the smallest UUID in each parent cycle attaches to root; descendants
+/// Only the oldest move in each parent cycle attaches to root (UUID tie-break); descendants
 /// retain their parents. Missing parents attach to root. Output depth is capped at
 /// MAX_GROUP_DEPTH by reattaching deeper groups to root, retaining their contents.
 pub fn merge(local: &Database, remote: &Database) -> Database {
@@ -259,9 +267,9 @@ pub fn merge(local: &Database, remote: &Database) -> Database {
             break;
         }
         // D2: missing/deleted parents were already rooted above. Every remaining
-        // component feeds a cycle. Cut only its smallest UUID, then resume the
+        // component feeds a cycle. Cut only its oldest move, then resume the
         // same depth-limited BFS at depth 2, preserving all other relationships.
-        for id in cycle_roots(&parents, &visited) {
+        for id in cycle_roots(&parents, &visited, &groups) {
             if !visited.contains(&id) {
                 actual_parents.insert(id, root);
                 queue.push_back((id, 2));
@@ -841,6 +849,17 @@ mod tests {
         out
     }
     #[test]
+    fn cleanup_cycle_cuts_oldest_move_not_smallest_uuid() {
+        let l = cycle_input(&[(2, 3, 9), (3, 0, 1), (4, 2, 1)], false);
+        let r = cycle_input(&[(2, 0, 1), (3, 2, 6), (4, 2, 1)], false);
+        for m in [merge(&l, &r), merge(&r, &l)] {
+            let tree = cycle_tree(&m);
+            assert_eq!(tree[&Uuid::from_u128(3)], m.root.uuid);
+            assert_eq!(tree[&Uuid::from_u128(2)], Uuid::from_u128(3));
+            assert_eq!(tree[&Uuid::from_u128(4)], Uuid::from_u128(2));
+        }
+    }
+    #[test]
     fn cross_move_cycle_keeps_descendants_and_entries() {
         for tombstone in [false, true] {
             let l = cycle_input(&[(2, 3, 5), (3, 0, 1), (4, 2, 1), (5, 4, 1)], tombstone);
@@ -871,7 +890,10 @@ mod tests {
         let a = Uuid::from_u128(2);
         let c = Uuid::from_u128(4);
         let parents = BTreeMap::from([(a, a), (c, a)]);
-        assert_eq!(cycle_roots(&parents, &HashSet::new()), vec![a]);
+        assert_eq!(
+            cycle_roots(&parents, &HashSet::new(), &HashMap::new()),
+            vec![a]
+        );
     }
     #[test]
     fn tombstoned_cycle_member_leaves_live_descendants() {

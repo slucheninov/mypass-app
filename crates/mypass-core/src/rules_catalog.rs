@@ -279,3 +279,23 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod cleanup_tests {
+    use super::*;
+    #[test]
+    fn exact_parent_is_skipped_for_matching_grandparent() {
+        let index = PasswordRulesIndex::from_json(r#"{"example.com":{"password-rules":"minlength: 8;"},"sub.example.com":{"password-rules":"minlength: 9;","exact-domain-match-only":true}}"#).unwrap();
+        assert_eq!(
+            index
+                .rules_for_host("x.sub.example.com")
+                .unwrap()
+                .min_length,
+            Some(8)
+        );
+        assert!(index.rules_for_host("example.com..").is_none());
+        assert!(index
+            .rules_for_host(&format!("{}.com", "a".repeat(254)))
+            .is_none());
+    }
+}

@@ -43,38 +43,29 @@ fn assert_conforms(password: &str, rules: &PasswordRules, host: &str) {
             "{context}"
         );
     }
-    let mut run = 0;
-    let mut previous = None;
-    let mut sequential = 1;
-    let mut direction = 0i64;
-    for &c in &chars {
-        run = if previous == Some(c) { run + 1 } else { 1 };
-        if let Some(max) = rules.max_consecutive {
-            assert!(run <= max, "{context}");
+    if let Some(max) = rules.max_consecutive {
+        assert!(
+            chars
+                .windows(max as usize + 1)
+                .all(|w| w.iter().any(|c| *c != w[0])),
+            "{context}"
+        );
+    }
+    if let Some(max) = rules.max_repeating {
+        let mut counts = std::collections::BTreeMap::new();
+        for c in &chars {
+            *counts.entry(c).or_insert(0usize) += 1;
         }
-        if let Some(max) = rules.max_repeating {
-            assert!(
-                chars.iter().filter(|x| **x == c).count() <= max as usize,
-                "{context}"
-            );
-        }
-        if let Some(p) = previous {
-            let delta = c as i64 - p as i64;
-            sequential = if delta.abs() == 1 {
-                if direction == delta {
-                    sequential + 1
-                } else {
-                    2
-                }
-            } else {
-                1
-            };
-            direction = delta;
-        }
-        if let Some(max) = rules.max_sequential {
-            assert!(sequential <= max, "{context}");
-        }
-        previous = Some(c);
+        assert!(counts.values().all(|n| *n <= max as usize), "{context}");
+    }
+    if let Some(max) = rules.max_sequential {
+        assert!(
+            chars.windows(max as usize + 1).all(|w| {
+                let deltas: Vec<_> = w.windows(2).map(|p| p[1] as i64 - p[0] as i64).collect();
+                !(deltas.iter().all(|d| *d == 1) || deltas.iter().all(|d| *d == -1))
+            }),
+            "{context}"
+        );
     }
 }
 #[test]
@@ -116,4 +107,17 @@ fn allowed_class_check_treats_empty_allow_list_as_no_restriction() {
         },
         "synthetic",
     );
+}
+
+#[test]
+fn hand_built_repeating_and_sequential_rules() {
+    let r = PasswordRules {
+        max_repeating: Some(2),
+        max_sequential: Some(2),
+        ..Default::default()
+    };
+    assert_conforms("azabz", &r, "synthetic");
+    for bad in ["aaaz", "abc", "cba"] {
+        assert!(std::panic::catch_unwind(|| assert_conforms(bad, &r, "synthetic")).is_err());
+    }
 }

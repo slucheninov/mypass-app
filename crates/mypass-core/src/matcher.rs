@@ -47,10 +47,18 @@ fn parse_target(input: &str) -> Option<Url> {
     if input.len() > MAX_MATCH_URL_BYTES {
         return None;
     }
-    let host_port = input
-        .split_once(':')
-        .and_then(|(_, rest)| rest.split(['/', '?', '#']).next())
-        .is_some_and(|port| !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()));
+    if input.parse::<std::net::Ipv6Addr>().is_ok() {
+        return parse_lenient(input);
+    }
+    let host_port = input.split_once(':').is_some_and(|(host, rest)| {
+        let hostname =
+            host == "localhost" || host.contains('.') || host.parse::<std::net::IpAddr>().is_ok();
+        let port = rest.split(['/', '?', '#']).next().unwrap_or_default();
+        hostname && !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())
+    });
+    if input.contains(':') && !input.contains("://") && !host_port {
+        return None;
+    }
     let url = match Url::parse(input) {
         Ok(url) if url.has_host() || !host_port => url,
         _ => parse_lenient(input)?,
@@ -182,6 +190,21 @@ mod tests {
     }
     fn rd(s: &str) -> Option<String> {
         registrable_domain_of(s)
+    }
+    #[test]
+    fn cleanup_target_host_shapes() {
+        for ip in ["fe80::1", "abcd::1", "fd00::1"] {
+            check(UriMatchMode::Host, &format!("https://[{ip}]/"), ip, true);
+        }
+    }
+    #[test]
+    fn cleanup_scheme_tokens_are_not_host_ports() {
+        for target in ["javascript:80", "ftp:", "ftp:80", "custom:123"] {
+            assert!(parse_target(target).is_none(), "{target}");
+        }
+        for target in ["example.com:80", "localhost:8080", "127.0.0.1:80"] {
+            assert!(parse_target(target).is_some(), "{target}");
+        }
     }
     #[test]
     fn targets_require_parsed_http_scheme_in_every_selection_api() {
@@ -699,14 +722,14 @@ mod tests {
     }
     #[test]
     fn matches_on_additional_url_when_primary_differs() {
-        let mut e = make_entry("https://primary-only.example.com", "Multi-URL Entry");
+        let mut e = make_entry("https://primary-only.example.org", "Multi-URL Entry");
+        assert!(!matches(&e, "https://secondary.example.com/login"));
         e.set_urls(&[
-            "https://primary-only.example.com".into(),
+            "https://primary-only.example.org".into(),
             "https://secondary.example.com".into(),
         ]);
         assert!(matches(&e, "https://secondary.example.com/login"));
-        // The Swift fixture's two URLs share example.com, so also pin extras
-        // through host mode where the primary alone cannot satisfy this target.
+        // Pin additional URL selection through host mode too.
         e.set_uri_match_mode(UriMatchMode::Host);
         assert!(matches(&e, "https://secondary.example.com/login"));
     }

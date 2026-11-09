@@ -32,7 +32,6 @@ fn database(rows: Vec<Row>, shapes: Vec<GroupRow>, deletes: Vec<(u8, i64)>, side
         let id = 101 + i as u8;
         let mut g = Group::new(&value.to_string(), clock(modified));
         g.uuid = Uuid::from_u128(u128::from(id));
-        g.location_changed = clock(location);
         g.icon_id = u32::from(value);
         g.custom_data.push(CustomDataItem {
             key: format!("key{}", value % 2),
@@ -41,6 +40,7 @@ fn database(rows: Vec<Row>, shapes: Vec<GroupRow>, deletes: Vec<(u8, i64)>, side
         });
         let choices: Vec<_> = groups.keys().copied().collect();
         let parent = choices[usize::from(shape) % choices.len()];
+        g.location_changed = clock(location + if parent != 100 { 20 } else { 0 });
         parents.insert(id, parent);
         order.push(id);
         groups.insert(id, g);
@@ -222,7 +222,7 @@ fn check_symmetric(l: &Database, r: &Database) -> TestCaseResult {
 }
 
 // A separate plain-map oracle: first choose clocks/parents, then identify
-// cycle membership by closing each item's ancestor path. Only the minimum UUID
+// cycle membership by closing each item's ancestor path. Only the oldest move (UUID tie-break)
 // of each cycle loses its parent. Descendants outside the cycle retain theirs.
 fn locations(d: &Database) -> BTreeMap<Uuid, (Uuid, Timestamp, bool)> {
     let mut out = BTreeMap::new();
@@ -281,7 +281,12 @@ fn check_locations(l: &Database, r: &Database) -> TestCaseResult {
         let mut cursor = id;
         while cursor != root {
             if let Some(start) = path.iter().position(|p| *p == cursor) {
-                cuts.insert(*path[start..].iter().min().unwrap());
+                cuts.insert(
+                    *path[start..]
+                        .iter()
+                        .min_by_key(|id| (expected[id].1, **id))
+                        .unwrap(),
+                );
                 break;
             }
             path.push(cursor);

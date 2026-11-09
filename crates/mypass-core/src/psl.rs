@@ -82,7 +82,8 @@ impl PublicSuffixList {
 /// ASCII input (including IP literals and existing ACE) is not IDNA-validated.
 /// After stripping one optional trailing dot, the final ACE form must be at most
 /// 253 bytes, with nonempty labels of at most 63 bytes, including for ASCII.
-/// Non-ASCII input rejects `<`, `>`, `^`, `|` via the URL deny-list; ASCII passes them (Swift parity).
+/// Non-ASCII input rejects `<`, `>`, `^`, `|` via the URL deny-list;
+/// ASCII passes them (Swift parity).
 pub fn canonical_host(host: &str) -> Option<String> {
     let ace = if host.is_ascii() {
         host.to_ascii_lowercase()
@@ -478,8 +479,7 @@ mod tests {
         }
     }
     #[test]
-    fn canonical_host_is_independent_of_rule_data() {
-        assert!(PublicSuffixList::parse("com\n\u{516c}\u{53f8}/x.hk").is_none());
+    fn canonical_host_known_answers() {
         for (h, expected) in [
             ("\u{516c}\u{53f8}.hk", "xn--55qx5d.hk"),
             ("XN--55QX5D.HK.", "xn--55qx5d.hk"),

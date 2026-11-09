@@ -148,7 +148,10 @@ impl TotpConfig {
     /// Algorithms are case-insensitive. Unknown algorithms are rejected instead
     /// of Swift's SHA1 fallback, because silently selecting another hash gives
     /// incorrect codes. Parsing deliberately bounds digits to 6..=10 and period
-    /// to 1..=3600; public fields are validated again during generation.
+    /// to 1..=3600. Query names are case-sensitive; form decoding treats `+`
+    /// as a space (ignored in secrets). Fractional periods and empty algorithm
+    /// values are rejected rather than rounded/defaulted as in Swift;
+    /// public fields are validated again during generation.
     pub fn parse(input: &str) -> Option<Self> {
         let input = input.trim();
         let mut config = Self {
@@ -165,7 +168,7 @@ impl TotpConfig {
         // non-zeroizing storage. Labels are opaque and may contain spaces.
         let (head, query) = input.split_once('?')?;
         let url = url::Url::parse(head).ok()?;
-        if url.scheme() != "otpauth" || url.host_str()? != "totp" {
+        if url.scheme() != "otpauth" || !url.host_str()?.eq_ignore_ascii_case("totp") {
             return None;
         }
         let mut secret = None;
@@ -237,6 +240,54 @@ mod tests {
     const SHA256_KEY: &[u8] = b"12345678901234567890123456789012";
     const SHA512_KEY: &[u8] = b"1234567890123456789012345678901234567890123456789012345678901234";
 
+    #[test]
+    fn long_keys_and_maximum_timestamp() {
+        // Independently checked with Python stdlib hmac/hashlib; key = 200 bytes of 0xab.
+        let key = vec![0xab; 200];
+        for (algorithm, expected) in [
+            (TotpAlgorithm::Sha1, "50878979"),
+            (TotpAlgorithm::Sha256, "58667971"),
+            (TotpAlgorithm::Sha512, "70197661"),
+        ] {
+            assert_eq!(
+                totp_code(&key, 1234567890, 30, 8, algorithm).unwrap(),
+                expected
+            );
+        }
+        let config = TotpConfig::parse("MY").unwrap();
+        assert_eq!(config.code_at(u64::MAX).unwrap().len(), 6);
+    }
+    #[test]
+    fn query_parameter_policies_and_pretty_debug() {
+        let config = TotpConfig::parse("otpauth://totp/x?secret=MY&digits=8&digits=9&period=60&period=90&algorithm=SHA256&algorithm=SHA512&DIGITS=10").unwrap();
+        assert_eq!(
+            (config.digits, config.period, config.algorithm),
+            (8, 60, TotpAlgorithm::Sha256)
+        );
+        assert!(TotpConfig::parse("otpauth://totp/x?SECRET=MY").is_none());
+        for query in ["secret=MY&period=1.5", "secret=MY&algorithm="] {
+            assert!(TotpConfig::parse(&format!("otpauth://totp/x?{query}")).is_none());
+        }
+        assert_eq!(
+            TotpConfig::parse("otpauth://totp/x?secret=M+Y")
+                .unwrap()
+                .secret
+                .as_slice(),
+            b"f"
+        );
+        let debug = format!("{config:#?}");
+        for expected in ["secret_len: 1", "digits: 8", "period: 60", "Sha256"] {
+            assert!(debug.contains(expected));
+        }
+        assert!(!debug.contains("[102]"));
+    }
+    #[test]
+    fn cleanup_uppercase_totp_host() {
+        assert_eq!(
+            TotpConfig::parse("otpauth://TOTP/test?secret=MY"),
+            TotpConfig::parse("otpauth://totp/test?secret=MY")
+        );
+    }
     #[test]
     fn rfc6238_vectors() {
         for (key, algorithm, time, expected) in [

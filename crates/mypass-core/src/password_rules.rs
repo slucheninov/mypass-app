@@ -1,4 +1,8 @@
 //! Structured Apple password rules and a strict, non-panicking parser.
+//!
+//! Numeric properties are unsigned u32: Swift's signed parsing can accept `-0`
+//! and wider integers. Scanning uses Unicode scalars, rather than Swift grapheme
+//! clusters; the grammar's named tokens and custom members are ASCII.
 use std::collections::BTreeSet;
 
 /// A named character repertoire or a literal custom set.
@@ -467,5 +471,24 @@ mod tests {
         for raw in ["minlength: ;", "minlength: 1.5;", "minlength: 1 2;"] {
             assert!(parse_password_rules(raw).is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod cleanup_tests {
+    use super::*;
+    #[test]
+    fn hostile_rule_shapes_are_bounded_by_input() {
+        assert!(parse_password_rules(&format!("allowed: [{}", "a".repeat(60_000))).is_err());
+        assert!(parse_password_rules(&format!("allowed: [{}];", "a".repeat(10_000))).is_ok());
+        assert_eq!(
+            parse_password_rules(&"required: digit;".repeat(3000))
+                .unwrap()
+                .required_clauses
+                .len(),
+            3000
+        );
+        assert!(parse_password_rules("minlength: -0;").is_err());
+        assert!(parse_password_rules("minlength: 4294967296;").is_err());
     }
 }

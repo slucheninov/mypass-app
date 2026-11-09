@@ -424,3 +424,35 @@ fn sample_handles_wide_pools_without_a_custom_random_primitive() {
         Err(UnsatisfiableRules)
     ));
 }
+
+#[test]
+fn cleanup_unicode_error_precedence_and_zero_consecutive() {
+    let off = GeneratorOptions {
+        lowercase: false,
+        uppercase: false,
+        digits: false,
+        symbols: false,
+        ..Default::default()
+    };
+    let rules = parse_password_rules("required: unicode;").unwrap();
+    assert_eq!(
+        generate(&off, Some(&rules), &mut make_rng()),
+        Err(NoCharacterClassSelected)
+    );
+    // Unlike Swift's repair shortcut, zero consecutive forbids even one scalar.
+    let rules = PasswordRules {
+        max_consecutive: Some(0),
+        ..Default::default()
+    };
+    assert_eq!(
+        generate(
+            &GeneratorOptions {
+                length: 1,
+                ..Default::default()
+            },
+            Some(&rules),
+            &mut make_rng()
+        ),
+        Err(UnsatisfiableRules)
+    );
+}

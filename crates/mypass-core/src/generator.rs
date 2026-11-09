@@ -2,7 +2,7 @@
 use crate::generator_toggles::{forced_on_toggle_classes, toggle_backed_class_of};
 use crate::{CharacterClass, PasswordRules};
 use rand::{seq::SliceRandom, CryptoRng, Rng, RngCore};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use zeroize::Zeroizing;
 use CharacterClass::{AsciiPrintable, Custom, Digit, Lower, Special, Upper};
 /// Bound allocation and repair work for public API callers, including usize::MAX.
@@ -43,6 +43,7 @@ pub enum GeneratorError {
 use GeneratorError::{NoCharacterClassSelected, UnsatisfiableRules};
 struct EffectivePool {
     characters: Vec<char>,
+    lookup: HashMap<char, usize>,
     membership: BTreeMap<CharacterClass, BTreeSet<char>>,
 }
 fn effective_pool(opts: &GeneratorOptions, rules: &PasswordRules) -> EffectivePool {
@@ -59,6 +60,9 @@ fn effective_pool(opts: &GeneratorOptions, rules: &PasswordRules) -> EffectivePo
     let in_play =
         |c: &CharacterClass| forced.contains(c) || toggles.iter().any(|(cl, on, _)| cl == c && *on);
     let mut membership = BTreeMap::<CharacterClass, BTreeSet<char>>::new();
+    // A forced-on toggle does not bypass the allowed-class gate: a custom
+    // symbol set permits only its own members, never the entire symbol baseline.
+    // Literal required named classes retain their unconditional branch.
     for (class, _, baseline) in &toggles {
         if required.contains(class)
             || ((unrestricted || rules.allowed_classes.contains(class)) && in_play(class))
@@ -82,7 +86,7 @@ fn effective_pool(opts: &GeneratorOptions, rules: &PasswordRules) -> EffectivePo
     }
     // Unicode has no invented baseline pool. A required Unicode-only clause
     // remains unsatisfiable, just as in Swift; explicit custom scalars work.
-    let characters = membership
+    let characters: Vec<char> = membership
         .values()
         .flatten()
         .copied()
@@ -90,6 +94,11 @@ fn effective_pool(opts: &GeneratorOptions, rules: &PasswordRules) -> EffectivePo
         .into_iter()
         .collect();
     EffectivePool {
+        lookup: characters
+            .iter()
+            .enumerate()
+            .map(|(i, &c)| (c, i))
+            .collect(),
         characters,
         membership,
     }
@@ -116,7 +125,7 @@ fn random_candidate<R: CryptoRng + RngCore>(
     Ok(result)
 }
 fn satisfies(candidate: &[char], rules: &PasswordRules, pool: &EffectivePool) -> bool {
-    if !candidate.iter().all(|c| pool.characters.contains(c)) {
+    if !candidate.iter().all(|c| pool.lookup.contains_key(c)) {
         return false;
     }
     if !rules.required_clauses.iter().all(|clause| {
@@ -132,18 +141,22 @@ fn satisfies(candidate: &[char], rules: &PasswordRules, pool: &EffectivePool) ->
     let mut run = 0;
     let mut sequential = 1;
     let mut direction = 0i64;
-    // Counts are positional rather than a char-keyed map: temporary password
-    // characters stay in the zeroizing candidate buffer.
+    // Index by the public pool, and wipe password-derived counts on drop.
+    // No secret character keys are copied into a non-zeroizing map.
+    let mut counts = Zeroizing::new(vec![0u32; pool.characters.len()]);
     for &c in candidate {
         run = if previous == Some(c) { run + 1 } else { 1 };
         if rules.max_consecutive.is_some_and(|max| run > max) {
             return false;
         }
-        if rules
-            .max_repeating
-            .is_some_and(|max| candidate.iter().filter(|x| **x == c).count() > max as usize)
-        {
-            return false;
+        if let Some(max) = rules.max_repeating {
+            let Some(count) = pool.lookup.get(&c).and_then(|i| counts.get_mut(*i)) else {
+                return false;
+            };
+            *count += 1;
+            if *count > max {
+                return false;
+            }
         }
         if let Some(p) = previous {
             let delta = c as i64 - p as i64;
@@ -255,6 +268,7 @@ pub fn generate<R: CryptoRng + RngCore>(
         return Err(UnsatisfiableRules);
     }
     let pool = effective_pool(opts, constraints);
+    // Deduplicate each clause as a set so overlapping classes do not bias draws.
     let clauses: Vec<Vec<char>> = constraints
         .required_clauses
         .iter()
@@ -269,11 +283,11 @@ pub fn generate<R: CryptoRng + RngCore>(
                 .collect()
         })
         .collect();
-    if clauses.iter().any(Vec::is_empty) {
-        return Err(UnsatisfiableRules);
-    }
     if pool.characters.is_empty() {
         return Err(NoCharacterClassSelected);
+    }
+    if clauses.iter().any(Vec::is_empty) {
+        return Err(UnsatisfiableRules);
     }
     if rules.is_none() {
         return Ok(into_password(&random_candidate(
