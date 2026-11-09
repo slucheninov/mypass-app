@@ -217,6 +217,14 @@ mod tests {
         out
     }
     #[test]
+    fn duplicate_outer_scalar_fields_keep_last_value() {
+        let bytes = wire(None, &AES, &[2; 16], &[(4, vec![9; 32])]);
+        assert_eq!(
+            OuterHeader::parse(&bytes).unwrap().0.master_seed,
+            vec![9; 32]
+        );
+    }
+    #[test]
     fn minimal_header_round_trips() {
         let h = sample();
         let bytes = wire(None, &AES, &[2; 16], &[]);

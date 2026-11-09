@@ -155,6 +155,17 @@ mod tests {
         ));
     }
     #[test]
+    fn duplicate_inner_scalar_fields_keep_last_value() {
+        let mut data = valid_wire();
+        data.truncate(data.len() - 5);
+        append_wire_field(&mut data, 1, &2u32.to_le_bytes());
+        append_wire_field(&mut data, 2, &[9; 64]);
+        append_wire_field(&mut data, 0, &[]);
+        let (parsed, _) = InnerHeader::parse(&data).unwrap();
+        assert_eq!(parsed.stream, InnerStreamKind::Salsa20);
+        assert_eq!(*parsed.stream_key, vec![9; 64]);
+    }
+    #[test]
     fn serialize_then_parse_round_trip() {
         let header = InnerHeader {
             stream: InnerStreamKind::ChaCha20,

@@ -110,6 +110,17 @@ mod tests {
             Err(KdbxError::Corrupt("block 1 HMAC".into()))
         );
     }
+    #[test]
+    fn literal_block_mac_known_answer() {
+        // Python stdlib hashlib/hmac, index 0, all-zero base, one-byte payload.
+        let actual = write(b"x", &[0; 64], 1);
+        let expected = "121a996cae5055030800887dcfe257bc1fdc3eea197d2e55de1dbb915f50eae8";
+        let bytes: Vec<u8> = (0..64)
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&expected[i..i + 2], 16).unwrap())
+            .collect();
+        assert_eq!(&actual[..32], bytes);
+    }
     // Independent oracle: raw index/length bytes and RustCrypto calls only; no production helpers.
     fn oracle_block(index: u64, payload: &[u8], base: &[u8; 64]) -> Vec<u8> {
         let mut key_input = index.to_le_bytes().to_vec();
@@ -188,6 +199,17 @@ mod tests {
             1 << 20
         );
         assert_eq!(read(&stream, &[0x11; 64]).unwrap(), payload);
+        assert_eq!(
+            stream,
+            oracle_stream(
+                &[
+                    &payload[..1 << 20],
+                    &payload[1 << 20..2 << 20],
+                    &payload[2 << 20..]
+                ],
+                &[0x11; 64]
+            )
+        );
     }
 
     #[test]

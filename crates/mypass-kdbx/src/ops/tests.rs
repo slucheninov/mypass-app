@@ -475,3 +475,20 @@ fn insertion_stamps_location_changed() {
     assert_eq!(db.find_entry(eid).unwrap().location_changed, Timestamp(999));
     assert_eq!(db.find_group(gid).unwrap().location_changed, Timestamp(999));
 }
+
+#[test]
+fn delete_deep_group_refuses_before_creating_recycle_bin() {
+    let mut db = Database::new("root");
+    let mut parent = db.root_id();
+    let mut first = None;
+    for _ in 0..92 {
+        let g = Group::new("deep", t(0));
+        let id = g.uuid;
+        first.get_or_insert(id);
+        db.add_group(parent, g, t(1)).unwrap();
+        parent = id;
+    }
+    let before = db.clone();
+    assert!(db.delete_group(first.unwrap(), t(2)).is_err());
+    assert_eq!(db, before);
+}
