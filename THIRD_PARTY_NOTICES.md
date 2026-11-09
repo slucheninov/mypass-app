@@ -112,3 +112,8 @@ https://github.com/sseemayer/keepass-rs, is a dev-dependency only. Its
 linked into a shipped artifact. The MIT licence permits use, copying,
 modification and distribution subject to retaining its copyright and permission
 notice; the full licence is included in the crate's `LICENSE` file.
+
+## Merge property-test tooling (development only)
+
+`proptest` 1.12.0 (MIT OR Apache-2.0) generates and shrinks deterministic merge cases.
+It is a dev-dependency and is never linked into the shipped product.

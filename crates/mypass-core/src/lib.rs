@@ -42,3 +42,6 @@ pub mod psl;
 pub mod entry_ext;
 /// URL-based credential selection.
 pub mod matcher;
+
+/// Pure UUID-keyed two-way vault merge.
+pub mod merge;

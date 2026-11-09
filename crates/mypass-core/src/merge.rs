@@ -1,0 +1,747 @@
+//! Pure two-way merge, following SyncKit's numbered rules (brief rules 1–7).
+use mypass_kdbx::{Database, DeletedObject, Entry, Group, Timestamp};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use uuid::Uuid;
+
+#[derive(Default)]
+struct Index<'a> {
+    groups: HashMap<Uuid, (&'a Group, Uuid)>,
+    entries: HashMap<Uuid, (&'a Entry, Uuid)>,
+}
+impl<'a> Index<'a> {
+    fn new(root: &'a Group, canonical_root: Uuid) -> Self {
+        let mut result = Self::default();
+        let mut stack = vec![(root, canonical_root)];
+        let mut seen = HashSet::new();
+        // Iterative preorder: duplicate UUIDs keep the first occurrence in tree order.
+        // Still visit duplicate groups' contents so unrelated live children are retained.
+        while let Some((g, parent)) = stack.pop() {
+            let id = if std::ptr::eq(g, root) {
+                canonical_root
+            } else {
+                g.uuid
+            };
+            if seen.insert(id) {
+                result.groups.insert(id, (g, parent));
+            }
+            for e in &g.entries {
+                if seen.insert(e.uuid) {
+                    result.entries.insert(e.uuid, (e, id));
+                }
+            }
+            stack.extend(g.groups.iter().rev().map(|c| (c, id)));
+        }
+        result
+    }
+}
+
+fn metadata(g: &Group) -> Group {
+    // Do not clone the recursive tree: caller-created trees need not obey XML limits.
+    Group {
+        uuid: g.uuid,
+        name: g.name.clone(),
+        icon_id: g.icon_id,
+        created: g.created,
+        modified: g.modified,
+        accessed: g.accessed,
+        location_changed: g.location_changed,
+        expires: g.expires,
+        expiry_time: g.expiry_time,
+        custom_data: g.custom_data.clone(),
+        extra: g.extra.clone(),
+        entries: vec![],
+        groups: vec![],
+    }
+}
+fn version(e: &Entry) -> impl std::hash::Hash + Eq + '_ {
+    (
+        e.uuid,
+        e.modified,
+        e.fields
+            .iter()
+            .map(|f| (f.key.as_str(), f.value.as_str(), f.protected))
+            .collect::<Vec<_>>(),
+        e.attachments
+            .iter()
+            .map(|a| (a.name.as_str(), a.data.as_slice(), a.protected))
+            .collect::<Vec<_>>(),
+    )
+}
+fn merge_entry(l: &Entry, r: &Entry) -> Entry {
+    // Rule 2: whole-second mtimes can tie; keep local current without losing a
+    // distinct remote version. Attachment-only edits must survive deduplication.
+    let (winner, loser) = if r.modified > l.modified {
+        (r, l)
+    } else {
+        (l, r)
+    };
+    let mut out = winner.clone();
+    let mut seen = HashSet::new();
+    out.history = winner
+        .history
+        .iter()
+        .chain(&loser.history)
+        .chain((version(winner) != version(loser)).then_some(loser))
+        .filter(|e| seen.insert(version(e)))
+        .map(|e| {
+            let mut s = e.clone();
+            if std::ptr::eq(e, loser) {
+                s.history.clear();
+            }
+            s
+        })
+        .collect();
+    // Stable oldest-first: equal timestamps keep winner/loser union order.
+    out.history.sort_by_key(|e| e.modified);
+    out
+}
+
+/// Merge without I/O or mutation. Children and tombstones are sorted by UUID bytes.
+/// Duplicate UUIDs within either side keep the first preorder occurrence. Group
+/// parent ambiguity prefers local (Swift has no group-move clock rule). Cyclic or
+/// missing parent chains attach to root. Output depth is capped at the KDBX limit
+/// of 93 groups by reattaching deeper groups to root, retaining their contents.
+pub fn merge(local: &Database, remote: &Database) -> Database {
+    let root = local.root.uuid;
+    // D1 / Swift rule 9: unlike Swift's early return, alias different roots and
+    // merge all their children; the local root's identity and metadata remain.
+    let l = Index::new(&local.root, root);
+    let mut r = Index::new(&remote.root, root);
+    // For malformed cross-type collisions across sides, the local object type
+    // wins; unrelated children of a suppressed group remain live via D2.
+    r.groups.retain(|id, _| !l.entries.contains_key(id));
+    r.entries.retain(|id, _| !l.groups.contains_key(id));
+    // Rule 7 (brief 5): union tombstones, retaining the later deletion time.
+    let mut deleted = BTreeMap::<Uuid, Timestamp>::new();
+    for d in local.deleted_objects.iter().chain(&remote.deleted_objects) {
+        deleted
+            .entry(d.uuid)
+            .and_modify(|t| *t = (*t).max(d.deleted_at))
+            .or_insert(d.deleted_at);
+    }
+    // Rule 5: use the surviving (newest) modification, not just the first side.
+    deleted.retain(|id, time| {
+        l.entries
+            .get(id)
+            .into_iter()
+            .chain(r.entries.get(id))
+            .map(|(e, _)| e.modified)
+            .chain(
+                l.groups
+                    .get(id)
+                    .into_iter()
+                    .chain(r.groups.get(id))
+                    .map(|(g, _)| g.modified),
+            )
+            .max()
+            .is_none_or(|modified| modified <= *time)
+    });
+    let ids: HashSet<_> = l.groups.keys().chain(r.groups.keys()).copied().collect();
+    let mut groups = HashMap::new();
+    let mut parents = BTreeMap::new();
+    for id in ids {
+        if id != root && deleted.contains_key(&id) {
+            continue;
+        }
+        let a = l.groups.get(&id);
+        let b = r.groups.get(&id);
+        let (newer, older, parent) = match (a, b) {
+            (Some((a, p)), Some((b, _)))
+                if a.modified >= b.modified
+                    || (id == root && local.root.uuid != remote.root.uuid) =>
+            {
+                (*a, Some(*b), *p)
+            }
+            (Some((a, p)), Some((b, _))) => (*b, Some(*a), *p),
+            (Some((a, p)), None) | (None, Some((a, p))) => (*a, None, *p),
+            (None, None) => continue,
+        };
+        // Rule 3: metadata and custom-data union are independent of child merge.
+        let mut g = metadata(newer);
+        g.uuid = id;
+        let mut custom = BTreeMap::new();
+        for c in older
+            .into_iter()
+            .flat_map(|g| &g.custom_data)
+            .chain(&newer.custom_data)
+        {
+            custom.insert(c.key.clone(), c.clone());
+        }
+        g.custom_data = custom.into_values().collect();
+        groups.insert(id, g);
+        if id != root {
+            parents.insert(id, parent);
+        }
+    }
+    // Rule 4: assemble the UUID union once, using adjacency indexes rather than
+    // rescanning every entry for every group. D2: missing parents attach to root.
+    let mut children: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+    for (&id, &parent) in &parents {
+        let parent = if groups.contains_key(&parent) {
+            parent
+        } else {
+            root
+        };
+        children.entry(parent).or_default().push(id);
+    }
+    let mut queue = VecDeque::from([(root, 1usize)]);
+    let mut order = vec![];
+    let mut actual_parents = HashMap::new();
+    let mut visited = HashSet::new();
+    while let Some((id, depth)) = queue.pop_front() {
+        if !visited.insert(id) {
+            continue;
+        }
+        order.push(id);
+        for child in children.remove(&id).unwrap_or_default() {
+            let (parent, next_depth) = if depth >= 93 {
+                (root, 2)
+            } else {
+                (id, depth + 1)
+            };
+            actual_parents.insert(child, parent);
+            queue.push_back((child, next_depth));
+        }
+    }
+    // D2: unresolved components are cycles. Flatten them deterministically to
+    // root; each UUID is emitted once, with no recursion and no infinite walk.
+    for &id in parents.keys() {
+        if visited.insert(id) {
+            actual_parents.insert(id, root);
+            order.push(id);
+        }
+    }
+    let entries: HashSet<_> = l.entries.keys().chain(r.entries.keys()).copied().collect();
+    for id in entries {
+        if deleted.contains_key(&id) || groups.contains_key(&id) {
+            continue;
+        }
+        let (entry, parent) = match (l.entries.get(&id), r.entries.get(&id)) {
+            (Some((a, ap)), Some((b, bp))) => {
+                // Rule 6: location, independently of content; ties favour local.
+                (
+                    merge_entry(a, b),
+                    if a.location_changed >= b.location_changed {
+                        *ap
+                    } else {
+                        *bp
+                    },
+                )
+            }
+            (Some((a, p)), None) | (None, Some((a, p))) => ((*a).clone(), *p), // Rule 1
+            (None, None) => continue,
+        };
+        // D2: adding an entry does not bump its parent's mtime. A tombstoned
+        // parent must not silently swallow that still-live entry.
+        let parent = if groups.contains_key(&parent) {
+            parent
+        } else {
+            root
+        };
+        if let Some(g) = groups.get_mut(&parent) {
+            g.entries.push(entry);
+        }
+    }
+    for g in groups.values_mut() {
+        g.entries.sort_by_key(|e| e.uuid);
+    }
+    for id in order.into_iter().rev() {
+        if id == root {
+            continue;
+        }
+        if let Some(mut g) = groups.remove(&id) {
+            g.groups.sort_by_key(|g| g.uuid);
+            if let Some(parent) = actual_parents.get(&id).and_then(|p| groups.get_mut(p)) {
+                parent.groups.push(g);
+            }
+        }
+    }
+    let mut merged_root = groups
+        .remove(&root)
+        .unwrap_or_else(|| metadata(&local.root));
+    merged_root.groups.sort_by_key(|g| g.uuid);
+    // Rule 8 (brief 7): nil means unset. All other meta/settings stay local.
+    let mut meta = local.meta.clone();
+    meta.recycle_bin_uuid = local
+        .meta
+        .recycle_bin_uuid
+        .filter(|u| !u.is_nil())
+        .or(remote.meta.recycle_bin_uuid.filter(|u| !u.is_nil()));
+    Database {
+        root: merged_root,
+        meta,
+        deleted_objects: deleted
+            .into_iter()
+            .map(|(uuid, deleted_at)| DeletedObject { uuid, deleted_at })
+            .collect(),
+        settings: local.settings.clone(),
+        dropped_attachment_refs: local.dropped_attachment_refs,
+        dropped_protected_unknown: local.dropped_protected_unknown,
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mypass_kdbx::{Attachment, KdfParams};
+    fn make_entry(id: u128, title: &str, time: i64) -> Entry {
+        let mut e = Entry::new(Timestamp(time));
+        e.uuid = Uuid::from_u128(id);
+        e.set_field("Title", title, false);
+        e
+    }
+    fn group(id: u128) -> Group {
+        let mut g = Group::new("MyPass", Timestamp(1000));
+        g.uuid = Uuid::from_u128(id);
+        g
+    }
+    fn make_db(entries: Vec<Entry>) -> Database {
+        let mut d = Database::new("MyPass");
+        d.root = group(100);
+        d.root.entries = entries;
+        d.settings.kdf = KdfParams::AesKdf {
+            seed: vec![0; 32],
+            rounds: 1,
+        };
+        d
+    }
+    fn att(name: &str, byte: u8) -> Attachment {
+        Attachment {
+            name: name.into(),
+            data: vec![byte],
+            protected: true,
+        }
+    }
+    fn pair(lt: i64, rt: i64) -> (Database, Database) {
+        (
+            make_db(vec![make_entry(1, "Local", lt)]),
+            make_db(vec![make_entry(1, "Remote", rt)]),
+        )
+    }
+    #[test]
+    fn added_only_locally() {
+        let (l, _) = pair(2000, 1000);
+        assert_eq!(merge(&l, &make_db(vec![])), l);
+    }
+    #[test]
+    fn added_only_remotely() {
+        let (l, _) = pair(2000, 1000);
+        assert_eq!(merge(&make_db(vec![]), &l), l);
+    }
+    fn edits(lt: i64, rt: i64, title: &str, loser: &str) {
+        let (l, r) = pair(lt, rt);
+        let m = merge(&l, &r);
+        let e = &m.root.entries[0];
+        assert_eq!(e.title(), title);
+        assert_eq!(e.history.len(), 1);
+        assert_eq!(e.history[0].title(), loser);
+        assert!(e.history[0].history.is_empty());
+    }
+    #[test]
+    fn edited_both_newer_local_wins() {
+        edits(3000, 1000, "Local", "Remote");
+    }
+    #[test]
+    fn edited_both_newer_remote_wins() {
+        edits(1000, 3000, "Remote", "Local");
+    }
+    #[test]
+    fn edited_equal_timestamps_prefers_local() {
+        edits(5000, 5000, "Local", "Remote");
+    }
+    #[test]
+    fn group_metadata_merge_independent_of_child_merge() {
+        let mut l = make_db(vec![]);
+        let mut r = l.clone();
+        let mut a = group(2);
+        a.name = "RenamedByLocal".into();
+        a.modified = Timestamp(4000);
+        a.icon_id = 1;
+        let mut b = group(2);
+        b.name = "OriginalName".into();
+        b.modified = Timestamp(1500);
+        b.entries.push(make_entry(1, "AddedByRemote", 2000));
+        l.root.groups.push(a.clone());
+        r.root.groups.push(b);
+        let m = merge(&l, &r);
+        assert_eq!(m.root.groups[0].name, a.name);
+        assert_eq!(m.root.groups[0].icon_id, 1);
+        assert_eq!(m.root.groups[0].entries.len(), 1);
+        assert_eq!(merge(&r, &l).root.groups[0], m.root.groups[0]);
+    }
+    #[test]
+    fn group_custom_data_unions_distinct_keys_and_prefers_newer_on_conflict() {
+        let mut l = make_db(vec![]);
+        let mut r = l.clone();
+        l.root.modified = Timestamp(2000);
+        r.root.modified = Timestamp(3000);
+        l.root.set_custom("local", "a");
+        l.root.set_custom("same", "old");
+        r.root.set_custom("remote", "b");
+        r.root.set_custom("same", "new");
+        let m = merge(&l, &r);
+        assert_eq!(m.root.custom("local"), Some("a"));
+        assert_eq!(m.root.custom("remote"), Some("b"));
+        assert_eq!(m.root.custom("same"), Some("new"));
+        r.root.modified = l.root.modified;
+        assert_eq!(merge(&l, &r).root.custom("same"), Some("old"));
+    }
+    fn deletion(local_delete: bool, modified: i64, deleted: i64, live: bool) {
+        let a = make_db(vec![make_entry(1, "edit", modified)]);
+        let mut b = make_db(vec![]);
+        b.deleted_objects.push(DeletedObject {
+            uuid: Uuid::from_u128(1),
+            deleted_at: Timestamp(deleted),
+        });
+        let m = if local_delete {
+            merge(&b, &a)
+        } else {
+            merge(&a, &b)
+        };
+        assert_eq!(m.root.entries.len(), usize::from(live));
+        assert_eq!(m.deleted_objects.is_empty(), live);
+    }
+    #[test]
+    fn delete_local_edit_remote_newer_resurrects() {
+        deletion(true, 3000, 2000, true);
+    }
+    #[test]
+    fn delete_local_edit_remote_older_deletion_wins() {
+        deletion(true, 1000, 5000, false);
+    }
+    #[test]
+    fn delete_remote_edit_local_newer_resurrects() {
+        deletion(false, 3000, 2000, true);
+    }
+    #[test]
+    fn delete_remote_edit_local_older_deletion_wins() {
+        deletion(false, 1000, 5000, false);
+    }
+    #[test]
+    fn delete_equal_time_deletion_wins() {
+        deletion(true, 2000, 2000, false);
+    }
+    fn moved(lt: i64, rt: i64, want: usize) {
+        let mut l = make_db(vec![]);
+        let mut r = l.clone();
+        l.root.groups = vec![group(2), group(3)];
+        r.root.groups = l.root.groups.clone();
+        let mut e = make_entry(1, "Moved", 1000);
+        e.location_changed = Timestamp(lt);
+        l.root.groups[1].entries.push(e.clone());
+        e.location_changed = Timestamp(rt);
+        r.root.groups[0].entries.push(e);
+        let m = merge(&l, &r);
+        assert_eq!(m.root.groups[want].entries.len(), 1);
+        assert_eq!(m.root.groups[1 - want].entries.len(), 0);
+    }
+    #[test]
+    fn move_local_newer_location_wins() {
+        moved(9000, 1000, 1);
+    }
+    #[test]
+    fn move_remote_newer_location_wins() {
+        moved(1000, 9000, 0);
+    }
+    #[test]
+    fn move_tie_prefers_local() {
+        moved(1000, 1000, 1);
+    }
+    #[test]
+    fn deleted_objects_union_keeps_later_deletion_time() {
+        let mut l = make_db(vec![]);
+        let mut r = l.clone();
+        l.deleted_objects.push(DeletedObject {
+            uuid: Uuid::from_u128(1),
+            deleted_at: Timestamp(1000),
+        });
+        r.deleted_objects.push(DeletedObject {
+            uuid: Uuid::from_u128(1),
+            deleted_at: Timestamp(9000),
+        });
+        assert_eq!(merge(&l, &r).deleted_objects, r.deleted_objects);
+        assert_eq!(merge(&r, &l).deleted_objects, r.deleted_objects);
+    }
+    #[test]
+    fn recycle_bin_uuid_prefers_non_nil_local_first() {
+        for a in [None, Some(Uuid::nil()), Some(Uuid::from_u128(2))] {
+            for b in [None, Some(Uuid::nil()), Some(Uuid::from_u128(3))] {
+                let mut l = make_db(vec![]);
+                let mut r = l.clone();
+                l.meta.recycle_bin_uuid = a;
+                r.meta.recycle_bin_uuid = b;
+                assert_eq!(
+                    merge(&l, &r).meta.recycle_bin_uuid,
+                    a.filter(|u| !u.is_nil()).or(b.filter(|u| !u.is_nil()))
+                );
+            }
+        }
+    }
+    fn attachments(lt: i64, rt: i64) -> (Database, Database) {
+        let (mut l, mut r) = pair(lt, rt);
+        l.root.entries[0].attachments.push(att("old.txt", 1));
+        r.root.entries[0].attachments.push(att("new.txt", 2));
+        (l, r)
+    }
+    #[test]
+    fn newer_side_attachments_win_older_goes_to_history_with_its_attachments() {
+        let (l, r) = attachments(2000, 3000);
+        let m = merge(&l, &r);
+        assert_eq!(m.root.entries[0].attachments, r.root.entries[0].attachments);
+        assert_eq!(
+            m.root.entries[0].history[0].attachments,
+            l.root.entries[0].attachments
+        );
+    }
+    #[test]
+    fn entry_only_on_one_side_keeps_attachments() {
+        let (l, _) = attachments(2000, 3000);
+        assert_eq!(merge(&l, &make_db(vec![])), l);
+        assert_eq!(merge(&make_db(vec![]), &l), l);
+    }
+    #[test]
+    fn equal_timestamps_keep_local_attachments() {
+        let (l, r) = attachments(2000, 2000);
+        assert_eq!(
+            merge(&l, &r).root.entries[0].attachments,
+            l.root.entries[0].attachments
+        );
+    }
+    #[test]
+    fn attachment_only_difference_is_not_deduplicated_away_from_history() {
+        let mut l = make_db(vec![make_entry(1, "T", 2000)]);
+        l.root.entries[0].attachments.push(att("x", 1));
+        let mut r = make_db(vec![make_entry(1, "T", 3000)]);
+        r.root.entries[0].history.push(make_entry(1, "T", 2000));
+        assert_eq!(merge(&l, &r).root.entries[0].history.len(), 2);
+    }
+    #[test]
+    fn losing_entrys_own_history_is_unioned_into_winners() {
+        let (mut l, mut r) = pair(2000, 3000);
+        l.root.entries[0].history.push(make_entry(1, "l1", 1600));
+        r.root.entries[0].history.push(make_entry(1, "w1", 1500));
+        let m = merge(&l, &r);
+        assert_eq!(
+            m.root.entries[0]
+                .history
+                .iter()
+                .map(|e| e.modified.0)
+                .collect::<Vec<_>>(),
+            vec![1500, 1600, 2000]
+        );
+    }
+    #[test]
+    fn snapshots_present_on_both_sides_are_not_duplicated() {
+        let (mut l, mut r) = pair(2000, 3000);
+        let s = make_entry(1, "s", 1500);
+        l.root.entries[0].history.push(s.clone());
+        r.root.entries[0].history.push(s);
+        assert_eq!(merge(&l, &r).root.entries[0].history.len(), 2);
+    }
+    #[test]
+    fn equal_timestamps_keep_distinct_remote_version_in_history() {
+        let (l, r) = attachments(2000, 2000);
+        let m = merge(&l, &r);
+        assert_eq!(m.root.entries[0].history.len(), 1);
+        assert_eq!(
+            m.root.entries[0].history[0].attachments,
+            r.root.entries[0].attachments
+        );
+    }
+    #[test]
+    fn equal_timestamps_identical_content_add_no_history() {
+        let (l, _) = attachments(2000, 2000);
+        assert!(merge(&l, &l).root.entries[0].history.is_empty());
+    }
+    #[test]
+    fn merged_database_survives_save_and_open() {
+        let (l, r) = attachments(2000, 3000);
+        let m = merge(&l, &r);
+        let p = secrecy::SecretString::from("pw");
+        assert_eq!(Database::open(&m.save(&p).unwrap(), &p).unwrap(), m);
+    }
+    #[test]
+    fn different_root_uuids_still_merge_children() {
+        let (l, mut r) = pair(2000, 3000);
+        r.root.uuid = Uuid::from_u128(101);
+        r.root.modified = Timestamp(9000);
+        r.root.name = "remote".into();
+        r.root.entries[0].uuid = Uuid::from_u128(2);
+        let m = merge(&l, &r);
+        assert_eq!(m.root.entries.len(), 2);
+        assert_eq!(m.root.name, l.root.name);
+        assert_eq!(m.root.uuid, l.root.uuid);
+    }
+    #[test]
+    fn remote_entry_added_to_locally_deleted_group_is_reattached_to_root() {
+        let mut l = make_db(vec![]);
+        let mut r = l.clone();
+        let mut g = group(2);
+        g.entries.push(make_entry(1, "Added", 2000));
+        r.root.groups.push(g);
+        l.deleted_objects.push(DeletedObject {
+            uuid: Uuid::from_u128(2),
+            deleted_at: Timestamp(3000),
+        });
+        let m = merge(&l, &r);
+        assert_eq!(m.root.entries.len(), 1);
+        assert!(m.root.groups.is_empty());
+    }
+    #[test]
+    fn tombstoned_entry_inside_surviving_group_is_removed() {
+        let (l, mut r) = pair(1000, 1000);
+        r.deleted_objects.push(DeletedObject {
+            uuid: Uuid::from_u128(1),
+            deleted_at: Timestamp(3000),
+        });
+        assert!(merge(&l, &r).root.entries.is_empty());
+    }
+    #[test]
+    fn merge_does_not_mutate_arguments() {
+        let (l, r) = pair(2000, 3000);
+        let before = (l.clone(), r.clone());
+        let _ = merge(&l, &r);
+        assert_eq!((l, r), before);
+    }
+    #[test]
+    fn merge_is_idempotent() {
+        let (l, r) = pair(2000, 3000);
+        let m = merge(&l, &r);
+        assert_eq!(merge(&l, &m), m);
+    }
+    #[test]
+    fn merge_with_self_is_identity_up_to_ordering() {
+        let l = make_db(vec![make_entry(1, "A", 1000), make_entry(2, "B", 2000)]);
+        assert_eq!(merge(&l, &l), l);
+    }
+    #[test]
+    fn duplicate_uuids_keep_first_tree_occurrence() {
+        let mut l = make_db(vec![
+            make_entry(1, "first", 1000),
+            make_entry(1, "second", 9000),
+        ]);
+        let mut a = group(2);
+        a.name = "first".into();
+        let mut b = group(2);
+        b.name = "second".into();
+        b.entries.push(make_entry(3, "retained", 1000));
+        l.root.groups = vec![a, b];
+        let m = merge(&l, &make_db(vec![]));
+        assert_eq!(m.root.entries.len(), 1);
+        assert_eq!(m.root.entries[0].title(), "first");
+        assert_eq!(m.root.groups.len(), 1);
+        assert_eq!(m.root.groups[0].name, "first");
+        assert_eq!(m.root.groups[0].entries.len(), 1);
+    }
+    #[test]
+    fn cyclic_parent_union_is_reattached_without_duplicates() {
+        let mut l = make_db(vec![]);
+        let mut a = group(2);
+        a.groups.push(group(3));
+        l.root.groups.push(a);
+        let mut r = make_db(vec![]);
+        let mut b = group(3);
+        b.groups.push(group(2));
+        r.root.groups.push(b);
+        let m = merge(&l, &r);
+        assert_eq!(m.root.groups.len(), 1);
+        assert_eq!(m.root.groups[0].uuid, Uuid::from_u128(2));
+        assert_eq!(m.root.groups[0].groups[0].uuid, Uuid::from_u128(3));
+        // A repeated ancestor UUID in a value tree cannot create a traversal loop.
+        l.root.groups[0].groups[0].groups.push(group(2));
+        assert_eq!(merge(&l, &r), m);
+    }
+    #[test]
+    fn orphan_group_and_entries_survive_deleted_parent() {
+        let mut l = make_db(vec![]);
+        let mut r = l.clone();
+        let mut a = group(2);
+        a.groups.push(group(3));
+        r.root.groups.push(a);
+        l.deleted_objects.push(DeletedObject {
+            uuid: Uuid::from_u128(2),
+            deleted_at: Timestamp(2000),
+        });
+        let m = merge(&l, &r);
+        assert_eq!(m.root.groups.len(), 1);
+        assert_eq!(m.root.groups[0].uuid, Uuid::from_u128(3));
+    }
+    #[test]
+    fn large_vault_has_exactly_one_sorted_copy_of_each_entry() {
+        let l = make_db(
+            (1..=20_000)
+                .rev()
+                .map(|id| make_entry(id + 1000, "entry", 1000))
+                .collect(),
+        );
+        let m = merge(&l, &l);
+        assert_eq!(m.root.entries.len(), 20_000);
+        assert!(m.root.entries.windows(2).all(|w| w[0].uuid < w[1].uuid));
+    }
+    #[test]
+    fn deep_caller_tree_is_flattened_to_serializable_depth() {
+        let mut g = group(2000);
+        for id in (2001..4000).rev() {
+            let mut p = group(id);
+            p.groups.push(g);
+            g = p;
+        }
+        let mut l = make_db(vec![]);
+        l.root.groups.push(g);
+        let m = merge(&l, &make_db(vec![]));
+        let mut count = 0;
+        let mut stack = vec![(&m.root, 1)];
+        while let Some((g, depth)) = stack.pop() {
+            assert!(depth <= 93);
+            count += 1;
+            stack.extend(g.groups.iter().map(|g| (g, depth + 1)));
+        }
+        assert_eq!(count, 2001);
+        // Iteratively dismantle the deliberately hostile input as Group's derived Drop is recursive.
+        let mut stack = std::mem::take(&mut l.root.groups);
+        while let Some(mut g) = stack.pop() {
+            stack.append(&mut g.groups);
+        }
+    }
+    #[test]
+    fn protected_field_content_is_part_of_history_identity() {
+        let (mut l, mut r) = pair(2000, 2000);
+        l.root.entries[0].set_field("Password", "one", true);
+        r.root.entries[0].set_field("Password", "two", true);
+        let m = merge(&l, &r);
+        assert_eq!(m.root.entries[0].history[0].field("Password"), Some("two"));
+    }
+    #[test]
+    fn local_settings_and_meta_are_preserved() {
+        let (mut l, mut r) = pair(2000, 3000);
+        l.meta.database_description = "local".into();
+        r.meta.database_description = "remote".into();
+        r.settings.minor_version = 1;
+        let m = merge(&l, &r);
+        assert_eq!(m.meta, l.meta);
+        assert_eq!(m.settings, l.settings);
+    }
+    #[test]
+    fn resurrection_uses_newest_surviving_version() {
+        let (mut l, r) = pair(1000, 3000);
+        l.deleted_objects.push(DeletedObject {
+            uuid: Uuid::from_u128(1),
+            deleted_at: Timestamp(2000),
+        });
+        let m = merge(&l, &r);
+        assert!(m.deleted_objects.is_empty());
+        assert_eq!(m.root.entries.len(), 1);
+    }
+    #[test]
+    fn uuid_collision_between_entry_and_group_keeps_first_occurrence() {
+        let mut l = make_db(vec![make_entry(2, "first", 1000)]);
+        let mut duplicate = group(2);
+        duplicate.entries.push(make_entry(3, "child", 1000));
+        l.root.groups.push(duplicate);
+        let m = merge(&l, &make_db(vec![]));
+        assert!(m.root.groups.is_empty());
+        assert_eq!(
+            m.root.entries.iter().map(|e| e.uuid).collect::<Vec<_>>(),
+            vec![Uuid::from_u128(2), Uuid::from_u128(3)]
+        );
+    }
+}
