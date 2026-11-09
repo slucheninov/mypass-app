@@ -48,6 +48,15 @@ fn trim_history(e: &mut Entry, items: i32, size: i64) {
         e.history.drain(..count);
     }
 }
+impl Entry {
+    /// Drops oldest history snapshots first, using the mutation API's limits.
+    /// Negative limits are unlimited; zero items clears history. Size counts
+    /// field keys/values and attachment names/bytes, so zero-cost snapshots can
+    /// remain with a zero size limit. Caller supplies oldest-first history.
+    pub fn trim_history(&mut self, max_items: i32, max_size: i64) {
+        trim_history(self, max_items, max_size);
+    }
+}
 impl Database {
     /// Returns the root group's identity.
     pub fn root_id(&self) -> Uuid {

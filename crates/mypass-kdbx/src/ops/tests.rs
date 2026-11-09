@@ -492,3 +492,38 @@ fn delete_deep_group_refuses_before_creating_recycle_bin() {
     assert!(db.delete_group(first.unwrap(), t(2)).is_err());
     assert_eq!(db, before);
 }
+
+#[test]
+fn public_trim_history_matches_mutation_policy() {
+    for (items, size, want) in [
+        (-1, -1, 3),
+        (0, -1, 0),
+        (2, -1, 2),
+        (-1, 28, 2),
+        (-1, 27, 1),
+        (-1, 0, 0),
+    ] {
+        let mut entry = make_entry("current");
+        for n in 0..3 {
+            let mut h = make_entry("v0");
+            h.modified = t(n);
+            h.attachments.push(Attachment {
+                name: "abc".into(),
+                data: vec![0; 4],
+                protected: true,
+            });
+            entry.history.push(h);
+        }
+        entry.trim_history(items, size);
+        assert_eq!(entry.history.len(), want);
+        assert_eq!(
+            entry.history.iter().map(|h| h.modified).collect::<Vec<_>>(),
+            ((3 - want)..3).map(|n| t(n as i64)).collect::<Vec<_>>()
+        );
+    }
+    // Zero size retains zero-cost snapshots, exactly as update_entry does.
+    let mut entry = make_entry("current");
+    entry.history.push(Entry::new(t(0)));
+    entry.trim_history(-1, 0);
+    assert_eq!(entry.history.len(), 1);
+}

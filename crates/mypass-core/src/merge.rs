@@ -337,7 +337,7 @@ pub fn merge(local: &Database, remote: &Database) -> Database {
         if deleted.contains_key(&id) || groups.contains_key(&id) {
             continue;
         }
-        let (entry, parent) = match (l.entries.get(&id), r.entries.get(&id)) {
+        let (mut entry, parent) = match (l.entries.get(&id), r.entries.get(&id)) {
             (Some((a, ap)), Some((b, bp))) => {
                 // Rule 6: location, independently of content; ties favour local.
                 let (parent, location) = if a.location_changed >= b.location_changed {
@@ -349,9 +349,10 @@ pub fn merge(local: &Database, remote: &Database) -> Database {
                 entry.location_changed = location;
                 (entry, parent)
             }
-            (Some((a, p)), None) | (None, Some((a, p))) => ((*a).clone(), *p), // Rule 1
+            (Some((a, p)), None) | (None, Some((a, p))) => (merge_entry(a, a), *p), // Rule 1, normalize history before trimming
             (None, None) => continue,
         };
+        entry.trim_history(local.meta.history_max_items, local.meta.history_max_size);
         // D2: adding an entry does not bump its parent's mtime. A tombstoned
         // parent must not silently swallow that still-live entry.
         let parent = if groups.contains_key(&parent) {
@@ -1195,6 +1196,62 @@ mod tests {
         assert_eq!(
             Database::open(&m.save(&password).unwrap(), &password).unwrap(),
             m
+        );
+        assert_eq!(merge(&l, &m), m);
+    }
+    #[test]
+    fn merged_history_obeys_item_and_attachment_size_limits() {
+        for (items, size, expected) in
+            [(3, -1, 3), (-1, -1, 9), (0, -1, 0), (-1, 0, 0), (-1, 26, 2)]
+        {
+            let (mut l, mut r) = pair(20, 19);
+            l.meta.history_max_items = items;
+            l.meta.history_max_size = size;
+            for (side, times) in [(&mut l, vec![1, 3, 5, 7]), (&mut r, vec![2, 4, 6, 8])] {
+                side.root.entries[0].attachments = vec![att("abc", 1)];
+                side.root.entries[0].set_field("Title", "abcd", false);
+                for time in times {
+                    let mut h = side.root.entries[0].clone();
+                    h.modified = Timestamp(time);
+                    h.history.clear();
+                    side.root.entries[0].history.push(h);
+                }
+            }
+            // Each snapshot costs Title(5)+abcd(4)+abc(3)+one byte = 13.
+            let m = merge(&l, &r);
+            assert_eq!(m.root.entries[0].history.len(), expected, "{items}/{size}");
+            let times: Vec<_> = m.root.entries[0]
+                .history
+                .iter()
+                .map(|h| h.modified.0)
+                .collect();
+            assert!(times.windows(2).all(|w| w[0] <= w[1]));
+            if items == 3 {
+                assert_eq!(times, vec![7, 8, 19]);
+            }
+            assert_eq!(merge(&l, &m), m);
+            assert_eq!(merge(&l, &r), m);
+        }
+    }
+    #[test]
+    fn one_sided_history_is_normalized_before_trim_and_repeated_merge() {
+        let mut l = make_db(vec![make_entry(1, "current", 20)]);
+        l.meta.history_max_items = 2;
+        l.root.entries[0].history = vec![
+            make_entry(1, "old", 3),
+            make_entry(1, "old", 1),
+            make_entry(1, "old", 3),
+            make_entry(1, "old", 2),
+        ];
+        let r = make_db(vec![]);
+        let m = merge(&l, &r);
+        assert_eq!(
+            m.root.entries[0]
+                .history
+                .iter()
+                .map(|h| h.modified.0)
+                .collect::<Vec<_>>(),
+            vec![2, 3]
         );
         assert_eq!(merge(&l, &m), m);
     }

@@ -335,18 +335,6 @@ fn recycle_cases() -> impl Strategy<Value = (Database, Database)> {
             side.root.groups.push(bin);
             side.meta.recycle_bin_uuid = Some(Uuid::from_u128(id));
         }
-        // Mutation API histories are oldest-first and distinct. The base
-        // hostile-history generator intentionally also emits unordered duplicates.
-        for side in [&mut l, &mut r] {
-            let mut stack = vec![&mut side.root];
-            while let Some(g) = stack.pop() {
-                for e in &mut g.entries {
-                    e.history.sort_by_key(|h| h.modified);
-                    e.history.dedup_by_key(|h| h.modified);
-                }
-                stack.extend(&mut g.groups);
-            }
-        }
         (l, r)
     })
 }
