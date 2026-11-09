@@ -25,3 +25,5 @@ pub use database::{Database, SaveSettings};
 pub use format::kdf::{Argon2Variant, KdfParams};
 pub use format::outer_header::{Cipher, Compression};
 pub use model::*;
+
+mod ops;

@@ -219,7 +219,7 @@ fn check_field_len(len: usize, limit: usize) -> Result<()> {
     Ok(())
 }
 fn validate_model(g: &Group, depth: usize, limit: usize) -> Result<()> {
-    if depth > crate::format::limits::MAX_XML_DEPTH {
+    if depth.saturating_sub(2) > crate::format::limits::MAX_GROUP_DEPTH {
         return Err(KdbxError::InvalidOperation("XML depth".into()));
     }
     crate::format::xml::validate_extras(&g.extra, depth, crate::format::xml::ParentKind::Group)?;
