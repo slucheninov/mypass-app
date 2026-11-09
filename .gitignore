@@ -1,4 +1,7 @@
-.superpowers/
-.worktrees/
-.DS_Store
 /docs/superpowers/
+.superpowers/
+/target/
+node_modules/
+/dist/
+.DS_Store
+.worktrees/
