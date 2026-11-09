@@ -125,6 +125,14 @@ mod tests {
         PasswordRulesIndex::from_entries(HashMap::from([(domain.into(), raw.into())]))
     }
     #[test]
+    fn oversized_host_has_no_rules() {
+        let index = fixture("example.com", "minlength: 10;");
+        let host = format!("{}.example.com", "a".repeat(40_000));
+        assert_eq!(index.rules_for_host(&host), None);
+        let many_labels = format!("{}example.com", "a.".repeat(100_000));
+        assert_eq!(index.rules_for_host(&many_labels), None);
+    }
+    #[test]
     fn subdomain_walk_finds_parent_rule() {
         let index = fixture("example.com", "minlength: 10; required: digit;");
         let rules = index.rules_for_host("login.accounts.example.com").unwrap();

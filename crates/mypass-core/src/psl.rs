@@ -41,6 +41,8 @@ impl PublicSuffixList {
     }
 
     /// Longest matching suffix; exceptions override wildcards and exact rules.
+    /// Canonical hosts are capped at 253 bytes with labels of at most 63 bytes,
+    /// bounding repeated hashing of the borrowed candidate suffixes.
     pub fn public_suffix(&self, host: &str) -> Option<String> {
         let normalized = canonical_host(host)?;
         let mut candidate = normalized.as_str();
@@ -65,7 +67,8 @@ impl PublicSuffixList {
         Some(longest.unwrap_or(candidate).to_owned())
     }
 
-    /// Public suffix plus one label, or None when the host is itself a suffix.
+    /// Public suffix plus one label, or None for a suffix or a host exceeding
+    /// the canonical 253-byte host / 63-byte label limits.
     pub fn registrable_domain(&self, host: &str) -> Option<String> {
         let normalized = canonical_host(host)?;
         let suffix = self.public_suffix(&normalized)?;
@@ -77,7 +80,9 @@ impl PublicSuffixList {
 
 /// Canonical lowercase ACE host, independent of the registry. As in Swift,
 /// ASCII input (including IP literals and existing ACE) is not IDNA-validated.
-/// Empty labels are refused even for ASCII, as required by the Rust contract.
+/// After stripping one optional trailing dot, the final ACE form must be at most
+/// 253 bytes, with nonempty labels of at most 63 bytes, including for ASCII.
+/// Non-ASCII input rejects `<`, `>`, `^`, `|` via the URL deny-list; ASCII passes them (Swift parity).
 pub fn canonical_host(host: &str) -> Option<String> {
     let ace = if host.is_ascii() {
         host.to_ascii_lowercase()
@@ -104,7 +109,11 @@ pub fn canonical_host(host: &str) -> Option<String> {
             .into_owned()
     };
     let body = ace.strip_suffix('.').unwrap_or(&ace);
-    if body.split('.').any(str::is_empty) {
+    if body.len() > 253
+        || body
+            .split('.')
+            .any(|label| label.is_empty() || label.len() > 63)
+    {
         return None;
     }
     Some(body.to_owned())
@@ -140,6 +149,87 @@ mod tests {
     fn check(host: &str, suffix: &str, domain: Option<&str>) {
         assert_eq!(public_suffix(host).as_deref(), Some(suffix), "{host}");
         assert_eq!(registrable_domain(host).as_deref(), domain, "{host}");
+    }
+    #[test]
+    fn oversized_hosts_fail_closed() {
+        for host in [format!("{}com", "a.".repeat(100_000)), "a".repeat(40_000)] {
+            // Check canonicalization first so RED never performs the unbounded walk.
+            assert!(canonical_host(&host).is_none());
+            assert!(public_suffix(&host).is_none());
+            assert!(registrable_domain(&host).is_none());
+        }
+    }
+    #[test]
+    fn host_length_boundary() {
+        let host = format!(
+            "{}.{}.{}.{}",
+            "a".repeat(63),
+            "b".repeat(63),
+            "c".repeat(63),
+            "d".repeat(61)
+        );
+        assert_eq!(host.len(), 253);
+        assert_eq!(canonical_host(&host).as_deref(), Some(host.as_str()));
+        assert_eq!(
+            canonical_host(&format!("{host}.")).as_deref(),
+            Some(host.as_str())
+        );
+        assert!(public_suffix(&host).is_some());
+        assert!(registrable_domain(&host).is_some());
+        let oversized = format!("{host}d");
+        assert_eq!(oversized.len(), 254);
+        assert!(canonical_host(&oversized).is_none());
+        assert!(public_suffix(&oversized).is_none());
+        assert!(registrable_domain(&oversized).is_none());
+    }
+    #[test]
+    fn label_length_boundary() {
+        let host = format!("{}.com", "a".repeat(63));
+        assert_eq!(canonical_host(&host).as_deref(), Some(host.as_str()));
+        check(&host, "com", Some(&host));
+        let oversized = format!("{}.com", "a".repeat(64));
+        assert!(canonical_host(&oversized).is_none());
+        assert!(public_suffix(&oversized).is_none());
+        assert!(registrable_domain(&oversized).is_none());
+    }
+    #[test]
+    fn idna_final_ace_length_boundaries() {
+        // U+FF41 maps to ASCII a, so the raw input can exceed the ACE byte cap.
+        let valid = format!(
+            "{}.{}.{}.{}",
+            "\u{ff41}".repeat(63),
+            "b".repeat(63),
+            "c".repeat(63),
+            "d".repeat(61)
+        );
+        let ace = canonical_host(&valid).unwrap();
+        assert_eq!(ace.len(), 253);
+        assert_eq!(
+            canonical_host(&format!("{valid}.")).as_deref(),
+            Some(ace.as_str())
+        );
+        assert!(canonical_host(&format!("{valid}d")).is_none());
+        assert!(canonical_host(&format!("{}.com", "\u{ff41}".repeat(64))).is_none());
+        // Punycode expansion also counts toward the final label limit.
+        assert!(canonical_host(&format!("{}.de", "\u{fc}".repeat(57))).is_some());
+        assert!(canonical_host(&format!("{}.de", "\u{fc}".repeat(58))).is_none());
+    }
+    #[test]
+    fn unicode_hyphens_are_allowed() {
+        for (host, expected) in [
+            ("-b\u{fc}cher.de", "xn---bcher-4ya.de"),
+            ("b\u{fc}cher-.de", "xn--bcher--3ya.de"),
+        ] {
+            assert_eq!(canonical_host(host).as_deref(), Some(expected));
+        }
+    }
+    #[test]
+    fn url_deny_list_preserves_ascii_parity() {
+        for c in ['<', '>', '^', '|'] {
+            let ascii = format!("a{c}.de");
+            assert_eq!(canonical_host(&ascii).as_deref(), Some(ascii.as_str()));
+            assert!(canonical_host(&format!("b\u{fc}cher{c}.de")).is_none());
+        }
     }
     #[test]
     fn exact_rule_com() {
