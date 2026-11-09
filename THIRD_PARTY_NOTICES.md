@@ -101,8 +101,8 @@ neither is linked or shipped. Fixture passwords and contents are documented in t
 ## Test-only (not part of any shipped artifact)
 
 `repo-guards` is a test-only workspace crate (`publish = false`) and is never shipped. The
-dev-only crates used by tests, the oracle and the repository guards (`tempfile`, `proptest`,
-`keepass`, `toml`, `serde_yaml_ng`) are not linked into any artifact.
+dev-only crates used by tests, the oracle and the repository guards (`proptest`, `keepass`, `toml`,
+`serde_yaml_ng`) are not linked into any artifact.
 
 ### Test-only KDBX oracle
 
@@ -121,4 +121,5 @@ It is a dev-dependency and is never linked into the shipped product.
 ## Atomic-write test tooling (development only)
 
 `tempfile` 3.27.0 (MIT OR Apache-2.0) supplies isolated temporary directories for
-vault-file tests. It is a dev-dependency and is never linked into the shipped product.
+workspace tests, including vault-file tests. It is a dev-dependency and is never linked
+into the shipped product.

@@ -15,6 +15,7 @@ struct Failures {
     write: Option<ErrorKind>,
     metadata: Option<ErrorKind>,
 }
+/// Test-only backend behind the `test-util` feature; never enable in production.
 /// Persistent per-operation failures and counters, including failed calls.
 pub struct FailingFileIo {
     inner: Arc<dyn FileIo>,
@@ -24,6 +25,7 @@ pub struct FailingFileIo {
     metadata: AtomicUsize,
 }
 impl FailingFileIo {
+    /// Wrap a backend with test-only failure switches and zeroed counters.
     pub fn new(inner: Arc<dyn FileIo>) -> Self {
         Self {
             inner,
@@ -38,24 +40,31 @@ impl FailingFileIo {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+    /// Persistently fail reads with this error kind until `heal`.
     pub fn fail_read(&self, kind: ErrorKind) {
         self.failures().read = Some(kind);
     }
+    /// Persistently fail writes before calling the backend until `heal`.
     pub fn fail_write_atomic(&self, kind: ErrorKind) {
         self.failures().write = Some(kind);
     }
+    /// Persistently fail metadata calls until `heal`.
     pub fn fail_metadata(&self, kind: ErrorKind) {
         self.failures().metadata = Some(kind);
     }
+    /// Clear test failures without resetting operation counters.
     pub fn heal(&self) {
         *self.failures() = Failures::default();
     }
+    /// Return the number of attempted writes, including injected failures.
     pub fn write_calls(&self) -> usize {
         self.writes.load(Ordering::Relaxed)
     }
+    /// Return the number of attempted reads, including injected failures.
     pub fn read_calls(&self) -> usize {
         self.reads.load(Ordering::Relaxed)
     }
+    /// Return the number of attempted metadata calls, including injected failures.
     pub fn metadata_calls(&self) -> usize {
         self.metadata.load(Ordering::Relaxed)
     }

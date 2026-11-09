@@ -11,29 +11,44 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+/// Metadata and digest of the last successfully opened, saved or reloaded vault.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileStamp {
+    /// Encoded file length in bytes.
     pub len: u64,
+    /// Modification time, when supplied by the backend.
     pub modified: Option<SystemTime>,
+    /// SHA-256 of the encoded vault, used when metadata ties.
     pub sha256: [u8; 32],
 }
+/// Result of a guarded save.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SaveOutcome {
+    /// Replacement and stamp refresh succeeded.
     Saved,
+    /// The guard detected a change; no bytes were written.
     ChangedOnDisk,
 }
+/// File metadata used by the concurrent-change guard.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileMeta {
+    /// Encoded file length in bytes.
     pub len: u64,
+    /// Modification time, when supplied by the backend.
     pub modified: Option<SystemTime>,
 }
 
 /// The I/O boundary for vault bytes and metadata; implementations must not log bytes.
 pub trait FileIo: Send + Sync {
+    /// Read the encoded vault bytes.
     fn read(&self, path: &Path) -> Result<Vec<u8>>;
+    /// Replace the vault atomically; an error can occur after replacement commits.
+    /// Follow the permission and durability policy of [`write_atomic`].
     fn write_atomic(&self, path: &Path, bytes: &[u8]) -> Result<()>;
+    /// Read length and modification time, following the resolved target.
     fn metadata(&self, path: &Path) -> Result<FileMeta>;
 }
+/// Production filesystem backend with atomic replacement.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PlainFileIo;
 impl FileIo for PlainFileIo {
@@ -82,9 +97,11 @@ impl fmt::Debug for VaultFile {
     }
 }
 impl VaultFile {
+    /// Resolve the path, authenticate the vault and record its stamp using [`PlainFileIo`].
     pub fn open(path: &Path, password: &SecretString) -> Result<(Self, Database)> {
         Self::open_with(Arc::new(PlainFileIo), path, password)
     }
+    /// Open and authenticate using an injected I/O backend after resolving the path.
     pub fn open_with(
         io: Arc<dyn FileIo>,
         path: &Path,
@@ -97,9 +114,12 @@ impl VaultFile {
         let stamp = stamp(io.metadata(&path)?, &bytes);
         Ok((Self { path, stamp, io }, db))
     }
+    /// Return the resolved vault path.
     pub fn path(&self) -> &Path {
         &self.path
     }
+    /// Compare metadata and, when metadata ties, the encoded content digest.
+    /// Missing files count as changed; other I/O errors propagate.
     pub fn has_changed_on_disk(&self) -> Result<bool> {
         let meta = match self.io.metadata(&self.path) {
             Err(KdbxError::Io {
@@ -121,20 +141,42 @@ impl VaultFile {
             Err(e) => Err(e),
         }
     }
+    /// Serialize first, then check for external changes immediately before replacement.
+    /// A changed file returns [`SaveOutcome::ChangedOnDisk`] without writing anything.
     /// Best-effort guard, not a cross-process lock: another writer can race the check.
+    ///
+    /// On Unix the replacement is created 0o600 and narrowed to the target's owner
+    /// read/write bits; wider modes lose group/other access, and a 0o400 target is
+    /// replaced. Ownership, ACLs and xattrs are not carried over.
+    /// An error after commit (directory sync or metadata refresh) keeps the old stamp;
+    /// the caller must reload, because the disk may already contain the replacement.
     pub fn save(&mut self, db: &Database, password: &SecretString) -> Result<SaveOutcome> {
+        self.save_serializing(|| db.save(password))
+    }
+    fn save_serializing(
+        &mut self,
+        serialize: impl FnOnce() -> Result<Vec<u8>>,
+    ) -> Result<SaveOutcome> {
+        let bytes = serialize()?;
         if self.has_changed_on_disk()? {
             return Ok(SaveOutcome::ChangedOnDisk);
         }
-        self.save_overwriting(db, password)?;
+        self.save_bytes(&bytes)?;
         Ok(SaveOutcome::Saved)
     }
+    /// Serialize and replace without checking for external changes.
+    /// Uses the permission policy of [`write_atomic`]. An error after commit keeps
+    /// the old stamp; the caller must reload before saving again.
     pub fn save_overwriting(&mut self, db: &Database, password: &SecretString) -> Result<()> {
         let bytes = db.save(password)?;
-        self.io.write_atomic(&self.path, &bytes)?;
-        self.stamp = stamp(self.io.metadata(&self.path)?, &bytes);
+        self.save_bytes(&bytes)
+    }
+    fn save_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        self.io.write_atomic(&self.path, bytes)?;
+        self.stamp = stamp(self.io.metadata(&self.path)?, bytes);
         Ok(())
     }
+    /// Authenticate the current disk content and refresh the stamp only on success.
     pub fn reload(&mut self, password: &SecretString) -> Result<Database> {
         let bytes = self.io.read(&self.path)?;
         let db = Database::open(&bytes, password)?;
@@ -174,10 +216,15 @@ fn retry_rename<T>(
         }
     }
 }
-struct TempCleanup(PathBuf);
+struct TempCleanup {
+    path: PathBuf,
+    armed: bool,
+}
 impl Drop for TempCleanup {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
+        if self.armed {
+            let _ = fs::remove_file(&self.path);
+        }
     }
 }
 fn resolve_target(path: &Path) -> io::Result<PathBuf> {
@@ -193,7 +240,12 @@ fn resolve_target(path: &Path) -> io::Result<PathBuf> {
     }
 }
 /// Replace in the same directory, syncing content before rename and the directory afterwards.
-/// If the final directory sync fails, replacement has already committed: we report the error
+/// On Unix the replacement is created 0o600, then narrowed to the existing target's
+/// owner read/write bits (mode & 0o600). Wider modes lose group/other access; even
+/// a 0o400 target is replaced. Ownership, ACLs and xattrs are not carried over.
+/// Directory-sync Unsupported/InvalidInput errors are tolerated for filesystems
+/// that cannot sync directories; durability across power loss is then not guaranteed.
+/// Any other final directory sync failure occurs after replacement has committed: we report the error
 /// but cannot safely roll back over a possible concurrent writer. The caller must reload.
 /// Cleanup is best effort if the OS denies deletion too; no bytes are ever included in errors.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -207,11 +259,42 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 fn write_atomic_using(
     path: &Path,
     bytes: &[u8],
+    rename: impl FnMut(&Path, &Path) -> io::Result<()>,
+    sleep: impl FnMut(Duration),
+) -> Result<()> {
+    write_atomic_with_sync(path, bytes, rename, sleep, sync_directory)
+}
+fn sync_directory(parent: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        fs::File::open(parent).and_then(|dir| dir.sync_all())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = parent;
+        Ok(())
+    }
+}
+fn resolve_using(
+    resolve: impl FnMut() -> io::Result<PathBuf>,
+    sleep: impl FnMut(Duration),
+) -> io::Result<PathBuf> {
+    let mut resolve = resolve;
+    if cfg!(windows) {
+        retry_rename(resolve, sleep)
+    } else {
+        resolve()
+    }
+}
+fn write_atomic_with_sync(
+    path: &Path,
+    bytes: &[u8],
     mut rename: impl FnMut(&Path, &Path) -> io::Result<()>,
     mut sleep: impl FnMut(Duration),
+    mut sync: impl FnMut(&Path) -> io::Result<()>,
 ) -> Result<()> {
     // Windows canonicalization opens a handle and can itself hit a sharing violation.
-    let target = retry_rename(|| resolve_target(path), &mut sleep).map_err(io_error)?;
+    let target = resolve_using(|| resolve_target(path), &mut sleep).map_err(io_error)?;
     let parent = target
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -239,7 +322,10 @@ fn write_atomic_using(
     }
     // Install cleanup only after create_new succeeds: never delete a pre-planted file.
     let file = options.open(&temp).map_err(io_error)?;
-    let _cleanup = TempCleanup(temp.clone());
+    let mut cleanup = TempCleanup {
+        path: temp.clone(),
+        armed: true,
+    };
     // Drop the open handle before cleanup on all pre-rename failure paths.
     let mut file = file;
     file.write_all(bytes).map_err(io_error)?;
@@ -260,10 +346,18 @@ fn write_atomic_using(
     file.sync_all().map_err(io_error)?;
     drop(file);
     retry_rename(|| rename(&temp, &target), &mut sleep).map_err(io_error)?;
-    #[cfg(unix)]
-    fs::File::open(parent)
-        .and_then(|dir| dir.sync_all())
-        .map_err(io_error)?;
+    // Rename transferred ownership; this name may now belong to another writer.
+    cleanup.armed = false;
+    match sync(parent) {
+        Ok(()) => {}
+        // Some network/FUSE volumes and macOS filesystems cannot sync directories.
+        Err(e)
+            if matches!(
+                e.kind(),
+                io::ErrorKind::Unsupported | io::ErrorKind::InvalidInput
+            ) => {}
+        Err(e) => return Err(io_error(e)),
+    }
     Ok(())
 }
 
@@ -279,6 +373,179 @@ mod tests {
         time::{Duration, SystemTime},
     };
     use tempfile::TempDir;
+
+    // Records the guard and commit boundary without using a clock or background worker.
+    struct RecordingIo {
+        events: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    }
+    impl FileIo for RecordingIo {
+        fn read(&self, path: &Path) -> Result<Vec<u8>> {
+            self.events.lock().unwrap().push("read");
+            PlainFileIo.read(path)
+        }
+        fn metadata(&self, path: &Path) -> Result<FileMeta> {
+            self.events.lock().unwrap().push("metadata");
+            PlainFileIo.metadata(path)
+        }
+        fn write_atomic(&self, path: &Path, bytes: &[u8]) -> Result<()> {
+            self.events.lock().unwrap().push("write");
+            PlainFileIo.write_atomic(path, bytes)
+        }
+    }
+    #[test]
+    fn guard_runs_after_serialisation_immediately_before_write() {
+        let (_d, mut f, db) = fixture();
+        let events = Arc::new(std::sync::Mutex::new(vec![]));
+        f.io = Arc::new(RecordingIo {
+            events: events.clone(),
+        });
+        assert_eq!(
+            f.save_serializing(|| {
+                let bytes = db.save(&password())?;
+                events.lock().unwrap().push("serialized");
+                Ok(bytes)
+            })
+            .unwrap(),
+            SaveOutcome::Saved
+        );
+        assert_eq!(
+            *events.lock().unwrap(),
+            ["serialized", "metadata", "read", "write", "metadata"]
+        );
+    }
+    #[test]
+    fn change_during_serialisation_is_not_overwritten() {
+        let (_d, mut f, db, io) = injected();
+        let path = f.path().to_owned();
+        let old = f.stamp.clone();
+        assert_eq!(
+            f.save_serializing(|| {
+                let bytes = db.save(&password())?;
+                fs::write(&path, b"external during serialization").unwrap();
+                Ok(bytes)
+            })
+            .unwrap(),
+            SaveOutcome::ChangedOnDisk
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"external during serialization");
+        assert_eq!(io.write_calls(), 0);
+        assert_eq!(f.stamp, old);
+    }
+    struct PostCommitIo {
+        inner: Arc<FailingFileIo>,
+        sync_error: Option<ErrorKind>,
+    }
+    impl FileIo for PostCommitIo {
+        fn read(&self, path: &Path) -> Result<Vec<u8>> {
+            self.inner.read(path)
+        }
+        fn metadata(&self, path: &Path) -> Result<FileMeta> {
+            self.inner.metadata(path)
+        }
+        fn write_atomic(&self, path: &Path, bytes: &[u8]) -> Result<()> {
+            if let Some(kind) = self.sync_error {
+                write_atomic_with_sync(
+                    path,
+                    bytes,
+                    |s, t| fs::rename(s, t),
+                    |_| panic!("sleep"),
+                    |_| Err(kind.into()),
+                )
+            } else {
+                self.inner.write_atomic(path, bytes)?;
+                self.inner.fail_metadata(ErrorKind::PermissionDenied);
+                Ok(())
+            }
+        }
+    }
+    #[test]
+    fn post_commit_metadata_failure_forces_reload_on_next_save() {
+        let (_d, mut f, db, io) = injected();
+        let old = f.stamp.clone();
+        let before = fs::read(f.path()).unwrap();
+        f.io = Arc::new(PostCommitIo {
+            inner: io.clone(),
+            sync_error: None,
+        });
+        io_kind(f.save(&db, &password()), ErrorKind::PermissionDenied);
+        assert_ne!(fs::read(f.path()).unwrap(), before);
+        assert_eq!(f.stamp, old);
+        io.heal();
+        assert!(f.has_changed_on_disk().unwrap());
+        assert_eq!(
+            f.save(&db, &password()).unwrap(),
+            SaveOutcome::ChangedOnDisk
+        );
+        assert_eq!(io.write_calls(), 1);
+    }
+    #[test]
+    fn directory_sync_unsupported_and_invalid_input_are_success() {
+        for kind in [ErrorKind::Unsupported, ErrorKind::InvalidInput] {
+            let (_d, mut f, db, io) = injected();
+            let old = f.stamp.clone();
+            f.io = Arc::new(PostCommitIo {
+                inner: io,
+                sync_error: Some(kind),
+            });
+            assert_eq!(f.save(&db, &password()).unwrap(), SaveOutcome::Saved);
+            assert_ne!(f.stamp, old);
+            assert!(!f.has_changed_on_disk().unwrap());
+        }
+    }
+    #[test]
+    fn directory_sync_other_error_keeps_old_stamp_after_commit() {
+        let (_d, mut f, db, io) = injected();
+        let old = f.stamp.clone();
+        let before = fs::read(f.path()).unwrap();
+        f.io = Arc::new(PostCommitIo {
+            inner: io,
+            sync_error: Some(ErrorKind::PermissionDenied),
+        });
+        io_kind(f.save(&db, &password()), ErrorKind::PermissionDenied);
+        assert_ne!(fs::read(f.path()).unwrap(), before);
+        assert_eq!(f.stamp, old);
+        assert!(f.has_changed_on_disk().unwrap());
+        assert_eq!(
+            f.save(&db, &password()).unwrap(),
+            SaveOutcome::ChangedOnDisk
+        );
+    }
+    #[test]
+    fn cleanup_does_not_remove_reused_temp_path_after_rename() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("vault");
+        let mut reused = None;
+        write_atomic_using(
+            &path,
+            b"new",
+            |source, target| {
+                fs::rename(source, target)?;
+                fs::write(source, b"another owner")?;
+                reused = Some(source.to_owned());
+                Ok(())
+            },
+            |_| panic!("sleep"),
+        )
+        .unwrap();
+        assert_eq!(fs::read(reused.unwrap()).unwrap(), b"another owner");
+        assert_eq!(fs::read(path).unwrap(), b"new");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn unix_resolution_permission_denied_never_sleeps() {
+        let mut calls = 0;
+        let mut sleeps = vec![];
+        let result = resolve_using(
+            || {
+                calls += 1;
+                Err(ErrorKind::PermissionDenied.into())
+            },
+            |delay| sleeps.push(delay),
+        );
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::PermissionDenied);
+        assert_eq!(calls, 1);
+        assert!(sleeps.is_empty());
+    }
 
     fn password() -> SecretString {
         "synthetic-test-password".into()
