@@ -117,3 +117,8 @@ notice; the full licence is included in the crate's `LICENSE` file.
 
 `proptest` 1.12.0 (MIT OR Apache-2.0) generates and shrinks deterministic merge cases.
 It is a dev-dependency and is never linked into the shipped product.
+
+## Atomic-write test tooling (development only)
+
+`tempfile` 3.27.0 (MIT OR Apache-2.0) supplies isolated temporary directories for
+vault-file tests. It is a dev-dependency and is never linked into the shipped product.
