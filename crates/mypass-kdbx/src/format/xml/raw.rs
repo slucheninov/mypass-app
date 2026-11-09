@@ -188,18 +188,25 @@ pub(super) fn is_protected(value: Option<&str>) -> bool {
 }
 
 /// Extras cannot escape their containing element or consume protected-value keystream.
-pub(crate) fn validate_extras(extras: &[crate::RawXml], parent_depth: usize) -> Result<()> {
+pub(crate) fn validate_extras(
+    extras: &[crate::RawXml],
+    parent_depth: usize,
+    parent: super::ParentKind,
+) -> Result<()> {
     let invalid = || crate::KdbxError::InvalidOperation("unsafe raw XML extra".into());
     for extra in extras {
         let mut reader = Reader::from_str(&extra.0);
         let mut depth = 0usize;
         let mut elements = 0usize;
-        if extra.0.contains('\0') {
+        if !extra.0.chars().all(is_xml10_char) {
             return Err(invalid());
         }
         loop {
             match reader.read_event().map_err(|_| invalid())? {
                 Event::Start(e) | Event::Empty(e) => {
+                    if depth == 0 && parent.is_known_element(e.name().as_ref()) {
+                        return Err(invalid());
+                    }
                     if parent_depth + depth >= MAX_XML_DEPTH {
                         return Err(invalid());
                     }
@@ -208,7 +215,9 @@ pub(crate) fn validate_extras(extras: &[crate::RawXml], parent_depth: usize) -> 
                         let value = attr
                             .normalized_value(quick_xml::XmlVersion::Implicit1_0)
                             .map_err(|_| invalid())?;
-                        if attr.key.as_ref() == "Protected" && is_protected(Some(&value)) {
+                        if !value.chars().all(is_xml10_char)
+                            || (attr.key.as_ref() == "Protected" && is_protected(Some(&value)))
+                        {
                             return Err(invalid());
                         }
                     }
@@ -227,7 +236,17 @@ pub(crate) fn validate_extras(extras: &[crate::RawXml], parent_depth: usize) -> 
                 Event::Text(t) if depth == 0 && !t.xml10_content().trim().is_empty() => {
                     return Err(invalid())
                 }
-                Event::CData(_) | Event::GeneralRef(_) if depth == 0 => return Err(invalid()),
+                Event::GeneralRef(r) => {
+                    if depth == 0 {
+                        return Err(invalid());
+                    }
+                    let entity = format!("&{};", r.xml10_content());
+                    let value = quick_xml::escape::unescape(&entity).map_err(|_| invalid())?;
+                    if !value.chars().all(is_xml10_char) {
+                        return Err(invalid());
+                    }
+                }
+                Event::CData(_) if depth == 0 => return Err(invalid()),
                 Event::Eof => break,
                 _ => {}
             }
@@ -237,4 +256,9 @@ pub(crate) fn validate_extras(extras: &[crate::RawXml], parent_depth: usize) -> 
         }
     }
     Ok(())
+}
+
+/// XML 1.0 Char production, shared with model-text cleaning.
+pub(super) fn is_xml10_char(c: char) -> bool {
+    matches!(c, '\u{9}' | '\u{a}' | '\u{d}' | '\u{20}'..='\u{d7ff}' | '\u{e000}'..='\u{fffd}' | '\u{10000}'..='\u{10ffff}')
 }

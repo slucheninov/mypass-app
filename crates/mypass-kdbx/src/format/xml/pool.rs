@@ -52,11 +52,12 @@ impl AttachmentPool {
                 .is_some_and(|b| b.data == a.data && b.protected == a.protected)
         })
     }
-    pub(crate) fn index_of(&self, a: &Attachment) -> usize {
+    pub(crate) fn index_of(&self, a: &Attachment) -> crate::Result<usize> {
         // Only called for the same immutable tree passed to collecting. Expected O(1) pool
         // lookup after hashing the attachment, independent of the number of other binaries.
-        self.find_index(&attachment_key(a), a)
-            .unwrap_or(self.binaries.len())
+        self.find_index(&attachment_key(a), a).ok_or_else(|| {
+            crate::KdbxError::InvalidOperation("attachment missing from pool".into())
+        })
     }
 }
 #[cfg(test)]
@@ -76,6 +77,20 @@ mod tests {
         e.attachments = attachments;
         g.entries.push(e);
         g
+    }
+    #[test]
+    fn missing_pool_attachment_returns_error() {
+        let a = make_attachment(&[1], false);
+        let pool = AttachmentPool::collecting(&make_root(vec![a.clone()]));
+        for missing in [make_attachment(&[2], false), make_attachment(&[1], true)] {
+            assert_eq!(
+                pool.index_of(&missing),
+                Err(crate::KdbxError::InvalidOperation(
+                    "attachment missing from pool".into()
+                ))
+            );
+        }
+        assert_eq!(pool.index_of(&a), Ok(0));
     }
     #[test]
     fn digest_collision_still_requires_exact_content() {
@@ -99,7 +114,7 @@ mod tests {
         let pool = AttachmentPool::collecting(&make_root(all));
         assert_eq!(pool.binaries.len(), 2000);
         for (i, a) in originals.iter().enumerate() {
-            assert_eq!(pool.index_of(a), i);
+            assert_eq!(pool.index_of(a).unwrap(), i);
             assert_eq!(pool.binaries[i].data, a.data);
             assert_eq!(pool.binaries[i].protected, a.protected);
         }
@@ -111,8 +126,8 @@ mod tests {
         b.name = "other".into();
         let pool = AttachmentPool::collecting(&make_root(vec![a.clone(), b.clone()]));
         assert_eq!(pool.binaries.len(), 1);
-        assert_eq!(pool.index_of(&a), 0);
-        assert_eq!(pool.index_of(&b), 0);
+        assert_eq!(pool.index_of(&a).unwrap(), 0);
+        assert_eq!(pool.index_of(&b).unwrap(), 0);
     }
     #[test]
     fn same_content_different_protection_stored_twice() {
@@ -120,8 +135,8 @@ mod tests {
         let b = make_attachment(&[1, 2], false);
         let pool = AttachmentPool::collecting(&make_root(vec![a.clone(), b.clone()]));
         assert_eq!(pool.binaries.len(), 2);
-        assert_eq!(pool.index_of(&a), 0);
-        assert_eq!(pool.index_of(&b), 1);
+        assert_eq!(pool.index_of(&a).unwrap(), 0);
+        assert_eq!(pool.index_of(&b).unwrap(), 1);
         assert!(!pool.binaries[1].protected);
     }
     #[test]

@@ -4,7 +4,11 @@ use crate::{format::inner_stream::InnerStream, *};
 use base64::{prelude::BASE64_STANDARD as B64, Engine};
 use zeroize::Zeroizing;
 fn clean(s: &str) -> Zeroizing<String> {
-    Zeroizing::new(s.chars().filter(|c| matches!(*c, '\u{9}' | '\u{a}' | '\u{d}' | '\u{20}'..='\u{d7ff}' | '\u{e000}'..='\u{fffd}' | '\u{10000}'..='\u{10ffff}')).collect())
+    Zeroizing::new(
+        s.chars()
+            .filter(|c| super::raw::is_xml10_char(*c))
+            .collect(),
+    )
 }
 fn text(out: &mut String, tag: &str, s: &str) {
     out.push('<');
@@ -79,7 +83,12 @@ fn times(
     }
     out.push_str("</Times>");
 }
-fn entry(out: &mut String, e: &Entry, pool: &AttachmentPool, stream: &mut InnerStream) {
+fn entry(
+    out: &mut String,
+    e: &Entry,
+    pool: &AttachmentPool,
+    stream: &mut InnerStream,
+) -> Result<()> {
     out.push_str("<Entry>");
     text(out, "UUID", &B64.encode(e.uuid.as_bytes()));
     text(out, "IconID", &e.icon_id.to_string());
@@ -107,7 +116,7 @@ fn entry(out: &mut String, e: &Entry, pool: &AttachmentPool, stream: &mut InnerS
     for a in &e.attachments {
         out.push_str("<Binary>");
         text(out, "Key", &a.name);
-        out.push_str(&format!("<Value Ref=\"{}\"/></Binary>", pool.index_of(a)));
+        out.push_str(&format!("<Value Ref=\"{}\"/></Binary>", pool.index_of(a)?));
     }
     for a in &e.string_arrays {
         out.push_str("<StringArray>");
@@ -122,13 +131,19 @@ fn entry(out: &mut String, e: &Entry, pool: &AttachmentPool, stream: &mut InnerS
     if !e.history.is_empty() {
         out.push_str("<History>");
         for e in &e.history {
-            entry(out, e, pool, stream);
+            entry(out, e, pool, stream)?;
         }
         out.push_str("</History>");
     }
     out.push_str("</Entry>");
+    Ok(())
 }
-fn group(out: &mut String, g: &Group, pool: &AttachmentPool, stream: &mut InnerStream) {
+fn group(
+    out: &mut String,
+    g: &Group,
+    pool: &AttachmentPool,
+    stream: &mut InnerStream,
+) -> Result<()> {
     out.push_str("<Group>");
     text(out, "UUID", &B64.encode(g.uuid.as_bytes()));
     text(out, "Name", &g.name);
@@ -143,14 +158,19 @@ fn group(out: &mut String, g: &Group, pool: &AttachmentPool, stream: &mut InnerS
     custom(out, &g.custom_data);
     extra(out, &g.extra);
     for e in &g.entries {
-        entry(out, e, pool, stream);
+        entry(out, e, pool, stream)?;
     }
     for g in &g.groups {
-        group(out, g, pool, stream);
+        group(out, g, pool, stream)?;
     }
     out.push_str("</Group>");
+    Ok(())
 }
-pub(crate) fn encode(db: &Database, pool: &AttachmentPool, stream: &mut InnerStream) -> String {
+pub(crate) fn encode(
+    db: &Database,
+    pool: &AttachmentPool,
+    stream: &mut InnerStream,
+) -> Result<String> {
     let mut out = String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?><KeePassFile><Meta>");
     let m = &db.meta;
     for (tag, v) in [
@@ -184,7 +204,7 @@ pub(crate) fn encode(db: &Database, pool: &AttachmentPool, stream: &mut InnerStr
     custom(&mut out, &m.custom_data);
     extra(&mut out, &m.extra);
     out.push_str("</Meta><Root>");
-    group(&mut out, &db.root, pool, stream);
+    group(&mut out, &db.root, pool, stream)?;
     out.push_str("<DeletedObjects>");
     for d in &db.deleted_objects {
         out.push_str("<DeletedObject>");
@@ -193,7 +213,7 @@ pub(crate) fn encode(db: &Database, pool: &AttachmentPool, stream: &mut InnerStr
         out.push_str("</DeletedObject>");
     }
     out.push_str("</DeletedObjects></Root></KeePassFile>");
-    out
+    Ok(out)
 }
 #[cfg(test)]
 mod tests {
@@ -218,7 +238,30 @@ mod tests {
             &[0; 64],
         )
         .unwrap();
-        encode(&db, &pool, &mut stream)
+        encode(&db, &pool, &mut stream).unwrap()
+    }
+    #[test]
+    fn missing_pool_attachment_refuses_encoding() {
+        let mut db = Database::new("root");
+        let pool = AttachmentPool::collecting(&db.root);
+        let mut e = Entry::new(Timestamp(0));
+        e.attachments.push(Attachment {
+            name: "missing".into(),
+            data: vec![9],
+            protected: false,
+        });
+        db.root.entries.push(e);
+        let mut stream = InnerStream::new(
+            crate::format::inner_header::InnerStreamKind::ChaCha20,
+            &[0; 64],
+        )
+        .unwrap();
+        assert_eq!(
+            encode(&db, &pool, &mut stream),
+            Err(KdbxError::InvalidOperation(
+                "attachment missing from pool".into()
+            ))
+        );
     }
     #[test]
     fn protected_field_marked_protected_and_not_plaintext_in_xml() {

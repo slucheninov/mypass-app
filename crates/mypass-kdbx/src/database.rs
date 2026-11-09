@@ -67,7 +67,11 @@ impl Database {
             xml::{encode, pool::AttachmentPool, validate_document},
         };
         validate_model(&self.root, 3, limit)?;
-        crate::format::xml::validate_extras(&self.meta.extra, 2)?;
+        crate::format::xml::validate_extras(
+            &self.meta.extra,
+            2,
+            crate::format::xml::ParentKind::Meta,
+        )?;
         validate_times(
             self.deleted_objects
                 .iter()
@@ -103,7 +107,7 @@ impl Database {
         fill_random(&mut inner_key)?;
         let pool = AttachmentPool::collecting(&self.root);
         let mut stream = InnerStream::new(InnerStreamKind::ChaCha20, &inner_key)?;
-        let xml = Zeroizing::new(encode::encode(self, &pool, &mut stream));
+        let xml = Zeroizing::new(encode::encode(self, &pool, &mut stream)?);
         validate_document(xml.as_bytes())?;
         if stream.is_failed() {
             return Err(KdbxError::InvalidOperation("inner stream exhausted".into()));
@@ -218,7 +222,7 @@ fn validate_model(g: &Group, depth: usize, limit: usize) -> Result<()> {
     if depth > crate::format::limits::MAX_XML_DEPTH {
         return Err(KdbxError::InvalidOperation("XML depth".into()));
     }
-    crate::format::xml::validate_extras(&g.extra, depth)?;
+    crate::format::xml::validate_extras(&g.extra, depth, crate::format::xml::ParentKind::Group)?;
     validate_times(
         [g.created, g.modified, g.accessed, g.location_changed]
             .into_iter()
@@ -244,7 +248,7 @@ fn validate_entry(e: &Entry, depth: usize, limit: usize) -> Result<()> {
     if depth > crate::format::limits::MAX_XML_DEPTH {
         return Err(KdbxError::InvalidOperation("XML depth".into()));
     }
-    crate::format::xml::validate_extras(&e.extra, depth)?;
+    crate::format::xml::validate_extras(&e.extra, depth, crate::format::xml::ParentKind::Entry)?;
     validate_times(
         [e.created, e.modified, e.accessed, e.location_changed]
             .into_iter()
@@ -586,6 +590,139 @@ mod save_tests {
                 );
             }
         }
+    }
+    // Removing the parent-name check must let these corrupt or model-changing extras save.
+    #[test]
+    fn shadowing_raw_extras_are_rejected_for_each_parent() {
+        let cases: &[(&str, &[&str])] = &[
+            (
+                "meta",
+                &[
+                    "<Generator>evil</Generator>",
+                    "<DatabaseName>evil</DatabaseName>",
+                    "<DatabaseDescription/>",
+                    "<DefaultUserName/>",
+                    "<HistoryMaxItems>x</HistoryMaxItems>",
+                    "<HistoryMaxSize>x</HistoryMaxSize>",
+                    "<RecycleBinEnabled>True</RecycleBinEnabled>",
+                    "<RecycleBinUUID/>",
+                    "<CustomData><Item><Key>x</Key><Value>evil</Value></Item></CustomData>",
+                    "<Binary/>",
+                ],
+            ),
+            (
+                "group",
+                &[
+                    "<UUID>notbase64</UUID>",
+                    "<Extension/><UUID>notbase64</UUID>",
+                    "<UUID>AQAAAAAAAAAAAAAAAAAAAA==</UUID>",
+                    "<Name>renamed</Name>",
+                    "<IconID>x</IconID>",
+                    "<Times><CreationTime>garbage</CreationTime></Times>",
+                    "<Entry/>",
+                    "<Group/>",
+                    "<CustomData/>",
+                    "<Binary/>",
+                ],
+            ),
+            (
+                "entry",
+                &[
+                    "<UUID>notbase64</UUID>",
+                    "<Extension/><UUID>notbase64</UUID>",
+                    "<UUID>AQAAAAAAAAAAAAAAAAAAAA==</UUID>",
+                    "<IconID>x</IconID>",
+                    "<String><Key>Password</Key><Value>evil</Value></String>",
+                    "<StringArray><Key>x</Key><Value>evil</Value></StringArray>",
+                    "<Binary><Key>x</Key><Value Ref='0'/></Binary>",
+                    "<Times><CreationTime>garbage</CreationTime></Times>",
+                    "<CustomData/>",
+                    "<History><Entry/></History>",
+                ],
+            ),
+        ];
+        for (parent, fragments) in cases {
+            for fragment in *fragments {
+                for history in [false, true] {
+                    let mut db = make_db();
+                    let mut e = Entry::new(Timestamp(0));
+                    e.set_field("Password", "secret", true);
+                    let extra = RawXml((*fragment).into());
+                    match *parent {
+                        "meta" => db.meta.extra.push(extra),
+                        "group" => db.root.extra.push(extra),
+                        _ if history => {
+                            let mut h = Entry::new(Timestamp(0));
+                            h.extra.push(extra);
+                            e.history.push(h);
+                        }
+                        _ => e.extra.push(extra),
+                    }
+                    db.root.entries.push(e);
+                    assert_eq!(
+                        db.save(&SecretString::from("p")),
+                        Err(KdbxError::InvalidOperation("unsafe raw XML extra".into())),
+                        "{parent}, history={history}, {fragment}"
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn xml10_invalid_raw_extras_are_rejected() {
+        for fragment in [
+            "<A>\u{1}</A>",
+            "<A>\u{fffe}</A>",
+            "<A>\u{ffff}</A>",
+            "<A>&#xFFFE;</A>",
+            "<A>&#xFFFF;</A>",
+            "<A>&#0;</A>",
+            "<A>&#xD800;</A>",
+            "<A>&#x1;</A>",
+            "<A>&#x110000;</A>",
+            "<A a='&#xFFFE;'/>",
+            "<A><![CDATA[\u{1}]]></A>",
+            "<A><!--\u{fffe}--></A>",
+        ] {
+            let mut db = make_db();
+            db.root.extra.push(RawXml(fragment.into()));
+            assert_eq!(
+                db.save(&SecretString::from("p")),
+                Err(KdbxError::InvalidOperation("unsafe raw XML extra".into())),
+                "{fragment:?}"
+            );
+        }
+    }
+    #[test]
+    fn similar_names_and_xml10_valid_raw_extras_round_trip_byte_equal() {
+        let fragments = [
+            "<Names/>",
+            "<TimesX/>",
+            "<tags/>",
+            "<Extension><UUID>notbase64</UUID></Extension>",
+            "<A>\t\n\r😀&#9;&#10;&#13;&#x1F600;&amp;</A>",
+        ];
+        let mut db = make_db();
+        let mut e = Entry::new(Timestamp(0));
+        let mut h = Entry::new(Timestamp(0));
+        for fragment in fragments {
+            let extra = RawXml(fragment.into());
+            db.meta.extra.push(extra.clone());
+            db.root.extra.push(extra.clone());
+            e.extra.push(extra.clone());
+            h.extra.push(extra);
+        }
+        db.meta.extra.extend([
+            RawXml("<MemoryProtection/>".into()),
+            RawXml("<CustomIcons/>".into()),
+        ]);
+        // Neither name is typed on Entry; Expires is handled only inside Times.
+        e.extra
+            .extend([RawXml("<Notes/>".into()), RawXml("<Expires/>".into())]);
+        e.history.push(h);
+        db.root.entries.push(e);
+        let p = SecretString::from("p");
+        assert_eq!(Database::open(&db.save(&p).unwrap(), &p).unwrap(), db);
     }
     #[test]
     fn benign_raw_extras_round_trip_byte_equal_in_all_locations() {

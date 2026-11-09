@@ -1,3 +1,4 @@
+use super::names::{EntryElement, GroupElement, MetaElement};
 use super::{
     raw::{self, Node},
     time,
@@ -166,11 +167,13 @@ impl Context<'_> {
             extra: vec![],
         };
         for c in &n.children {
-            match c.name.as_str() {
-                "UUID" => g.uuid = uuid(text(c)?)?,
-                "Name" => g.name = text(c)?.to_owned(),
-                "IconID" => g.icon_id = text(c)?.parse().map_err(|_| corrupt("icon ID"))?,
-                "Times" => {
+            match GroupElement::from_name(&c.name) {
+                Some(GroupElement::Uuid) => g.uuid = uuid(text(c)?)?,
+                Some(GroupElement::Name) => g.name = text(c)?.to_owned(),
+                Some(GroupElement::IconID) => {
+                    g.icon_id = text(c)?.parse().map_err(|_| corrupt("icon ID"))?
+                }
+                Some(GroupElement::Times) => {
                     let t = times(c)?;
                     g.created = t.created.unwrap_or(Timestamp(0));
                     g.modified = t.modified.unwrap_or(Timestamp(0));
@@ -179,11 +182,12 @@ impl Context<'_> {
                     g.expires = t.expires;
                     g.expiry_time = t.expiry;
                 }
-                "Entry" => g.entries.push(self.entry(c)?),
-                "Group" => g.groups.push(self.group(c)?),
-                "CustomData" => g.custom_data = custom(c)?,
-                "Binary" => { /* Binary elements are attachments, never raw XML. */ }
-                _ => self.extra(c, &mut g.extra)?,
+                Some(GroupElement::Entry) => g.entries.push(self.entry(c)?),
+                Some(GroupElement::Group) => g.groups.push(self.group(c)?),
+                Some(GroupElement::CustomData) => g.custom_data = custom(c)?,
+                Some(GroupElement::Binary) => { /* Binary elements are attachments, never raw XML. */
+                }
+                None => self.extra(c, &mut g.extra)?,
             }
         }
         Ok(g)
@@ -207,10 +211,12 @@ impl Context<'_> {
             extra: vec![],
         };
         for c in &n.children {
-            match c.name.as_str() {
-                "UUID" => e.uuid = uuid(text(c)?)?,
-                "IconID" => e.icon_id = text(c)?.parse().map_err(|_| corrupt("icon ID"))?,
-                "String" => {
+            match EntryElement::from_name(&c.name) {
+                Some(EntryElement::Uuid) => e.uuid = uuid(text(c)?)?,
+                Some(EntryElement::IconID) => {
+                    e.icon_id = text(c)?.parse().map_err(|_| corrupt("icon ID"))?
+                }
+                Some(EntryElement::String) => {
                     let v = c.child("Value");
                     if v.is_some_and(|v| v.invalid_protected_utf8) {
                         return Err(corrupt("protected UTF-8"));
@@ -221,7 +227,7 @@ impl Context<'_> {
                         protected: v.is_some_and(|v| v.attr("Protected") == Some("True")),
                     });
                 }
-                "StringArray" => e.string_arrays.push(StringArray {
+                Some(EntryElement::StringArray) => e.string_arrays.push(StringArray {
                     key: value(c, "Key")?.into(),
                     values: c
                         .children
@@ -230,7 +236,7 @@ impl Context<'_> {
                         .map(|v| text(v).map(str::to_owned))
                         .collect::<Result<Vec<_>>>()?,
                 }),
-                "Binary" => {
+                Some(EntryElement::Binary) => {
                     if let Some(binary) = c
                         .child("Value")
                         .and_then(|v| v.attr("Ref"))
@@ -252,7 +258,7 @@ impl Context<'_> {
                         self.refs += 1;
                     }
                 }
-                "Times" => {
+                Some(EntryElement::Times) => {
                     let t = times(c)?;
                     e.created = t.created.unwrap_or(Timestamp(0));
                     e.modified = t.modified.unwrap_or(Timestamp(0));
@@ -262,15 +268,15 @@ impl Context<'_> {
                     e.expiry_time = t.expiry;
                     e.usage_count = t.usage;
                 }
-                "CustomData" => e.custom_data = custom(c)?,
-                "History" => {
+                Some(EntryElement::CustomData) => e.custom_data = custom(c)?,
+                Some(EntryElement::History) => {
                     for h in &c.children {
                         if h.name == "Entry" {
                             e.history.push(self.entry(h)?);
                         }
                     }
                 }
-                _ => self.extra(c, &mut e.extra)?,
+                None => self.extra(c, &mut e.extra)?,
             }
         }
         Ok(e)
@@ -278,28 +284,30 @@ impl Context<'_> {
     fn meta(&mut self, n: &Node) -> Result<Meta> {
         let mut m = Meta::default();
         for c in &n.children {
-            match c.name.as_str() {
-                "Generator" => m.generator = text(c)?.to_owned(),
-                "DatabaseName" => m.database_name = text(c)?.to_owned(),
-                "DatabaseDescription" => m.database_description = text(c)?.to_owned(),
-                "DefaultUserName" => m.default_username = text(c)?.to_owned(),
-                "HistoryMaxItems" => {
+            match MetaElement::from_name(&c.name) {
+                Some(MetaElement::Generator) => m.generator = text(c)?.to_owned(),
+                Some(MetaElement::DatabaseName) => m.database_name = text(c)?.to_owned(),
+                Some(MetaElement::DatabaseDescription) => {
+                    m.database_description = text(c)?.to_owned()
+                }
+                Some(MetaElement::DefaultUserName) => m.default_username = text(c)?.to_owned(),
+                Some(MetaElement::HistoryMaxItems) => {
                     m.history_max_items =
                         text(c)?.parse().map_err(|_| corrupt("history max items"))?
                 }
-                "HistoryMaxSize" => {
+                Some(MetaElement::HistoryMaxSize) => {
                     m.history_max_size =
                         text(c)?.parse().map_err(|_| corrupt("history max size"))?
                 }
-                "RecycleBinEnabled" => {
+                Some(MetaElement::RecycleBinEnabled) => {
                     m.recycle_bin_enabled = text(c)?.eq_ignore_ascii_case("true")
                 }
-                "RecycleBinUUID" => {
+                Some(MetaElement::RecycleBinUUID) => {
                     m.recycle_bin_uuid = uuid(text(c)?).ok().filter(|u| !u.is_nil())
                 }
-                "CustomData" => m.custom_data = custom(c)?,
-                "Binary" => {}
-                _ => self.extra(c, &mut m.extra)?,
+                Some(MetaElement::CustomData) => m.custom_data = custom(c)?,
+                Some(MetaElement::Binary) => {}
+                None => self.extra(c, &mut m.extra)?,
             }
         }
         Ok(m)
