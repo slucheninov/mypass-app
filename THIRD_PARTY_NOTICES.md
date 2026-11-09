@@ -48,6 +48,10 @@ place, generated with `cargo metadata` and reviewed by hand.
 |---|---|---|---|
 | `mypass-kdbx` | workspace | Apache-2.0 | MyPass (own code) |
 | `mypass-core` | workspace | Apache-2.0 | MyPass (own code) |
+| `sha2` | 0.11.1 | MIT OR Apache-2.0 | `mypass-kdbx` header hashes |
+| `hmac` | 0.13.0 | MIT OR Apache-2.0 | `mypass-kdbx` header authentication |
+| `subtle` | 2.6.1 | BSD-3-Clause | `mypass-kdbx` constant-time digest comparison |
+| `zeroize` | 1.9.1 | Apache-2.0 OR MIT | `mypass-kdbx` derived key cleanup |
 
 ## Test-only (not part of any shipped artifact)
 
