@@ -103,7 +103,14 @@ impl fmt::Debug for Database {
         }
         let (e, g) = counts(&self.root);
         // KDF Debug currently contains salts: format the parameter set explicitly without them.
-        let kdf=match &self.settings.kdf{KdfParams::AesKdf{rounds,..}=>format!("AES-KDF rounds={rounds}"),KdfParams::Argon2{variant,memory_bytes,iterations,parallelism,version,..}=>format!("{variant:?} memory={memory_bytes} iterations={iterations} parallelism={parallelism} version={version}")};
+        let kdf = match &self.settings.kdf {
+            KdfParams::AesKdf { rounds, .. } => format!("AES-KDF rounds={rounds}"),
+            KdfParams::Argon2 {
+                variant, memory_bytes, iterations, parallelism, version, ..
+            } => format!(
+                "{variant:?} memory={memory_bytes} iterations={iterations} parallelism={parallelism} version={version}"
+            ),
+        };
         f.debug_struct("Database")
             .field("entries", &e)
             .field("groups", &g)
@@ -171,9 +178,8 @@ mod tests {
     #[test]
     fn header_sha_and_kdf_limits_precede_transform() {
         let rounds = 1_000_000_001;
-        assert!(
-            matches!(Database::open(&make_vector(rounds,true),&SecretString::from("x")),Err(KdbxError::Corrupt(ref s)) if s == "header checksum")
-        );
+        let result = Database::open(&make_vector(rounds, true), &SecretString::from("x"));
+        assert!(matches!(result, Err(KdbxError::Corrupt(ref s)) if s == "header checksum"));
         assert!(matches!(
             Database::open(&make_vector(rounds, false), &SecretString::from("x")),
             Err(KdbxError::InvalidKdfParameters(_))
@@ -184,8 +190,7 @@ mod tests {
         let data = include_bytes!("../tests/fixtures/aeskdf-aes256-none.kdbx");
         let mut wire = data.to_vec();
         wire.push(0);
-        assert!(
-            matches!(Database::open(&wire,&SecretString::from("TestMasterPass123")),Err(KdbxError::Corrupt(ref s)) if s=="trailing block data")
-        );
+        let result = Database::open(&wire, &SecretString::from("TestMasterPass123"));
+        assert!(matches!(result, Err(KdbxError::Corrupt(ref s)) if s == "trailing block data"));
     }
 }

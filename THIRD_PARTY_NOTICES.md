@@ -60,7 +60,6 @@ place, generated with `cargo metadata` and reviewed by hand.
 | `chacha20` | 0.10.2 | MIT OR Apache-2.0 | `mypass-kdbx` ChaCha20 outer and inner ciphers |
 | `salsa20` | 0.11.0 | MIT OR Apache-2.0 | `mypass-kdbx` Salsa20 inner random stream |
 | `flate2` | 1.1.11 | MIT OR Apache-2.0 | `mypass-kdbx` gzip compression and bounded decompression |
-
 | `quick-xml` | 0.42.0 | MIT | `mypass-kdbx` bounded XML decoder |
 | `uuid` | 1.29.2 | Apache-2.0 OR MIT | `mypass-kdbx` model identifiers |
 | `base64` | 0.23.1 | MIT OR Apache-2.0 | `mypass-kdbx` XML binary encoding |

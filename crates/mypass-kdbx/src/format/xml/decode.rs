@@ -150,8 +150,21 @@ impl Context<'_> {
     }
     fn group(&mut self, n: &Node) -> Result<Group> {
         // Missing times/UUID default deterministically; decoding never invents wall-clock values.
-        let mut g = Group::new("", Timestamp(0));
-        g.uuid = Uuid::nil();
+        let mut g = Group {
+            uuid: Uuid::nil(),
+            name: String::new(),
+            icon_id: 0,
+            created: Timestamp(0),
+            modified: Timestamp(0),
+            accessed: Timestamp(0),
+            location_changed: Timestamp(0),
+            expires: false,
+            expiry_time: None,
+            entries: vec![],
+            groups: vec![],
+            custom_data: vec![],
+            extra: vec![],
+        };
         for c in &n.children {
             match c.name.as_str() {
                 "UUID" => g.uuid = uuid(text(c)?)?,
@@ -176,8 +189,23 @@ impl Context<'_> {
         Ok(g)
     }
     fn entry(&mut self, n: &Node) -> Result<Entry> {
-        let mut e = Entry::new(Timestamp(0));
-        e.uuid = Uuid::nil();
+        let mut e = Entry {
+            uuid: Uuid::nil(),
+            icon_id: 0,
+            fields: vec![],
+            string_arrays: vec![],
+            attachments: vec![],
+            created: Timestamp(0),
+            modified: Timestamp(0),
+            accessed: Timestamp(0),
+            location_changed: Timestamp(0),
+            expires: false,
+            expiry_time: None,
+            usage_count: 0,
+            custom_data: vec![],
+            history: vec![],
+            extra: vec![],
+        };
         for c in &n.children {
             match c.name.as_str() {
                 "UUID" => e.uuid = uuid(text(c)?)?,

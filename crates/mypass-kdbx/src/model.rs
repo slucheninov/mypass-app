@@ -28,7 +28,7 @@ pub struct Field {
     pub value: String,
     pub protected: bool,
 }
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct StringArray {
     pub key: String,
     pub values: Vec<String>,
@@ -45,7 +45,7 @@ pub struct CustomDataItem {
     pub value: String,
     pub last_modified: Option<Timestamp>,
 }
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct RawXml(pub String);
 #[derive(Clone, PartialEq)]
 pub struct Entry {
@@ -210,6 +210,21 @@ impl Default for Meta {
         }
     }
 }
+impl fmt::Debug for RawXml {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RawXml")
+            .field("len", &self.0.len())
+            .finish()
+    }
+}
+impl fmt::Debug for StringArray {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StringArray")
+            .field("key", &self.key)
+            .field("values_len", &self.values.len())
+            .finish()
+    }
+}
 impl fmt::Debug for Field {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Field")
@@ -294,6 +309,11 @@ mod tests {
             value: "custom-secret".into(),
             last_modified: None,
         });
+        e.extra.push(RawXml("<Secret>raw-secret</Secret>".into()));
+        e.string_arrays.push(StringArray {
+            key: "array".into(),
+            values: vec!["array-secret".into()],
+        });
         let mut root = Group::new("group-secret", Timestamp(0));
         root.entries.push(e);
         let meta = Meta {
@@ -331,10 +351,14 @@ mod tests {
             &db.meta,
             &db.root,
             &e.custom_data[0],
+            &e.extra[0],
+            &e.string_arrays[0],
         ];
         for obj in objects {
             for rendered in [format!("{obj:?}"), format!("{obj:#?}")] {
                 for secret in [
+                    "raw-secret",
+                    "array-secret",
                     "hunter2-secret",
                     "plain-secret",
                     "notes-secret",

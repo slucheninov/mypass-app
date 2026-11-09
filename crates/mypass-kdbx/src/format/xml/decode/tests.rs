@@ -87,7 +87,20 @@ fn iso8601_times_accepted() {
     ))
     .unwrap();
     assert_eq!(d.root.created, Timestamp(0));
+    for (iso_text, seconds) in [
+        ("2000-02-29T00:00:00Z", 951_782_400),
+        // The existing parser accepts :60 and maps it to the next minute.
+        ("2000-02-29T00:00:60Z", 951_782_460),
+    ] {
+        let d = read(&make_xml(&format!(
+            "<Times><CreationTime>{iso_text}</CreationTime></Times>"
+        )))
+        .unwrap();
+        assert_eq!(d.root.created, Timestamp(seconds));
+    }
     for s in [
+        "1900-02-29T00:00:00Z",
+        "2000-04-31T00:00:00Z",
         "2001-02-29T00:00:00Z",
         "2000-13-01T00:00:00Z",
         "2000-01-32T00:00:00Z",
@@ -123,7 +136,17 @@ fn make_protected(unknown: bool) -> (String, InnerStream) {
             BASE64_STANDARD.encode(a)
         )
     };
-    (make_xml(&format!("{first}<Entry><String><Key>Password</Key><Value Protected=\"True\">{}</Value></String></Entry>",BASE64_STANDARD.encode(b))),InnerStream::new(InnerStreamKind::ChaCha20,&[7;64]).unwrap())
+    (
+        make_xml(&format!(
+            concat!(
+                "{first}<Entry><String><Key>Password</Key>",
+                "<Value Protected=\"True\">{}</Value></String></Entry>"
+            ),
+            BASE64_STANDARD.encode(b),
+            first = first,
+        )),
+        InnerStream::new(InnerStreamKind::ChaCha20, &[7; 64]).unwrap(),
+    )
 }
 #[test]
 fn protected_value_decrypted_in_document_order() {
@@ -142,7 +165,12 @@ fn unknown_protected_element_dropped_but_consumes_keystream() {
 }
 #[test]
 fn unknown_meta_and_entry_elements_preserved_verbatim() {
-    let s="<KeePassFile><Meta><MemoryProtection><ProtectPassword>True</ProtectPassword></MemoryProtection><CustomIcons/></Meta><Root><Group><Entry><Tags>a;b</Tags><ForegroundColor>#ffffff</ForegroundColor><AutoType><Enabled>True</Enabled></AutoType></Entry></Group></Root></KeePassFile>";
+    let s = concat!(
+        "<KeePassFile><Meta><MemoryProtection><ProtectPassword>True</ProtectPassword>",
+        "</MemoryProtection><CustomIcons/></Meta><Root><Group><Entry><Tags>a;b</Tags>",
+        "<ForegroundColor>#ffffff</ForegroundColor><AutoType><Enabled>True</Enabled></AutoType>",
+        "</Entry></Group></Root></KeePassFile>",
+    );
     let d = read(s).unwrap();
     assert_eq!(
         d.meta.extra,
@@ -162,16 +190,46 @@ fn unknown_meta_and_entry_elements_preserved_verbatim() {
             RawXml("<AutoType><Enabled>True</Enabled></AutoType>".into())
         ]
     );
+    let markup = r#"<Foo b='1' a="&amp;"><![CDATA[x<]]> <Bar /><A></A>
+  <!-- keep me --> &amp; </Foo>"#;
+    let xml = format!(
+        concat!(
+            "<KeePassFile><Meta>{markup}</Meta><Root><Group>{markup}<Entry>{markup}</Entry></Group>",
+            "</Root></KeePassFile>",
+        ),
+        markup = markup,
+    );
+    let d = read(&xml).unwrap();
+    for extra in [&d.meta.extra, &d.root.extra, &d.root.entries[0].extra] {
+        assert_eq!(
+            extra,
+            &vec![RawXml(
+                r#"<Foo b='1' a="&amp;"><![CDATA[x<]]> <Bar /><A></A>
+  <!-- keep me --> &amp; </Foo>"#
+                    .into()
+            )]
+        );
+    }
+    // quick-xml Writer preserves these forms; end-tag whitespace (</A >) normalises.
+    let d = read(&make_xml("<A></A >")).unwrap();
+    assert_eq!(d.root.extra, vec![RawXml("<A></A>".into())]);
 }
 #[test]
 fn dangling_and_non_numeric_binary_refs_skipped_and_counted() {
-    let d=read(&make_xml("<Entry><Binary><Key>a</Key><Value Ref='0'/></Binary><Binary><Value Ref='no'/></Binary></Entry>")).unwrap();
+    let d = read(&make_xml(concat!(
+        "<Entry><Binary><Key>a</Key><Value Ref='0'/></Binary>",
+        "<Binary><Value Ref='no'/></Binary></Entry>"
+    )))
+    .unwrap();
     assert_eq!(d.dropped_attachment_refs, 2);
     assert!(d.root.entries[0].attachments.is_empty());
 }
 #[test]
 fn duplicate_attachment_names_within_entry_preserved() {
-    let s=make_xml("<Entry><Binary><Key>x</Key><Value Ref='0'/></Binary><Binary><Key>x</Key><Value Ref='0'/></Binary></Entry>");
+    let s = make_xml(concat!(
+        "<Entry><Binary><Key>x</Key><Value Ref='0'/></Binary><Binary><Key>x</Key><Value Ref='0'/>",
+        "</Binary></Entry>",
+    ));
     let d = decode(
         s.as_bytes(),
         &[InnerBinary {
@@ -234,13 +292,21 @@ fn recycle_bin_uuid_present_absent_and_malformed() {
 }
 #[test]
 fn group_custom_data_and_item_last_modified() {
-    let d=read(&make_xml("<CustomData><Item><Key>x</Key><Value>y</Value><LastModificationTime>1970-01-01T00:00:00Z</LastModificationTime></Item></CustomData>")).unwrap();
+    let d = read(&make_xml(concat!(
+        "<CustomData><Item><Key>x</Key><Value>y</Value>",
+        "<LastModificationTime>1970-01-01T00:00:00Z</LastModificationTime></Item></CustomData>",
+    )))
+    .unwrap();
     assert_eq!(d.root.custom("x"), Some("y"));
     assert_eq!(d.root.custom_data[0].last_modified, Some(Timestamp(0)));
 }
 #[test]
 fn string_arrays_and_plain_kp2a_field() {
-    let d=read(&make_xml("<Entry><String><Key>KP2A_URL</Key><Value>plain</Value></String><StringArray><Key>KP2A_URL</Key><Value>a</Value><Value>b</Value></StringArray></Entry>")).unwrap();
+    let d = read(&make_xml(concat!(
+        "<Entry><String><Key>KP2A_URL</Key><Value>plain</Value></String><StringArray>",
+        "<Key>KP2A_URL</Key><Value>a</Value><Value>b</Value></StringArray></Entry>",
+    )))
+    .unwrap();
     assert_eq!(d.root.entries[0].field("KP2A_URL"), Some("plain"));
     assert_eq!(
         d.root.entries[0].string_arrays,
@@ -275,7 +341,7 @@ fn bomless_utf16_rejected_by_encoding_check() {
 #[test]
 fn literal_inner_keystream_ciphertext_recovers_plaintext() {
     // libsodium-derived first keystream bytes 8c e8 bc 61 0a XOR ASCII "first".
-    let xml=make_xml("<Entry><String><Key>Password</Key><Value Protected='True'>6oHOEn4=</Value></String></Entry>");
+    let xml = make_xml("<Entry><String><Key>Password</Key><Value Protected='True'>6oHOEn4=</Value></String></Entry>");
     let mut stream =
         InnerStream::new(InnerStreamKind::ChaCha20, &(0..64).collect::<Vec<u8>>()).unwrap();
     let d = decode(xml.as_bytes(), &[], &mut |v| stream.apply(v)).unwrap();
@@ -296,7 +362,14 @@ fn unknown_protected_binary_consumed_and_dropped() {
     enc.apply(&mut bytes);
     let mut value = b"password".to_vec();
     enc.apply(&mut value);
-    let xml=make_xml(&format!("<Unknown Protected='True'>{}</Unknown><Entry><String><Key>Password</Key><Value Protected='True'>{}</Value></String></Entry>",BASE64_STANDARD.encode(&bytes),BASE64_STANDARD.encode(&value)));
+    let xml = make_xml(&format!(
+        concat!(
+            "<Unknown Protected='True'>{}</Unknown><Entry><String><Key>Password</Key>",
+            "<Value Protected='True'>{}</Value></String></Entry>",
+        ),
+        BASE64_STANDARD.encode(&bytes),
+        BASE64_STANDARD.encode(&value)
+    ));
     let mut dec = InnerStream::new(InnerStreamKind::ChaCha20, &[7; 64]).unwrap();
     let d = decode(xml.as_bytes(), &[], &mut |v| dec.apply(v)).unwrap();
     assert_eq!(d.root.entries[0].field("Password"), Some("password"));
@@ -322,7 +395,16 @@ fn protected_document_order_includes_meta_and_history() {
             BASE64_STANDARD.encode(b)
         })
         .collect();
-    let xml=format!("<KeePassFile><Meta><Unknown Protected='True'>{}</Unknown></Meta><Root><Group><Entry><String><Key>Password</Key><Value Protected='True'>{}</Value></String><History><Entry><String><Key>Password</Key><Value Protected='True'>{}</Value></String></Entry></History></Entry></Group></Root></KeePassFile>",values[0],values[1],values[2]);
+    let xml = format!(
+        concat!(
+            "<KeePassFile><Meta><Unknown Protected='True'>{}</Unknown></Meta>",
+            "<Root><Group><Entry><String><Key>Password</Key>",
+            "<Value Protected='True'>{}</Value></String><History><Entry>",
+            "<String><Key>Password</Key><Value Protected='True'>{}</Value>",
+            "</String></Entry></History></Entry></Group></Root></KeePassFile>",
+        ),
+        values[0], values[1], values[2],
+    );
     let mut dec = InnerStream::new(InnerStreamKind::ChaCha20, &[7; 64]).unwrap();
     let d = decode(xml.as_bytes(), &[], &mut |v| dec.apply(v)).unwrap();
     assert_eq!(d.root.entries[0].field("Password"), Some("entry"));
@@ -334,7 +416,12 @@ fn protected_document_order_includes_meta_and_history() {
 }
 #[test]
 fn deleted_objects_and_meta_defaults_decode() {
-    let d=read("<KeePassFile><Meta/><Root><Group/><DeletedObjects><DeletedObject><UUID>AAECAwQFBgcICQoLDA0ODw==</UUID><DeletionTime>1970-01-01T00:00:00Z</DeletionTime></DeletedObject></DeletedObjects></Root></KeePassFile>").unwrap();
+    let d = read(concat!(
+        "<KeePassFile><Meta/><Root><Group/><DeletedObjects><DeletedObject>",
+        "<UUID>AAECAwQFBgcICQoLDA0ODw==</UUID><DeletionTime>1970-01-01T00:00:00Z</DeletionTime>",
+        "</DeletedObject></DeletedObjects></Root></KeePassFile>",
+    ))
+    .unwrap();
     assert_eq!(d.meta.history_max_items, 10);
     assert_eq!(d.meta.history_max_size, 6_291_456);
     assert_eq!(d.deleted_objects.len(), 1);
@@ -383,4 +470,27 @@ fn attachment_expansion_budget_includes_history_and_all_entries() {
         decode_with_limit(xml.as_bytes(), &pool, &mut |_| {}, 2),
         Err(KdbxError::Corrupt(_))
     ));
+}
+
+#[test]
+fn attachment_expansion_counter_overflow_is_corrupt() {
+    let pool = [InnerBinary {
+        data: vec![1],
+        protected: false,
+    }];
+    let mut ctx = Context {
+        pool: &pool,
+        attachment_bytes: u64::MAX,
+        attachment_limit: u64::MAX,
+        refs: 0,
+        protected: 0,
+    };
+    let node = raw::parse(
+        b"<Entry><Binary><Value Ref='0'/></Binary></Entry>",
+        &mut |_| {},
+    )
+    .unwrap();
+    let result = ctx.entry(&node);
+    assert!(matches!(result, Err(KdbxError::Corrupt(ref message))
+        if message == "attachment expansion exceeds limit"));
 }
