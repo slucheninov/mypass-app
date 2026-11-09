@@ -462,3 +462,16 @@ fn move_subtree_exact_limit_and_one_over_are_atomic() {
     db.purge_entry(eid, t(4)).unwrap();
     db.purge_group(sid, t(5)).unwrap();
 }
+
+#[test]
+fn insertion_stamps_location_changed() {
+    let mut db = Database::new("test");
+    let e = Entry::new(Timestamp(1));
+    let eid = e.uuid;
+    let g = Group::new("new", Timestamp(1));
+    let gid = g.uuid;
+    db.add_entry(db.root_id(), e, Timestamp(999)).unwrap();
+    db.add_group(db.root_id(), g, Timestamp(999)).unwrap();
+    assert_eq!(db.find_entry(eid).unwrap().location_changed, Timestamp(999));
+    assert_eq!(db.find_group(gid).unwrap().location_changed, Timestamp(999));
+}

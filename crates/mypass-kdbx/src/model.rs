@@ -45,6 +45,8 @@ pub struct CustomDataItem {
     pub value: String,
     pub last_modified: Option<Timestamp>,
 }
+/// Validated opaque XML; saving and reopening splits multiple top-level elements
+/// into separate extras and normalizes inter-element comments/PI/whitespace.
 #[derive(Clone, PartialEq)]
 pub struct RawXml(pub String);
 #[derive(Clone, PartialEq)]

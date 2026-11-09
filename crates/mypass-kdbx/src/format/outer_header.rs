@@ -184,7 +184,7 @@ mod tests {
             public_custom_data: None,
         }
     }
-    fn field(out: &mut Vec<u8>, id: u8, value: &[u8]) {
+    fn raw_field(out: &mut Vec<u8>, id: u8, value: &[u8]) {
         out.push(id);
         out.extend_from_slice(&(value.len() as u32).to_le_bytes());
         out.extend_from_slice(value);
@@ -207,13 +207,13 @@ mod tests {
             (11, h.kdf_parameters.serialize()),
         ] {
             if omit != Some(id) {
-                field(&mut out, id, &value);
+                raw_field(&mut out, id, &value);
             }
         }
         for (id, value) in extra {
-            field(&mut out, *id, value);
+            raw_field(&mut out, *id, value);
         }
-        field(&mut out, 0, &[13, 10, 13, 10]);
+        raw_field(&mut out, 0, &[13, 10, 13, 10]);
         out
     }
     #[test]
@@ -272,13 +272,13 @@ mod tests {
         }
     }
     #[test]
-    fn missing_master_seed_names_field() {
+    fn missing_master_seed_names_raw_field() {
         assert!(
             matches!(OuterHeader::parse(&wire(Some(4), &AES, &[2;16], &[])), Err(KdbxError::Corrupt(s)) if s.contains("MasterSeed"))
         );
     }
     #[test]
-    fn missing_kdf_parameters_names_field() {
+    fn missing_kdf_parameters_names_raw_field() {
         assert!(
             matches!(OuterHeader::parse(&wire(Some(11), &AES, &[2;16], &[])), Err(KdbxError::Corrupt(s)) if s.contains("KdfParameters"))
         );
@@ -314,7 +314,7 @@ mod edge_tests {
         assert_eq!(OuterHeader::parse(&bytes).unwrap().1, expected);
     }
     #[test]
-    fn missing_cipher_compression_and_iv_name_field() {
+    fn missing_cipher_compression_and_iv_name_raw_field() {
         for (id, name) in [
             (2, "CipherID"),
             (3, "CompressionFlags"),

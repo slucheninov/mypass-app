@@ -26,6 +26,8 @@ fn gunzip_with_limit(data: &[u8], limit: u64) -> Result<Vec<u8>> {
     // Read just one byte beyond the bound to distinguish exactly-at-limit success.
     // Never trust the gzip trailer's attacker-controlled uncompressed size.
     let mut reader = GzDecoder::new(data).take(limit.saturating_add(1));
+    // Best-effort erasure: Vec growth may leave earlier allocations unwiped.
+    // Preallocating the 1 GiB cap for every vault would itself amplify hostile input.
     let mut output = Zeroizing::new(Vec::new());
     reader
         .read_to_end(&mut output)
@@ -47,6 +49,7 @@ mod tests {
     fn gzip_has_magic_1f8b() {
         let compressed = gzip(b"Hello, KeePassXC!").unwrap();
         assert_eq!(&compressed[..2], &[0x1f, 0x8b]);
+        assert_eq!(&compressed[8..10], &[0, 255]);
         assert_eq!(&compressed[4..8], &[0; 4]); // deterministic mtime
         assert_eq!(compressed, gzip(b"Hello, KeePassXC!").unwrap());
     }

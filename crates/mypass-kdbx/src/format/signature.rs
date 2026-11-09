@@ -11,7 +11,7 @@ const SIGNATURE_2: u32 = 0xB54B_FB67;
 const SIGNATURE_LEN: usize = 12;
 /// Only KDBX major version 4 is read.
 const SUPPORTED_MAJOR: u16 = 4;
-/// Major version of KDB1 files (second magic `0xB54BFB65`), which are not KDBX at all.
+/// Historical major-1 word is also classified as NotKdbx, even with KDBX magic.
 const KDB1_MAJOR: u16 = 1;
 
 /// The file format version from the signature block.
@@ -138,6 +138,7 @@ mod tests {
 
     #[test]
     fn kdb1_signature_is_not_kdbx() {
+        assert_eq!(parse(&with_version(0, 1)), Err(KdbxError::NotKdbx));
         let bytes = [
             0x03, 0xD9, 0xA2, 0x9A, 0x65, 0xFB, 0x4B, 0xB5, 0x00, 0x00, 0x01, 0x00,
         ];

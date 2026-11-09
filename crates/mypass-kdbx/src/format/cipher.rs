@@ -129,6 +129,10 @@ mod tests {
         // One padded block (02 02). CBC IV flips alter exactly the chosen plaintext
         // byte, leaving a deterministic malformed suffix instead of random padding.
         let encrypted = encrypt(Cipher::Aes256Cbc, &[0; 32], &[0; 16], &[0x42; 14]).unwrap();
+        assert_eq!(
+            decrypt(Cipher::Aes256Cbc, &[0; 32], &[0; 16], &encrypted).unwrap(),
+            vec![0x42; 14]
+        );
         for (position, flip) in [(15, 2), (15, 19), (14, 1)] {
             let mut iv = [0; 16];
             iv[position] ^= flip; // zero length, length > 16, inconsistent bytes
@@ -139,7 +143,14 @@ mod tests {
     #[test]
     fn cipher_rejects_wrong_iv_lengths() {
         for cipher in [Cipher::Aes256Cbc, Cipher::ChaCha20] {
-            for len in [0, 8, cipher.iv_len() - 1, cipher.iv_len() + 1, 24] {
+            for len in [
+                0,
+                8,
+                cipher.iv_len() - 1,
+                cipher.iv_len() + 1,
+                if cipher == Cipher::Aes256Cbc { 12 } else { 16 },
+                24,
+            ] {
                 assert_corrupt(encrypt(cipher, &[0; 32], &vec![0; len], &[0; 16]));
                 assert_corrupt(decrypt(cipher, &[0; 32], &vec![0; len], &[0; 16]));
             }

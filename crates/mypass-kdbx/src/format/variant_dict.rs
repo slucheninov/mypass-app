@@ -142,6 +142,21 @@ mod tests {
     use super::*;
     use crate::error::KdbxError;
 
+    #[test]
+    fn permissive_parse_policy_is_stable() {
+        let dict = VariantDictionary {
+            items: vec![
+                ("x".into(), VariantValue::U32(1)),
+                ("x".into(), VariantValue::U32(2)),
+            ],
+        };
+        let mut bytes = dict.serialize();
+        bytes[0] = 0xff;
+        bytes.extend_from_slice(b"trailing");
+        let parsed = VariantDictionary::parse(&bytes).unwrap();
+        assert_eq!(parsed, dict);
+        assert_eq!(parsed.get("x"), Some(&VariantValue::U32(1)));
+    }
     fn sample() -> VariantDictionary {
         let mut d = VariantDictionary::default();
         d.set("u32", VariantValue::U32(7));

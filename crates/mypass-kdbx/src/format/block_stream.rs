@@ -45,11 +45,7 @@ pub(crate) fn read(data: &[u8], hmac_key_base: &[u8; 64]) -> Result<Vec<u8>> {
 
 /// A zero block size uses the default; oversized sizes are capped to the reader's block limit.
 pub(crate) fn write(plain: &[u8], hmac_key_base: &[u8; 64], block_size: usize) -> Vec<u8> {
-    let block_size = if block_size == 0 {
-        DEFAULT_BLOCK_SIZE
-    } else {
-        block_size.min(MAX_BLOCK_LEN)
-    };
+    let block_size = effective_block_size(block_size);
     let mut stream = Vec::new();
     let mut index = 0_u64;
     for payload in plain.chunks(block_size) {
@@ -60,6 +56,14 @@ pub(crate) fn write(plain: &[u8], hmac_key_base: &[u8; 64], block_size: usize) -
     }
     append_block(&mut stream, index, &[], hmac_key_base);
     stream
+}
+
+fn effective_block_size(block_size: usize) -> usize {
+    if block_size == 0 {
+        DEFAULT_BLOCK_SIZE
+    } else {
+        block_size.min(MAX_BLOCK_LEN)
+    }
 }
 
 fn block_mac(index: u64, length: u32, payload: &[u8], base: &[u8; 64]) -> Hmac<Sha256> {
@@ -93,6 +97,19 @@ mod tests {
     use hmac::{Hmac, KeyInit, Mac};
     use sha2::{Digest, Sha256, Sha512};
 
+    #[test]
+    fn clamp_and_terminator_authentication_order() {
+        assert_eq!(effective_block_size(0), DEFAULT_BLOCK_SIZE);
+        assert_eq!(effective_block_size(1), 1);
+        assert_eq!(effective_block_size(usize::MAX), MAX_BLOCK_LEN);
+        let mut data = write(b"x", &[0; 64], 1);
+        data[37] ^= 1;
+        data.push(0);
+        assert_eq!(
+            read(&data, &[0; 64]),
+            Err(KdbxError::Corrupt("block 1 HMAC".into()))
+        );
+    }
     // Independent oracle: raw index/length bytes and RustCrypto calls only; no production helpers.
     fn oracle_block(index: u64, payload: &[u8], base: &[u8; 64]) -> Vec<u8> {
         let mut key_input = index.to_le_bytes().to_vec();

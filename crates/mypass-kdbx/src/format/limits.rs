@@ -33,5 +33,7 @@ pub(crate) const MAX_DECOMPRESSED_LEN: u64 = 1 << 30;
 pub(crate) const MAX_XML_DEPTH: usize = 100;
 
 /// Maximum serializable group chain depth, including the root group.
+/// Deliberately stricter than opening shallow-content chains at depths 94..97:
+/// future entries/history must remain serializable at every accepted group.
 /// Reserves KeePassFile/Root and Entry/History/Entry/String/Value XML nesting.
 pub const MAX_GROUP_DEPTH: usize = MAX_XML_DEPTH - 7;
