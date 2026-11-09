@@ -57,6 +57,17 @@ fn version(e: &Entry) -> impl std::hash::Hash + Eq + '_ {
     (
         e.uuid,
         e.modified,
+        e.string_arrays
+            .iter()
+            .map(|a| (a.key.as_str(), &a.values))
+            .collect::<Vec<_>>(),
+        e.custom_data
+            .iter()
+            .map(|c| (c.key.as_str(), c.value.as_str(), c.last_modified))
+            .collect::<Vec<_>>(),
+        e.icon_id,
+        e.expires,
+        e.expiry_time,
         e.fields
             .iter()
             .map(|f| (f.key.as_str(), f.value.as_str(), f.protected))
@@ -1254,5 +1265,45 @@ mod tests {
             vec![2, 3]
         );
         assert_eq!(merge(&l, &m), m);
+    }
+    fn check_tied_extra_edit(edit: impl FnOnce(&mut Entry)) {
+        let mut l = make_db(vec![make_entry(1, "same", 2000)]);
+        let mut r = l.clone();
+        edit(&mut r.root.entries[0]);
+        let m = merge(&l, &r);
+        assert!(m.root.entries[0].content_eq(&l.root.entries[0]));
+        assert_eq!(m.root.entries[0].history, vec![r.root.entries[0].clone()]);
+        assert_eq!(merge(&l, &m), m);
+        // Identical versions still add nothing.
+        l.root.entries[0] = r.root.entries[0].clone();
+        assert!(merge(&l, &r).root.entries[0].history.is_empty());
+    }
+    #[test]
+    fn equal_timestamps_differing_only_in_additional_urls_keep_remote_in_history() {
+        check_tied_extra_edit(|e| {
+            e.string_arrays.push(mypass_kdbx::StringArray {
+                key: "KP2A_URL".into(),
+                values: vec!["https://extra.example".into()],
+            })
+        });
+    }
+    #[test]
+    fn equal_timestamps_differing_only_in_custom_data_keep_remote_in_history() {
+        check_tied_extra_edit(|e| {
+            e.custom_data.push(mypass_kdbx::CustomDataItem {
+                key: "plugin".into(),
+                value: "value".into(),
+                last_modified: Some(Timestamp(2000)),
+            })
+        });
+    }
+    #[test]
+    fn equal_timestamps_differing_only_in_icon_id_keep_remote_in_history() {
+        check_tied_extra_edit(|e| e.icon_id = 42);
+    }
+    #[test]
+    fn equal_timestamps_differing_only_in_expiry_keep_remote_in_history() {
+        check_tied_extra_edit(|e| e.expires = true);
+        check_tied_extra_edit(|e| e.expiry_time = Some(Timestamp(3000)));
     }
 }
