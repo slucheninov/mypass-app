@@ -134,7 +134,7 @@ fn finish<'a>(
         .get(start as usize..reader.buffer_position() as usize)
         .ok_or_else(|| corrupt("XML position"))?;
     node.raw = raw;
-    if node.attr("Protected") == Some("True") {
+    if is_protected(node.attr("Protected")) {
         if !node.children.is_empty() {
             return Err(corrupt("nested protected XML"));
         }
@@ -180,4 +180,61 @@ pub(super) fn raw_xml(node: &Node) -> Result<crate::RawXml> {
     Ok(crate::RawXml(
         String::from_utf8(writer.into_inner()).map_err(|_| corrupt("raw XML UTF-8"))?,
     ))
+}
+
+/// The wire predicate is deliberately case-sensitive, after attribute normalization.
+pub(super) fn is_protected(value: Option<&str>) -> bool {
+    value == Some("True")
+}
+
+/// Extras cannot escape their containing element or consume protected-value keystream.
+pub(crate) fn validate_extras(extras: &[crate::RawXml], parent_depth: usize) -> Result<()> {
+    let invalid = || crate::KdbxError::InvalidOperation("unsafe raw XML extra".into());
+    for extra in extras {
+        let mut reader = Reader::from_str(&extra.0);
+        let mut depth = 0usize;
+        let mut elements = 0usize;
+        if extra.0.contains('\0') {
+            return Err(invalid());
+        }
+        loop {
+            match reader.read_event().map_err(|_| invalid())? {
+                Event::Start(e) | Event::Empty(e) => {
+                    if parent_depth + depth >= MAX_XML_DEPTH {
+                        return Err(invalid());
+                    }
+                    for attr in e.attributes() {
+                        let attr = attr.map_err(|_| invalid())?;
+                        let value = attr
+                            .normalized_value(quick_xml::XmlVersion::Implicit1_0)
+                            .map_err(|_| invalid())?;
+                        if attr.key.as_ref() == "Protected" && is_protected(Some(&value)) {
+                            return Err(invalid());
+                        }
+                    }
+                    elements += 1;
+                    // quick-xml exposes the consumed source position for empty tags.
+                    if !extra
+                        .0
+                        .get(..reader.buffer_position() as usize)
+                        .is_some_and(|s| s.ends_with("/>"))
+                    {
+                        depth += 1;
+                    }
+                }
+                Event::End(_) => depth = depth.checked_sub(1).ok_or_else(invalid)?,
+                Event::DocType(_) | Event::Decl(_) => return Err(invalid()),
+                Event::Text(t) if depth == 0 && !t.xml10_content().trim().is_empty() => {
+                    return Err(invalid())
+                }
+                Event::CData(_) | Event::GeneralRef(_) if depth == 0 => return Err(invalid()),
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        if depth != 0 || elements == 0 {
+            return Err(invalid());
+        }
+    }
+    Ok(())
 }

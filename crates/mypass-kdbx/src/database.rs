@@ -67,6 +67,7 @@ impl Database {
             xml::{encode, pool::AttachmentPool, validate_document},
         };
         validate_model(&self.root, 3, limit)?;
+        crate::format::xml::validate_extras(&self.meta.extra, 2)?;
         validate_times(
             self.deleted_objects
                 .iter()
@@ -87,7 +88,7 @@ impl Database {
         check_field_len(
             salt_len
                 .checked_add(overhead)
-                .ok_or_else(|| KdbxError::Corrupt("header field size".into()))?,
+                .ok_or_else(|| KdbxError::InvalidOperation("header field size".into()))?,
             limit,
         )?;
         for len in [32, self.settings.cipher.iv_len(), 64] {
@@ -105,7 +106,7 @@ impl Database {
         let xml = Zeroizing::new(encode::encode(self, &pool, &mut stream));
         validate_document(xml.as_bytes())?;
         if stream.is_failed() {
-            return Err(KdbxError::Corrupt("inner stream exhausted".into()));
+            return Err(KdbxError::InvalidOperation("inner stream exhausted".into()));
         }
         let transformed = kdf.transform(&CompositeKey::from_password(password))?;
         let keys = derive_keys(&master_seed, &transformed);
@@ -134,7 +135,7 @@ impl Database {
         let mut plain = Zeroizing::new(inner.serialize());
         plain.extend_from_slice(xml.as_bytes());
         if plain.len() as u64 > crate::format::limits::MAX_DECOMPRESSED_LEN {
-            return Err(KdbxError::Corrupt("payload size".into()));
+            return Err(KdbxError::InvalidOperation("payload size".into()));
         }
         let compressed = Zeroizing::new(match self.settings.compression {
             Compression::None => plain.to_vec(),
@@ -209,14 +210,15 @@ impl Database {
 }
 fn check_field_len(len: usize, limit: usize) -> Result<()> {
     if len > limit {
-        return Err(KdbxError::Corrupt("header field size".into()));
+        return Err(KdbxError::InvalidOperation("header field size".into()));
     }
     Ok(())
 }
 fn validate_model(g: &Group, depth: usize, limit: usize) -> Result<()> {
     if depth > crate::format::limits::MAX_XML_DEPTH {
-        return Err(KdbxError::Corrupt("XML depth".into()));
+        return Err(KdbxError::InvalidOperation("XML depth".into()));
     }
+    crate::format::xml::validate_extras(&g.extra, depth)?;
     validate_times(
         [g.created, g.modified, g.accessed, g.location_changed]
             .into_iter()
@@ -234,14 +236,15 @@ fn validate_model(g: &Group, depth: usize, limit: usize) -> Result<()> {
 fn validate_times(ts: impl Iterator<Item = Timestamp>) -> Result<()> {
     for t in ts {
         t.0.checked_add(Timestamp::EPOCH_OFFSET_SECS)
-            .ok_or_else(|| KdbxError::Corrupt("timestamp overflow".into()))?;
+            .ok_or_else(|| KdbxError::InvalidOperation("timestamp overflow".into()))?;
     }
     Ok(())
 }
 fn validate_entry(e: &Entry, depth: usize, limit: usize) -> Result<()> {
     if depth > crate::format::limits::MAX_XML_DEPTH {
-        return Err(KdbxError::Corrupt("XML depth".into()));
+        return Err(KdbxError::InvalidOperation("XML depth".into()));
     }
+    crate::format::xml::validate_extras(&e.extra, depth)?;
     validate_times(
         [e.created, e.modified, e.accessed, e.location_changed]
             .into_iter()
@@ -253,7 +256,7 @@ fn validate_entry(e: &Entry, depth: usize, limit: usize) -> Result<()> {
             a.data
                 .len()
                 .checked_add(1)
-                .ok_or_else(|| KdbxError::Corrupt("header field size".into()))?,
+                .ok_or_else(|| KdbxError::InvalidOperation("header field size".into()))?,
             limit,
         )?;
     }
@@ -442,7 +445,7 @@ mod save_tests {
         db.root.entries.push(e);
         assert!(db.save_with_field_limit(&p, 129).is_ok());
         assert!(
-            matches!(db.save_with_field_limit(&p,128),Err(KdbxError::Corrupt(ref s)) if s=="header field size")
+            matches!(db.save_with_field_limit(&p,128),Err(KdbxError::InvalidOperation(ref s)) if s=="header field size")
         );
     }
     #[test]
@@ -451,7 +454,7 @@ mod save_tests {
         let p = SecretString::from("p");
         assert!(db.save_with_field_limit(&p, 93).is_ok());
         assert!(
-            matches!(db.save_with_field_limit(&p,92),Err(KdbxError::Corrupt(ref s)) if s=="header field size")
+            matches!(db.save_with_field_limit(&p,92),Err(KdbxError::InvalidOperation(ref s)) if s=="header field size")
         );
     }
     #[test]
@@ -459,7 +462,7 @@ mod save_tests {
         let mut db = make_db();
         db.root.created = Timestamp(i64::MAX);
         assert!(
-            matches!(db.save(&SecretString::from("p")),Err(KdbxError::Corrupt(ref s)) if s=="timestamp overflow")
+            matches!(db.save(&SecretString::from("p")),Err(KdbxError::InvalidOperation(ref s)) if s=="timestamp overflow")
         );
     }
     #[test]
@@ -485,7 +488,66 @@ mod save_tests {
         let wire = db.save(&p).unwrap();
         assert_eq!(Database::open(&wire, &p).unwrap(), db);
         db.root = make_chain(94);
-        assert!(matches!(db.save(&p),Err(KdbxError::Corrupt(ref s)) if s=="XML depth"));
+        assert!(matches!(db.save(&p),Err(KdbxError::InvalidOperation(ref s)) if s=="XML depth"));
+    }
+    #[test]
+    fn unsafe_raw_extras_are_rejected_before_encoding() {
+        for fragment in [
+            "<Foo Protected=\"True\">AAAAAAAAAAAAAAAAAAAAAA==</Foo>",
+            "<Foo><Bar Protected='Tr&#117;e'/></Foo>",
+            "</Meta><Meta>",
+            "<A>",
+            "</A>",
+            "<A></B>",
+            "text only",
+            "<!DOCTYPE A><A/>",
+            "<A/><B>",
+        ] {
+            for location in 0..3 {
+                let mut db = make_db();
+                let mut e = Entry::new(Timestamp(0));
+                e.set_field("Password", "protected secret", true);
+                db.root.entries.push(e);
+                let extra = RawXml(fragment.into());
+                match location {
+                    0 => db.meta.extra.push(extra),
+                    1 => db.root.extra.push(extra),
+                    _ => db.root.entries[0].extra.push(extra),
+                }
+                assert_eq!(
+                    db.save(&SecretString::from("p")),
+                    Err(KdbxError::InvalidOperation("unsafe raw XML extra".into())),
+                    "location {location}, fragment {fragment}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn benign_raw_extras_round_trip_byte_equal_in_all_locations() {
+        let fragment = RawXml("<Extension a='a&amp;b'><![CDATA[<>&]]><!--ok--><Nested Protected=\"False\" /></Extension>".into());
+        let mut db = make_db();
+        db.meta.extra.push(fragment.clone());
+        db.root.extra.push(fragment.clone());
+        let mut e = Entry::new(Timestamp(0));
+        e.extra.push(fragment);
+        e.set_field("Password", "protected secret", true);
+        db.root.entries.push(e);
+        let p = SecretString::from("p");
+        assert_eq!(Database::open(&db.save(&p).unwrap(), &p).unwrap(), db);
+    }
+    #[test]
+    fn raw_extra_depth_includes_its_containing_element() {
+        let mut db = make_db();
+        db.root
+            .extra
+            .push(RawXml(format!("{}{}", "<X>".repeat(97), "</X>".repeat(97))));
+        let p = SecretString::from("p");
+        assert!(db.save(&p).is_ok());
+        db.root.extra[0] = RawXml(format!("{}{}", "<X>".repeat(98), "</X>".repeat(98)));
+        assert_eq!(
+            db.save(&p),
+            Err(KdbxError::InvalidOperation("unsafe raw XML extra".into()))
+        );
     }
     #[test]
     fn unknown_keepassxc_elements_survive_round_trip() {

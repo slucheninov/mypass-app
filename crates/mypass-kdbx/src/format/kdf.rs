@@ -87,6 +87,7 @@ impl KdfParams {
         Self::try_argon2id_default().unwrap_or_else(|_| panic!("OS randomness unavailable"))
     }
 
+    /// Generate the default Argon2id parameters, returning `Random` if OS entropy fails.
     pub fn try_argon2id_default() -> Result<Self> {
         let mut salt = vec![0; 32];
         fill_random(&mut salt)?;
@@ -194,12 +195,15 @@ impl KdfParams {
     }
 
     /// Preserve the KDF and costs, replacing only the salt/seed with OS randomness.
-    /// Panics if OS randomness fails. Save uses `try_with_fresh_randomness` instead.
+    /// Panics if parameters are invalid or OS randomness fails.
+    /// Save uses `try_with_fresh_randomness` instead.
     pub fn with_fresh_randomness(&self) -> Self {
         Self::try_with_fresh_randomness(self)
-            .unwrap_or_else(|_| panic!("OS randomness unavailable"))
+            .unwrap_or_else(|err| panic!("cannot refresh KDF randomness: {err}"))
     }
 
+    /// Validate costs and replace the salt/seed, returning `InvalidKdfParameters`
+    /// for invalid parameters or `Random` if OS entropy fails.
     pub fn try_with_fresh_randomness(&self) -> Result<Self> {
         self.validate()?;
         let mut fresh = self.clone();
@@ -310,6 +314,15 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
     use super::*;
 
+    #[test]
+    #[should_panic(expected = "cannot refresh KDF randomness: invalid KDF parameters")]
+    fn invalid_refresh_panic_identifies_parameters() {
+        KdfParams::AesKdf {
+            seed: vec![0; 32],
+            rounds: 0,
+        }
+        .with_fresh_randomness();
+    }
     fn argon(variant: Argon2Variant, parallelism: u32, salt_len: u8) -> KdfParams {
         KdfParams::Argon2 {
             variant,
