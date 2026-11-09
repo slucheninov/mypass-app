@@ -11,5 +11,13 @@ publish = false
 [dependencies]
 mypass-kdbx = { path = "../mypass-kdbx" }
 
+hmac.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+data-encoding.workspace = true
+zeroize.workspace = true
+url.workspace = true
+thiserror.workspace = true
+
 [lints]
 workspace = true

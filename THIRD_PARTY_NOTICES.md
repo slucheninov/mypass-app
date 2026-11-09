@@ -48,10 +48,10 @@ place, generated with `cargo metadata` and reviewed by hand.
 |---|---|---|---|
 | `mypass-kdbx` | workspace | Apache-2.0 | MyPass (own code) |
 | `mypass-core` | workspace | Apache-2.0 | MyPass (own code) |
-| `sha2` | 0.11.1 | MIT OR Apache-2.0 | `mypass-kdbx` header hashes |
-| `hmac` | 0.13.0 | MIT OR Apache-2.0 | `mypass-kdbx` header authentication |
+| `sha2` | 0.11.1 | MIT OR Apache-2.0 | `mypass-kdbx` header hashes; `mypass-core` TOTP |
+| `hmac` | 0.13.0 | MIT OR Apache-2.0 | `mypass-kdbx` header authentication; `mypass-core` TOTP |
 | `subtle` | 2.6.1 | BSD-3-Clause | `mypass-kdbx` constant-time digest comparison |
-| `zeroize` | 1.9.1 | Apache-2.0 OR MIT | `mypass-kdbx` derived key cleanup |
+| `zeroize` | 1.9.1 | Apache-2.0 OR MIT | `mypass-kdbx` derived key cleanup; `mypass-core` TOTP secret cleanup |
 | `argon2` | 0.6.0 | MIT OR Apache-2.0 | `mypass-kdbx` Argon2d/id key derivation |
 | `aes` | 0.9.4 | MIT OR Apache-2.0 | `mypass-kdbx` AES-KDF and AES-256-CBC outer cipher |
 | `secrecy` | 0.10.3 | Apache-2.0 OR MIT | `mypass-kdbx` master password protection |
@@ -63,6 +63,10 @@ place, generated with `cargo metadata` and reviewed by hand.
 | `quick-xml` | 0.42.0 | MIT | `mypass-kdbx` bounded XML decoder |
 | `uuid` | 1.29.2 | Apache-2.0 OR MIT | `mypass-kdbx` model identifiers |
 | `base64` | 0.23.1 | MIT OR Apache-2.0 | `mypass-kdbx` XML binary encoding |
+| `sha1` | 0.11.0 | MIT OR Apache-2.0 | `mypass-core` TOTP HMAC-SHA1 |
+| `data-encoding` | 2.11.1 | MIT | `mypass-core` base32 secret encoding |
+| `url` | 2.5.8 | MIT OR Apache-2.0 | `mypass-core` otpauth URL/query parsing |
+| `thiserror` | 2.0.21 | MIT OR Apache-2.0 | `mypass-kdbx` and `mypass-core` error types |
 
 ## Synthetic test fixtures
 
