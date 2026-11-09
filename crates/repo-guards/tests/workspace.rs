@@ -396,6 +396,10 @@ fn toolchain_pins_agree() {
         if let Some(pm) = pkg.get("packageManager").and_then(|v| v.as_str()) {
             if let Some(version) = pm.strip_prefix("pnpm@") {
                 let version = version.split('+').next().unwrap_or(version);
+                assert!(
+                    !pnpm_versions.is_empty(),
+                    "packageManager pnpm needs a CI action pin"
+                );
                 for declared in &pnpm_versions {
                     assert_eq!(
                         declared, version,

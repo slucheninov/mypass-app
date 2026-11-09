@@ -366,7 +366,6 @@ fn crosscompat_is_path_gated_and_runs_both_directions() {
         .to_owned();
     for path in [
         "crates/mypass-kdbx/**",
-        "tests/crosscompat/**",
         "Cargo.toml",
         "Cargo.lock",
         ".github/workflows/ci.yml",
@@ -387,5 +386,66 @@ fn crosscompat_is_path_gated_and_runs_both_directions() {
         "--test pykeepass_generated",
     ] {
         assert!(runs.contains(command), "crosscompat missing {command}");
+    }
+}
+
+#[test]
+fn codeql_uses_gating_build_mode_and_identical_action_revision() {
+    let doc = workflow(".github/workflows/codeql.yml");
+    let analyze = job(&doc, "analyze");
+    let mut revisions = vec![];
+    for step in steps(analyze) {
+        let Some(action) = step.get("uses").and_then(Value::as_str) else {
+            continue;
+        };
+        if action.starts_with("github/codeql-action/") {
+            revisions.push(action.split_once('@').unwrap().1);
+            assert_eq!(
+                step.get("if").and_then(Value::as_str),
+                Some("steps.sources.outputs.has_code == 'true'")
+            );
+            if action.contains("/init@") {
+                assert_eq!(
+                    step.get("with")
+                        .unwrap()
+                        .get("build-mode")
+                        .and_then(Value::as_str),
+                    Some("none")
+                );
+            }
+        }
+    }
+    assert_eq!(revisions.len(), 2);
+    assert_eq!(revisions[0], revisions[1]);
+}
+#[test]
+fn extracted_aggregator_executes_result_matrix() {
+    use std::process::Command;
+    if !Command::new("bash")
+        .args(["-c", "command -v jq"])
+        .output()
+        .is_ok_and(|o| o.status.success())
+    {
+        println!("skipped aggregator execution: bash/jq unavailable");
+        return;
+    }
+    let doc = workflow(".github/workflows/ci.yml");
+    let script = steps(job(&doc, "ci"))
+        .iter()
+        .map(|s| run_text(s))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for name in needs_of(job(&doc, "ci")) {
+        for result in ["success", "skipped", "failure", "cancelled"] {
+            let input = serde_json::json!({name.clone(): {"result": result}}).to_string();
+            let output = Command::new("bash")
+                .args(["-c", &script])
+                .env("NEEDS_JSON", input)
+                .output()
+                .unwrap();
+            let expected =
+                result == "success" || (result == "skipped" && GATED_JOBS.contains(&name.as_str()));
+            assert_eq!(output.status.success(), expected, "{name}: {result}");
+        }
     }
 }

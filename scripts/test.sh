@@ -101,6 +101,15 @@ need_tool() {
 [[ $want_js -eq 1 ]] && has_js && need_tool node js
 
 run_rust() {
+  # The notice generator reads the locked graph; CI must never silently omit this check.
+  if [[ $ci -eq 1 ]]; then
+    need_tool python3 notices
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 crates/mypass-kdbx/tests/crosscompat/update_notices.py --check
+  else
+    echo "notices: skipped (python3 unavailable)"
+  fi
   echo "== rust: cargo test --workspace"
   local args=(test --workspace)
   [[ $ci -eq 1 ]] && args+=(--locked)

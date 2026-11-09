@@ -4,7 +4,7 @@
 its tests pass, or, for manual-only items, once the manual check has actually been walked. History
 lives in `git log`, not here.
 
-Last updated: 2026-11-08
+Last updated: 2026-11-09
 
 ---
 

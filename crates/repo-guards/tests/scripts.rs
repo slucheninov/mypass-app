@@ -74,3 +74,13 @@ fn test_sh_help_exits_zero() {
         assert!(stdout.contains(flag), "--help does not mention {flag}");
     }
 }
+
+#[test]
+fn rust_test_entrypoint_checks_generated_notices() {
+    let script = repo_guards::read("scripts/test.sh");
+    assert!(
+        script.contains("python3 crates/mypass-kdbx/tests/crosscompat/update_notices.py --check")
+    );
+    assert!(script.contains("need_tool python3"));
+    assert!(script.contains("notices: skipped"));
+}

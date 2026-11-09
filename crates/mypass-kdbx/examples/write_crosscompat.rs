@@ -1,5 +1,4 @@
 // Test-only support code: synthetic interoperability fixture, never an owner's vault.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
 use mypass_kdbx::{Attachment, Database, Entry, Timestamp};
 use secrecy::SecretString;

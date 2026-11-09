@@ -44,7 +44,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 ## Stage status
 
 Stage 1 (the Rust core: KDBX4 engine, TOTP, generator, Public Suffix List, matcher, merge, atomic
-vault file) is implemented. Local gates are green; owner push and CI verification are pending.
+vault file) is implemented.
 Later stages (app backend, UI, extension bridge, passkeys, macOS release, Windows) are listed in `docs/implementation/ROADMAP.md`.
 
 ## Build, run, test
@@ -79,7 +79,7 @@ cargo test -p <crate> <filter>                                # one crate, one f
 - `test` is a matrix over `macos-latest` and `windows-latest` (fail-fast off): `cargo fmt --check`,
   `cargo clippy -D warnings`, then `bash scripts/test.sh --ci --only rust`. It restores
   `Swatinem/rust-cache`.
-- `changes` is a cheap path filter that gates heavy path-specific jobs added in later stages.
+- `changes` is a cheap path filter that gates the crosscompat job.
 - `crosscompat` runs on Ubuntu with Python 3.12 and CI-only `pykeepass==4.2.0`: Rust writes /
   Python reads, then Python writes / Rust reads. It is path-gated on pull requests through
   `changes.outputs.crosscompat` and always runs on main pushes and manual dispatch.
@@ -116,8 +116,7 @@ change is done.
   under `crates/mypass-core/resources/`, listed in `THIRD_PARTY_NOTICES.md`.
 - **`FileIo` seam.** All vault-file I/O goes through the `FileIo` trait (`PlainFileIo` in production,
   `FailingFileIo` under the `test-util` feature in tests). There is no `cfg(test)` failure injection
-  in production code. `VaultFile` (in `mypass-kdbx`) wraps atomic saves, conflict detection and
-  password changes; `SaveOutcome` reports their result.
+  in production code. `VaultFile` (in `mypass-kdbx`) wraps atomic saves and conflict detection; `SaveOutcome` reports their result.
 - **Signing.** The stable team `W645B93PPQ` arrives in stage 5. Never sign ad-hoc: it breaks the
   Keychain access that guards the unlock key.
 

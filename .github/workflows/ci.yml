@@ -52,7 +52,6 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
-              - 'tests/crosscompat/**'
               - '.github/workflows/ci.yml'
 
   test:
