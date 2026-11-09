@@ -32,7 +32,7 @@ request. Tests are not allowed to be skipped, weakened or deleted to make someth
 - `--ci` is the mode used by the CI workflow: cargo runs with `--locked`, it requires every tool of
   every part that exists and it rejects `--no-js`.
 - `.github/workflows/ci.yml` runs on pull requests, on pushes to `main` and on manual dispatch: a
-  test matrix on macOS and Windows, a disabled Windows integration skeleton and a final `ci` job that
+  test matrix on macOS and Windows, a path-filtered bidirectional pykeepass `crosscompat` job, a disabled Windows integration skeleton and a final `ci` job that
   reports the combined result. It runs after the fact, so it is not a substitute for running the
   suite yourself. `.github/workflows/codeql.yml` is a separate workflow that runs after the merge,
   weekly and on manual dispatch.
@@ -94,3 +94,55 @@ request. Report vulnerabilities as described in [`SECURITY.md`](SECURITY.md).
 
 Under section 5 of the Apache License 2.0, a contribution you submit for inclusion is licensed under
 that license unless you state otherwise (see [`LICENSE`](LICENSE)).
+
+## Main branch protection (owner action)
+
+After pushing and checking CI, the owner can apply this ruleset. These commands are documented
+only; implementation agents do not apply them. `ci` is the only required status check. It accepts
+skipped path/variable-gated jobs, so irrelevant changes do not leave required checks pending.
+Zero approvals are required, pull requests are required, and only squash merging is allowed.
+Force pushes and branch deletion are blocked. Run in the repository with authenticated `gh`:
+
+```bash
+gh api --method POST repos/{owner}/{repo}/rulesets --input - <<'JSON'
+{
+  "name": "main",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [],
+  "conditions": {
+    "ref_name": {"include": ["refs/heads/main"], "exclude": []}
+  },
+  "rules": [
+    {"type": "deletion"},
+    {"type": "non_fast_forward"},
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": false,
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": false,
+        "allowed_merge_methods": ["squash"]
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "required_status_checks": [{"context": "ci"}],
+        "strict_required_status_checks_policy": false
+      }
+    }
+  ]
+}
+JSON
+
+gh api --method PATCH repos/{owner}/{repo} \
+  -F allow_squash_merge=true -F allow_merge_commit=false -F allow_rebase_merge=false \
+  -F delete_branch_on_merge=true
+```
+
+The repository settings command enables automatic head-branch deletion after merging. The ruleset
+POST creates a rule; if `main` already exists, inspect its ID and use the ruleset update endpoint
+instead of creating a duplicate. Applying these settings is pending owner action.

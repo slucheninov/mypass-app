@@ -20,9 +20,9 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 
 | Crate | Status | Role |
 |---|---|---|
-| `mypass-kdbx` | exists | KDBX4 engine: format pipeline, model, database API, vault file, `FileIo` seam |
-| `mypass-core` | exists | Everything that consumes the model: TOTP, generator and password rules, Public Suffix List, entry matcher, merge engine |
-| `repo-guards` | exists | Test-only (`publish = false`, never shipped): guard tests for the workspace, CI, docs and scripts |
+| `mypass-kdbx` | implemented | KDBX4 engine: format pipeline, model, database API, vault file, `FileIo` seam |
+| `mypass-core` | implemented | Everything that consumes the model: TOTP, generator and password rules, Public Suffix List, entry matcher, merge engine |
+| `repo-guards` | implemented | Test-only (`publish = false`, never shipped): guard tests for the workspace, CI, docs and scripts |
 | `mypass-bridge` | planned | Browser bridge protocol and loopback server |
 | `mypass-platform` | planned | OS glue behind traits (clipboard, secret store, lock events) |
 | `mypass-host` | planned | Native messaging host binary |
@@ -44,8 +44,8 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 ## Stage status
 
 Stage 1 (the Rust core: KDBX4 engine, TOTP, generator, Public Suffix List, matcher, merge, atomic
-vault file) is in progress. Later stages (app backend, UI, extension bridge, passkeys, macOS release,
-Windows) are listed in `docs/implementation/ROADMAP.md`.
+vault file) is implemented. Local gates are green; owner push and CI verification are pending.
+Later stages (app backend, UI, extension bridge, passkeys, macOS release, Windows) are listed in `docs/implementation/ROADMAP.md`.
 
 ## Build, run, test
 
@@ -54,6 +54,8 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 bash scripts/test.sh [--ci] [--only rust|ui|js] [--no-js]   # the full suite
 cargo test --workspace                                        # Rust tests only
+cargo test --workspace -- --ignored                           # includes the 50 MiB round trip
+cargo run -p mypass-kdbx --example write_crosscompat -- <out.kdbx> # synthetic fixture
 cargo test -p <crate> <filter>                                # one crate, one filter
 ```
 
@@ -78,6 +80,10 @@ cargo test -p <crate> <filter>                                # one crate, one f
   `cargo clippy -D warnings`, then `bash scripts/test.sh --ci --only rust`. It restores
   `Swatinem/rust-cache`.
 - `changes` is a cheap path filter that gates heavy path-specific jobs added in later stages.
+- `crosscompat` runs on Ubuntu with Python 3.12 and CI-only `pykeepass==4.2.0`: Rust writes /
+  Python reads, then Python writes / Rust reads. It is path-gated on pull requests through
+  `changes.outputs.crosscompat` and always runs on main pushes and manual dispatch.
+  The env-gated Rust test prints a skip locally unless `MYPASS_PYKEEPASS_VAULT` is set.
 - `windows-integration` is a disabled skeleton for stage 6: it runs only when the repository variable
   `MYPASS_WINDOWS_INTEGRATION_TESTS` is `true`, otherwise it is skipped.
 - `ci` is the aggregator and the required status check. It needs every other job; a gated job may be
@@ -94,8 +100,9 @@ change is done.
 
 - **KDBX pipeline.** `Database::open` and `Database::save` compose a chain of small pure modules:
   reader, variant dictionary, headers, KDF, block stream, ciphers, inner stream, XML. All primitives
-  come from RustCrypto. KDBX 4.0 and 4.1 only; KDBX3 and KDB1 return `UnsupportedVersion`, garbage
-  returns `NotKdbx`. Password-only composite key in stage 1, no Unicode normalisation.
+  come from RustCrypto. KDBX 4.0/4.1 writes; major-4 minor versions are accepted and preserved
+  on read/save. KDBX3 returns `UnsupportedVersion`; KDB1 and garbage return `NotKdbx`.
+  Password-only composite key in stage 1, no Unicode normalisation.
 - **Preserve-KDF rule.** Re-saving an opened vault keeps its cipher, compression, KDF type and KDF
   parameters and its minor version; every save draws a fresh master seed, KDF salt, IV and inner
   stream key from the OS RNG. Fresh vaults use Argon2id (64 MiB, 3 iterations, parallelism 2),
@@ -109,7 +116,8 @@ change is done.
   under `crates/mypass-core/resources/`, listed in `THIRD_PARTY_NOTICES.md`.
 - **`FileIo` seam.** All vault-file I/O goes through the `FileIo` trait (`PlainFileIo` in production,
   `FailingFileIo` under the `test-util` feature in tests). There is no `cfg(test)` failure injection
-  in production code.
+  in production code. `VaultFile` (in `mypass-kdbx`) wraps atomic saves, conflict detection and
+  password changes; `SaveOutcome` reports their result.
 - **Signing.** The stable team `W645B93PPQ` arrives in stage 5. Never sign ad-hoc: it breaks the
   Keychain access that guards the unlock key.
 

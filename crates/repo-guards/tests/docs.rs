@@ -253,3 +253,22 @@ fn issue_templates_and_pr_template_exist_and_parse() {
     );
     assert!(!read(".github/pull_request_template.md").trim().is_empty());
 }
+
+#[test]
+fn every_locked_package_has_a_third_party_notice() {
+    let lock: toml::Value = toml::from_str(&read("Cargo.lock")).unwrap();
+    let notices = read("THIRD_PARTY_NOTICES.md");
+    for package in lock["package"].as_array().unwrap() {
+        // Workspace packages are first-party, not third-party components.
+        if package.get("source").is_none() {
+            continue;
+        }
+        let name = package["name"].as_str().unwrap();
+        let version = package["version"].as_str().unwrap();
+        let row = format!("| `{name}` | {version} |");
+        assert!(
+            notices.contains(&row),
+            "missing notice for {name} {version}"
+        );
+    }
+}

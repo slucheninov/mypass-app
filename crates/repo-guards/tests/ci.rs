@@ -113,6 +113,10 @@ fn ci_aggregator_accepts_skipped_only_for_gated_jobs() {
         gated.contains(&"windows-integration"),
         "windows-integration must be tolerated when skipped"
     );
+    assert!(
+        gated.contains(&"crosscompat"),
+        "crosscompat must tolerate skipped"
+    );
     for name in &gated {
         assert!(
             GATED_JOBS.contains(name),
@@ -341,4 +345,47 @@ fn codeql_workflow_covers_rust_and_javascript_typescript() {
         perms.get("security-events").and_then(Value::as_str),
         Some("write")
     );
+}
+
+#[test]
+fn crosscompat_is_path_gated_and_runs_both_directions() {
+    let doc = workflow(".github/workflows/ci.yml");
+    let cross = job(&doc, "crosscompat");
+    assert_eq!(needs_of(cross), ["changes"]);
+    assert_eq!(
+        cross.get("runs-on").and_then(Value::as_str),
+        Some("ubuntu-latest")
+    );
+    assert_eq!(cross.get("if").and_then(Value::as_str), Some("${{ github.event_name != 'pull_request' || needs.changes.outputs.crosscompat == 'true' }}"));
+    let filter = job(&doc, "changes");
+    assert!(filter.get("outputs").unwrap().get("crosscompat").is_some());
+    let filters = steps(filter)
+        .iter()
+        .find_map(|s| s.get("with")?.get("filters")?.as_str())
+        .unwrap()
+        .to_owned();
+    for path in [
+        "crates/mypass-kdbx/**",
+        "tests/crosscompat/**",
+        "Cargo.toml",
+        "Cargo.lock",
+        ".github/workflows/ci.yml",
+    ] {
+        assert!(filters.contains(path), "crosscompat must filter {path}");
+    }
+    let runs = steps(cross)
+        .iter()
+        .map(|s| run_text(s))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for command in [
+        "pykeepass==4.2.0",
+        "--example write_crosscompat",
+        "crates/mypass-kdbx/tests/crosscompat/pykeepass_check.py",
+        "crates/mypass-kdbx/tests/crosscompat/pykeepass_make.py",
+        "MYPASS_PYKEEPASS_VAULT=",
+        "--test pykeepass_generated",
+    ] {
+        assert!(runs.contains(command), "crosscompat missing {command}");
+    }
 }
