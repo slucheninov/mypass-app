@@ -56,7 +56,6 @@ impl Database {
         let blocks = reader.bytes(reader.remaining())?;
         // Authenticate every block before touching the outer cipher (no padding oracle).
         let encrypted = Zeroizing::new(block_stream::read(blocks, &keys.hmac_key_base)?);
-        reject_trailing_blocks(blocks)?;
         let decrypted = Zeroizing::new(cipher::decrypt(
             header.cipher,
             &keys.master_key,
@@ -92,22 +91,6 @@ impl Database {
             dropped_attachment_refs: decoded.dropped_attachment_refs,
             dropped_protected_unknown: decoded.dropped_protected_unknown,
         })
-    }
-}
-// A cheap framing-only pass after authentication keeps the block-stream API unchanged.
-fn reject_trailing_blocks(data: &[u8]) -> Result<()> {
-    let mut r = Reader::new(data);
-    loop {
-        r.bytes(32)?;
-        let len = r.u32_le()?;
-        r.bytes(len as usize)?;
-        if len == 0 {
-            return if r.remaining() == 0 {
-                Ok(())
-            } else {
-                Err(KdbxError::Corrupt("trailing block data".into()))
-            };
-        }
     }
 }
 impl fmt::Debug for Database {

@@ -22,6 +22,19 @@ pub(crate) fn decode(
     pool: &[InnerBinary],
     decrypt: &mut impl FnMut(&mut [u8]),
 ) -> Result<Decoded> {
+    decode_with_limit(
+        data,
+        pool,
+        decrypt,
+        crate::format::limits::MAX_DECOMPRESSED_LEN,
+    )
+}
+fn decode_with_limit(
+    data: &[u8],
+    pool: &[InnerBinary],
+    decrypt: &mut impl FnMut(&mut [u8]),
+    attachment_limit: u64,
+) -> Result<Decoded> {
     let doc = raw::parse(data, decrypt)?;
     if doc.name != "KeePassFile" {
         return Err(corrupt("missing KeePassFile"));
@@ -32,6 +45,8 @@ pub(crate) fn decode(
         .ok_or_else(|| corrupt("missing Root Group"))?;
     let mut ctx = Context {
         pool,
+        attachment_bytes: 0,
+        attachment_limit,
         refs: 0,
         protected: 0,
     };
@@ -119,6 +134,8 @@ fn times(n: &Node) -> Result<Times> {
 }
 struct Context<'a> {
     pool: &'a [InnerBinary],
+    attachment_bytes: u64,
+    attachment_limit: u64,
     refs: usize,
     protected: usize,
 }
@@ -192,6 +209,12 @@ impl Context<'_> {
                         .and_then(|s| s.parse::<usize>().ok())
                         .and_then(|i| self.pool.get(i))
                     {
+                        // Share the budget across all entries, including recursively decoded history.
+                        self.attachment_bytes = self
+                            .attachment_bytes
+                            .checked_add(binary.data.len() as u64)
+                            .filter(|total| *total <= self.attachment_limit)
+                            .ok_or_else(|| corrupt("attachment expansion exceeds limit"))?;
                         e.attachments.push(Attachment {
                             name: value(c, "Key")?.into(),
                             data: binary.data.clone(),

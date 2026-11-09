@@ -340,3 +340,47 @@ fn deleted_objects_and_meta_defaults_decode() {
     assert_eq!(d.deleted_objects.len(), 1);
     assert_eq!(d.deleted_objects[0].deleted_at, Timestamp(0));
 }
+
+#[test]
+fn base64_times_containing_t_are_not_iso() {
+    for (encoded, raw, expected) in [
+        ("TG184g4AAAA=", 63_929_347_404_i64, 1_793_750_604_i64),
+        ("TG1T4g4AAAA=", 63_926_660_428_i64, 1_791_063_628_i64),
+    ] {
+        // Independent little-endian base64 bytes and epoch arithmetic cross-check the literals.
+        assert_eq!(BASE64_STANDARD.decode(encoded).unwrap(), raw.to_le_bytes());
+        assert_eq!(raw - 62_135_596_800, expected);
+        let d = read(&make_xml(&format!(
+            "<Times><CreationTime>{encoded}</CreationTime></Times>"
+        )))
+        .unwrap();
+        assert_eq!(d.root.created, Timestamp(expected));
+    }
+}
+
+#[test]
+fn attachment_expansion_budget_includes_history_and_all_entries() {
+    let binary = "<Binary><Key>x</Key><Value Ref='0'/></Binary>";
+    let pool = [InnerBinary {
+        data: b"abc".to_vec(),
+        protected: true,
+    }];
+    for body in [
+        format!("<Entry>{binary}{binary}</Entry>"),
+        format!("<Entry>{binary}<History><Entry>{binary}</Entry></History></Entry>"),
+        format!("<Entry>{binary}</Entry><Group><Entry>{binary}</Entry></Group>"),
+    ] {
+        let xml = make_xml(&body);
+        assert!(decode_with_limit(xml.as_bytes(), &pool, &mut |_| {}, 6).is_ok());
+        assert!(matches!(
+            decode_with_limit(xml.as_bytes(), &pool, &mut |_| {}, 5),
+            Err(KdbxError::Corrupt(ref message)) if message == "attachment expansion exceeds limit"
+        ));
+    }
+    let xml = make_xml(&format!("<Entry>{binary}</Entry>"));
+    assert!(decode_with_limit(xml.as_bytes(), &pool, &mut |_| {}, 3).is_ok());
+    assert!(matches!(
+        decode_with_limit(xml.as_bytes(), &pool, &mut |_| {}, 2),
+        Err(KdbxError::Corrupt(_))
+    ));
+}

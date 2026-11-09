@@ -32,6 +32,9 @@ pub(crate) fn read(data: &[u8], hmac_key_base: &[u8; 64]) -> Result<Vec<u8>> {
             .verify_slice(stored_mac)
             .map_err(|_| KdbxError::Corrupt(format!("block {index} HMAC")))?;
         if length == 0 {
+            if reader.remaining() != 0 {
+                return Err(KdbxError::Corrupt("trailing block data".into()));
+            }
             return Ok(plain);
         }
         plain.extend_from_slice(payload);
@@ -242,6 +245,20 @@ mod tests {
         assert_corrupt(&stream, &base, "block 1 HMAC");
         let wrong_index = [oracle_block(0, b"data", &base), oracle_block(0, b"", &base)].concat();
         assert_corrupt(&wrong_index, &base, "block 1 HMAC");
+    }
+
+    #[test]
+    fn trailing_data_after_terminator_is_corrupt() {
+        let base = [0x77; 64];
+        for tail in [
+            vec![0],
+            oracle_block(2, b"extra", &base),
+            oracle_block(2, b"", &base),
+        ] {
+            let mut stream = oracle_stream(&[b"data"], &base);
+            stream.extend(tail);
+            assert_corrupt(&stream, &base, "trailing block data");
+        }
     }
 
     #[test]

@@ -2,7 +2,7 @@ use super::decode::corrupt;
 use crate::{Result, Timestamp};
 use base64::{prelude::BASE64_STANDARD, Engine};
 pub(super) fn parse(s: &str) -> Result<Timestamp> {
-    if s.contains('T') {
+    if s.len() == 20 && s.ends_with('Z') && s.as_bytes().get(4) == Some(&b'-') {
         return iso(s).ok_or_else(|| corrupt("ISO-8601 time"));
     }
     let bytes = BASE64_STANDARD
