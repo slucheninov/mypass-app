@@ -7,6 +7,9 @@ together with the licence notices those components require.
 **Maintenance.** Add or update an entry here in the same change that adds, removes or bumps a
 dependency, or re-vendors a file (see `CONTRIBUTING.md`). The Cargo tables are generated deterministically and reviewed; vendored notices are maintained manually.
 
+RustCrypto `sha2` and `hmac` enable their upstream `zeroize` features to erase
+intermediate hash state. Versions and licences are unchanged.
+
 ## Vendored data
 
 ### Apple password-manager-resources (`quirks/password-rules.json`)
