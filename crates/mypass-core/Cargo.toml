@@ -9,7 +9,6 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-uuid.workspace = true
 idna.workspace = true
 mypass-kdbx = { path = "../mypass-kdbx" }
 
@@ -20,6 +19,7 @@ data-encoding.workspace = true
 zeroize.workspace = true
 rand.workspace = true
 url.workspace = true
+uuid.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true

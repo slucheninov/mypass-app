@@ -11,22 +11,12 @@ use url::{Host, Url};
 pub const MAX_MATCH_URL_BYTES: usize = 8192;
 
 fn parse_lenient(input: &str) -> Option<Url> {
+    let input = input.trim();
     if input.len() > MAX_MATCH_URL_BYTES {
         return None;
     }
-    let input = input.trim();
     if input.is_empty() {
         return None;
-    }
-    // Explicit non-web schemes must not become a hostname through the lenient retry.
-    // A file URL can have a host too, but must never be a credential target.
-    if let Some((scheme, _)) = input.split_once(':') {
-        if ["javascript", "data", "file"]
-            .iter()
-            .any(|s| scheme.eq_ignore_ascii_case(s))
-        {
-            return None;
-        }
     }
     // Url requires brackets around an IPv6 authority; accept bare addresses as well (R13).
     if let Ok(ip) = input.parse::<std::net::Ipv6Addr>() {
@@ -38,12 +28,34 @@ fn parse_lenient(input: &str) -> Option<Url> {
         }
     }
     // Do not reinterpret a malformed explicit authority as a scheme-less host.
-    if input.contains("://") {
+    let authority = input.split(['/', '?', '#']).next()?;
+    if authority.ends_with(':')
+        && input
+            .get(authority.len()..)
+            .is_some_and(|tail| tail.starts_with("//"))
+    {
         return None;
     }
     Url::parse(&format!("https://{input}"))
         .ok()
         .filter(Url::has_host)
+}
+// Targets retain explicit parsed schemes, including hostless ones, so a mailto
+// URL cannot become an HTTPS authority via the entry-only lenient retry.
+fn parse_target(input: &str) -> Option<Url> {
+    let input = input.trim();
+    if input.len() > MAX_MATCH_URL_BYTES {
+        return None;
+    }
+    let host_port = input
+        .split_once(':')
+        .and_then(|(_, rest)| rest.split(['/', '?', '#']).next())
+        .is_some_and(|port| !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()));
+    let url = match Url::parse(input) {
+        Ok(url) if url.has_host() || !host_port => url,
+        _ => parse_lenient(input)?,
+    };
+    (matches!(url.scheme(), "http" | "https") && url.has_host()).then_some(url)
 }
 fn host(url: &Url) -> Option<String> {
     match url.host()? {
@@ -60,15 +72,19 @@ fn domain(url: &Url) -> Option<String> {
     }
 }
 /// Returns the registrable domain, or the whole canonical host for IPs/bare suffixes.
+/// Uses the same scheme-agnostic lenient parsing as stored entry URLs.
 pub fn registrable_domain_of(url_or_host: &str) -> Option<String> {
     domain(&parse_lenient(url_or_host)?)
 }
 /// Returns the complete canonical host without port or IPv6 brackets.
+/// Stored entry URLs use this lenient, scheme-agnostic parsing too: for Swift
+/// parity, `mailto:a@example.com` retries as an HTTPS authority with host `example.com`.
+/// Credential targets instead require a parsed HTTP(S) scheme and a host.
 pub fn host_of(url_or_host: &str) -> Option<String> {
     host(&parse_lenient(url_or_host)?)
 }
 fn same_origin(a: &Url, b: &Url) -> bool {
-    a.scheme() == b.scheme() && a.host() == b.host() && a.port() == b.port()
+    a.scheme() == b.scheme() && host(a) == host(b) && a.port() == b.port()
 }
 fn rest(url: &Url) -> String {
     // Excludes credentials, origin and fragment. Url normalises an empty web path
@@ -100,7 +116,7 @@ fn matches_parsed(entry: &Entry, target: &Url) -> bool {
                 UriMatchMode::RegistrableDomain => {
                     target_domain.is_some() && domain(&url) == target_domain
                 }
-                UriMatchMode::Host => url.host() == target.host() && url.port() == target.port(),
+                UriMatchMode::Host => host(&url) == host(target) && url.port() == target.port(),
                 UriMatchMode::Exact => same_origin(&url, target) && rest(&url) == rest(target),
                 UriMatchMode::StartsWith => {
                     // Decision 9 accepts /app matching /app-legacy: the user chooses
@@ -115,12 +131,13 @@ fn matches_parsed(entry: &Entry, target: &Url) -> bool {
         })
 }
 /// Matches one entry's primary or additional URLs using its stored mode.
+/// Targets must parse to HTTP(S) with a host; entry URLs remain scheme-agnostic.
 pub fn matches(entry: &Entry, target_url: &str) -> bool {
-    parse_lenient(target_url).is_some_and(|target| matches_parsed(entry, &target))
+    parse_target(target_url).is_some_and(|target| matches_parsed(entry, &target))
 }
 /// Filters entries in input order, parsing the target once.
 pub fn matching_entries<'a>(entries: &[&'a Entry], target_url: &str) -> Vec<&'a Entry> {
-    let Some(target) = parse_lenient(target_url) else {
+    let Some(target) = parse_target(target_url) else {
         return vec![];
     };
     entries
@@ -165,6 +182,154 @@ mod tests {
     }
     fn rd(s: &str) -> Option<String> {
         registrable_domain_of(s)
+    }
+    #[test]
+    fn targets_require_parsed_http_scheme_in_every_selection_api() {
+        for mode in UriMatchMode::ALL {
+            let mut e = make_entry("https://example.com/", "Entry");
+            e.set_uri_match_mode(mode);
+            let mut db = Database::new("test");
+            db.root.entries.push(e.clone());
+            for target in [
+                "java\tscript://example.com/",
+                "java\nscript://example.com/",
+                "\u{1}javascript://example.com/",
+                "\u{1}file://example.com/x",
+                "blob://example.com/",
+                "chrome://example.com/",
+                "ftp://example.com/",
+                "ws://example.com/",
+                "foo://example.com/",
+                "mailto:a@example.com",
+                "data:text/plain,hello",
+                "javascript:alert(1)",
+                "file:///x",
+            ] {
+                check(mode, "https://example.com/", target, false);
+                // Equal non-web entry/target origins must also fail Exact/StartsWith.
+                check(mode, target, target, false);
+                assert!(
+                    credential_candidates(&db, target).is_empty(),
+                    "{mode:?}: {target:?}"
+                );
+            }
+            for target in [
+                "https://example.com/",
+                "HTTPS://EXAMPLE.COM/",
+                "\u{1}https://example.com/",
+                "h\tttps://example.com/",
+                "h\nttps://example.com/",
+            ] {
+                check(
+                    mode,
+                    "https://example.com/",
+                    target,
+                    mode != UriMatchMode::Never,
+                );
+                assert_eq!(
+                    credential_candidates(&db, target).len(),
+                    usize::from(mode != UriMatchMode::Never)
+                );
+            }
+            check(
+                mode,
+                "http://example.com/",
+                "http://example.com/",
+                mode != UriMatchMode::Never,
+            );
+        }
+    }
+    #[test]
+    fn trailing_root_dot_is_canonical_in_host_exact_and_prefix_modes() {
+        for mode in [
+            UriMatchMode::Host,
+            UriMatchMode::Exact,
+            UriMatchMode::StartsWith,
+        ] {
+            for host in ["example.com", "127.0.0.1"] {
+                check(
+                    mode,
+                    &format!("https://{host}"),
+                    &format!("https://{host}./"),
+                    true,
+                );
+                check(
+                    mode,
+                    &format!("https://{host}./"),
+                    &format!("https://{host}/"),
+                    true,
+                );
+            }
+        }
+    }
+    #[test]
+    fn lenient_retry_allows_scheme_delimiters_in_path_and_query() {
+        for mode in [UriMatchMode::RegistrableDomain, UriMatchMode::Host] {
+            for (input, target) in [
+                ("example.com/r?u=https://x.com", "https://example.com/"),
+                ("localhost:8080/?next=http://x", "https://localhost:8080/"),
+            ] {
+                check(mode, input, target, true);
+                check(mode, target, input, true);
+            }
+        }
+        assert_eq!(host_of("foo://x"), Some("x".into()));
+        assert_eq!(host_of("foo://["), None);
+        assert_eq!(host_of("https://%zz"), None);
+        for mode in UriMatchMode::ALL {
+            check(mode, "https://foo/", "foo://x", false);
+            check(mode, "foo://x", "https://foo/", false);
+        }
+    }
+    #[test]
+    fn trimmed_target_and_entry_url_length_boundaries() {
+        let prefix = "https://example.com/";
+        let boundary = format!("{prefix}{}", "a".repeat(8192 - prefix.len()));
+        let oversized = format!("{boundary}a");
+        assert_eq!(boundary.len(), 8192);
+        assert_eq!(oversized.len(), 8193);
+        for mode in UriMatchMode::ALL {
+            let expected = mode != UriMatchMode::Never;
+            check(mode, &boundary, &boundary, expected);
+            check(mode, &boundary, &format!(" \t{boundary}\n "), expected);
+            check(mode, &format!(" \t{boundary}\n "), &boundary, expected);
+            check(mode, &boundary, &oversized, false);
+            check(mode, &oversized, &boundary, false);
+        }
+    }
+    #[test]
+    fn registrable_and_host_modes_ignore_scheme_difference() {
+        // Deliberate Swift parity; the scheme-downgrade decision is flagged for the owner.
+        for mode in [UriMatchMode::RegistrableDomain, UriMatchMode::Host] {
+            check(mode, "https://example.com/", "http://example.com/", true);
+        }
+        for mode in [UriMatchMode::Exact, UriMatchMode::StartsWith] {
+            check(mode, "https://example.com/", "http://example.com/", false);
+            check(mode, "http://example.com/", "https://example.com/", false);
+        }
+    }
+    #[test]
+    fn generic_helpers_and_entry_urls_preserve_lenient_non_web_parsing() {
+        // Swift parity: retrying mailto as an HTTPS authority yields example.com.
+        assert_eq!(host_of("mailto:a@example.com"), Some("example.com".into()));
+        assert_eq!(rd("mailto:a@example.com"), Some("example.com".into()));
+        for mode in UriMatchMode::ALL {
+            check(
+                mode,
+                "mailto:a@example.com",
+                "https://example.com/",
+                mode != UriMatchMode::Never,
+            );
+        }
+        for input in [
+            "foo://example.com/",
+            "\u{1}file://example.com/x",
+            "java\tscript://example.com/",
+        ] {
+            assert_eq!(host_of(input), Some("example.com".into()));
+            assert_eq!(rd(input), Some("example.com".into()));
+            check(UriMatchMode::Host, input, "https://example.com/", true);
+        }
     }
     #[test]
     fn strips_one_subdomain_label() {
