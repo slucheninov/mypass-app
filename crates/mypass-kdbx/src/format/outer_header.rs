@@ -128,6 +128,7 @@ impl OuterHeader {
 
     /// Writes the signature and fields in canonical order. As with VariantDictionary, field
     /// lengths above u32::MAX saturate; callers produce only representable headers.
+    #[allow(dead_code)] // remove in Task 9
     pub(crate) fn serialize(&self) -> Vec<u8> {
         let mut out = Vec::new();
         write_signature(&mut out, self.version);
@@ -152,6 +153,7 @@ impl OuterHeader {
     }
 }
 
+#[allow(dead_code)] // remove in Task 9
 fn field(out: &mut Vec<u8>, id: u8, value: &[u8]) {
     out.push(id);
     out.extend_from_slice(&u32::try_from(value.len()).unwrap_or(u32::MAX).to_le_bytes());

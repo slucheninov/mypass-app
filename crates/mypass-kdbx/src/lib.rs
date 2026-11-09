@@ -2,8 +2,6 @@
 //! tasks of stage 1.
 
 pub mod error;
-// Nothing consumes the format layer until the database API lands.
-#[allow(dead_code)] // remove in Task 9
 mod format;
 
 pub use error::{KdbxError, Result};
@@ -20,3 +18,10 @@ mod tests {
         assert_eq!(CRATE_NAME, "mypass-kdbx");
     }
 }
+
+mod database;
+mod model;
+pub use database::{Database, SaveSettings};
+pub use format::kdf::{Argon2Variant, KdfParams};
+pub use format::outer_header::{Cipher, Compression};
+pub use model::*;

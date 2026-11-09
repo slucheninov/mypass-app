@@ -172,6 +172,9 @@ fn cyrillic_allowed(rel: &str) -> bool {
     rel.ends_with(".xcstrings")
         || rel == "RUN.md"
         || rel == "crates/mypass-kdbx/tests/unicode.rs"
+        // Synthetic encrypted fixtures are opaque binary data. Keep their README and
+        // generator subject to the normal text rules.
+        || (rel.starts_with("crates/mypass-kdbx/tests/fixtures/") && rel.ends_with(".kdbx"))
         // Vendored upstream data (Public Suffix List, Apple password rules) is added verbatim by
         // later tasks and is not ours to rewrite; the PSL contains internationalised names.
         || rel.starts_with("crates/mypass-core/resources/")

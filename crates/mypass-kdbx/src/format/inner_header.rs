@@ -101,6 +101,7 @@ impl InnerHeader {
         ))
     }
 
+    #[allow(dead_code)] // remove in Task 9
     pub(crate) fn serialize(&self) -> Vec<u8> {
         let mut out = Vec::new();
         let id: u32 = match self.stream {
@@ -125,6 +126,7 @@ fn corrupt(message: &str) -> KdbxError {
     KdbxError::Corrupt(message.into())
 }
 
+#[allow(dead_code)] // remove in Task 9
 fn write_field_prefix(out: &mut Vec<u8>, id: u8, len: usize) {
     out.push(id);
     // Parsed fields fit u32 by construction; match the outer-header serializer

@@ -7,6 +7,7 @@ use zeroize::Zeroizing;
 use super::limits::MAX_DECOMPRESSED_LEN;
 use crate::error::{KdbxError, Result};
 
+#[allow(dead_code)] // remove in Task 9
 pub(crate) fn gzip(data: &[u8]) -> Result<Vec<u8>> {
     // GzEncoder's default header has mtime zero (no clock or filename metadata).
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());

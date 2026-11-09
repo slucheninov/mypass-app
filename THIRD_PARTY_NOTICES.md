@@ -61,6 +61,18 @@ place, generated with `cargo metadata` and reviewed by hand.
 | `salsa20` | 0.11.0 | MIT OR Apache-2.0 | `mypass-kdbx` Salsa20 inner random stream |
 | `flate2` | 1.1.11 | MIT OR Apache-2.0 | `mypass-kdbx` gzip compression and bounded decompression |
 
+| `quick-xml` | 0.42.0 | MIT | `mypass-kdbx` bounded XML decoder |
+| `uuid` | 1.29.2 | Apache-2.0 OR MIT | `mypass-kdbx` model identifiers |
+| `base64` | 0.23.1 | MIT OR Apache-2.0 | `mypass-kdbx` XML binary encoding |
+
+## Synthetic test fixtures
+
+`crates/mypass-kdbx/tests/fixtures/` copies the synthetic MyPassKit test assets
+(KeePassXC KDBX4 outputs, pykeepass attachment output and its generator) from the earlier
+MyPass project. They are MyPass test data/code under Apache-2.0, not third-party program code.
+KeePassXC (GPL-2.0/GPL-3.0) and pykeepass 4.2.0 (GPL-3.0) were producing tools only;
+neither is linked or shipped. Fixture passwords and contents are documented in that directory.
+
 ## Test-only (not part of any shipped artifact)
 
 `repo-guards` is a test-only workspace crate (`publish = false`) and is never shipped. The

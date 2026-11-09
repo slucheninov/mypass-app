@@ -10,6 +10,7 @@ fn outer_cipher_error() -> KdbxError {
     KdbxError::Corrupt("outer cipher".into())
 }
 
+#[allow(dead_code)] // remove in Task 9
 pub(crate) fn encrypt(cipher: Cipher, key: &[u8; 32], iv: &[u8], data: &[u8]) -> Result<Vec<u8>> {
     if iv.len() != cipher.iv_len() {
         return Err(outer_cipher_error());

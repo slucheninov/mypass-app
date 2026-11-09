@@ -6,6 +6,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256, Sha512};
 use zeroize::Zeroizing;
 
+#[allow(dead_code)] // remove in Task 9
 pub(crate) const DEFAULT_BLOCK_SIZE: usize = 1 << 20;
 
 pub(crate) fn read(data: &[u8], hmac_key_base: &[u8; 64]) -> Result<Vec<u8>> {
@@ -41,6 +42,7 @@ pub(crate) fn read(data: &[u8], hmac_key_base: &[u8; 64]) -> Result<Vec<u8>> {
 }
 
 /// A zero block size uses the default; oversized sizes are capped to the reader's block limit.
+#[allow(dead_code)] // remove in Task 9
 pub(crate) fn write(plain: &[u8], hmac_key_base: &[u8; 64], block_size: usize) -> Vec<u8> {
     let block_size = if block_size == 0 {
         DEFAULT_BLOCK_SIZE
@@ -72,6 +74,7 @@ fn block_mac(index: u64, length: u32, payload: &[u8], base: &[u8; 64]) -> Hmac<S
     mac
 }
 
+#[allow(dead_code)] // remove in Task 9
 fn append_block(stream: &mut Vec<u8>, index: u64, payload: &[u8], base: &[u8; 64]) {
     // Only called with chunks capped to MAX_BLOCK_LEN (2^30), or the empty terminator.
     let length = payload.len() as u32;

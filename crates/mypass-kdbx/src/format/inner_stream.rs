@@ -54,6 +54,10 @@ impl InnerStream {
     /// and every subsequent buffer are zeroed. ChaCha20 exhaustion requires about
     /// 2^38 bytes, far beyond the 1 GiB payload limit; Salsa20's limit is larger.
     /// Never use a panicking API or leave plaintext unchanged on failure.
+    pub(crate) fn is_failed(&self) -> bool {
+        self.failed
+    }
+
     pub fn apply(&mut self, data: &mut [u8]) {
         if !self.failed {
             let result = match &mut self.cipher {
