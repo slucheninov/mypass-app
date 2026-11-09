@@ -318,8 +318,63 @@ fn tie_clocks(mut d: Database) -> Database {
     d
 }
 
+fn recycle_cases() -> impl Strategy<Value = (Database, Database)> {
+    (cases(), any::<bool>(), 0usize..8).prop_map(|((mut l, mut r), two, depth)| {
+        for (side, id) in [(&mut l, 600u128), (&mut r, if two { 601 } else { 600 })] {
+            let mut bin = Group::new("Recycle Bin", Timestamp(100));
+            bin.uuid = Uuid::from_u128(id);
+            let mut e = Entry::new(Timestamp(100));
+            e.uuid = Uuid::from_u128(id + 100);
+            bin.entries.push(e);
+            for n in 0..depth {
+                let mut parent = Group::new("nested", Timestamp(100));
+                parent.uuid = Uuid::from_u128(id * 10 + n as u128);
+                parent.groups.push(bin);
+                bin = parent;
+            }
+            side.root.groups.push(bin);
+            side.meta.recycle_bin_uuid = Some(Uuid::from_u128(id));
+        }
+        // Mutation API histories are oldest-first and distinct. The base
+        // hostile-history generator intentionally also emits unordered duplicates.
+        for side in [&mut l, &mut r] {
+            let mut stack = vec![&mut side.root];
+            while let Some(g) = stack.pop() {
+                for e in &mut g.entries {
+                    e.history.sort_by_key(|h| h.modified);
+                    e.history.dedup_by_key(|h| h.modified);
+                }
+                stack.extend(&mut g.groups);
+            }
+        }
+        (l, r)
+    })
+}
+fn check_recycled(l: &Database, r: &Database) -> TestCaseResult {
+    check_survival(l, r)?;
+    let m = merge(l, r);
+    for side in [l, r] {
+        let bin = side
+            .find_group(side.meta.recycle_bin_uuid.unwrap())
+            .unwrap();
+        let mut stack = vec![bin];
+        while let Some(g) = stack.pop() {
+            for e in &g.entries {
+                prop_assert!(m.is_in_recycle_bin(e.uuid));
+            }
+            stack.extend(&g.groups);
+        }
+    }
+    prop_assert_eq!(merge(l, &m), m);
+    Ok(())
+}
+
 proptest! {
     #![proptest_config(ProptestConfig { cases: 1024, rng_seed: RngSeed::Fixed(0x1616), failure_persistence: None, ..ProptestConfig::default() })]
+    #[test]
+    fn recycled_subtrees_remain_recycled((l,r) in recycle_cases()) {
+        check_recycled(&l, &r)?;
+    }
     #[test]
     fn surviving_items_are_not_tombstoned_and_tombstones_are_not_invented((l,r) in cases()) {
         check_survival(&l, &r)?;

@@ -228,6 +228,51 @@ pub fn merge(local: &Database, remote: &Database) -> Database {
             parents.insert(id, parent);
         }
     }
+    // Preserve both devices' recycled contents. This is a structural override,
+    // not a new user move: retain each group's metadata and location clock.
+    let chosen_bin = local
+        .meta
+        .recycle_bin_uuid
+        .filter(|u| !u.is_nil())
+        .or(remote.meta.recycle_bin_uuid.filter(|u| !u.is_nil()));
+    let second_bin = remote.meta.recycle_bin_uuid.filter(|u| !u.is_nil());
+    if let (Some(chosen), Some(second)) = (chosen_bin, second_bin) {
+        if chosen != second
+            && chosen != root
+            && second != root
+            && groups.contains_key(&chosen)
+            && groups.contains_key(&second)
+        {
+            parents.insert(second, chosen);
+        }
+    }
+    if let Some(chosen) = chosen_bin.filter(|id| *id != root && groups.contains_key(id)) {
+        // Recognize a previous containment repair when the peer now advertises
+        // our bin: an original local ancestor is already inside it remotely.
+        if let Some((remote_bin, _)) = r.groups.get(&chosen) {
+            let contained = Index::new(remote_bin, chosen);
+            let mut cursor = l.groups.get(&chosen).map(|(_, p)| *p);
+            let mut seen = HashSet::new();
+            while let Some(id) = cursor.filter(|id| *id != root && seen.insert(*id)) {
+                if contained.groups.contains_key(&id) {
+                    parents.insert(id, chosen);
+                }
+                cursor = l.groups.get(&id).map(|(_, p)| *p);
+            }
+        }
+        // Also on repeated merges: peers may now advertise the same chosen bin
+        // while the original local parent edge would recreate the former cycle.
+        // Keep room for depth repair to retain descendants under the bin.
+        let mut seen = HashSet::new();
+        let mut cursor = chosen;
+        while cursor != root {
+            if !seen.insert(cursor) || seen.len() >= MAX_GROUP_DEPTH {
+                parents.insert(chosen, root);
+                break;
+            }
+            cursor = parents.get(&cursor).copied().unwrap_or(root);
+        }
+    }
     // Rule 4: assemble the UUID union once, using adjacency indexes rather than
     // rescanning every entry for every group. D2: missing parents attach to root.
     let mut children: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
@@ -239,12 +284,17 @@ pub fn merge(local: &Database, remote: &Database) -> Database {
         };
         children.entry(parent).or_default().push(id);
     }
-    let mut queue = VecDeque::from([(root, 1usize)]);
+    let mut queue = VecDeque::from([(root, 1usize, None)]);
     let mut order = vec![];
     let mut actual_parents = HashMap::new();
     let mut visited = HashSet::new();
     loop {
-        while let Some((id, depth)) = queue.pop_front() {
+        while let Some((id, depth, bin_depth)) = queue.pop_front() {
+            let bin_depth = if Some(id) == chosen_bin {
+                Some(depth)
+            } else {
+                bin_depth
+            };
             if !visited.insert(id) {
                 continue;
             }
@@ -255,12 +305,15 @@ pub fn merge(local: &Database, remote: &Database) -> Database {
                     continue;
                 }
                 let (parent, next_depth) = if depth >= MAX_GROUP_DEPTH {
-                    (root, 2)
+                    // Depth repair must never expose recycled descendants.
+                    bin_depth
+                        .and_then(|d| chosen_bin.map(|bin| (bin, d + 1)))
+                        .unwrap_or((root, 2))
                 } else {
                     (id, depth + 1)
                 };
                 actual_parents.insert(child, parent);
-                queue.push_back((child, next_depth));
+                queue.push_back((child, next_depth, bin_depth));
             }
         }
         if visited.len() == groups.len() {
@@ -272,7 +325,7 @@ pub fn merge(local: &Database, remote: &Database) -> Database {
         for id in cycle_roots(&parents, &visited, &groups) {
             if !visited.contains(&id) {
                 actual_parents.insert(id, root);
-                queue.push_back((id, 2));
+                queue.push_back((id, 2, None));
             }
         }
         if queue.is_empty() {
@@ -1054,5 +1107,95 @@ mod tests {
             m.root.entries.iter().map(|e| e.uuid).collect::<Vec<_>>(),
             vec![Uuid::from_u128(2), Uuid::from_u128(3)]
         );
+    }
+    fn bins() -> (Database, Database) {
+        let mut l = make_db(vec![]);
+        let mut r = l.clone();
+        l.meta.recycle_bin_uuid = Some(Uuid::from_u128(8));
+        r.meta.recycle_bin_uuid = Some(Uuid::from_u128(9));
+        l.root.groups.push(group(8));
+        let mut bin = group(9);
+        bin.entries.push(make_entry(1, "deleted", 1000));
+        r.root.groups.push(bin);
+        (l, r)
+    }
+    #[test]
+    fn distinct_bins_keep_metadata_and_are_idempotent() {
+        let (l, r) = bins();
+        let m = merge(&l, &r);
+        assert_eq!(
+            m.find_group(Uuid::from_u128(8)).unwrap().groups[0],
+            r.root.groups[0]
+        );
+        assert!(m.is_in_recycle_bin(Uuid::from_u128(1)));
+        assert_eq!(merge(&l, &m), m);
+    }
+    #[test]
+    fn nested_remote_bin_is_kept_under_chosen_bin() {
+        let (l, mut r) = bins();
+        let bin = r.root.groups.pop().unwrap();
+        let mut parent = group(7);
+        parent.groups.push(bin);
+        r.root.groups.push(parent);
+        let m = merge(&l, &r);
+        assert!(m.is_in_recycle_bin(Uuid::from_u128(1)));
+        assert_eq!(
+            m.find_group(Uuid::from_u128(8)).unwrap().groups[0].uuid,
+            Uuid::from_u128(9)
+        );
+    }
+    #[test]
+    fn absent_tombstoned_equal_and_unset_bins() {
+        let (l, mut r) = bins();
+        r.deleted_objects.push(DeletedObject {
+            uuid: Uuid::from_u128(9),
+            deleted_at: Timestamp(2000),
+        });
+        assert!(merge(&l, &r).find_group(Uuid::from_u128(9)).is_none());
+        let (mut l, r) = bins();
+        l.meta.recycle_bin_uuid = None;
+        assert_eq!(merge(&l, &r).meta.recycle_bin_uuid, r.meta.recycle_bin_uuid);
+        let (mut l, mut r) = bins();
+        r.meta.recycle_bin_uuid = l.meta.recycle_bin_uuid;
+        assert_eq!(merge(&l, &r).root.groups.len(), 2);
+        l.root.groups.clear();
+        assert_eq!(merge(&l, &r).root.groups.len(), 1);
+    }
+    #[test]
+    fn recycle_bin_reparent_breaks_ancestor_cycle() {
+        let (mut l, r) = bins();
+        let chosen = l.root.groups.pop().unwrap();
+        let mut ancestor = r.root.groups[0].clone();
+        ancestor.groups.push(chosen);
+        l.root.groups.push(ancestor);
+        let m = merge(&l, &r);
+        assert!(m.is_in_recycle_bin(Uuid::from_u128(1)));
+        assert_eq!(merge(&l, &m), m);
+    }
+
+    #[test]
+    fn second_bin_subtree_depth_counts_without_exposing_entries() {
+        let (l, mut r) = bins();
+        let mut child = group(2000);
+        child.entries.push(make_entry(2, "deep deleted", 1000));
+        for n in 0..MAX_GROUP_DEPTH {
+            let mut parent = group(3000 + n as u128);
+            parent.groups.push(child);
+            child = parent;
+        }
+        r.root.groups[0].groups.push(child);
+        let m = merge(&l, &r);
+        assert!(m.is_in_recycle_bin(Uuid::from_u128(2)));
+        let mut stack = vec![(&m.root, 1)];
+        while let Some((g, depth)) = stack.pop() {
+            assert!(depth <= MAX_GROUP_DEPTH);
+            stack.extend(g.groups.iter().map(|g| (g, depth + 1)));
+        }
+        let password = secrecy::SecretString::from("synthetic");
+        assert_eq!(
+            Database::open(&m.save(&password).unwrap(), &password).unwrap(),
+            m
+        );
+        assert_eq!(merge(&l, &m), m);
     }
 }
