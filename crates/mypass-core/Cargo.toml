@@ -18,6 +18,8 @@ data-encoding.workspace = true
 zeroize.workspace = true
 url.workspace = true
 thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

@@ -19,3 +19,12 @@ mod tests {
 /// Time-based one-time passwords and secret parsing.
 pub mod totp;
 pub use totp::{base32_decode, base32_encode, totp_code, TotpAlgorithm, TotpConfig, TotpError};
+
+/// Apple's password-rules grammar and structured rules.
+pub mod password_rules;
+/// Host lookup over the bundled Apple password-rules catalog.
+pub mod rules_catalog;
+pub use password_rules::{
+    parse_password_rules, CharacterClass, PasswordRules, PasswordRulesParseError,
+};
+pub use rules_catalog::{bundled_rules_for_host, PasswordRulesIndex};

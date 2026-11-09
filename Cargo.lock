@@ -649,6 +649,8 @@ dependencies = [
  "data-encoding",
  "hmac",
  "mypass-kdbx",
+ "serde",
+ "serde_json",
  "sha1",
  "sha2",
  "thiserror",

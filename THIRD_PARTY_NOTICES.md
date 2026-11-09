@@ -15,8 +15,9 @@ machine-generated.
 - Upstream: https://github.com/apple/password-manager-resources
 - Vendored file: `quirks/password-rules.json`, commit `6073487115b722596d3e1826d1b71b524b73bac5`
   (retrieved 2026-09-12, 436 entries at that commit). The file is committed as-is, with no
-  reformatting. It is added to this repository by a later stage 1 task, which records the exact
-  location and provenance here in the same change.
+  reformatting at `crates/mypass-core/resources/password-rules.json`. Its verbatim provenance
+  and licence are in `crates/mypass-core/resources/PASSWORD_RULES_PROVENANCE.md`; refresh with
+  `scripts/update-password-rules.sh`.
 - Licence: MIT. Text copied verbatim from upstream's `LICENSE.md` at the commit above:
 
 ~~~~text
@@ -66,6 +67,8 @@ place, generated with `cargo metadata` and reviewed by hand.
 | `sha1` | 0.11.0 | MIT OR Apache-2.0 | `mypass-core` TOTP HMAC-SHA1 |
 | `data-encoding` | 2.11.1 | MIT | `mypass-core` base32 secret encoding |
 | `url` | 2.5.8 | MIT OR Apache-2.0 | `mypass-core` otpauth URL/query parsing |
+| `serde` | 1.0.229 | MIT OR Apache-2.0 | `mypass-core` password-rules catalog deserialization |
+| `serde_json` | 1.0.154 | MIT OR Apache-2.0 | `mypass-core` password-rules JSON catalog |
 | `thiserror` | 2.0.21 | MIT OR Apache-2.0 | `mypass-kdbx` and `mypass-core` error types |
 
 ## Synthetic test fixtures
