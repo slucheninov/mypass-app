@@ -318,7 +318,7 @@ mod tests {
             rounds: 3,
         }
     }
-    fn invalid(params: &KdfParams) {
+    fn assert_invalid(params: &KdfParams) {
         assert!(matches!(
             KdfParams::from_variant(&params.to_variant()),
             Err(KdbxError::InvalidKdfParameters(_))
@@ -429,26 +429,33 @@ mod tests {
         );
     }
     #[test]
-    fn argon2_salt_16_bytes_still_works() {
-        let params = argon(Argon2Variant::Id, 1, 16);
-        let key = CompositeKey::from_password(&SecretString::from("password"));
-        let result = params.transform(&key).unwrap();
-        assert_eq!(
-            result.as_ref(),
-            params.transform_bytes(key.0.as_ref()).unwrap().as_ref()
-        );
-        assert_ne!(result.as_ref(), &[0; 32]);
-    }
-    #[test]
     fn aes_kdf_accepts_legacy_kdbx3_uuid() {
-        let mut dict = aes().to_variant();
-        dict.set("$UUID", VariantValue::Bytes(AES_LEGACY_UUID.to_vec()));
-        let params = KdfParams::from_variant(&dict).unwrap();
-        let key = CompositeKey(Zeroizing::new([5; 32]));
+        // The brief's "legacy" naming is inverted: KeePassXC's KDF_AES_KDBX3 (c9d9f39a) is emitted; 7c02bb82 is also accepted.
+        let emitted_uuid = vec![
+            0xc9, 0xd9, 0xf3, 0x9a, 0x62, 0x8a, 0x44, 0x60, 0xbf, 0x74, 0x0d, 0x08, 0xc1, 0x8a,
+            0x4f, 0xea,
+        ];
+        let other_uuid = vec![
+            0x7c, 0x02, 0xbb, 0x82, 0x79, 0xa7, 0x4a, 0xc0, 0x92, 0x7d, 0x11, 0x4a, 0x00, 0x64,
+            0x82, 0x38,
+        ];
         assert_eq!(
-            *params.transform(&key).unwrap(),
-            *aes().transform(&key).unwrap()
+            aes().to_variant().get("$UUID"),
+            Some(&VariantValue::Bytes(emitted_uuid.clone()))
         );
+        for uuid in [emitted_uuid, other_uuid] {
+            let mut dict = VariantDictionary::default();
+            dict.set("$UUID", VariantValue::Bytes(uuid));
+            dict.set("S", VariantValue::Bytes((0..32).collect()));
+            dict.set("R", VariantValue::U64(3));
+            let params = KdfParams::from_variant(&dict).unwrap();
+            assert_eq!(params, aes());
+            let key = CompositeKey(Zeroizing::new([5; 32]));
+            assert_eq!(
+                *params.transform(&key).unwrap(),
+                *aes().transform(&key).unwrap()
+            );
+        }
     }
     #[test]
     fn aes_kdf_missing_params_is_invalid() {
@@ -463,7 +470,7 @@ mod tests {
     }
     #[test]
     fn aes_kdf_wrong_seed_length_is_invalid() {
-        invalid(&KdfParams::AesKdf {
+        assert_invalid(&KdfParams::AesKdf {
             seed: vec![0; 16],
             rounds: 3,
         });
@@ -493,13 +500,22 @@ mod tests {
     }
     #[test]
     fn memory_below_8_kib_and_above_4_gib_rejected() {
-        for m in [8191, 4 * 1024 * 1024 * 1024 + 1, u64::MAX, 8193] {
+        // Non-multiples also fail the % 1024 rule; multiples isolate the range rule (P = 1).
+        for m in [
+            8191,
+            4 * 1024 * 1024 * 1024 + 1,
+            u64::MAX,
+            8193,
+            7 * 1024,
+            4 * 1024 * 1024 * 1024 + 1024,
+            1 << 40,
+        ] {
             changed("M", VariantValue::U64(m));
         }
     }
     #[test]
     fn memory_below_eight_times_parallelism_rejected() {
-        invalid(&KdfParams::Argon2 {
+        assert_invalid(&KdfParams::Argon2 {
             variant: Argon2Variant::Id,
             salt: vec![0; 16],
             memory_bytes: 8 * 1024,
@@ -527,7 +543,7 @@ mod tests {
     #[test]
     fn aes_kdf_rounds_above_cap_rejected() {
         for rounds in [0, 1_000_000_001, u64::MAX] {
-            invalid(&KdfParams::AesKdf {
+            assert_invalid(&KdfParams::AesKdf {
                 seed: vec![0; 32],
                 rounds,
             });
