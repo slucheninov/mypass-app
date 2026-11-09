@@ -409,6 +409,71 @@ mod save_tests {
         let db = Database::new("new");
         let p = SecretString::from("p");
         let data = db.save(&p).unwrap();
+        // Independent wire scan: do not use the production header/dictionary parsers here.
+        assert_eq!(&data[8..12], &[0, 0, 4, 0]);
+        let mut fields = std::collections::HashMap::new();
+        let mut offset = 12;
+        loop {
+            let id = data[offset];
+            let len = u32::from_le_bytes(data[offset + 1..offset + 5].try_into().unwrap()) as usize;
+            offset += 5;
+            let value = &data[offset..offset + len];
+            offset += len;
+            fields.insert(id, value);
+            if id == 0 {
+                break;
+            }
+        }
+        assert_eq!(
+            fields[&2],
+            &[
+                0x31, 0xc1, 0xf2, 0xe6, 0xbf, 0x71, 0x43, 0x50, 0xbe, 0x58, 0x05, 0x21, 0x6a, 0xfc,
+                0x5a, 0xff
+            ]
+        );
+        assert_eq!(fields[&3], &1u32.to_le_bytes());
+        let dict = fields[&11];
+        assert_eq!(&dict[..2], &[0, 1]);
+        let mut offset = 2;
+        let mut entries = std::collections::HashMap::new();
+        while dict[offset] != 0 {
+            let tag = dict[offset];
+            offset += 1;
+            let key_len = u32::from_le_bytes(dict[offset..offset + 4].try_into().unwrap()) as usize;
+            offset += 4;
+            let key = &dict[offset..offset + key_len];
+            offset += key_len;
+            let len = u32::from_le_bytes(dict[offset..offset + 4].try_into().unwrap()) as usize;
+            offset += 4;
+            entries.insert(key, (tag, &dict[offset..offset + len]));
+            offset += len;
+        }
+        assert_eq!(
+            entries[b"$UUID".as_slice()],
+            (
+                0x42,
+                [
+                    0x9e, 0x29, 0x8b, 0x19, 0x56, 0xdb, 0x47, 0x73, 0xb2, 0x3d, 0xfc, 0x3e, 0xc6,
+                    0xf0, 0xa1, 0xe6
+                ]
+                .as_slice()
+            )
+        );
+        for (key, expected) in [(b"M", 64 * 1024 * 1024u64), (b"I", 3u64)] {
+            assert_eq!(
+                entries[key.as_slice()],
+                (0x05, expected.to_le_bytes().as_slice())
+            );
+        }
+        for (key, expected) in [(b"P", 2u32), (b"V", 0x13u32)] {
+            assert_eq!(
+                entries[key.as_slice()],
+                (0x04, expected.to_le_bytes().as_slice())
+            );
+        }
+        let (salt_tag, salt) = entries[b"S".as_slice()];
+        assert_eq!(salt_tag, 0x42);
+        assert_eq!(salt.len(), 32);
         let (h, _) = OuterHeader::parse(&data).unwrap();
         assert_eq!(h.version, Version { major: 4, minor: 0 });
         assert_eq!(h.cipher, Cipher::Aes256Cbc);

@@ -1,12 +1,22 @@
 //! First-use attachment pool, keyed by exact bytes and protection flag.
 use crate::format::inner_header::InnerBinary;
 use crate::{Attachment, Entry, Group};
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+type PoolKey = ([u8; 32], bool);
+fn attachment_key(a: &Attachment) -> PoolKey {
+    (Sha256::digest(&a.data).into(), a.protected)
+}
 pub(crate) struct AttachmentPool {
     pub binaries: Vec<InnerBinary>,
+    indices: HashMap<PoolKey, Vec<usize>>,
 }
 impl AttachmentPool {
     pub(crate) fn collecting(root: &Group) -> Self {
-        let mut pool = Self { binaries: vec![] };
+        let mut pool = Self {
+            binaries: vec![],
+            indices: HashMap::new(),
+        };
         pool.group(root);
         pool
     }
@@ -20,26 +30,32 @@ impl AttachmentPool {
     }
     fn entry(&mut self, e: &Entry) {
         for a in &e.attachments {
-            if !self
-                .binaries
-                .iter()
-                .any(|b| b.data == a.data && b.protected == a.protected)
-            {
+            let key = attachment_key(a);
+            if self.find_index(&key, a).is_none() {
+                let index = self.binaries.len();
                 self.binaries.push(InnerBinary {
                     data: a.data.clone(),
                     protected: a.protected,
                 });
+                self.indices.entry(key).or_default().push(index);
             }
         }
         for e in &e.history {
             self.entry(e);
         }
     }
+    fn find_index(&self, key: &PoolKey, a: &Attachment) -> Option<usize> {
+        // Compare exact content within a digest bucket: even a hash collision cannot merge data.
+        self.indices.get(key)?.iter().copied().find(|index| {
+            self.binaries
+                .get(*index)
+                .is_some_and(|b| b.data == a.data && b.protected == a.protected)
+        })
+    }
     pub(crate) fn index_of(&self, a: &Attachment) -> usize {
-        // Only called for the same immutable tree passed to collecting.
-        self.binaries
-            .iter()
-            .position(|b| b.data == a.data && b.protected == a.protected)
+        // Only called for the same immutable tree passed to collecting. Expected O(1) pool
+        // lookup after hashing the attachment, independent of the number of other binaries.
+        self.find_index(&attachment_key(a), a)
             .unwrap_or(self.binaries.len())
     }
 }
@@ -60,6 +76,33 @@ mod tests {
         e.attachments = attachments;
         g.entries.push(e);
         g
+    }
+    #[test]
+    fn digest_collision_still_requires_exact_content() {
+        let a = make_attachment(&[1], false);
+        let b = make_attachment(&[2], false);
+        let mut pool = AttachmentPool::collecting(&make_root(vec![a.clone(), b.clone()]));
+        let key = attachment_key(&a);
+        // Force both distinct contents into one bucket, simulating a digest collision.
+        pool.indices.insert(key, vec![0, 1]);
+        assert_eq!(pool.find_index(&key, &a), Some(0));
+        assert_eq!(pool.find_index(&key, &b), Some(1));
+        assert_eq!(pool.find_index(&key, &make_attachment(&[3], false)), None);
+    }
+    #[test]
+    fn many_attachments_deduplicate_in_first_use_order() {
+        let originals: Vec<_> = (0..2000u32)
+            .map(|n| make_attachment(&n.to_le_bytes(), n % 2 == 0))
+            .collect();
+        let mut all = originals.clone();
+        all.extend(originals.iter().rev().cloned());
+        let pool = AttachmentPool::collecting(&make_root(all));
+        assert_eq!(pool.binaries.len(), 2000);
+        for (i, a) in originals.iter().enumerate() {
+            assert_eq!(pool.index_of(a), i);
+            assert_eq!(pool.binaries[i].data, a.data);
+            assert_eq!(pool.binaries[i].protected, a.protected);
+        }
     }
     #[test]
     fn identical_content_and_flag_stored_once() {

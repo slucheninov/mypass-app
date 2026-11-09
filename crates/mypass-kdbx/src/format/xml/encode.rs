@@ -249,7 +249,8 @@ mod tests {
         assert!(!make_xml(false).contains("<CustomData>"));
     }
     #[test]
-    fn special_characters_escaped_and_round_trip() {
+    // Full save/open coverage: tests/roundtrip.rs::history_and_string_arrays_survive_round_trip.
+    fn special_characters_are_escaped() {
         let mut out = String::new();
         text(&mut out, "Value", "<>&\"'😀");
         assert_eq!(out, "<Value>&lt;&gt;&amp;&quot;&apos;😀</Value>");
