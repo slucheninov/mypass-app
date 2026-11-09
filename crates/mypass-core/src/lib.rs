@@ -28,3 +28,9 @@ pub use password_rules::{
     parse_password_rules, CharacterClass, PasswordRules, PasswordRulesParseError,
 };
 pub use rules_catalog::{bundled_rules_for_host, PasswordRulesIndex};
+
+/// Cryptographic password generation.
+pub mod generator;
+/// Rule-derived toggle state.
+pub mod generator_toggles;
+pub use generator::{generate, generate_os, GeneratorError, GeneratorOptions};

@@ -52,10 +52,11 @@ place, generated with `cargo metadata` and reviewed by hand.
 | `sha2` | 0.11.1 | MIT OR Apache-2.0 | `mypass-kdbx` header hashes; `mypass-core` TOTP |
 | `hmac` | 0.13.0 | MIT OR Apache-2.0 | `mypass-kdbx` header authentication; `mypass-core` TOTP |
 | `subtle` | 2.6.1 | BSD-3-Clause | `mypass-kdbx` constant-time digest comparison |
-| `zeroize` | 1.9.1 | Apache-2.0 OR MIT | `mypass-kdbx` derived key cleanup; `mypass-core` TOTP secret cleanup |
+| `zeroize` | 1.9.1 | Apache-2.0 OR MIT | `mypass-kdbx` derived key cleanup; `mypass-core` TOTP and generated-password cleanup |
 | `argon2` | 0.6.0 | MIT OR Apache-2.0 | `mypass-kdbx` Argon2d/id key derivation |
 | `aes` | 0.9.4 | MIT OR Apache-2.0 | `mypass-kdbx` AES-KDF and AES-256-CBC outer cipher |
 | `secrecy` | 0.10.3 | Apache-2.0 OR MIT | `mypass-kdbx` master password protection |
+| `rand` | 0.8.8 | MIT OR Apache-2.0 | `mypass-core` cryptographic password sampling and shuffle |
 | `getrandom` | 0.4.3 | MIT OR Apache-2.0 | `mypass-kdbx` OS-generated KDF salts and seeds |
 | `cbc` | 0.2.1 | MIT OR Apache-2.0 | `mypass-kdbx` CBC outer cipher mode and PKCS7 padding |
 | `chacha20` | 0.10.2 | MIT OR Apache-2.0 | `mypass-kdbx` ChaCha20 outer and inner ciphers |

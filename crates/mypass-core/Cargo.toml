@@ -16,6 +16,7 @@ sha1.workspace = true
 sha2.workspace = true
 data-encoding.workspace = true
 zeroize.workspace = true
+rand.workspace = true
 url.workspace = true
 thiserror.workspace = true
 serde.workspace = true
