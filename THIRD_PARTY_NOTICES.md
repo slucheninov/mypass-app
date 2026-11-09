@@ -57,7 +57,8 @@ place, generated with `cargo metadata` and reviewed by hand.
 | `secrecy` | 0.10.3 | Apache-2.0 OR MIT | `mypass-kdbx` master password protection |
 | `getrandom` | 0.4.3 | MIT OR Apache-2.0 | `mypass-kdbx` OS-generated KDF salts and seeds |
 | `cbc` | 0.2.1 | MIT OR Apache-2.0 | `mypass-kdbx` CBC outer cipher mode and PKCS7 padding |
-| `chacha20` | 0.10.2 | MIT OR Apache-2.0 | `mypass-kdbx` ChaCha20 outer cipher |
+| `chacha20` | 0.10.2 | MIT OR Apache-2.0 | `mypass-kdbx` ChaCha20 outer and inner ciphers |
+| `salsa20` | 0.11.0 | MIT OR Apache-2.0 | `mypass-kdbx` Salsa20 inner random stream |
 | `flate2` | 1.1.11 | MIT OR Apache-2.0 | `mypass-kdbx` gzip compression and bounded decompression |
 
 ## Test-only (not part of any shipped artifact)

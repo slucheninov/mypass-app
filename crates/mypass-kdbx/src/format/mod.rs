@@ -14,3 +14,8 @@ pub mod variant_dict;
 pub(crate) mod cipher;
 #[allow(dead_code)] // remove in Task 9
 pub(crate) mod compression;
+
+#[allow(dead_code)] // remove in Task 9
+pub(crate) mod inner_header;
+#[allow(dead_code)] // remove in Task 9
+pub(crate) mod inner_stream;
