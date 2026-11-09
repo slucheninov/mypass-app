@@ -36,6 +36,120 @@ impl PartialEq for Database {
     }
 }
 impl Database {
+    pub fn new(name: &str) -> Database {
+        Self {
+            root: Group::new(name, Timestamp::now()),
+            deleted_objects: vec![],
+            meta: Meta {
+                database_name: name.into(),
+                ..Meta::default()
+            },
+            settings: SaveSettings {
+                minor_version: 0,
+                cipher: Cipher::Aes256Cbc,
+                compression: Compression::Gzip,
+                kdf: KdfParams::argon2id_default(),
+            },
+            dropped_attachment_refs: 0,
+            dropped_protected_unknown: 0,
+        }
+    }
+
+    pub fn save(&self, password: &SecretString) -> Result<Vec<u8>> {
+        self.save_with_field_limit(password, u32::MAX as usize)
+    }
+
+    fn save_with_field_limit(&self, password: &SecretString, limit: usize) -> Result<Vec<u8>> {
+        use crate::format::{
+            inner_header::InnerStreamKind,
+            kdf::fill_random,
+            signature::Version,
+            xml::{encode, pool::AttachmentPool, validate_document},
+        };
+        validate_model(&self.root, 3, limit)?;
+        validate_times(
+            self.deleted_objects
+                .iter()
+                .map(|d| d.deleted_at)
+                .chain(self.meta.custom_data.iter().filter_map(|c| c.last_modified)),
+        )?;
+        let salt_len = match &self.settings.kdf {
+            KdfParams::Argon2 { salt, .. } => salt.len(),
+            KdfParams::AesKdf { seed, .. } => seed.len(),
+        };
+        check_field_len(salt_len, limit)?;
+        // Generated dictionaries have fixed names and scalar values; account for the entire
+        // containing field as well as its variable salt before allocating/serializing it.
+        let overhead = match self.settings.kdf {
+            KdfParams::Argon2 { .. } => 107,
+            KdfParams::AesKdf { .. } => 61,
+        };
+        check_field_len(
+            salt_len
+                .checked_add(overhead)
+                .ok_or_else(|| KdbxError::Corrupt("header field size".into()))?,
+            limit,
+        )?;
+        for len in [32, self.settings.cipher.iv_len(), 64] {
+            check_field_len(len, limit)?;
+        }
+        let kdf = self.settings.kdf.try_with_fresh_randomness()?;
+        let mut master_seed = vec![0; 32];
+        fill_random(&mut master_seed)?;
+        let mut iv = vec![0; self.settings.cipher.iv_len()];
+        fill_random(&mut iv)?;
+        let mut inner_key = Zeroizing::new(vec![0; 64]);
+        fill_random(&mut inner_key)?;
+        let pool = AttachmentPool::collecting(&self.root);
+        let mut stream = InnerStream::new(InnerStreamKind::ChaCha20, &inner_key)?;
+        let xml = Zeroizing::new(encode::encode(self, &pool, &mut stream));
+        validate_document(xml.as_bytes())?;
+        if stream.is_failed() {
+            return Err(KdbxError::Corrupt("inner stream exhausted".into()));
+        }
+        let transformed = kdf.transform(&CompositeKey::from_password(password))?;
+        let keys = derive_keys(&master_seed, &transformed);
+        let header = OuterHeader {
+            version: Version {
+                major: 4,
+                minor: self.settings.minor_version,
+            },
+            cipher: self.settings.cipher,
+            compression: self.settings.compression,
+            master_seed,
+            encryption_iv: iv,
+            kdf_parameters: kdf.to_variant(),
+            public_custom_data: None,
+        };
+        let mut out = header.serialize();
+        let sha = header_auth::header_sha256(&out);
+        let mac = header_auth::header_hmac(&out, &keys.hmac_key_base);
+        out.extend(sha);
+        out.extend(mac);
+        let inner = InnerHeader {
+            stream: InnerStreamKind::ChaCha20,
+            stream_key: inner_key,
+            binaries: pool.binaries,
+        };
+        let mut plain = Zeroizing::new(inner.serialize());
+        plain.extend_from_slice(xml.as_bytes());
+        if plain.len() as u64 > crate::format::limits::MAX_DECOMPRESSED_LEN {
+            return Err(KdbxError::Corrupt("payload size".into()));
+        }
+        let compressed = Zeroizing::new(match self.settings.compression {
+            Compression::None => plain.to_vec(),
+            Compression::Gzip => compression::gzip(&plain)?,
+        });
+        let encrypted = cipher::encrypt(
+            self.settings.cipher,
+            &keys.master_key,
+            &header.encryption_iv,
+            &compressed,
+        )?;
+        out.extend(block_stream::write(&encrypted, &keys.hmac_key_base, 0));
+        Ok(out)
+    }
+
     pub fn open(data: &[u8], password: &SecretString) -> Result<Self> {
         let (header, offset) = OuterHeader::parse(data)?;
         let raw = data
@@ -92,6 +206,61 @@ impl Database {
             dropped_protected_unknown: decoded.dropped_protected_unknown,
         })
     }
+}
+fn check_field_len(len: usize, limit: usize) -> Result<()> {
+    if len > limit {
+        return Err(KdbxError::Corrupt("header field size".into()));
+    }
+    Ok(())
+}
+fn validate_model(g: &Group, depth: usize, limit: usize) -> Result<()> {
+    if depth > crate::format::limits::MAX_XML_DEPTH {
+        return Err(KdbxError::Corrupt("XML depth".into()));
+    }
+    validate_times(
+        [g.created, g.modified, g.accessed, g.location_changed]
+            .into_iter()
+            .chain(g.expiry_time)
+            .chain(g.custom_data.iter().filter_map(|c| c.last_modified)),
+    )?;
+    for e in &g.entries {
+        validate_entry(e, depth + 1, limit)?;
+    }
+    for g in &g.groups {
+        validate_model(g, depth + 1, limit)?;
+    }
+    Ok(())
+}
+fn validate_times(ts: impl Iterator<Item = Timestamp>) -> Result<()> {
+    for t in ts {
+        t.0.checked_add(Timestamp::EPOCH_OFFSET_SECS)
+            .ok_or_else(|| KdbxError::Corrupt("timestamp overflow".into()))?;
+    }
+    Ok(())
+}
+fn validate_entry(e: &Entry, depth: usize, limit: usize) -> Result<()> {
+    if depth > crate::format::limits::MAX_XML_DEPTH {
+        return Err(KdbxError::Corrupt("XML depth".into()));
+    }
+    validate_times(
+        [e.created, e.modified, e.accessed, e.location_changed]
+            .into_iter()
+            .chain(e.expiry_time)
+            .chain(e.custom_data.iter().filter_map(|c| c.last_modified)),
+    )?;
+    for a in &e.attachments {
+        check_field_len(
+            a.data
+                .len()
+                .checked_add(1)
+                .ok_or_else(|| KdbxError::Corrupt("header field size".into()))?,
+            limit,
+        )?;
+    }
+    for e in &e.history {
+        validate_entry(e, depth + 2, limit)?;
+    }
+    Ok(())
 }
 impl fmt::Debug for Database {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -192,5 +361,160 @@ mod tests {
         wire.push(0);
         let result = Database::open(&wire, &SecretString::from("TestMasterPass123"));
         assert!(matches!(result, Err(KdbxError::Corrupt(ref s)) if s == "trailing block data"));
+    }
+}
+
+#[cfg(test)]
+mod save_tests {
+    use super::*;
+    use crate::format::{inner_header::InnerHeader, signature::Version};
+    fn make_db() -> Database {
+        let mut db = Database::new("root");
+        db.settings.kdf = KdfParams::AesKdf {
+            seed: vec![0; 32],
+            rounds: 1,
+        };
+        db
+    }
+    fn parse_headers(data: &[u8], p: &SecretString) -> (OuterHeader, InnerHeader) {
+        let (h, n) = OuterHeader::parse(data).unwrap();
+        let kdf = KdfParams::from_variant(&h.kdf_parameters).unwrap();
+        let t = kdf.transform(&CompositeKey::from_password(p)).unwrap();
+        let keys = derive_keys(&h.master_seed, &t);
+        let encrypted = block_stream::read(&data[n + 64..], &keys.hmac_key_base).unwrap();
+        let plain =
+            cipher::decrypt(h.cipher, &keys.master_key, &h.encryption_iv, &encrypted).unwrap();
+        let plain = match h.compression {
+            Compression::None => plain,
+            Compression::Gzip => compression::gunzip(&plain).unwrap(),
+        };
+        (h, InnerHeader::parse(&plain).unwrap().0)
+    }
+    #[test]
+    fn every_save_uses_fresh_randomness() {
+        let db = make_db();
+        let p = SecretString::from("p");
+        let (a, ai) = parse_headers(&db.save(&p).unwrap(), &p);
+        let (b, bi) = parse_headers(&db.save(&p).unwrap(), &p);
+        assert_ne!(a.master_seed, b.master_seed);
+        assert_ne!(a.encryption_iv, b.encryption_iv);
+        assert_ne!(a.kdf_parameters, b.kdf_parameters);
+        assert_ne!(ai.stream_key, bi.stream_key);
+    }
+    #[test]
+    fn new_database_writes_documented_kdf_defaults() {
+        let db = Database::new("new");
+        let p = SecretString::from("p");
+        let data = db.save(&p).unwrap();
+        let (h, _) = OuterHeader::parse(&data).unwrap();
+        assert_eq!(h.version, Version { major: 4, minor: 0 });
+        assert_eq!(h.cipher, Cipher::Aes256Cbc);
+        assert_eq!(h.compression, Compression::Gzip);
+        match KdfParams::from_variant(&h.kdf_parameters).unwrap() {
+            KdfParams::Argon2 {
+                variant,
+                salt,
+                memory_bytes,
+                iterations,
+                parallelism,
+                version,
+            } => {
+                assert_eq!(variant, Argon2Variant::Id);
+                assert_eq!(salt.len(), 32);
+                assert_eq!(memory_bytes, 64 * 1024 * 1024);
+                assert_eq!(iterations, 3);
+                assert_eq!(parallelism, 2);
+                assert_eq!(version, 0x13);
+            }
+            _ => panic!("not Argon2"),
+        }
+    }
+    #[test]
+    fn header_field_size_is_checked_before_serialization() {
+        let mut db = make_db();
+        let p = SecretString::from("p");
+        let mut e = Entry::new(Timestamp(0));
+        e.attachments.push(Attachment {
+            name: "large".into(),
+            data: vec![7; 128],
+            protected: false,
+        });
+        db.root.entries.push(e);
+        assert!(db.save_with_field_limit(&p, 129).is_ok());
+        assert!(
+            matches!(db.save_with_field_limit(&p,128),Err(KdbxError::Corrupt(ref s)) if s=="header field size")
+        );
+    }
+    #[test]
+    fn kdf_dictionary_container_size_is_checked() {
+        let db = make_db();
+        let p = SecretString::from("p");
+        assert!(db.save_with_field_limit(&p, 93).is_ok());
+        assert!(
+            matches!(db.save_with_field_limit(&p,92),Err(KdbxError::Corrupt(ref s)) if s=="header field size")
+        );
+    }
+    #[test]
+    fn unrepresentable_time_fails_to_save() {
+        let mut db = make_db();
+        db.root.created = Timestamp(i64::MAX);
+        assert!(
+            matches!(db.save(&SecretString::from("p")),Err(KdbxError::Corrupt(ref s)) if s=="timestamp overflow")
+        );
+    }
+    #[test]
+    fn exact_xml_depth_round_trips_one_more_fails_to_save() {
+        let p = SecretString::from("p");
+        // KeePassFile/Root + 93 Groups + Entry/History/Entry/String/Value = 100.
+        fn make_chain(count: usize) -> Group {
+            let mut g = Group::new("leaf", Timestamp(0));
+            let mut e = Entry::new(Timestamp(0));
+            e.set_field("Title", "leaf", false);
+            let mut outer = Entry::new(Timestamp(0));
+            outer.history.push(e);
+            g.entries.push(outer);
+            for _ in 1..count {
+                let mut parent = Group::new("parent", Timestamp(0));
+                parent.groups.push(g);
+                g = parent;
+            }
+            g
+        }
+        let mut db = make_db();
+        db.root = make_chain(93);
+        let wire = db.save(&p).unwrap();
+        assert_eq!(Database::open(&wire, &p).unwrap(), db);
+        db.root = make_chain(94);
+        assert!(matches!(db.save(&p),Err(KdbxError::Corrupt(ref s)) if s=="XML depth"));
+    }
+    #[test]
+    fn unknown_keepassxc_elements_survive_round_trip() {
+        let mut db = make_db();
+        let mut e = Entry::new(Timestamp(0));
+        db.meta.extra.push(RawXml(
+            "<Extension attr = 'a&amp;b'><Nested /></Extension>".into(),
+        ));
+        e.extra.push(RawXml(
+            "<AutoType><Enabled>True</Enabled></AutoType>".into(),
+        ));
+        db.root.entries.push(e);
+        let xml = b"<KeePassFile><Meta><Extension attr = 'a&amp;b'><Nested /></Extension></Meta><Root><Group><UUID>AAAAAAAAAAAAAAAAAAAAAA==</UUID><Name>root</Name><Entry><UUID>AQAAAAAAAAAAAAAAAAAAAA==</UUID><AutoType><Enabled>True</Enabled></AutoType></Entry></Group></Root></KeePassFile>";
+        let decoded = decode::decode(xml, &[], &mut |_| {}).unwrap();
+        db.meta = decoded.meta;
+        db.root = decoded.root;
+        assert_eq!(
+            db.meta.extra,
+            vec![RawXml(
+                "<Extension attr = 'a&amp;b'><Nested /></Extension>".into()
+            )]
+        );
+        assert_eq!(
+            db.root.entries[0].extra,
+            vec![RawXml(
+                "<AutoType><Enabled>True</Enabled></AutoType>".into()
+            )]
+        );
+        let p = SecretString::from("p");
+        assert_eq!(Database::open(&db.save(&p).unwrap(), &p).unwrap(), db);
     }
 }

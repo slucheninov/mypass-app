@@ -77,3 +77,12 @@ neither is linked or shipped. Fixture passwords and contents are documented in t
 `repo-guards` is a test-only workspace crate (`publish = false`) and is never shipped. The
 dev-only crates used by tests, the oracle and the repository guards (`tempfile`, `proptest`,
 `keepass`, `toml`, `serde_yaml_ng`) are not linked into any artifact.
+
+### Test-only KDBX oracle
+
+`keepass` 0.17.0 (MIT, copyright Stefan Seemayer and contributors),
+https://github.com/sseemayer/keepass-rs, is a dev-dependency only. Its
+`save_kdbx4` feature checks interoperability in both directions; it is never
+linked into a shipped artifact. The MIT licence permits use, copying,
+modification and distribution subject to retaining its copyright and permission
+notice; the full licence is included in the crate's `LICENSE` file.

@@ -37,7 +37,7 @@ impl<'a> Reader<'a> {
         Ok(u32::from_le_bytes(self.array()?))
     }
 
-    #[allow(dead_code)] // remove in Task 9
+    #[cfg(test)]
     pub fn u64_le(&mut self) -> Result<u64> {
         Ok(u64::from_le_bytes(self.array()?))
     }

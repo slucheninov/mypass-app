@@ -6,6 +6,8 @@
 /// Everything that can go wrong while opening, editing or saving a vault.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum KdbxError {
+    #[error("OS randomness unavailable")]
+    Random,
     /// The input does not start with the KDBX magic (or is KDB1).
     #[error("not a KDBX file")]
     NotKdbx,

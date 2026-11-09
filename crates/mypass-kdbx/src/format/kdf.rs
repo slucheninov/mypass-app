@@ -76,27 +76,28 @@ fn u32_param(dict: &VariantDictionary, name: &str) -> Result<u32> {
     }
 }
 
-// These constructors are infallible by contract. Never continue with a zero or partially filled
-// salt if the OS RNG fails; panicking here is independent of parsing any untrusted vault input.
-fn randomize(bytes: &mut [u8]) {
-    if getrandom::fill(bytes).is_err() {
-        panic!("OS randomness unavailable");
-    }
+pub(crate) fn fill_random(bytes: &mut [u8]) -> Result<()> {
+    getrandom::fill(bytes).map_err(|_| KdbxError::Random)
 }
 
 impl KdfParams {
     /// Fresh vault defaults; a new OS-random 32-byte salt is generated on every call.
+    /// Panics if OS randomness fails. Result-returning callers must use the fallible form.
     pub fn argon2id_default() -> Self {
+        Self::try_argon2id_default().unwrap_or_else(|_| panic!("OS randomness unavailable"))
+    }
+
+    pub fn try_argon2id_default() -> Result<Self> {
         let mut salt = vec![0; 32];
-        randomize(&mut salt);
-        Self::Argon2 {
+        fill_random(&mut salt)?;
+        Ok(Self::Argon2 {
             variant: Argon2Variant::Id,
             salt,
             memory_bytes: 64 * 1024 * 1024,
             iterations: 3,
             parallelism: 2,
             version: 0x13,
-        }
+        })
     }
 
     /// Validate all attacker-controlled costs before KDF work or workspace allocation.
@@ -192,14 +193,21 @@ impl KdfParams {
         dict
     }
 
-    /// Preserve the KDF and costs on save, replacing only the salt/seed with OS randomness.
+    /// Preserve the KDF and costs, replacing only the salt/seed with OS randomness.
+    /// Panics if OS randomness fails. Save uses `try_with_fresh_randomness` instead.
     pub fn with_fresh_randomness(&self) -> Self {
+        Self::try_with_fresh_randomness(self)
+            .unwrap_or_else(|_| panic!("OS randomness unavailable"))
+    }
+
+    pub fn try_with_fresh_randomness(&self) -> Result<Self> {
+        self.validate()?;
         let mut fresh = self.clone();
         match &mut fresh {
-            Self::Argon2 { salt, .. } => randomize(salt),
-            Self::AesKdf { seed, .. } => randomize(seed),
+            Self::Argon2 { salt, .. } => fill_random(salt)?,
+            Self::AesKdf { seed, .. } => fill_random(seed)?,
         }
-        fresh
+        Ok(fresh)
     }
 
     pub fn transform(&self, key: &CompositeKey) -> Result<Zeroizing<[u8; 32]>> {

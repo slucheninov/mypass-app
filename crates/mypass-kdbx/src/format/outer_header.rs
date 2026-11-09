@@ -76,9 +76,6 @@ impl OuterHeader {
             let value = reader.bytes(len)?;
             match id {
                 0 => {
-                    if value != END_MARKER {
-                        return Err(KdbxError::Corrupt("end-of-header marker".into()));
-                    }
                     break;
                 }
                 2 => {
@@ -128,7 +125,6 @@ impl OuterHeader {
 
     /// Writes the signature and fields in canonical order. As with VariantDictionary, field
     /// lengths above u32::MAX saturate; callers produce only representable headers.
-    #[allow(dead_code)] // remove in Task 9
     pub(crate) fn serialize(&self) -> Vec<u8> {
         let mut out = Vec::new();
         write_signature(&mut out, self.version);
@@ -153,7 +149,6 @@ impl OuterHeader {
     }
 }
 
-#[allow(dead_code)] // remove in Task 9
 fn field(out: &mut Vec<u8>, id: u8, value: &[u8]) {
     out.push(id);
     out.extend_from_slice(&u32::try_from(value.len()).unwrap_or(u32::MAX).to_le_bytes());
@@ -331,14 +326,20 @@ mod edge_tests {
         }
     }
     #[test]
-    fn malformed_field_lengths_and_end_marker_are_corrupt() {
+    fn end_field_accepts_any_authenticated_payload() {
+        for value in [vec![], vec![0; 4], vec![1, 2, 3]] {
+            let bytes = wire(Some(0), &AES, &[2; 16], &[(0, value)]);
+            assert!(OuterHeader::parse(&bytes).is_ok());
+        }
+    }
+    #[test]
+    fn malformed_field_lengths_are_corrupt() {
         for (id, value) in [
             (2, vec![0; 15]),
             (3, vec![0; 3]),
             (4, vec![0; 31]),
             (11, vec![0]),
             (12, vec![0]),
-            (0, vec![0; 4]),
         ] {
             let bytes = wire(Some(id), &AES, &[2; 16], &[(id, value)]);
             assert!(

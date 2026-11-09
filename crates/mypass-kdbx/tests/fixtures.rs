@@ -118,3 +118,30 @@ fn wrong_password_on_every_fixture_is_wrong_password() {
         );
     }
 }
+#[test]
+fn fixtures_round_trip_logically_equal() {
+    for (data, password) in XC
+        .into_iter()
+        .map(|d| (d, "TestMasterPass123"))
+        .chain([(PY, "fixture-password")])
+    {
+        let p = SecretString::from(password);
+        let db = Database::open(data, &p).unwrap();
+        let next = Database::open(&db.save(&p).unwrap(), &p).unwrap();
+        assert_eq!(next, db);
+        assert_eq!(next.settings.cipher, db.settings.cipher);
+        assert_eq!(next.settings.compression, db.settings.compression);
+        assert_eq!(next.settings.minor_version, db.settings.minor_version);
+        let mut expected = db.settings.kdf.clone();
+        match (&mut expected, &next.settings.kdf) {
+            (KdfParams::Argon2 { salt: a, .. }, KdfParams::Argon2 { salt: b, .. })
+            | (KdfParams::AesKdf { seed: a, .. }, KdfParams::AesKdf { seed: b, .. }) => {
+                assert_eq!(a.len(), b.len());
+                assert_ne!(a, b);
+                *a = b.clone();
+            }
+            _ => panic!("KDF changed"),
+        }
+        assert_eq!(expected, next.settings.kdf);
+    }
+}

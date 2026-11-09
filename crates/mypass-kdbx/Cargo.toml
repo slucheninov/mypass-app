@@ -28,3 +28,7 @@ salsa20 = { workspace = true, features = ["zeroize"] }
 quick-xml.workspace = true
 uuid.workspace = true
 base64.workspace = true
+
+[dev-dependencies]
+keepass = { workspace = true, features = ["save_kdbx4"] }
+rand.workspace = true

@@ -59,7 +59,6 @@ pub(crate) fn parse_signature(r: &mut Reader<'_>) -> Result<Version> {
 }
 
 /// Appends the 12-byte signature block for `version`.
-#[allow(dead_code)] // remove in Task 9
 pub(crate) fn write_signature(out: &mut Vec<u8>, version: Version) {
     out.extend_from_slice(&SIGNATURE_1.to_le_bytes());
     out.extend_from_slice(&SIGNATURE_2.to_le_bytes());

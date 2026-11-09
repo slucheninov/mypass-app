@@ -6,7 +6,6 @@ use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256, Sha512};
 use zeroize::Zeroizing;
 
-#[allow(dead_code)] // remove in Task 9
 pub(crate) const DEFAULT_BLOCK_SIZE: usize = 1 << 20;
 
 pub(crate) fn read(data: &[u8], hmac_key_base: &[u8; 64]) -> Result<Vec<u8>> {
@@ -45,7 +44,6 @@ pub(crate) fn read(data: &[u8], hmac_key_base: &[u8; 64]) -> Result<Vec<u8>> {
 }
 
 /// A zero block size uses the default; oversized sizes are capped to the reader's block limit.
-#[allow(dead_code)] // remove in Task 9
 pub(crate) fn write(plain: &[u8], hmac_key_base: &[u8; 64], block_size: usize) -> Vec<u8> {
     let block_size = if block_size == 0 {
         DEFAULT_BLOCK_SIZE
@@ -77,7 +75,6 @@ fn block_mac(index: u64, length: u32, payload: &[u8], base: &[u8; 64]) -> Hmac<S
     mac
 }
 
-#[allow(dead_code)] // remove in Task 9
 fn append_block(stream: &mut Vec<u8>, index: u64, payload: &[u8], base: &[u8; 64]) {
     // Only called with chunks capped to MAX_BLOCK_LEN (2^30), or the empty terminator.
     let length = payload.len() as u32;
@@ -293,6 +290,23 @@ mod tests {
         assert_eq!(
             write(b"small", &[4; 64], usize::MAX),
             oracle_stream(&[b"small"], &[4; 64])
+        );
+    }
+}
+
+#[cfg(test)]
+mod authentication_order_tests {
+    use super::*;
+    #[test]
+    fn tampered_terminator_mac_precedes_trailing_data_error() {
+        let base = [7; 64];
+        let mut wire = write(b"x", &base, 0);
+        let terminator = wire.len() - 36;
+        wire[terminator] ^= 1;
+        wire.push(0);
+        assert_eq!(
+            read(&wire, &base),
+            Err(KdbxError::Corrupt("block 1 HMAC".into()))
         );
     }
 }

@@ -1,13 +1,12 @@
 //! Gzip payload framing with a bounded decompression reader.
 use std::io::{Read, Write};
 
-use flate2::{read::GzDecoder, write::GzEncoder, Compression};
+use flate2::{bufread::GzDecoder, write::GzEncoder, Compression};
 use zeroize::Zeroizing;
 
 use super::limits::MAX_DECOMPRESSED_LEN;
 use crate::error::{KdbxError, Result};
 
-#[allow(dead_code)] // remove in Task 9
 pub(crate) fn gzip(data: &[u8]) -> Result<Vec<u8>> {
     // GzEncoder's default header has mtime zero (no clock or filename metadata).
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
@@ -33,6 +32,9 @@ fn gunzip_with_limit(data: &[u8], limit: u64) -> Result<Vec<u8>> {
         .map_err(|_| KdbxError::Corrupt("gzip payload".into()))?;
     if output.len() as u64 > limit {
         return Err(KdbxError::Corrupt("decompressed payload too large".into()));
+    }
+    if !reader.into_inner().into_inner().is_empty() {
+        return Err(KdbxError::Corrupt("trailing gzip data".into()));
     }
     Ok(std::mem::take(&mut *output))
 }
@@ -119,5 +121,20 @@ mod tests {
             gunzip(&damaged),
             Err(KdbxError::Corrupt("gzip payload".into()))
         );
+    }
+}
+
+#[cfg(test)]
+mod trailing_tests {
+    use super::*;
+    #[test]
+    fn trailing_bytes_and_second_member_are_corrupt() {
+        let first = gzip(b"first").unwrap();
+        assert_eq!(gunzip(&first).unwrap(), b"first");
+        for suffix in [vec![0], gzip(b"second").unwrap()] {
+            let mut data = first.clone();
+            data.extend(suffix);
+            assert!(matches!(gunzip(&data), Err(KdbxError::Corrupt(_))));
+        }
     }
 }

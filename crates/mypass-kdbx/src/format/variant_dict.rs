@@ -92,7 +92,6 @@ impl VariantDictionary {
     /// Lengths are `u32` on the wire; a single key or value above 4 GiB cannot be represented and
     /// is outside anything this engine produces (its inputs are KDF parameters of a few hundred
     /// bytes), so such a length saturates instead of panicking.
-    #[allow(dead_code)] // remove in Task 9
     pub(crate) fn serialize(&self) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&VERSION.to_le_bytes());
@@ -134,7 +133,6 @@ fn len_to_usize(len: u32) -> Result<usize> {
     usize::try_from(len).map_err(|_| corrupt("length does not fit in memory"))
 }
 
-#[allow(dead_code)] // remove in Task 9
 fn push_len(out: &mut Vec<u8>, len: usize) {
     out.extend_from_slice(&u32::try_from(len).unwrap_or(u32::MAX).to_le_bytes());
 }
