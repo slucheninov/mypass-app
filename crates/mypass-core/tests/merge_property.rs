@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use uuid::Uuid;
 
 type Row = (u8, i64, i64, u8, Vec<i64>);
-type GroupRow = (bool, i64, i64, u8, u8);
+type GroupRow = (bool, i64, i64, u8, u8, u8);
 
 fn database(rows: Vec<Row>, shapes: Vec<GroupRow>, deletes: Vec<(u8, i64)>, side: i64) -> Database {
     // Disjoint even/odd clocks across sides make symmetry's no-ties precondition
@@ -20,7 +20,12 @@ fn database(rows: Vec<Row>, shapes: Vec<GroupRow>, deletes: Vec<(u8, i64)>, side
     let mut groups = BTreeMap::new();
     groups.insert(100u8, d.root.clone());
     let mut parents = BTreeMap::new();
-    for (i, (present, modified, location, shape, value)) in shapes.into_iter().enumerate() {
+    // Independent per-side permutations permit any group to parent any other,
+    // while earlier-only parents guarantee each input is acyclic.
+    let mut shapes: Vec<_> = shapes.into_iter().enumerate().collect();
+    shapes.sort_by_key(|(i, row)| (row.5, *i));
+    let mut order = vec![];
+    for (i, (present, modified, location, shape, value, _)) in shapes {
         if !present {
             continue;
         }
@@ -34,13 +39,10 @@ fn database(rows: Vec<Row>, shapes: Vec<GroupRow>, deletes: Vec<(u8, i64)>, side
             value: value.to_string(),
             last_modified: Some(clock(modified)),
         });
-        // Only group 101 can be a nested parent: depth is at most three.
-        let parent = if id > 101 && shape % 2 == 1 && groups.contains_key(&101) {
-            101
-        } else {
-            100
-        };
+        let choices: Vec<_> = groups.keys().copied().collect();
+        let parent = choices[usize::from(shape) % choices.len()];
         parents.insert(id, parent);
+        order.push(id);
         groups.insert(id, g);
     }
     // Normalize duplicate generated rows before constructing a valid input tree.
@@ -64,7 +66,8 @@ fn database(rows: Vec<Row>, shapes: Vec<GroupRow>, deletes: Vec<(u8, i64)>, side
         };
         groups.get_mut(&parent).unwrap().entries.push(e);
     }
-    for (id, parent) in parents.into_iter().rev() {
+    for id in order.into_iter().rev() {
+        let parent = parents[&id];
         let g = groups.remove(&id).unwrap();
         groups.get_mut(&parent).unwrap().groups.push(g);
     }
@@ -72,7 +75,9 @@ fn database(rows: Vec<Row>, shapes: Vec<GroupRow>, deletes: Vec<(u8, i64)>, side
     d.deleted_objects = deletes
         .into_iter()
         .map(|(id, time)| DeletedObject {
-            uuid: Uuid::from_u128(if id < 8 {
+            uuid: Uuid::from_u128(if id == 13 {
+                100
+            } else if id < 8 {
                 u128::from(id)
             } else {
                 101 + u128::from(id - 8)
@@ -91,13 +96,23 @@ fn cases() -> impl Strategy<Value = (Database, Database)> {
                     0u8..8,
                     0i64..10,
                     0i64..10,
-                    0u8..4,
+                    0u8..6,
                     prop::collection::vec(0i64..10, 0..=3),
                 ),
                 0..=6,
             ),
-            prop::collection::vec((any::<bool>(), 0i64..10, 0i64..10, any::<u8>(), 0u8..8), 3),
-            prop::collection::vec((0u8..11, 0i64..10), 0..=8),
+            prop::collection::vec(
+                (
+                    any::<bool>(),
+                    0i64..10,
+                    0i64..10,
+                    any::<u8>(),
+                    0u8..8,
+                    any::<u8>(),
+                ),
+                5,
+            ),
+            prop::collection::vec((0u8..14, 0i64..10), 0..=8),
         )
     };
     (side(), side()).prop_map(|((a, b, c), (d, e, f))| (database(a, b, c, 0), database(d, e, f, 1)))
@@ -206,8 +221,100 @@ fn check_symmetric(l: &Database, r: &Database) -> TestCaseResult {
     Ok(())
 }
 
+// A separate plain-map oracle: first choose clocks/parents, then identify
+// cycle membership by closing each item's ancestor path. Only the minimum UUID
+// of each cycle loses its parent. Descendants outside the cycle retain theirs.
+fn locations(d: &Database) -> BTreeMap<Uuid, (Uuid, Timestamp, bool)> {
+    let mut out = BTreeMap::new();
+    let mut stack = vec![&d.root];
+    while let Some(g) = stack.pop() {
+        for child in &g.groups {
+            out.insert(child.uuid, (g.uuid, child.location_changed, true));
+            stack.push(child);
+        }
+        for e in &g.entries {
+            out.insert(e.uuid, (g.uuid, e.location_changed, false));
+        }
+    }
+    out
+}
+
+fn check_locations(l: &Database, r: &Database) -> TestCaseResult {
+    check_survival(l, r)?;
+    let root = l.root.uuid;
+    let mut modified = BTreeMap::<Uuid, Timestamp>::new();
+    let mut deletes = BTreeMap::<Uuid, Timestamp>::new();
+    for (id, t) in items(l).into_iter().chain(items(r)) {
+        modified
+            .entry(id)
+            .and_modify(|v| *v = (*v).max(t))
+            .or_insert(t);
+    }
+    for d in l.deleted_objects.iter().chain(&r.deleted_objects) {
+        deletes
+            .entry(d.uuid)
+            .and_modify(|v| *v = (*v).max(d.deleted_at))
+            .or_insert(d.deleted_at);
+    }
+    let live: HashSet<_> = modified
+        .iter()
+        .filter_map(|(&id, t)| (id == root || deletes.get(&id).is_none_or(|d| t > d)).then_some(id))
+        .collect();
+    let mut expected = locations(r);
+    for (id, value) in locations(l) {
+        if expected.get(&id).is_none_or(|r| value.1 >= r.1) {
+            expected.insert(id, value);
+        }
+    }
+    expected.retain(|id, _| live.contains(id));
+    for (parent, _, _) in expected.values_mut() {
+        if !live.contains(parent) {
+            *parent = root;
+        }
+    }
+    let mut cuts = HashSet::new();
+    for (&id, &(_, _, group)) in &expected {
+        if !group {
+            continue;
+        }
+        let mut path = vec![];
+        let mut cursor = id;
+        while cursor != root {
+            if let Some(start) = path.iter().position(|p| *p == cursor) {
+                cuts.insert(*path[start..].iter().min().unwrap());
+                break;
+            }
+            path.push(cursor);
+            cursor = expected[&cursor].0;
+        }
+    }
+    for id in cuts {
+        expected.get_mut(&id).unwrap().0 = root;
+    }
+    let actual = locations(&merge(l, r));
+    prop_assert_eq!(actual, expected);
+    Ok(())
+}
+
+fn tie_clocks(mut d: Database) -> Database {
+    let mut stack = vec![&mut d.root];
+    while let Some(g) = stack.pop() {
+        g.modified.0 /= 2;
+        g.location_changed.0 /= 2;
+        for e in &mut g.entries {
+            e.modified.0 /= 2;
+            e.location_changed.0 /= 2;
+        }
+        stack.extend(&mut g.groups);
+    }
+    for t in &mut d.deleted_objects {
+        t.deleted_at.0 /= 2;
+    }
+    d
+}
+
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 256, rng_seed: RngSeed::Fixed(0x1616), failure_persistence: None, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig { cases: 1024, rng_seed: RngSeed::Fixed(0x1616), failure_persistence: None, ..ProptestConfig::default() })]
     #[test]
     fn surviving_items_are_not_tombstoned_and_tombstones_are_not_invented((l,r) in cases()) {
         check_survival(&l, &r)?;
@@ -219,6 +326,15 @@ proptest! {
     #[test]
     fn no_duplicate_uuids_in_output((l,r) in cases()) {
         check_unique(&l, &r)?;
+    }
+    #[test]
+    fn surviving_locations_follow_move_clocks((l,r) in cases()) {
+        check_locations(&l, &r)?;
+        check_locations(&r, &l)?;
+    }
+    #[test]
+    fn tied_locations_favour_local((l,r) in cases()) {
+        check_locations(&tie_clocks(l), &tie_clocks(r))?;
     }
     #[test]
     fn merge_is_symmetric_up_to_ties((l,r) in cases()) {

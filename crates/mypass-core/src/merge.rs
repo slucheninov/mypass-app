@@ -97,10 +97,40 @@ fn merge_entry(l: &Entry, r: &Entry) -> Entry {
     out
 }
 
+// Walk each functional-graph component once. A path-local position map
+// distinguishes actual cycle members from tails feeding into the cycle.
+fn cycle_roots(parents: &BTreeMap<Uuid, Uuid>, visited: &HashSet<Uuid>) -> Vec<Uuid> {
+    let mut done = visited.clone();
+    let mut roots = vec![];
+    for &start in parents.keys() {
+        let mut positions = HashMap::new();
+        let mut path = vec![];
+        let mut cursor = start;
+        while !done.contains(&cursor) {
+            if let Some(&offset) = positions.get(&cursor) {
+                if let Some(&id) = path.get(offset..).and_then(|cycle| cycle.iter().min()) {
+                    roots.push(id);
+                }
+                break;
+            }
+            positions.insert(cursor, path.len());
+            path.push(cursor);
+            let Some(&parent) = parents.get(&cursor) else {
+                break;
+            };
+            cursor = parent;
+        }
+        done.extend(path);
+    }
+    roots.sort();
+    roots
+}
+
 /// Merge without I/O or mutation. Children and tombstones are sorted by UUID bytes.
 /// Duplicate UUIDs within either side keep the first preorder occurrence. Group
 /// parents follow the greater location_changed clock, with local winning ties.
-/// Cyclic or missing parent chains attach to root. Output depth is capped at
+/// Only the smallest UUID in each parent cycle attaches to root; descendants
+/// retain their parents. Missing parents attach to root. Output depth is capped at
 /// MAX_GROUP_DEPTH by reattaching deeper groups to root, retaining their contents.
 pub fn merge(local: &Database, remote: &Database) -> Database {
     let root = local.root.uuid;
@@ -205,27 +235,40 @@ pub fn merge(local: &Database, remote: &Database) -> Database {
     let mut order = vec![];
     let mut actual_parents = HashMap::new();
     let mut visited = HashSet::new();
-    while let Some((id, depth)) = queue.pop_front() {
-        if !visited.insert(id) {
-            continue;
-        }
-        order.push(id);
-        for child in children.remove(&id).unwrap_or_default() {
-            let (parent, next_depth) = if depth >= MAX_GROUP_DEPTH {
-                (root, 2)
-            } else {
-                (id, depth + 1)
-            };
-            actual_parents.insert(child, parent);
-            queue.push_back((child, next_depth));
-        }
-    }
-    // D2: unresolved components are cycles. Flatten them deterministically to
-    // root; each UUID is emitted once, with no recursion and no infinite walk.
-    for &id in parents.keys() {
-        if visited.insert(id) {
-            actual_parents.insert(id, root);
+    loop {
+        while let Some((id, depth)) = queue.pop_front() {
+            if !visited.insert(id) {
+                continue;
+            }
             order.push(id);
+            for child in children.remove(&id).unwrap_or_default() {
+                // The old edge into a cycle's detached member must stay cut.
+                if visited.contains(&child) {
+                    continue;
+                }
+                let (parent, next_depth) = if depth >= MAX_GROUP_DEPTH {
+                    (root, 2)
+                } else {
+                    (id, depth + 1)
+                };
+                actual_parents.insert(child, parent);
+                queue.push_back((child, next_depth));
+            }
+        }
+        if visited.len() == groups.len() {
+            break;
+        }
+        // D2: missing/deleted parents were already rooted above. Every remaining
+        // component feeds a cycle. Cut only its smallest UUID, then resume the
+        // same depth-limited BFS at depth 2, preserving all other relationships.
+        for id in cycle_roots(&parents, &visited) {
+            if !visited.contains(&id) {
+                actual_parents.insert(id, root);
+                queue.push_back((id, 2));
+            }
+        }
+        if queue.is_empty() {
+            break;
         }
     }
     let entries: HashSet<_> = l.entries.keys().chain(r.entries.keys()).copied().collect();
@@ -748,6 +791,151 @@ mod tests {
         l.root.groups[0].groups[0].groups.push(group(2));
         assert_eq!(merge(&l, &r), m);
     }
+    // Construct valid trees from plain parent maps; clocks choose a cross-side
+    // cycle independently of the content timestamps.
+    fn cycle_input(edges: &[(u128, u128, i64)], tombstone: bool) -> Database {
+        let mut d = make_db(vec![]);
+        let root = d.root.uuid;
+        let mut pending: BTreeMap<_, _> = edges
+            .iter()
+            .map(|&(id, parent, time)| {
+                let mut g = group(id);
+                g.location_changed = Timestamp(time);
+                g.entries.push(make_entry(id + 100, "retained", 1000));
+                (id, (parent, g))
+            })
+            .collect();
+        while !pending.is_empty() {
+            let leaf = *pending
+                .keys()
+                .find(|id| !pending.values().any(|(p, _)| p == *id))
+                .unwrap();
+            let (parent, g) = pending.remove(&leaf).unwrap();
+            if parent == 0 {
+                d.root.groups.push(g);
+            } else {
+                pending.get_mut(&parent).unwrap().1.groups.push(g);
+            }
+        }
+        if tombstone {
+            d.deleted_objects.push(DeletedObject {
+                uuid: Uuid::from_u128(2),
+                deleted_at: Timestamp(999),
+            });
+        }
+        assert_eq!(d.root.uuid, root);
+        d
+    }
+    fn cycle_tree(d: &Database) -> BTreeMap<Uuid, Uuid> {
+        let mut out = BTreeMap::new();
+        let mut stack = vec![&d.root];
+        while let Some(g) = stack.pop() {
+            for child in &g.groups {
+                assert!(out.insert(child.uuid, g.uuid).is_none());
+                stack.push(child);
+            }
+            for e in &g.entries {
+                assert!(out.insert(e.uuid, g.uuid).is_none());
+            }
+        }
+        out
+    }
+    #[test]
+    fn cross_move_cycle_keeps_descendants_and_entries() {
+        for tombstone in [false, true] {
+            let l = cycle_input(&[(2, 3, 5), (3, 0, 1), (4, 2, 1), (5, 4, 1)], tombstone);
+            let r = cycle_input(&[(2, 0, 1), (3, 2, 6), (4, 2, 1), (5, 4, 1)], false);
+            let expected = BTreeMap::from([
+                (2, 100),
+                (3, 2),
+                (4, 2),
+                (5, 4),
+                (102, 2),
+                (103, 3),
+                (104, 4),
+                (105, 5),
+            ])
+            .into_iter()
+            .map(|(a, b)| (Uuid::from_u128(a), Uuid::from_u128(b)))
+            .collect();
+            for m in [merge(&l, &r), merge(&r, &l)] {
+                assert_eq!(cycle_tree(&m), expected);
+                assert!(m.deleted_objects.is_empty());
+            }
+        }
+    }
+    #[test]
+    fn self_parent_cycle_detaches_only_itself() {
+        // A unique-UUID value tree cannot encode a self-parent. Exercise the
+        // functional-graph boundary directly, including an attached descendant.
+        let a = Uuid::from_u128(2);
+        let c = Uuid::from_u128(4);
+        let parents = BTreeMap::from([(a, a), (c, a)]);
+        assert_eq!(cycle_roots(&parents, &HashSet::new()), vec![a]);
+    }
+    #[test]
+    fn tombstoned_cycle_member_leaves_live_descendants() {
+        let mut l = cycle_input(&[(2, 3, 5), (3, 0, 1), (4, 2, 1), (5, 4, 1)], false);
+        let r = cycle_input(&[(2, 0, 1), (3, 2, 6), (4, 2, 1), (5, 4, 1)], false);
+        l.deleted_objects.push(DeletedObject {
+            uuid: Uuid::from_u128(2),
+            deleted_at: Timestamp(2000),
+        });
+        for m in [merge(&l, &r), merge(&r, &l)] {
+            let tree = cycle_tree(&m);
+            assert_eq!(tree.len(), 7);
+            for (id, parent) in [
+                (3, 100),
+                (4, 100),
+                (5, 4),
+                (102, 100),
+                (103, 3),
+                (104, 4),
+                (105, 5),
+            ] {
+                assert_eq!(tree[&Uuid::from_u128(id)], Uuid::from_u128(parent));
+            }
+        }
+    }
+    #[test]
+    fn resumed_cycle_bfs_obeys_depth_cap() {
+        let mut left = vec![(2, 3, 5), (3, 0, 1)];
+        let mut right = vec![(2, 0, 1), (3, 2, 6)];
+        for id in 4..100 {
+            let edge = (id, if id == 4 { 2 } else { id - 1 }, 1);
+            left.push(edge);
+            right.push(edge);
+        }
+        let l = cycle_input(&left, false);
+        let r = cycle_input(&right, false);
+        for m in [merge(&l, &r), merge(&r, &l)] {
+            assert_eq!(cycle_tree(&m).len(), 196);
+            let mut stack = vec![(&m.root, 1)];
+            while let Some((g, depth)) = stack.pop() {
+                assert!(depth <= MAX_GROUP_DEPTH);
+                stack.extend(g.groups.iter().map(|g| (g, depth + 1)));
+            }
+            let password = secrecy::SecretString::from("test-only");
+            assert_eq!(
+                Database::open(&m.save(&password).unwrap(), &password).unwrap(),
+                m
+            );
+        }
+    }
+    #[test]
+    fn three_group_cycle_keeps_descendants() {
+        let l = cycle_input(&[(2, 3, 5), (3, 4, 5), (4, 0, 1), (5, 2, 1)], false);
+        let r = cycle_input(&[(2, 0, 1), (3, 0, 1), (4, 2, 6), (5, 2, 1)], false);
+        for m in [merge(&l, &r), merge(&r, &l)] {
+            let tree = cycle_tree(&m);
+            assert_eq!(tree.len(), 8);
+            for (id, parent) in [(2, 100), (3, 4), (4, 2), (5, 2)] {
+                assert_eq!(tree[&Uuid::from_u128(id)], Uuid::from_u128(parent));
+                assert_eq!(tree[&Uuid::from_u128(id + 100)], Uuid::from_u128(id));
+            }
+        }
+    }
+
     #[test]
     fn orphan_group_and_entries_survive_deleted_parent() {
         let mut l = make_db(vec![]);
