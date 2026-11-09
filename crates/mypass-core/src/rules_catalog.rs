@@ -69,11 +69,14 @@ impl PasswordRulesIndex {
 
     /// Return the most specific applicable, valid rule for a host.
     /// Malformed rules behave as absent, allowing lookup to continue at a parent.
-    /// Until Task 14 wires in the PSL, lookup stops before a single-label suffix.
+    /// Lookup includes the registrable domain, but never walks above it.
+    /// If the registry is unavailable or the host is itself a suffix, only the host is checked.
     pub fn rules_for_host(&self, host: &str) -> Option<PasswordRules> {
         let normalized = normalize(host)?;
+        let ceiling =
+            crate::psl::registrable_domain(&normalized).unwrap_or_else(|| normalized.clone());
         let mut candidate = normalized.as_str();
-        while candidate.contains('.') {
+        loop {
             let is_exact_host = candidate == normalized;
             if let Some(entry) = self.entries.get(candidate) {
                 if is_exact_host || !entry.exact_domain_match_only {
@@ -82,23 +85,23 @@ impl PasswordRulesIndex {
                     }
                 }
             }
+            if candidate == ceiling {
+                return None;
+            }
             candidate = candidate.split_once('.')?.1;
         }
-        None
     }
 }
 
 fn normalize(host: &str) -> Option<String> {
-    let lowered = host.to_lowercase();
-    let normalized = lowered.strip_suffix('.').unwrap_or(&lowered);
-    if normalized.is_empty()
-        || normalized
-            .chars()
-            .any(|c| c.is_whitespace() || matches!(c, '/' | ':'))
+    let normalized = crate::psl::canonical_host(host)?;
+    if normalized
+        .chars()
+        .any(|c| c.is_whitespace() || matches!(c, '/' | ':'))
     {
         return None;
     }
-    Some(normalized.into())
+    Some(normalized)
 }
 
 /// Look up a host in the lazily initialized bundled catalog.
@@ -129,7 +132,6 @@ mod tests {
         assert_eq!(rules.required_clauses, vec![vec![Digit]]);
     }
     #[test]
-    #[ignore = "needs psl (Task 14)"]
     fn lookup_stops_at_the_registrable_domain() {
         assert_eq!(
             fixture("co.uk", "minlength: 20;").rules_for_host("attacker.example.co.uk"),
@@ -137,12 +139,28 @@ mod tests {
         );
     }
     #[test]
-    #[ignore = "needs psl (Task 14)"]
     fn lookup_stops_at_a_three_label_suffix() {
         assert_eq!(
             fixture("service.gov.uk", "minlength: 20;")
                 .rules_for_host("attacker.example.service.gov.uk"),
             None
+        );
+    }
+    #[test]
+    fn public_suffix_host_matches_only_itself() {
+        let index = fixture("co.uk", "minlength: 20;");
+        assert_eq!(index.rules_for_host("co.uk").unwrap().min_length, Some(20));
+        assert_eq!(index.rules_for_host("example.co.uk"), None);
+    }
+    #[test]
+    fn unicode_host_uses_ace_catalog_key() {
+        let index = fixture("xn--bcher-kva.de", "minlength: 12;");
+        assert_eq!(
+            index
+                .rules_for_host("www.b\u{fc}cher.de.")
+                .unwrap()
+                .min_length,
+            Some(12)
         );
     }
     #[test]
@@ -222,7 +240,7 @@ mod tests {
         }
         let tld = fixture("com", "minlength: 99;");
         assert_eq!(tld.rules_for_host("a.example.com"), None);
-        assert_eq!(tld.rules_for_host("com"), None);
+        assert_eq!(tld.rules_for_host("com").unwrap().min_length, Some(99));
     }
     #[test]
     fn json_loader_filters_entries_and_preserves_flags() {

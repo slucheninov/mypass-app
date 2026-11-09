@@ -34,3 +34,6 @@ pub mod generator;
 /// Rule-derived toggle state.
 pub mod generator_toggles;
 pub use generator::{generate, generate_os, GeneratorError, GeneratorOptions};
+
+/// Public suffix matching and canonical ACE hosts.
+pub mod psl;

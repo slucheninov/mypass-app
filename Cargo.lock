@@ -648,6 +648,7 @@ version = "0.1.0"
 dependencies = [
  "data-encoding",
  "hmac",
+ "idna",
  "mypass-kdbx",
  "rand",
  "serde",

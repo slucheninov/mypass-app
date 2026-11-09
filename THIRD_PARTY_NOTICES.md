@@ -33,12 +33,12 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 ### Mozilla Public Suffix List
 
 - Upstream: https://publicsuffix.org/ (source repository https://github.com/publicsuffix/list).
-- Vendored file: `public_suffix_list.dat`, shipped as a bundled resource of `mypass-core`. The data
-  file is unmodified, as served by publicsuffix.org. It is added to this repository by a later
-  stage 1 task, which records the commit and list version here in the same change.
-- Licence: Mozilla Public License 2.0, https://www.mozilla.org/en-US/MPL/2.0/. The source form of
-  the covered file is the file itself, available at the links above. The full licence text is
-  added together with the file.
+- Vendored file: `crates/mypass-core/resources/public_suffix_list.dat`, copied verbatim from
+  the MyPassKit resource. Header VERSION: `2026-08-19_19-18-48_UTC`, COMMIT:
+  `e8c9a2b2b2856b6449999dd0ec0d118f364ed0cd`. Includes ICANN and PRIVATE rules.
+- Licence: Mozilla Public License 2.0, https://www.mozilla.org/en-US/MPL/2.0/.
+  The original licence notice remains at the top of the resource. Source form is distributed
+  in this repository at the path above, with no modifications.
 
 ## Linked crates
 
@@ -71,6 +71,24 @@ place, generated with `cargo metadata` and reviewed by hand.
 | `serde` | 1.0.229 | MIT OR Apache-2.0 | `mypass-core` password-rules catalog deserialization |
 | `serde_json` | 1.0.154 | MIT OR Apache-2.0 | `mypass-core` password-rules JSON catalog |
 | `thiserror` | 2.0.21 | MIT OR Apache-2.0 | `mypass-kdbx` and `mypass-core` error types |
+
+### IDNA and Unicode support
+
+UTS #46 host canonicalization uses `idna` and its ICU4X adapter/data. Crate source
+archives include their full licence texts; Unicode data carries the Unicode-3.0
+licence. The complete transitive table will be reviewed in Task 18.
+
+| Crate | Version | Licence |
+|---|---|---|
+| `icu_collections` | 2.4.0 | Unicode-3.0 |
+| `icu_locale_core` | 2.4.0 | Unicode-3.0 |
+| `icu_normalizer` | 2.4.0 | Unicode-3.0 |
+| `icu_normalizer_data` | 2.4.0 | Unicode-3.0 |
+| `icu_properties` | 2.4.0 | Unicode-3.0 |
+| `icu_properties_data` | 2.4.0 | Unicode-3.0 |
+| `icu_provider` | 2.4.0 | Unicode-3.0 |
+| `idna` | 1.1.0 | MIT OR Apache-2.0 |
+| `idna_adapter` | 1.2.2 | Apache-2.0 OR MIT |
 
 ## Synthetic test fixtures
 
