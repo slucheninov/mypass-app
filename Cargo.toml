@@ -1,0 +1,87 @@
+# MyPass Cargo workspace.
+#
+# `members` is the `crates/*` glob only. Stage 2a Task 1 appends "src-tauri" explicitly once
+# that directory exists: the glob never picks it up because `src-tauri` is not under `crates/`.
+# The guard test `workspace_members_are_the_crates_glob_until_src_tauri_exists` enforces this.
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2021"
+# Equal to the pinned toolchain in `rust-toolchain.toml` up to the patch version
+# (guard test `toolchain_pins_agree`).
+rust-version = "1.99.1"
+license = "Apache-2.0"
+repository = "https://github.com/slucheninov/mypass-app"
+
+# The single version table for the whole rewrite (stages 1-3). Every third-party crate is declared
+# here exactly once, with a full `x.y.z` version; members write `name.workspace = true` and never
+# carry a version literal. `Cargo.lock` is committed and CI runs with `--locked`, so this table plus
+# the lock file make builds reproducible. Later stages consume the table and never bump a version
+# (a bump is its own `chore(deps)` commit). The tauri family, `specta` and `tauri-specta` are
+# `=`-pinned: their pre-release / fast-moving versions must move together. Guard tests:
+# `workspace_dependencies_are_exactly_pinned`, `member_crates_take_versions_only_from_the_workspace_table`.
+[workspace.dependencies]
+# --- RustCrypto primitives (no hand-rolled crypto) ---
+aes = "0.9.4"
+cbc = "0.2.1"
+chacha20 = "0.10.2"
+salsa20 = "0.11.0"
+hmac = "0.13.0"
+sha1 = "0.11.0"
+sha2 = "0.11.1"
+subtle = "2.6.1"
+argon2 = "0.6.0"
+# --- Compression, secrets, XML, encodings ---
+flate2 = "1.1.11"
+zeroize = "1.9.1"
+secrecy = "0.10.3"
+quick-xml = "0.42.0"
+uuid = { version = "1.29.2", features = ["v4"] }
+base64 = "0.23.1"
+data-encoding = "2.11.1"
+thiserror = "2.0.21"
+idna = "1.1.0"
+url = "2.5.8"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+# rand stays on 0.8 (matches the RustCrypto traits used by the KDBX engine).
+rand = { version = "0.8.8", features = ["std_rng"] }
+getrandom = "0.4.3"
+
+# --- Dev-only crates (tests, oracle, repo guards); never linked into a shipped artifact ---
+tempfile = "3.27.0"
+proptest = "1.12.0"
+# keepass-rs is a test oracle only.
+keepass = "0.17.0"
+toml = "1.2.1"
+serde_yaml_ng = "0.10.0"
+
+# --- Declared now, first used from stage 2a (`=`-pinned) ---
+tauri = "=2.12.5"
+tauri-build = "=2.7.4"
+tauri-plugin-single-instance = "=2.5.5"
+tauri-plugin-global-shortcut = "=2.4.1"
+tauri-plugin-dialog = "=2.8.4"
+tauri-plugin-opener = "=2.7.2"
+specta = { version = "=2.0.0-rc.26", features = ["derive"] }
+tauri-specta = { version = "=2.0.0-rc.26", features = ["derive", "typescript"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+# `warn` here, `-D warnings` in CI: parsers must return `Err`, never panic. Tests are exempt
+# through `clippy.toml` (`allow-*-in-tests`); non-test support code carries a file-level allow.
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+indexing_slicing = "warn"
+
+# Argon2 with 64 MiB x 3 passes takes minutes at opt-level 0, so dependencies are optimised even
+# in dev and test builds (our own crates stay at opt-level 0 for fast incremental builds).
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.test.package."*"]
+opt-level = 3

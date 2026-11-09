@@ -1,0 +1,12 @@
+[package]
+name = "mypass-kdbx"
+version = "0.1.0"
+description = "From-scratch KDBX 4 engine for MyPass: format, model, database API and vault file."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true

@@ -1,0 +1,70 @@
+name: CodeQL
+
+# Code scanning, advanced setup. Not triggered on pull requests: a PR already runs the full CI, and
+# a code-scanning leg per PR only slows merging down. Findings reach the Security tab after the
+# merge, on the weekly schedule and on manual dispatch. This workflow is separate from ci.yml and
+# is not part of the `ci` aggregator.
+#
+# The JavaScript/TypeScript leg is a no-op until stage 2b/3 add sources, so the workflow never
+# fails on "no code seen": the first step lists the tracked sources for the language and the
+# CodeQL steps run only when there are some.
+on:
+  push:
+    branches: [main]
+  # Weekly, so alerts also appear when GitHub ships new queries without any code change.
+  # A schedule only fires from the default branch.
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [rust, javascript-typescript]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Look for sources
+        id: sources
+        env:
+          LANGUAGE: ${{ matrix.language }}
+        run: |
+          if [[ "$LANGUAGE" == "rust" ]]; then
+            files=$(git ls-files '*.rs')
+          else
+            files=$(git ls-files '*.js' '*.ts' '*.svelte')
+          fi
+          if [[ -n "$files" ]]; then
+            echo "has_code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_code=false" >> "$GITHUB_OUTPUT"
+            echo "No $LANGUAGE sources tracked yet; skipping CodeQL for this leg."
+          fi
+      # init and analyze share one pinned SHA of github/codeql-action; bump both together.
+      - name: Initialize CodeQL
+        if: steps.sources.outputs.has_code == 'true'
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      - name: Analyze
+        if: steps.sources.outputs.has_code == 'true'
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          category: "/language:${{ matrix.language }}"

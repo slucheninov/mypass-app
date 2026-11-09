@@ -1,0 +1,50 @@
+name: Feature request
+description: Suggest an improvement or a new capability.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This tracker is public. Do not paste vault contents, passwords, tokens or other secrets.
+
+        MyPass uses the KeePass KDBX4 vault format. Say whether your idea needs a change to how vaults are stored.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Area
+      options:
+        - App
+        - Browser extension (autofill, TOTP, passkeys)
+        - Vault engine (KDBX)
+        - Sync
+        - Import
+        - Build, test or CI scripts
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the existing issues and `docs/implementation/ROADMAP.md`.
+          required: true

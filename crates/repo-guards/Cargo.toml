@@ -1,0 +1,17 @@
+[package]
+name = "repo-guards"
+version = "0.1.0"
+description = "Test-only guard tests for the repository itself (workspace, CI, docs, scripts). Never shipped."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dev-dependencies]
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
+toml.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,7 @@
+# Pinned toolchain. Must agree with `workspace.package.rust-version` (up to the patch version) and
+# with every `toolchain:` value in `.github/workflows/*.yml` (guard test `toolchain_pins_agree`).
+# Bump only with a written reason in the commit body.
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

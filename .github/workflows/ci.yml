@@ -1,0 +1,129 @@
+name: CI
+
+# Minimal and fast on purpose: one matrix job runs the whole Rust suite through scripts/test.sh
+# (the same entry point agents and humans use), cargo jobs restore Swatinem/rust-cache, and heavy
+# jobs that only matter for some paths are gated by the cheap `changes` job. CI is a second check,
+# not a substitute for running `bash scripts/test.sh` locally.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A new push to a pull request cancels the superseded run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Git Bash on the Windows runner, so scripts/*.sh run unchanged on both OSes.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Which path-filtered jobs matter for this change. Outputs one boolean per filter. Path-filtered
+  # jobs carry `if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.<filter> == 'true' }}`
+  # so they always run on push to main and on workflow_dispatch. Stage 5 adds the `package` filter.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      crosscompat: ${{ steps.filter.outputs.crosscompat }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: filter
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            crosscompat:
+              - 'crates/mypass-kdbx/**'
+              - 'crates/mypass-core/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'scripts/passkey_oracle*'
+              - '.github/workflows/ci.yml'
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.99.1
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: bash scripts/test.sh --ci --only rust
+
+  # Disabled skeleton for stage 6: with the repository variable unset the job is `skipped`.
+  windows-integration:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    if: ${{ vars.MYPASS_WINDOWS_INTEGRATION_TESTS == 'true' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.99.1
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Windows integration tests
+        env:
+          MYPASS_WINDOWS_INTEGRATION_TESTS: "1"
+        run: cargo test --workspace -- --ignored windows_integration
+
+  # The required status check (keep the name `ci`). It needs every other job, so a job added in a
+  # later stage must be wired in here (guard test `ci_aggregator_needs_every_job`). A job that never
+  # ran counts as success only when it is gated: the `gated` set below. Every other result,
+  # `changes` included, must be `success`.
+  ci:
+    needs: [changes, test, windows-integration]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify results
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          # Jobs whose `skipped` result is fine: gated on a variable or on changed paths.
+          gated=" windows-integration crosscompat package-smoke "
+          failed=0
+          for job in $(jq -r 'keys[]' <<<"$NEEDS_JSON"); do
+            result=$(jq -r --arg j "$job" '.[$j].result' <<<"$NEEDS_JSON")
+            if [[ "$result" == "success" ]]; then
+              continue
+            fi
+            if [[ "$result" == "skipped" && "$gated" == *" $job "* ]]; then
+              continue
+            fi
+            echo "::error::job '$job' finished with result '$result'"
+            failed=1
+          done
+          exit "$failed"

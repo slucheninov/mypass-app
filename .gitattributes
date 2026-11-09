@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.kdbx binary
+*.dat text eol=lf
+*.json text eol=lf

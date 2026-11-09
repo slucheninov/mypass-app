@@ -1,0 +1,102 @@
+name: Bug report
+description: Something in MyPass or the browser extension does not work as expected.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This tracker is public. **Never paste vault contents, master passwords, key files, pairing codes, tokens or screenshots that show real credentials.** Use a throwaway vault with fake data to reproduce.
+
+        Do not describe a security vulnerability in detail here. Report it privately, see SECURITY.md.
+
+        MyPass is pre-release software. Please say whether you built it from source or installed a release, and which signing the build had.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - App
+        - Native messaging host
+        - Browser extension
+        - Vault engine (KDBX reading or writing)
+        - Sync
+        - Build, test or CI scripts
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Windows
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: os_version
+    attributes:
+      label: OS version and hardware
+      placeholder: "macOS 26.1, Apple silicon / Windows 11, x64"
+    validations:
+      required: true
+  - type: input
+    id: app_version
+    attributes:
+      label: App version or commit
+      description: The app version, or the git commit or artifact name.
+      placeholder: "0.1.0 / d2f6c58"
+    validations:
+      required: true
+  - type: input
+    id: extension_version
+    attributes:
+      label: Extension version
+      description: Only if the browser extension is involved.
+      placeholder: "0.1.0"
+  - type: input
+    id: chromium_version
+    attributes:
+      label: Chromium-based browser and version
+      description: Only if the browser extension is involved.
+      placeholder: "Chrome 141"
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps, starting from a fresh test vault if possible.
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or console output
+      description: Redact anything sensitive first (URLs with tokens, usernames, hosts, key material).
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the existing issues.
+          required: true
+        - label: I removed passwords, vault data, tokens and other secrets from everything I pasted.
+          required: true
