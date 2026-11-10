@@ -160,7 +160,10 @@ fn ci_has_concurrency_cancel_in_progress() {
         .expect("ci.yml has top-level `concurrency`");
     assert_eq!(
         concurrency.get("group").and_then(Value::as_str),
-        Some("ci-${{ github.ref }}")
+        Some("ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}"),
+        "pull requests share one group per ref (so a newer push cancels the older run); every other \
+         run gets its own group, because GitHub keeps only ONE pending run per group and a burst of \
+         pushes to main would otherwise drop the CI result of the intermediate commits"
     );
     assert_eq!(
         concurrency

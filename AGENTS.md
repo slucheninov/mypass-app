@@ -67,8 +67,9 @@ bash scripts/test.sh [--ci] [--only rust|ui|js] [--no-js]   # the full suite
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on pull requests, on pushes to `main` and on manual dispatch, with
-`concurrency` that cancels a superseded pull request run (runs on `main` and manual runs are never
-cancelled). The jobs are independent and run in parallel, so the wall-clock time is the slowest job:
+`concurrency` that cancels a superseded pull request run (pull requests share one group per ref; runs
+on `main` and manual runs each get their own group by run id, so none is cancelled or dropped). The
+jobs are independent and run in parallel, so the wall-clock time is the slowest job:
 
 - `lint` is a matrix over `ubuntu-latest` and `windows-latest` (fail-fast off): `cargo clippy
   --workspace --all-targets -- -D warnings` on both (Linux lints the `cfg(unix)` code, Windows the
