@@ -71,10 +71,18 @@ impl EntryExt for Entry {
     }
     fn set_urls(&mut self, urls: &[String]) {
         let mut values = urls.iter();
+        // `set_field` overwrites the protected flag, so pass the existing one back in: a URL field
+        // protected by another KeePass client must stay protected. Only a missing field is
+        // created, and then unprotected.
+        let protected = self
+            .fields
+            .iter()
+            .find(|f| f.key == "URL")
+            .is_some_and(|f| f.protected);
         self.set_field(
             "URL",
             values.next().map(String::as_str).unwrap_or(""),
-            false,
+            protected,
         );
         self.string_arrays.retain(|a| a.key != ADDITIONAL_URLS_KEY);
         let remaining: Vec<_> = values.cloned().collect();
@@ -164,6 +172,30 @@ mod tests {
         e.set_urls(&["only".into()]);
         assert_eq!(e.urls(), ["only"]);
         assert_eq!(e.string_arrays.len(), 1);
+    }
+    #[test]
+    fn set_urls_keeps_the_protected_flag_of_the_url_field() {
+        let protected = |e: &Entry| e.fields.iter().find(|f| f.key == "URL").map(|f| f.protected);
+        // Another KeePass client may have marked the URL as protected: editing the value must not
+        // silently strip that protection.
+        let mut e = entry();
+        e.set_field("URL", "old", true);
+        e.set_urls(&["new".into()]);
+        assert_eq!(e.field("URL"), Some("new"));
+        assert_eq!(protected(&e), Some(true));
+        // Clearing the urls keeps the (now empty) field protected too.
+        e.set_urls(&[]);
+        assert_eq!(protected(&e), Some(true));
+        // An unprotected field stays unprotected.
+        let mut e = entry();
+        e.set_field("URL", "old", false);
+        e.set_urls(&["new".into()]);
+        assert_eq!(protected(&e), Some(false));
+        // A missing field is created unprotected.
+        let mut e = entry();
+        e.remove_field("URL");
+        e.set_urls(&["new".into()]);
+        assert_eq!(protected(&e), Some(false));
     }
     #[test]
     fn uri_match_mode_defaults_and_unknown_value() {
