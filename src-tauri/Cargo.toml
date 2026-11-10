@@ -1,0 +1,39 @@
+[package]
+name = "mypass-app"
+version = "0.1.0"
+description = "The MyPass desktop app shell (Tauri 2)."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "mypass_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+mypass-kdbx = { path = "../crates/mypass-kdbx" }
+mypass-core = { path = "../crates/mypass-core" }
+mypass-platform = { path = "../crates/mypass-platform" }
+mypass-session = { path = "../crates/mypass-session" }
+tauri.workspace = true
+tauri-specta.workspace = true
+specta.workspace = true
+specta-typescript.workspace = true
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-single-instance.workspace = true
+tauri-plugin-global-shortcut.workspace = true
+tauri-plugin-dialog.workspace = true
+tauri-plugin-opener.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

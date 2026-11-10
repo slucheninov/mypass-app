@@ -1,0 +1,20 @@
+[package]
+name = "mypass-session"
+version = "0.1.0"
+description = "MyPass Vault session, settings, scheduling and the command facade behind the Tauri shell."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+mypass-kdbx = { path = "../mypass-kdbx" }
+mypass-core = { path = "../mypass-core" }
+mypass-platform = { path = "../mypass-platform" }
+
+[dev-dependencies]
+mypass-kdbx = { path = "../mypass-kdbx", features = ["test-util"] }

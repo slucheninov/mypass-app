@@ -1,0 +1,12 @@
+[package]
+name = "mypass-platform"
+version = "0.1.0"
+description = "MyPass OS glue behind traits: clipboard, secret store, system events."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true

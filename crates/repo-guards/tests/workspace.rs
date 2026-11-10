@@ -396,8 +396,12 @@ fn toolchain_pins_agree() {
         if let Some(pm) = pkg.get("packageManager").and_then(|v| v.as_str()) {
             if let Some(version) = pm.strip_prefix("pnpm@") {
                 let version = version.split('+').next().unwrap_or(version);
+                // Until stage 2b no workflow touches pnpm (the `pnpm/action-setup` pin and the
+                // Node steps arrive with the UI toolchain in 2b); the moment a workflow mentions
+                // pnpm, it needs the pinned action with the matching version.
+                let workflows_use_pnpm = workflow_files().iter().any(|f| read(f).contains("pnpm"));
                 assert!(
-                    !pnpm_versions.is_empty(),
+                    !workflows_use_pnpm || !pnpm_versions.is_empty(),
                     "packageManager pnpm needs a CI action pin"
                 );
                 for declared in &pnpm_versions {

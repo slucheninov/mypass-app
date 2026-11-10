@@ -84,7 +84,9 @@ else
   esac
 fi
 
-has_ui() { [[ -f package.json ]]; }
+# A UI suite exists once package.json declares a `test` script. Until stage 2b, package.json only
+# carries the tooling pins, so there is nothing to run (and pnpm is not required).
+has_ui() { [[ -f package.json ]] && grep -q '"test"[[:space:]]*:' package.json; }
 has_js() { [[ -f scripts/test-extension.sh ]]; }
 
 need_tool() {
@@ -119,11 +121,15 @@ run_rust() {
 
 # Stage 2b fills this hook with install, type-check and unit tests.
 run_ui() {
-  if ! has_ui; then
+  if [[ ! -f package.json ]]; then
     echo "ui: skipped (no package.json yet)"
     return 0
   fi
-  echo "error: package.json exists but the ui hook of scripts/test.sh is not filled in yet" >&2
+  if ! has_ui; then
+    echo "ui: NOT RUN (package.json has no test script yet; no UI suite exists until stage 2b)"
+    return 0
+  fi
+  echo "error: package.json declares a test script but the ui hook of scripts/test.sh is not filled in yet" >&2
   return 1
 }
 

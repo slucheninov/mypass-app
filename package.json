@@ -1,0 +1,10 @@
+{
+  "name": "mypass",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=26.13.0"
+  },
+  "packageManager": "pnpm@12.18.0"
+}
