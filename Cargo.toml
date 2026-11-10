@@ -47,7 +47,7 @@ url = "2.5.8"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 # rand stays on 0.8 (matches the RustCrypto traits used by the KDBX engine).
-rand = { version = "0.8.8", features = ["std_rng"] }
+rand = { version = "0.10.3", features = ["std_rng"] }
 getrandom = "0.4.3"
 
 # --- Dev-only crates (tests, oracle, repo guards); never linked into a shipped artifact ---
