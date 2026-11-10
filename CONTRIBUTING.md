@@ -10,8 +10,8 @@ project conventions.
 You need [rustup](https://rustup.rs). The toolchain is pinned in `rust-toolchain.toml` (with
 `rustfmt` and `clippy`) and rustup installs it on first use. `bash` is needed for `scripts/test.sh`:
 on Windows use Git Bash for the scripts and PowerShell for `cargo`. Node.js and pnpm are needed only
-once the UI and the browser extension exist (later stages); `scripts/test.sh` says so when a part
-needs a tool you do not have.
+once the UI and the browser extension have tests (later stages); `scripts/test.sh` says so when a
+part needs a tool you do not have, and `ui: NOT RUN` while no UI suite exists.
 
 ## Commands
 
@@ -33,7 +33,7 @@ request. Tests are not allowed to be skipped, weakened or deleted to make someth
 - `--ci` is the mode used by the CI workflow: cargo runs with `--locked`, it requires every tool of
   every part that exists and it rejects `--no-js`.
 - `.github/workflows/ci.yml` runs on pull requests, on pushes to `main` and on manual dispatch,
-  as parallel jobs: a `lint` matrix (clippy on Linux and Windows, format check on Linux), a `test`
+  as parallel jobs: a `lint` matrix (clippy on macOS and Windows, format check on macOS), a `test`
   matrix on macOS and Windows, a path-filtered bidirectional pykeepass `crosscompat` job, a disabled
   Windows integration skeleton and a final `ci` job that reports the combined result. A newer push
   cancels the superseded pull request run. It runs after the fact, so it is not a substitute for running the

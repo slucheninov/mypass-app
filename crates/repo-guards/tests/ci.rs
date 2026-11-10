@@ -261,7 +261,7 @@ fn ci_cargo_jobs_use_rust_cache() {
 }
 
 #[test]
-fn ci_lint_job_runs_fmt_and_clippy_on_linux_and_windows() {
+fn ci_lint_job_runs_fmt_and_clippy_on_macos_and_windows() {
     let doc = workflow(".github/workflows/ci.yml");
     let lint = job(&doc, "lint");
     let os: Vec<&str> = lint
@@ -273,7 +273,7 @@ fn ci_lint_job_runs_fmt_and_clippy_on_linux_and_windows() {
         .iter()
         .filter_map(Value::as_str)
         .collect();
-    assert_eq!(os, ["ubuntu-latest", "windows-latest"]);
+    assert_eq!(os, ["macos-latest", "windows-latest"]);
     assert_eq!(
         lint.get("strategy")
             .and_then(|s| s.get("fail-fast"))
@@ -290,8 +290,8 @@ fn ci_lint_job_runs_fmt_and_clippy_on_linux_and_windows() {
         .expect("lint must run `cargo fmt --all -- --check`");
     assert_eq!(
         fmt.get("if").and_then(Value::as_str),
-        Some("matrix.os == 'ubuntu-latest'"),
-        "the format check is OS independent and runs on Linux only"
+        Some("matrix.os == 'macos-latest'"),
+        "the format check is OS independent and runs on macOS only"
     );
     let clippy = steps(lint)
         .into_iter()

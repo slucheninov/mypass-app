@@ -1,11 +1,11 @@
 # MyPass Cargo workspace.
 #
-# `members` is the `crates/*` glob only. Stage 2a Task 1 appends "src-tauri" explicitly once
-# that directory exists: the glob never picks it up because `src-tauri` is not under `crates/`.
-# The guard test `workspace_members_are_the_crates_glob_until_src_tauri_exists` enforces this.
+# `members` is the `crates/*` glob plus "src-tauri", listed explicitly because the glob never
+# picks it up (`src-tauri` is not under `crates/`). The guard test
+# `workspace_members_are_the_crates_glob_until_src_tauri_exists` enforces this.
 [workspace]
 resolver = "2"
-members = ["crates/*"]
+members = ["crates/*", "src-tauri"]
 
 [workspace.package]
 edition = "2021"
@@ -67,6 +67,18 @@ tauri-plugin-dialog = "=2.8.4"
 tauri-plugin-opener = "=2.7.2"
 specta = { version = "=2.0.0-rc.26", features = ["derive"] }
 tauri-specta = { version = "=2.0.0-rc.26", features = ["derive", "typescript"] }
+# Used directly for the `Typescript` exporter handed to `tauri_specta::Builder::export`; the version
+# is the one tauri-specta rc.26 depends on.
+specta-typescript = "=0.0.13"
+
+# --- Stage 2a: OS glue, clipboard, drafts, locale (consumed by later 2a tasks) ---
+objc2 = "0.6.5"
+objc2-foundation = "0.3.2"
+objc2-app-kit = "0.3.2"
+block2 = "0.6.2"
+arboard = "3.7.0"
+chacha20poly1305 = "0.11.0"
+sys-locale = "0.3.2"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

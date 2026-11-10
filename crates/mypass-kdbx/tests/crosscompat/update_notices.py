@@ -22,11 +22,16 @@ APPROVED = {
     "CC0-1.0 OR MIT-0 OR Apache-2.0", "MIT", "MIT OR Apache-2.0",
     "MIT OR Apache-2.0 OR LGPL-2.1-or-later", "MIT OR Zlib OR Apache-2.0",
     "MIT/Apache-2.0", "Unicode-3.0", "Unlicense OR MIT", "Zlib", "MPL-2.0",
+    # Added with the Tauri shell (stage 2a): every expression below is permissive only.
+    "Apache-2.0 AND MIT", "Apache-2.0 WITH LLVM-exception", "Apache-2.0/MIT",
+    "BSD-2-Clause", "BSD-3-Clause AND MIT", "BSD-3-Clause OR MIT OR Apache-2.0",
+    "BSD-3-Clause/MIT", "ISC", "MIT OR Apache-2.0 OR Zlib", "Unlicense/MIT",
+    "Zlib OR Apache-2.0 OR MIT",
 }
 
 
 def cargo(*args):
-    return subprocess.check_output(["cargo", *args], cwd=ROOT, text=True)
+    return subprocess.check_output(["cargo", *args], cwd=ROOT, encoding="utf-8")
 
 
 def generate():
@@ -60,7 +65,7 @@ def generate():
 if __name__ == "__main__":
     table, count, linked = generate()
     path = ROOT / "THIRD_PARTY_NOTICES.md"
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     before, rest = text.split(START)
     _, after = rest.split(END)
     updated = before + table + after
@@ -68,5 +73,5 @@ if __name__ == "__main__":
         if updated != text:
             sys.exit("NOTICES_FAILED: regenerate Cargo tables")
     else:
-        path.write_text(updated)
+        path.write_text(updated, encoding="utf-8")
     print(f"NOTICES_OK: {count} packages audited; {linked} release graph packages; permissive/MPL choices only")

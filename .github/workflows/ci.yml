@@ -65,10 +65,12 @@ jobs:
               - 'rust-toolchain.toml'
               - '.github/workflows/ci.yml'
 
-  # Format and clippy, apart from the tests so they run in parallel with them. Linux covers the
-  # `cfg(unix)` code, Windows the `cfg(windows)` code of crates/mypass-kdbx/src/file.rs (the only
-  # platform-specific code in the workspace; there is no `cfg(target_os = "macos")` code). rustfmt
-  # output does not depend on the OS, so the format check runs once, on Linux.
+  # Format and clippy, apart from the tests so they run in parallel with them. macOS is the
+  # shipped platform and Windows the second one; Linux is not a target (the Tauri shell needs
+  # WebKitGTK system packages there), so there is no Linux lint leg. The `cfg(unix)` code of
+  # crates/mypass-kdbx/src/file.rs is linted on macOS, its `cfg(windows)` code on Windows, and the
+  # Tauri shell compiles on both. rustfmt output does not depend on the OS, so the format check
+  # runs once, on macOS.
   lint:
     name: lint (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -76,7 +78,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -90,7 +92,7 @@ jobs:
           # A cold run that fails still saves its cache, so the retry starts warm.
           cache-on-failure: true
       - name: Format
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'macos-latest'
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings

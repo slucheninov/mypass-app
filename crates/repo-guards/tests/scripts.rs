@@ -90,3 +90,21 @@ fn rust_test_entrypoint_reports_every_failing_test_binary() {
     assert!(script.contains("local args=(test --workspace --no-fail-fast)"));
     assert!(script.contains("args+=(--locked)"));
 }
+
+#[test]
+fn test_sh_ui_part_says_plainly_when_no_ui_suite_exists() {
+    // package.json carries only the tooling pins until stage 2b adds a `test` script. The ui part
+    // must then pass without pnpm AND say that nothing ran: it never pretends to have tested.
+    let script = repo_guards::read("scripts/test.sh");
+    assert!(script.contains("ui: NOT RUN"));
+    let has_test_script = repo_guards::read("package.json").contains("\"test\"");
+    if has_test_script {
+        return;
+    }
+    let Some(out) = bash(&["scripts/test.sh", "--only", "ui"]) else {
+        return;
+    };
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("ui: NOT RUN"), "stdout: {stdout}");
+}

@@ -23,19 +23,23 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `mypass-kdbx` | implemented | KDBX4 engine: format pipeline, model, database API, vault file, `FileIo` seam |
 | `mypass-core` | implemented | Everything that consumes the model: TOTP, generator and password rules, Public Suffix List, entry matcher, merge engine |
 | `repo-guards` | implemented | Test-only (`publish = false`, never shipped): guard tests for the workspace, CI, docs and scripts |
+| `mypass-platform` | scaffold (stage 2a) | OS glue behind traits (clipboard, secret store, lock events) |
+| `mypass-session` | scaffold (stage 2a) | Vault session, settings, scheduling and the `AppCore` command facade; no Tauri dependency |
+| `src-tauri` (package `mypass-app`, lib `mypass_app_lib`) | scaffold (stage 2a) | The Tauri 2 app shell: typed IPC through `tauri-specta`, plugins; a workspace member listed explicitly |
 | `mypass-bridge` | planned | Browser bridge protocol and loopback server |
-| `mypass-platform` | planned | OS glue behind traits (clipboard, secret store, lock events) |
 | `mypass-host` | planned | Native messaging host binary |
-| `src-tauri` | planned | The Tauri app shell (added to the workspace members explicitly when it exists) |
 | `extension/` | planned | The Chromium extension (JavaScript, with its own Node test suites) |
 
 ## Repo layout
 
 | Path | Contents |
 |---|---|
-| `Cargo.toml` | Workspace manifest. `members = ["crates/*"]` for now; the single `[workspace.dependencies]` version table; `[workspace.lints]` |
+| `Cargo.toml` | Workspace manifest. `members = ["crates/*", "src-tauri"]`; the single `[workspace.dependencies]` version table; `[workspace.lints]` |
 | `rust-toolchain.toml` | Pinned toolchain `1.99.1` (components `rustfmt`, `clippy`) |
 | `crates/` | The Rust crates listed above |
+| `src-tauri/` | The Tauri app shell (`mypass-app`): `tauri.conf.json`, capabilities, placeholder icons (replaced in stage 5) |
+| `src/lib/bindings.ts` | Generated TypeScript bindings of the Tauri commands; never edited by hand |
+| `package.json`, `.nvmrc` | Node and pnpm pins only until stage 2b adds the UI toolchain |
 | `scripts/test.sh` | The single local and CI test entry point |
 | `.github/` | Workflows (`ci.yml`, `codeql.yml`), Dependabot config, issue forms, pull request template |
 | `docs/implementation/ROADMAP.md` | The only tracked document under `docs/`: unfinished work |
@@ -45,7 +49,8 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 
 Stage 1 (the Rust core: KDBX4 engine, TOTP, generator, Public Suffix List, matcher, merge, atomic
 vault file) is implemented.
-Later stages (app backend, UI, extension bridge, passkeys, macOS release, Windows) are listed in `docs/implementation/ROADMAP.md`.
+Stage 2a (the app backend behind the glass: `mypass-platform`, `mypass-session`, the Tauri shell) is in progress; its scaffold has landed.
+Later stages (rest of the app backend, UI, extension bridge, passkeys, macOS release, Windows) are listed in `docs/implementation/ROADMAP.md`.
 
 ## Build, run, test
 
@@ -71,10 +76,11 @@ bash scripts/test.sh [--ci] [--only rust|ui|js] [--no-js]   # the full suite
 on `main` and manual runs each get their own group by run id, so none is cancelled or dropped). The
 jobs are independent and run in parallel, so the wall-clock time is the slowest job:
 
-- `lint` is a matrix over `ubuntu-latest` and `windows-latest` (fail-fast off): `cargo clippy
-  --workspace --all-targets -- -D warnings` on both (Linux lints the `cfg(unix)` code, Windows the
-  `cfg(windows)` code of `crates/mypass-kdbx/src/file.rs`) and `cargo fmt --all -- --check` on Linux
-  only.
+- `lint` is a matrix over `macos-latest` and `windows-latest` (fail-fast off): `cargo clippy
+  --workspace --all-targets -- -D warnings` on both (macOS lints the `cfg(unix)` code, Windows the
+  `cfg(windows)` code of `crates/mypass-kdbx/src/file.rs`, and both compile the Tauri shell) and
+  `cargo fmt --all -- --check` on macOS only. There is no Linux leg: Linux is not a target and the
+  Tauri shell needs WebKitGTK system packages there.
 - `test` is a matrix over `macos-latest` and `windows-latest` (fail-fast off): only
   `bash scripts/test.sh --ci --only rust`.
 - Every cargo job restores `Swatinem/rust-cache` with `cache-on-failure`, and the workflow sets
@@ -121,6 +127,17 @@ change is done.
 - **`FileIo` seam.** All vault-file I/O goes through the `FileIo` trait (`PlainFileIo` in production,
   `FailingFileIo` under the `test-util` feature in tests). There is no `cfg(test)` failure injection
   in production code. `VaultFile` (in `mypass-kdbx`) wraps atomic saves and conflict detection; `SaveOutcome` reports their result.
+- **Generated files.** `src/lib/bindings.ts` is generated: regenerate it with
+  `cargo test -p mypass-app export_bindings_regenerate -- --ignored` and never edit it (the test
+  `bindings_are_up_to_date` fails when it drifts). `src-tauri/tests/commands.snap` lists every
+  command; a stage that adds or removes a command regenerates it with
+  `cargo test -p mypass-app command_snapshot_regenerate -- --ignored` in the same commit (the file
+  and its tests arrive with the command surface).
+- **Node-free Rust build.** `src-tauri/build.rs` creates a placeholder `dist/index.html` when `dist/`
+  is absent, so `cargo test --workspace` never needs Node. `dist/` is git-ignored.
+- **Windows manifest.** `src-tauri/build.rs` embeds `src-tauri/windows-app-manifest.xml`
+  (Common-Controls v6) into every target of the app package through linker arguments, because
+  `tauri-build` alone covers only the bin and the lib test binary then dies with `0xc0000139`.
 - **Signing.** The stable team `W645B93PPQ` arrives in stage 5. Never sign ad-hoc: it breaks the
   Keychain access that guards the unlock key.
 

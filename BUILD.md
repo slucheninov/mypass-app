@@ -9,8 +9,9 @@ to report a vulnerability, see [`SECURITY.md`](SECURITY.md); coding agents read
 
 You need [rustup](https://rustup.rs). The toolchain is pinned in `rust-toolchain.toml` (with
 `rustfmt` and `clippy`) and rustup installs it on first use. `bash` is needed for
-`scripts/test.sh`. Node.js and pnpm are needed only once the UI and the browser extension exist
-(later stages); `scripts/test.sh` says so when a part needs a tool you do not have.
+`scripts/test.sh`. Node.js and pnpm are needed only once the UI and the browser extension have tests
+(later stages): `package.json` and `.nvmrc` only pin the tooling for now, so `cargo test --workspace`
+needs no Node, and `scripts/test.sh` says `ui: NOT RUN` while no UI suite exists.
 
 On Windows, run `cargo` commands from PowerShell and `scripts/*.sh` from Git Bash.
 
@@ -21,7 +22,10 @@ On Windows, run `cargo` commands from PowerShell and `scripts/*.sh` from Git Bas
 | `mypass-kdbx` | implemented | KDBX4 engine: format pipeline, model, database API, vault file |
 | `mypass-core` | implemented | TOTP, generator and password rules, Public Suffix List, entry matcher, merge engine |
 | `repo-guards` | implemented | Test-only guard tests for the workspace, CI, docs and scripts (never shipped) |
-| `mypass-bridge`, `mypass-platform`, `mypass-host`, `src-tauri`, `extension/` | planned | Browser bridge, OS glue, native messaging host, the Tauri app shell and the Chromium extension |
+| `mypass-platform` | scaffold (stage 2a) | OS glue behind traits: clipboard, secret store, system events |
+| `mypass-session` | scaffold (stage 2a) | Vault session, settings, scheduling and the command facade; no Tauri dependency |
+| `src-tauri` (`mypass-app`) | scaffold (stage 2a) | The Tauri 2 app shell and the typed IPC bindings (`src/lib/bindings.ts`, generated) |
+| `mypass-bridge`, `mypass-host`, `extension/` | planned | Browser bridge, native messaging host and the Chromium extension |
 
 ## Build and check
 
@@ -35,6 +39,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 ```bash
 bash scripts/test.sh [--ci] [--only rust|ui|js] [--no-js]   # the full suite
 cargo test --workspace                                        # Rust tests only
+cargo test -p mypass-app export_bindings_regenerate -- --ignored   # regenerate src/lib/bindings.ts
 cargo test --workspace -- --ignored                           # includes the 50 MiB round trip
 cargo test -p <crate> <filter>                                # one crate, one filter
 cargo run -p mypass-kdbx --example write_crosscompat -- <out.kdbx>   # synthetic fixture
@@ -53,7 +58,7 @@ cargo run -p mypass-kdbx --example write_crosscompat -- <out.kdbx>   # synthetic
   (`cargo test -p mypass-kdbx -- filter1 filter2`).
 - Argon2 at 64 MiB x 3 passes takes minutes at opt-level 0, so dependencies are built at opt-level 3
   in the dev and test profiles (`[profile.dev.package."*"]`, `[profile.test.package."*"]`).
-- CI runs `lint` (clippy on Linux and Windows, format check on Linux), `test` (macOS and Windows),
+- CI runs `lint` (clippy on macOS and Windows, format check on macOS), `test` (macOS and Windows),
   `crosscompat` and a disabled Windows integration skeleton as parallel jobs, joined by the `ci`
   aggregator.
 - The `crosscompat` CI job (Rust writes and Python reads, then the reverse) uses `pykeepass`. The
