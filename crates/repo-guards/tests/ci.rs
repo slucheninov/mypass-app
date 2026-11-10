@@ -76,6 +76,19 @@ fn ci_aggregator_needs_every_job() {
         "ci.yml needs the aggregator job `ci`"
     );
     let needs = needs_of(job(&doc, "ci"));
+    let mut sorted_needs = needs.clone();
+    sorted_needs.sort();
+    assert_eq!(
+        sorted_needs,
+        [
+            "changes",
+            "crosscompat",
+            "lint",
+            "test",
+            "windows-integration"
+        ],
+        "`ci.needs` must be exactly the parallel jobs of the workflow"
+    );
     for id in all.iter().filter(|j| *j != "ci") {
         assert!(
             needs.contains(id),
@@ -152,8 +165,18 @@ fn ci_has_concurrency_cancel_in_progress() {
     assert_eq!(
         concurrency
             .get("cancel-in-progress")
-            .and_then(Value::as_bool),
-        Some(true)
+            .and_then(Value::as_str),
+        Some("${{ github.event_name == 'pull_request' }}"),
+        "only pull request runs may be cancelled; runs on main and manual runs never are"
+    );
+    let env = doc.get("env").expect("ci.yml has top-level `env`");
+    assert_eq!(
+        env.get("CARGO_PROFILE_DEV_DEBUG").and_then(Value::as_str),
+        Some("line-tables-only")
+    );
+    assert_eq!(
+        env.get("CARGO_TERM_COLOR").and_then(Value::as_str),
+        Some("always")
     );
     let perms = doc
         .get("permissions")
@@ -210,6 +233,76 @@ fn ci_cargo_jobs_use_rust_cache() {
         cargo_jobs > 0,
         "no cargo job found in any workflow: the guard would pass vacuously"
     );
+
+    // The parallel cargo jobs of ci.yml are named explicitly, and each one saves its cache even
+    // when a cold run fails, so the retry starts warm.
+    let doc = workflow(".github/workflows/ci.yml");
+    for id in ["lint", "test", "windows-integration", "crosscompat"] {
+        let cache = steps(job(&doc, id))
+            .into_iter()
+            .find(|s| {
+                s.get("uses")
+                    .and_then(Value::as_str)
+                    .is_some_and(|u| u.starts_with("Swatinem/rust-cache@"))
+            })
+            .unwrap_or_else(|| panic!("ci.yml job `{id}` has no Swatinem/rust-cache step"));
+        assert_eq!(
+            cache
+                .get("with")
+                .and_then(|w| w.get("cache-on-failure"))
+                .and_then(Value::as_bool),
+            Some(true),
+            "ci.yml job `{id}`: rust-cache needs `cache-on-failure: true`"
+        );
+    }
+}
+
+#[test]
+fn ci_lint_job_runs_fmt_and_clippy_on_linux_and_windows() {
+    let doc = workflow(".github/workflows/ci.yml");
+    let lint = job(&doc, "lint");
+    let os: Vec<&str> = lint
+        .get("strategy")
+        .and_then(|s| s.get("matrix"))
+        .and_then(|m| m.get("os"))
+        .and_then(Value::as_sequence)
+        .expect("lint strategy.matrix.os")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert_eq!(os, ["ubuntu-latest", "windows-latest"]);
+    assert_eq!(
+        lint.get("strategy")
+            .and_then(|s| s.get("fail-fast"))
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        lint.get("name").and_then(Value::as_str),
+        Some("lint (${{ matrix.os }})")
+    );
+    let fmt = steps(lint)
+        .into_iter()
+        .find(|s| run_text(s).trim() == "cargo fmt --all -- --check")
+        .expect("lint must run `cargo fmt --all -- --check`");
+    assert_eq!(
+        fmt.get("if").and_then(Value::as_str),
+        Some("matrix.os == 'ubuntu-latest'"),
+        "the format check is OS independent and runs on Linux only"
+    );
+    let clippy = steps(lint)
+        .into_iter()
+        .find(|s| run_text(s).trim() == "cargo clippy --workspace --all-targets -- -D warnings")
+        .expect("lint must run `cargo clippy --workspace --all-targets -- -D warnings`");
+    assert!(
+        clippy.get("if").is_none(),
+        "clippy must run on every lint OS so cfg(unix) and cfg(windows) code are both linted"
+    );
+    let components = steps(lint)
+        .into_iter()
+        .find_map(|s| s.get("with")?.get("components")?.as_str())
+        .expect("lint installs the toolchain components");
+    assert!(components.contains("rustfmt") && components.contains("clippy"));
 }
 
 #[test]
@@ -311,6 +404,11 @@ fn ci_test_job_runs_scripts_test_sh_in_ci_mode() {
         .expect("strategy.matrix.os");
     let os: Vec<&str> = os.iter().filter_map(Value::as_str).collect();
     assert_eq!(os, ["macos-latest", "windows-latest"]);
+    let all_runs = runs.join("\n");
+    assert!(
+        !all_runs.contains("cargo fmt") && !all_runs.contains("cargo clippy"),
+        "format and clippy belong to the parallel `lint` job, not to `test`"
+    );
     assert_eq!(
         test.get("strategy")
             .and_then(|s| s.get("fail-fast"))

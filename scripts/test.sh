@@ -3,7 +3,7 @@
 #
 #   scripts/test.sh [--ci] [--only rust|ui|js] [--no-js]
 #
-# Parts: rust (cargo test --workspace), ui (pnpm; the hook is filled by stage 2b), js (extension
+# Parts: rust (cargo test --workspace --no-fail-fast), ui (pnpm; the hook is filled by stage 2b), js (extension
 # suites; the hook is filled by stage 3 through scripts/test-extension.sh). Later stages fill the
 # hook bodies below and never change this command line.
 set -euo pipefail
@@ -110,8 +110,9 @@ run_rust() {
   else
     echo "notices: skipped (python3 unavailable)"
   fi
-  echo "== rust: cargo test --workspace"
-  local args=(test --workspace)
+  echo "== rust: cargo test --workspace --no-fail-fast"
+  # --no-fail-fast: one failing test binary must not hide failures in the binaries after it.
+  local args=(test --workspace --no-fail-fast)
   [[ $ci -eq 1 ]] && args+=(--locked)
   cargo "${args[@]}"
 }

@@ -67,11 +67,17 @@ bash scripts/test.sh [--ci] [--only rust|ui|js] [--no-js]   # the full suite
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on pull requests, on pushes to `main` and on manual dispatch, with
-`concurrency` that cancels a superseded run:
+`concurrency` that cancels a superseded pull request run (runs on `main` and manual runs are never
+cancelled). The jobs are independent and run in parallel, so the wall-clock time is the slowest job:
 
-- `test` is a matrix over `macos-latest` and `windows-latest` (fail-fast off): `cargo fmt --check`,
-  `cargo clippy -D warnings`, then `bash scripts/test.sh --ci --only rust`. It restores
-  `Swatinem/rust-cache`.
+- `lint` is a matrix over `ubuntu-latest` and `windows-latest` (fail-fast off): `cargo clippy
+  --workspace --all-targets -- -D warnings` on both (Linux lints the `cfg(unix)` code, Windows the
+  `cfg(windows)` code of `crates/mypass-kdbx/src/file.rs`) and `cargo fmt --all -- --check` on Linux
+  only.
+- `test` is a matrix over `macos-latest` and `windows-latest` (fail-fast off): only
+  `bash scripts/test.sh --ci --only rust`.
+- Every cargo job restores `Swatinem/rust-cache` with `cache-on-failure`, and the workflow sets
+  `CARGO_PROFILE_DEV_DEBUG=line-tables-only` for smaller, faster builds.
 - `changes` is a cheap path filter that gates the crosscompat job.
 - `crosscompat` runs on Ubuntu with Python 3.12 and CI-only `pykeepass==4.2.0`: Rust writes /
   Python reads, then Python writes / Rust reads. It is path-gated on pull requests through
@@ -79,8 +85,9 @@ bash scripts/test.sh [--ci] [--only rust|ui|js] [--no-js]   # the full suite
   The env-gated Rust test prints a skip locally unless `MYPASS_PYKEEPASS_VAULT` is set.
 - `windows-integration` is a disabled skeleton for stage 6: it runs only when the repository variable
   `MYPASS_WINDOWS_INTEGRATION_TESTS` is `true`, otherwise it is skipped.
-- `ci` is the aggregator and the required status check. It needs every other job; a gated job may be
-  `skipped`, every other result must be `success`. A job added later must be wired into it
+- `ci` is the aggregator and the required status check. It needs every other job (`changes`, `lint`,
+  `test`, `windows-integration`, `crosscompat`); a gated job may be `skipped`, every other result
+  (`lint` and `test` included) must be `success`. A job added later must be wired into it
   (pinned by `ci_aggregator_needs_every_job`).
 - `.github/workflows/codeql.yml` is a separate workflow (push to `main`, weekly, manual; never on pull
   requests) and is not part of `ci`.

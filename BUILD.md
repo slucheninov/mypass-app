@@ -41,7 +41,9 @@ cargo run -p mypass-kdbx --example write_crosscompat -- <out.kdbx>   # synthetic
 ```
 
 - `scripts/test.sh` is the one entry point for people, agents and CI. Without `--only` it runs every
-  part (`rust`, `ui`, `js`); a part with nothing to run yet prints that it was skipped.
+  part (`rust`, `ui`, `js`); a part with nothing to run yet prints that it was skipped. The `rust`
+  part runs `cargo test --workspace --no-fail-fast`, so one failing test binary does not hide
+  failures in the later ones.
 - `--ci` runs cargo with `--locked`, requires every tool of every part that exists and rejects
   `--no-js`.
 - `--no-js` is only for a local machine without `node`, and it prints that the JavaScript suites
@@ -51,6 +53,9 @@ cargo run -p mypass-kdbx --example write_crosscompat -- <out.kdbx>   # synthetic
   (`cargo test -p mypass-kdbx -- filter1 filter2`).
 - Argon2 at 64 MiB x 3 passes takes minutes at opt-level 0, so dependencies are built at opt-level 3
   in the dev and test profiles (`[profile.dev.package."*"]`, `[profile.test.package."*"]`).
+- CI runs `lint` (clippy on Linux and Windows, format check on Linux), `test` (macOS and Windows),
+  `crosscompat` and a disabled Windows integration skeleton as parallel jobs, joined by the `ci`
+  aggregator.
 - The `crosscompat` CI job (Rust writes and Python reads, then the reverse) uses `pykeepass`. The
   env-gated Rust test prints a skip locally unless `MYPASS_PYKEEPASS_VAULT` is set.
 

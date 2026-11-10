@@ -81,3 +81,12 @@ fn rust_test_entrypoint_checks_generated_notices() {
     assert!(script.contains("need_tool python3"));
     assert!(script.contains("notices: skipped"));
 }
+
+#[test]
+fn rust_test_entrypoint_reports_every_failing_test_binary() {
+    // Without `--no-fail-fast` cargo stops at the first failing test binary and hides failures
+    // in the later ones.
+    let script = repo_guards::read("scripts/test.sh");
+    assert!(script.contains("local args=(test --workspace --no-fail-fast)"));
+    assert!(script.contains("args+=(--locked)"));
+}

@@ -32,9 +32,11 @@ request. Tests are not allowed to be skipped, weakened or deleted to make someth
   were **not** run. A change that touches `extension/` needs them run.
 - `--ci` is the mode used by the CI workflow: cargo runs with `--locked`, it requires every tool of
   every part that exists and it rejects `--no-js`.
-- `.github/workflows/ci.yml` runs on pull requests, on pushes to `main` and on manual dispatch: a
-  test matrix on macOS and Windows, a path-filtered bidirectional pykeepass `crosscompat` job, a disabled Windows integration skeleton and a final `ci` job that
-  reports the combined result. It runs after the fact, so it is not a substitute for running the
+- `.github/workflows/ci.yml` runs on pull requests, on pushes to `main` and on manual dispatch,
+  as parallel jobs: a `lint` matrix (clippy on Linux and Windows, format check on Linux), a `test`
+  matrix on macOS and Windows, a path-filtered bidirectional pykeepass `crosscompat` job, a disabled
+  Windows integration skeleton and a final `ci` job that reports the combined result. A newer push
+  cancels the superseded pull request run. It runs after the fact, so it is not a substitute for running the
   suite yourself. `.github/workflows/codeql.yml` is a separate workflow that runs after the merge,
   weekly and on manual dispatch.
 - New behaviour comes with tests next to the code it covers. Format with `cargo fmt`; clippy runs
