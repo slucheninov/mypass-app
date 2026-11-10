@@ -527,3 +527,59 @@ fn public_trim_history_matches_mutation_policy() {
     entry.trim_history(-1, 0);
     assert_eq!(entry.history.len(), 1);
 }
+// A vault whose recycle-bin UUID points at the root group (another client, or a corrupted meta)
+// has no usable bin: treating the root as the bin would make every entry "recycled", turn deletes
+// into permanent purges and make moves into the bin no-ops.
+fn db_with_root_as_bin() -> Database {
+    let mut db = Database::new("Root");
+    db.meta.recycle_bin_enabled = true;
+    db.meta.recycle_bin_uuid = Some(db.root_id());
+    db
+}
+#[test]
+fn root_as_recycle_bin_does_not_make_entries_recycled() {
+    let mut db = db_with_root_as_bin();
+    let e = make_entry("ordinary");
+    let id = e.uuid;
+    db.add_entry(db.root_id(), e, t(1)).unwrap();
+    assert!(!db.is_in_recycle_bin(id));
+}
+#[test]
+fn root_as_recycle_bin_delete_entry_moves_to_a_fresh_bin() {
+    let mut db = db_with_root_as_bin();
+    let e = make_entry("ordinary");
+    let id = e.uuid;
+    db.add_entry(db.root_id(), e, t(1)).unwrap();
+    db.delete_entry(id, t(2)).unwrap();
+    let bin = db.meta.recycle_bin_uuid.unwrap();
+    assert_ne!(bin, db.root_id());
+    assert_eq!(db.find_group(bin).unwrap().name, "Recycle Bin");
+    assert_eq!(db.parent_of_entry(id), Some(bin));
+    assert!(db.is_in_recycle_bin(id));
+    assert!(db.deleted_objects.is_empty());
+    // A second delete is now a real purge: the entry is inside the new bin.
+    db.delete_entry(id, t(3)).unwrap();
+    assert!(db.find_entry(id).is_none());
+    assert_eq!(db.deleted_objects.len(), 1);
+}
+#[test]
+fn root_as_recycle_bin_delete_group_moves_to_a_fresh_bin() {
+    let mut db = db_with_root_as_bin();
+    let mut g = Group::new("g", t(0));
+    let e = make_entry("inside");
+    let eid = e.uuid;
+    g.entries.push(e);
+    let gid = g.uuid;
+    db.add_group(db.root_id(), g, t(1)).unwrap();
+    db.delete_group(gid, t(2)).unwrap();
+    let bin = db.meta.recycle_bin_uuid.unwrap();
+    assert_ne!(bin, db.root_id());
+    assert!(db
+        .find_group(bin)
+        .unwrap()
+        .groups
+        .iter()
+        .any(|g| g.uuid == gid));
+    assert!(db.is_in_recycle_bin(eid));
+    assert!(db.deleted_objects.is_empty());
+}

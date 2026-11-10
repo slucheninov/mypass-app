@@ -107,14 +107,21 @@ impl Database {
             false
         }
     }
-    /// True for entries anywhere below the configured, existing recycle bin.
-    pub fn is_in_recycle_bin(&self, entry_id: Uuid) -> bool {
+    /// The configured recycle bin, only when it exists and is not the root group. A bin UUID that
+    /// points at the root (another client, a corrupted meta) means "no usable bin": accepting it
+    /// would make every entry count as recycled, turn deletes into permanent purges and make moves
+    /// into the bin no-ops. `ensure_bin` creates a real bin in that case.
+    fn live_bin(&self) -> Option<&Group> {
         self.meta
             .recycle_bin_uuid
+            .filter(|id| *id != self.root_id())
             .and_then(|id| self.find_group(id))
-            .is_some_and(|bin| {
-                groups(bin).any(|(g, _)| g.entries.iter().any(|e| e.uuid == entry_id))
-            })
+    }
+    /// True for entries anywhere below the configured, existing recycle bin.
+    pub fn is_in_recycle_bin(&self, entry_id: Uuid) -> bool {
+        self.live_bin().is_some_and(|bin| {
+            groups(bin).any(|(g, _)| g.entries.iter().any(|e| e.uuid == entry_id))
+        })
     }
     /// Walks entries in document order, pruning each listed group and its entire subtree.
     pub fn entries_excluding(&self, skip_groups: &[Uuid]) -> Vec<&Entry> {
@@ -243,9 +250,7 @@ impl Database {
     pub fn delete_group(&mut self, id: Uuid, now: Timestamp) -> Result<()> {
         self.check_group_delete(id)?;
         let in_bin = self
-            .meta
-            .recycle_bin_uuid
-            .and_then(|bin| self.find_group(bin))
+            .live_bin()
             .is_some_and(|bin| groups(bin).any(|(g, _)| g.uuid == id));
         if !self.meta.recycle_bin_enabled || in_bin {
             return self.purge_group(id, now);
@@ -254,11 +259,7 @@ impl Database {
         let g = self
             .find_group(id)
             .ok_or_else(|| invalid("missing group"))?;
-        if let Some(bin) = self
-            .meta
-            .recycle_bin_uuid
-            .filter(|bin| self.find_group(*bin).is_some())
-        {
+        if let Some(bin) = self.live_bin().map(|bin| bin.uuid) {
             self.check_depth(bin, g)?;
         } else if groups(g)
             .map(|(_, d)| d)
@@ -342,12 +343,8 @@ impl Database {
         }
     }
     fn ensure_bin(&mut self, now: Timestamp) -> Result<Uuid> {
-        if let Some(id) = self
-            .meta
-            .recycle_bin_uuid
-            .filter(|id| self.find_group(*id).is_some())
-        {
-            return Ok(id);
+        if let Some(bin) = self.live_bin() {
+            return Ok(bin.uuid);
         }
         // This Result-returning path uses fallible OS randomness, like Database::save.
         let mut bytes = [0; 16];
