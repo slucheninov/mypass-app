@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit is advisory: it is not a required status check (only `ci` is, see CONTRIBUTING.md).
+language: en-US
+reviews:
+  profile: assertive
+  request_changes_workflow: false
+  # AGENTS.md forbids generated text in pull request descriptions: keep the summary in comments.
+  high_level_summary: false
+  poem: false
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches: ["main"]
+  path_filters:
+    - "!Cargo.lock"
+    - "!crates/mypass-core/resources/**"
+    - "!crates/mypass-kdbx/tests/fixtures/**"
+  path_instructions:
+    - path: "crates/*/src/**/*.rs"
+      instructions: >-
+        Library code: flag unwrap, expect, indexing and panics on untrusted input (parsers must
+        return Err), unsafe, secrets that are logged, Debug-printed or not zeroized, any network
+        call, and weakened or removed tests. Keep comments that record why a constraint exists.
+    - path: "crates/mypass-core/src/{matcher,merge}.rs"
+      instructions: >-
+        Credentials are offered only on https pages and domains are matched through the Public
+        Suffix List, never by suffix heuristics. A merge must never lose data.
+    - path: ".github/workflows/**"
+      instructions: >-
+        Every `uses:` is pinned to a full commit SHA with the tag in a trailing comment; a new job
+        must be wired into the `ci` aggregator.
+chat:
+  auto_reply: true
