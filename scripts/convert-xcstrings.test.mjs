@@ -193,8 +193,8 @@ test('infoplist_strings_written_per_language', () => {
         NSFaceIDUsageDescription: {
           localizations: {
             en: unit('Use "Touch ID" to unlock.'),
-            uk: unit('Тест'),
-            ru: unit('Тест 2'),
+            uk: unit('\u0422\u0435\u0441\u0442'),
+            ru: unit('\u0422\u0435\u0441\u0442 2'),
           },
         },
       }),
@@ -209,6 +209,142 @@ test('infoplist_strings_written_per_language', () => {
   const en = readFileSync(join(strOut, 'en.lproj', 'InfoPlist.strings'), 'utf8');
   assert.equal(en, '"NSFaceIDUsageDescription" = "Use \\"Touch ID\\" to unlock.";\n');
   const uk = readFileSync(join(strOut, 'uk.lproj', 'InfoPlist.strings'), 'utf8');
-  assert.equal(uk, '"NSFaceIDUsageDescription" = "Тест";\n');
+  assert.equal(uk, '"NSFaceIDUsageDescription" = "\u0422\u0435\u0441\u0442";\n');
   assert.ok(existsSync(join(strOut, 'ru.lproj', 'InfoPlist.strings')));
+});
+
+// Reference un-escaper for the ICU apostrophe mode the converter targets (DOUBLE_OPTIONAL, the
+// default of ICU4J and intl-messageformat). Returns tokens: literal text and unquoted placeholders.
+function unescapeIcu(text, { inPlural = false } = {}) {
+  const tokens = [];
+  let literal = '';
+  const flush = () => {
+    if (literal) tokens.push({ lit: literal });
+    literal = '';
+  };
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    const next = text[i + 1];
+    if (c === "'") {
+      if (next === "'") {
+        literal += "'";
+        i += 2;
+      } else if (next === '{' || next === '}' || (inPlural && next === '#')) {
+        i++;
+        while (i < text.length) {
+          if (text[i] === "'") {
+            if (text[i + 1] === "'") {
+              literal += "'";
+              i += 2;
+              continue;
+            }
+            i++;
+            break;
+          }
+          literal += text[i++];
+        }
+      } else {
+        literal += c;
+        i++;
+      }
+    } else if (c === '{') {
+      let depth = 1;
+      let j = i + 1;
+      while (j < text.length && depth > 0) {
+        if (text[j] === '{') depth++;
+        else if (text[j] === '}') depth--;
+        j++;
+      }
+      flush();
+      tokens.push({ ph: text.slice(i, j) });
+      i = j;
+    } else if (c === '#' && inPlural) {
+      flush();
+      tokens.push({ ph: '#' });
+      i++;
+    } else {
+      literal += c;
+      i++;
+    }
+  }
+  flush();
+  return tokens;
+}
+
+function convertEn(key) {
+  const { read, result } = run({ [key]: loc(key) });
+  assert.equal(result.status, 0, result.stderr);
+  return read('en')[key];
+}
+
+test('percent_followed_by_space_is_literal', () => {
+  assert.equal(convertEn('100% sure'), '100% sure');
+  assert.equal(convertEn('A 50% off'), 'A 50% off');
+  assert.equal(convertEn('Rate 5%'), 'Rate 5%');
+  assert.equal(convertEn('Pi is %.2f'), 'Pi is {0}');
+  assert.equal(convertEn('%1$lld of %2$lld'), '{0} of {1}');
+});
+
+test('apostrophe_alone_stays_literal', () => {
+  const out = convertEn("Don't");
+  assert.equal(out, "Don't");
+  assert.deepEqual(unescapeIcu(out), [{ lit: "Don't" }]);
+});
+
+test('apostrophe_after_braces_round_trips', () => {
+  const out = convertEn("{a}'s");
+  assert.equal(out, "'{a}'''s");
+  assert.deepEqual(unescapeIcu(out), [{ lit: "{a}'s" }]);
+});
+
+test('apostrophe_before_literal_braces', () => {
+  const out = convertEn("it's {x}");
+  assert.equal(out, "it's '{x}'");
+  assert.deepEqual(unescapeIcu(out), [{ lit: "it's {x}" }]);
+});
+
+test('quoted_word_round_trips', () => {
+  const out = convertEn("'quoted'");
+  assert.equal(out, "'quoted'");
+  assert.deepEqual(unescapeIcu(out), [{ lit: "'quoted'" }]);
+});
+
+test('apostrophe_before_placeholder_is_doubled', () => {
+  const out = convertEn("Bob'%@");
+  assert.equal(out, "Bob''{0}");
+  assert.deepEqual(unescapeIcu(out), [{ lit: "Bob'" }, { ph: '{0}' }]);
+  const spaced = convertEn("Bob' %@");
+  assert.equal(spaced, "Bob' {0}");
+  assert.deepEqual(unescapeIcu(spaced), [{ lit: "Bob' " }, { ph: '{0}' }]);
+});
+
+test('literal_hash_in_plural_branch_round_trips', () => {
+  const key = '%lld items';
+  const plural = (forms) => ({
+    variations: {
+      plural: Object.fromEntries(Object.entries(forms).map(([k, v]) => [k, unit(v)])),
+    },
+  });
+  const forms = { one: "%lld item #1's", other: "%lld items #'2" };
+  const { read, result } = run({
+    [key]: { localizations: { en: plural(forms), uk: plural(forms), ru: plural(forms) } },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const out = read('en')[key];
+  assert.equal(out, "{count, plural, one {# item '#'1's} other {# items '#'''2}}");
+  const match = /one \{(.*)\} other \{(.*)\}\}$/.exec(out);
+  assert.deepEqual(unescapeIcu(match[1], { inPlural: true }), [
+    { ph: '#' },
+    { lit: " item #1's" },
+  ]);
+  assert.deepEqual(unescapeIcu(match[2], { inPlural: true }), [
+    { ph: '#' },
+    { lit: " items #'2" },
+  ]);
+});
+
+test('mixed_implicit_and_explicit_indexes', () => {
+  assert.equal(convertEn('Mixed %@ and %2$@'), 'Mixed {0} and {1}');
+  assert.equal(convertEn('%2$@ and %@'), '{1} and {0}');
 });

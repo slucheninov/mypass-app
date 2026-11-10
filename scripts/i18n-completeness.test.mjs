@@ -13,7 +13,7 @@ const load = (lang) =>
 const en = load('en');
 const uk = load('uk');
 const ru = load('ru');
-const CYRILLIC = /[Ѐ-ԯᲀ-᲏ⷠ-ⷿꙀ-ꚟ]/;
+const CYRILLIC = /[\u0400-\u052F\u1C80-\u1C8F\u2DE0-\u2DFF\uA640-\uA69F]/;
 
 const list = (keys) => keys.slice(0, 20).map((k) => JSON.stringify(k)).join(', ');
 

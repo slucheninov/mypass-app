@@ -12,16 +12,22 @@
 // survive a re-run.
 //
 // Conversion rules:
-//   * `%@`, `%lld`, `%d`, `%f` and `%1$@`-style specifiers become positional `{0}`, `{1}` in
-//     specifier order; an explicit `%n$` index is honoured (`%2$@` is `{1}`).
+//   * `%@ %d %i %u %f %s` (with `l`/`ll` length, `.N` precision) and `%1$@`-style specifiers become
+//     positional `{0}`, `{1}` in specifier order; an explicit `%n$` index is honoured (`%2$@` is
+//     `{1}`). Mixed use follows NSString: an unnumbered specifier takes the next sequential
+//     argument counted among the unnumbered ones only, so `%2$@ and %@` is `{1} and {0}` and
+//     `%@ and %2$@` is `{0} and {1}`. Any other `%` (`100% sure`, `Rate 5%`) stays a literal `%`.
 //   * A plural variation set becomes `{count, plural, one {...} few {...} many {...} other {...}}`.
 //     The plural argument is always named `count` (the UI passes `{ count }`); it is the numeric
 //     specifier with the lowest argument index, written `#` inside the branches. The other
 //     specifiers keep their positional names. When any language of a key has a plural variation,
 //     the numeric specifier is called `{count}` in every language of that key, so the placeholder
 //     sets agree across languages.
-//   * `%%` is a literal `%`. `{` and `}` in source text are ICU-escaped with `'`; a literal `'`
-//     right before a placeholder is doubled, and a literal `#` inside a plural branch is quoted.
+//   * `%%` is a literal `%`. Output targets ICU apostrophe mode DOUBLE_OPTIONAL (default of ICU4J
+//     and intl-messageformat): `{`/`}` in source text are wrapped in `'...'`, a literal `#` inside
+//     a plural branch is quoted, and a literal `'` is doubled only where a single one would be
+//     read as syntax (before a brace, `#`, `'` or placeholder, or right after a quoted span);
+//     otherwise it stays a lone `'` (`Don't`).
 //   * `device` variations take the `mac` branch.
 //   * A string whose xcstrings state is not `translated` counts as missing. A translatable key that
 //     is missing `uk` or `ru` fails `--strict` (exit 1, stderr names the key and language, nothing
@@ -37,9 +43,10 @@ import { fileURLToPath } from 'node:url';
 const LANGS = ['en', 'uk', 'ru'];
 const DROP_PATTERN = /sftp|tofu|host key|private key|certificate|passphrase/i;
 const PLURAL_ORDER = ['zero', 'one', 'two', 'few', 'many', 'other'];
-const SPECIFIER =
-  /%(?:(\d+)\$)?[-+ #0]*\d*(?:\.\d+)?(?:hh|h|ll|l|q|z|t|j)?([@dDuUxXoOfeEgGcCsSpi%])/g;
-const NUMERIC = new Set('dDuUxXoOfeEgGi'.split(''));
+// Only what xcstrings actually use: %@ %d %i %u %f %s with an optional `N$` index, precision and
+// `l`/`ll` length. No printf flags or width, so `100% sure` keeps its percent sign.
+const SPECIFIER = /%%|%(?:(\d+)\$)?(?:\.\d+)?(?:ll|l)?([@diufs])/g;
+const NUMERIC = new Set('diuf'.split(''));
 
 function parseArgs(argv) {
   const args = { merge: false, strict: false };
@@ -69,7 +76,7 @@ function tokenize(text) {
   for (const match of text.matchAll(SPECIFIER)) {
     if (match.index > last) tokens.push({ literal: text.slice(last, match.index) });
     last = match.index + match[0].length;
-    if (match[2] === '%') {
+    if (match[0] === '%%') {
       tokens.push({ literal: '%' });
       continue;
     }
@@ -78,6 +85,45 @@ function tokenize(text) {
   }
   if (last < text.length) tokens.push({ literal: text.slice(last) });
   return tokens;
+}
+
+// Escape one literal run for ICU. Target mode: DOUBLE_OPTIONAL (the default of ICU4J and
+// intl-messageformat): `'` starts a quote only right before `{` or `}` (or `#` inside a plural
+// branch), `''` is a literal apostrophe everywhere, and a lone `'` elsewhere is literal. So:
+// `{...}` and stray braces (and `#` in plurals) are wrapped in quotes; an apostrophe is doubled
+// when it touches syntax (next char is `'`, `{`, `}`, `#`-in-plural, a placeholder follows, or it
+// comes straight after a quoted span, where a single `'` would close the quote early).
+function escapeLiteral(literal, { inPlural, beforePlaceholder }) {
+  const isSyntax = (c) => c === '{' || c === '}' || (inPlural && c === '#');
+  let out = '';
+  let afterQuote = false;
+  let i = 0;
+  while (i < literal.length) {
+    const c = literal[i];
+    const group = /^\{[^{}]*\}/.exec(literal.slice(i));
+    if (group) {
+      out += `'${group[0].replace(/'/g, "''")}'`;
+      i += group[0].length;
+      afterQuote = true;
+    } else if (isSyntax(c)) {
+      out += `'${c}'`;
+      i++;
+      afterQuote = true;
+    } else if (c === "'") {
+      const next = literal[i + 1];
+      const atEnd = next === undefined;
+      const double =
+        afterQuote || (atEnd ? beforePlaceholder : next === "'" || isSyntax(next));
+      out += double ? "''" : "'";
+      i++;
+      afterQuote = false;
+    } else {
+      out += c;
+      i++;
+      afterQuote = false;
+    }
+  }
+  return out;
 }
 
 // `countName` is set when a numeric specifier is to be named `count`; `inPlural` writes it as `#`.
@@ -92,16 +138,9 @@ function toIcu(text, { countName = false, inPlural = false } = {}) {
       else out += `{${token.index}}`;
       return;
     }
-    let literal = token.literal;
     const next = tokens[i + 1];
-    const beforePlaceholder = next && next.literal === undefined;
-    // A lone apostrophe is literal in ICU unless it touches a brace (or `#` in a plural branch).
-    literal = literal.replace(/'(?=[{}])/g, "''");
-    if (inPlural) literal = literal.replace(/'(?=#)/g, "''");
-    if (beforePlaceholder && literal.endsWith("'") && !literal.endsWith("''")) literal += "'";
-    literal = literal.replace(/\{[^{}]*\}/g, (m) => `'${m}'`).replace(/(?<!')[{}](?!')/g, (m) => `'${m}'`);
-    if (inPlural) literal = literal.replace(/#/g, "'#'");
-    out += literal;
+    const beforePlaceholder = next !== undefined && next.literal === undefined;
+    out += escapeLiteral(token.literal, { inPlural, beforePlaceholder });
   });
   return out;
 }
