@@ -49,26 +49,19 @@ Later stages (app backend, UI, extension bridge, passkeys, macOS release, Window
 
 ## Build, run, test
 
+Full build and test instructions live in [`BUILD.md`](BUILD.md); the gates an agent runs before
+calling a change done:
+
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 bash scripts/test.sh [--ci] [--only rust|ui|js] [--no-js]   # the full suite
-cargo test --workspace                                        # Rust tests only
-cargo test --workspace -- --ignored                           # includes the 50 MiB round trip
-cargo run -p mypass-kdbx --example write_crosscompat -- <out.kdbx> # synthetic fixture
-cargo test -p <crate> <filter>                                # one crate, one filter
 ```
 
-- `scripts/test.sh` is the one entry point for humans, agents and CI. Without `--only` it runs every
-  part (`rust`, `ui`, `js`); a part with nothing to run yet prints that it was skipped. `--ci` runs
-  cargo with `--locked`, requires every tool of every part that exists and rejects `--no-js`.
-  `--only` cannot be combined with `--no-js`.
+- `scripts/test.sh` is the one entry point for humans, agents and CI (`--ci` is the CI mode, see
+  `BUILD.md` for every flag).
 - `--no-js` is only for a local machine without `node`, and it prints that the JavaScript suites were
   NOT run. It is never a way to report a change as tested when that change touches `extension/`.
-- Integration test files are selected with `--test <file>`; several name filters go after `--`
-  (`cargo test -p mypass-kdbx -- filter1 filter2`).
-- Argon2 at 64 MiB x 3 passes is minutes at opt-level 0, so dependencies are built at opt-level 3 in
-  dev and test profiles (`[profile.dev.package."*"]`, `[profile.test.package."*"]`).
 - Windows: run `cargo` commands from PowerShell, and `scripts/*.sh` from Git Bash.
 
 ## Continuous integration
