@@ -135,6 +135,9 @@ change is done.
   and its tests arrive with the command surface).
 - **Node-free Rust build.** `src-tauri/build.rs` creates a placeholder `dist/index.html` when `dist/`
   is absent, so `cargo test --workspace` never needs Node. `dist/` is git-ignored.
+- **Windows manifest.** `src-tauri/build.rs` embeds `src-tauri/windows-app-manifest.xml`
+  (Common-Controls v6) into every target of the app package through linker arguments, because
+  `tauri-build` alone covers only the bin and the lib test binary then dies with `0xc0000139`.
 - **Signing.** The stable team `W645B93PPQ` arrives in stage 5. Never sign ad-hoc: it breaks the
   Keychain access that guards the unlock key.
 
