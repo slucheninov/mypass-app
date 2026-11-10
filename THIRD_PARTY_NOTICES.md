@@ -67,6 +67,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `alloc-no-stdlib` | 3.0.0 | BSD-3-Clause |
 | `alloc-stdlib` | 0.3.0 | BSD-3-Clause |
 | `anyhow` | 1.0.104 | MIT OR Apache-2.0 |
+| `arboard` | 3.7.0 | MIT OR Apache-2.0 |
 | `argon2` | 0.6.0 | MIT OR Apache-2.0 |
 | `async-broadcast` | 0.7.2 | MIT OR Apache-2.0 |
 | `async-channel` | 2.5.0 | Apache-2.0 OR MIT |
@@ -113,6 +114,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `cfg-if` | 1.0.5 | MIT OR Apache-2.0 |
 | `chacha20` | 0.10.2 | MIT OR Apache-2.0 |
 | `cipher` | 0.5.2 | MIT OR Apache-2.0 |
+| `clipboard-win` | 5.4.3 | BSL-1.0 |
 | `cmov` | 0.5.4 | Apache-2.0 OR MIT |
 | `combine` | 4.6.9 | MIT |
 | `concurrent-queue` | 2.5.0 | Apache-2.0 OR MIT |
@@ -165,6 +167,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `equivalent` | 1.0.3 | Apache-2.0 OR MIT |
 | `erased-serde` | 0.4.11 | MIT OR Apache-2.0 |
 | `errno` | 0.3.14 | MIT OR Apache-2.0 |
+| `error-code` | 3.4.0 | BSL-1.0 |
 | `event-listener` | 5.4.2 | Apache-2.0 OR MIT |
 | `event-listener-strategy` | 0.5.4 | Apache-2.0 OR MIT |
 | `fastrand` | 2.5.0 | Apache-2.0 OR MIT |

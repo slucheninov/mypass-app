@@ -23,7 +23,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `mypass-kdbx` | implemented | KDBX4 engine: format pipeline, model, database API, vault file, `FileIo` seam |
 | `mypass-core` | implemented | Everything that consumes the model: TOTP, generator and password rules, Public Suffix List, entry matcher, merge engine |
 | `repo-guards` | implemented | Test-only (`publish = false`, never shipped): guard tests for the workspace, CI, docs and scripts |
-| `mypass-platform` | scaffold (stage 2a) | OS glue behind traits (clipboard, secret store, lock events) |
+| `mypass-platform` | in progress (stage 2a) | OS glue behind traits (system events, secure clipboard, secret stores, device unlock, native host registrar, launch at login, keyboard layout) and `AppPaths`; fakes behind the `test-util` feature, `Unsupported` fallbacks where a platform body has not landed |
 | `mypass-session` | scaffold (stage 2a) | Vault session, settings, scheduling and the `AppCore` command facade; no Tauri dependency |
 | `src-tauri` (package `mypass-app`, lib `mypass_app_lib`) | scaffold (stage 2a) | The Tauri 2 app shell: typed IPC through `tauri-specta`, plugins; a workspace member listed explicitly |
 | `mypass-bridge` | planned | Browser bridge protocol and loopback server |
@@ -143,6 +143,10 @@ change is done.
 - **Windows manifest.** `src-tauri/build.rs` embeds `src-tauri/windows-app-manifest.xml`
   (Common-Controls v6) into every target of the app package through linker arguments, because
   `tauri-build` alone covers only the bin and the lib test binary then dies with `0xc0000139`.
+- **Platform seam.** Everything OS-specific goes through `mypass_platform::Platform` (trait objects,
+  built by `mypass_platform::current`) and every on-disk location through `AppPaths`. Tests use
+  `mypass_platform::testing::fake_platform()` under the `test-util` feature; no non-ignored test touches the
+  real clipboard, Keychain or system notifications.
 - **Signing.** The stable team `W645B93PPQ` arrives in stage 5. Never sign ad-hoc: it breaks the
   Keychain access that guards the unlock key.
 

@@ -10,3 +10,16 @@ publish = false
 
 [lints]
 workspace = true
+
+[features]
+default = []
+# Exposes `mypass_platform::testing` (the fakes) to other crates' tests; never enable in production.
+test-util = []
+
+[dependencies]
+secrecy.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+arboard.workspace = true
