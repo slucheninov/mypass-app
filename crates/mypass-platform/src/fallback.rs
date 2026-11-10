@@ -188,6 +188,8 @@ mod hashing {
             Ok(ClipboardStamp(stamp))
         }
 
+        // Read-back then clear is not atomic: a foreign copy in between can be wiped (accepted;
+        // see `SecureClipboard::clear_if_unchanged`).
         fn clear_if_unchanged(&self, stamp: &ClipboardStamp) -> PlatformResult<bool> {
             let mut s = self.lock();
             let Some((last_stamp, last_hash)) = s.last else {

@@ -30,7 +30,7 @@ pub use host_registrar::{
 };
 pub use keyboard_layout::KeyboardLayout;
 pub use launch_at_login::{LaunchAtLogin, LoginItemStatus};
-pub use paths::{AppPaths, Browser, BUNDLE_ID, HOST_MANIFEST_FILE};
+pub use paths::{AppPaths, Browser, VaultId, BUNDLE_ID, HOST_MANIFEST_FILE};
 pub use secrets::SecretStore;
 
 use std::path::PathBuf;

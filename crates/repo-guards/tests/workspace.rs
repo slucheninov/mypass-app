@@ -307,8 +307,20 @@ const UNSAFE_TOKENS: &[&str] = &[
     concat!("unsafe", " extern"),
     concat!("unsafe", " trait"),
     concat!("#[unsafe", "("),
-    concat!("allow(unsafe", "_code)"),
 ];
+
+/// True when `text` names `unsafe_code` inside any `allow(...)` or `expect(...)` attribute, inner
+/// or outer, alone or in a combined list.
+fn allows_unsafe_code(text: &str) -> bool {
+    let lint = concat!("unsafe", "_code");
+    ["allow(", "expect("].iter().any(|opener| {
+        text.match_indices(opener).any(|(at, _)| {
+            let rest = text.get(at + opener.len()..).unwrap_or_default();
+            let list = rest.split(')').next().unwrap_or_default();
+            list.split(',').any(|item| item.trim() == lint)
+        })
+    })
+}
 
 #[test]
 fn unsafe_only_in_allow_listed_modules() {
@@ -329,6 +341,9 @@ fn unsafe_only_in_allow_listed_modules() {
                 offenders.push(format!("{rel}: `{token}`"));
             }
         }
+        if allows_unsafe_code(&text) {
+            offenders.push(format!("{rel}: an allow/expect of the unsafe-code lint"));
+        }
     }
     assert!(
         offenders.is_empty(),
@@ -344,6 +359,30 @@ fn unsafe_detector_detects_unsafe() {
     assert!(!UNSAFE_TOKENS
         .iter()
         .any(|t| "let unsafe_code = 1; // safe".contains(t)));
+}
+
+#[test]
+fn allow_matcher_sees_combined_and_inner_lists() {
+    let lint = concat!("unsafe", "_code");
+    for attr in [
+        format!("#[allow({lint})]"),
+        format!("#![allow({lint})]"),
+        format!("#[allow(dead_code, {lint})]"),
+        format!("#[allow(dead_code,{lint}, unused)]"),
+        format!("#![expect(dead_code, {lint})]"),
+        format!("#[allow(\n    dead_code,\n    {lint},\n)]"),
+    ] {
+        assert!(allows_unsafe_code(&attr), "{attr}");
+    }
+    for text in [
+        format!("let {lint} = 1;"),
+        "#[allow(dead_code)]".to_owned(),
+        format!("#[deny({lint})]"),
+        format!("#[allow(dead_code)] // mentions {lint} later"),
+        format!("#[allow(not_{lint})]"),
+    ] {
+        assert!(!allows_unsafe_code(&text), "{text}");
+    }
 }
 
 #[test]

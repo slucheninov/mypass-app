@@ -14,5 +14,8 @@ pub trait SecureClipboard: Send + Sync {
     fn write_secret(&self, text: &str) -> PlatformResult<ClipboardStamp>;
     /// Clears the clipboard if it still holds the write identified by `stamp`. `Ok(true)` means
     /// cleared, `Ok(false)` means the user copied something else since, which is left alone.
+    ///
+    /// The OS APIs offer no atomic compare-and-clear, so a copy made by another app between the
+    /// check and the clear can be wiped. The window is a few microseconds and is accepted.
     fn clear_if_unchanged(&self, stamp: &ClipboardStamp) -> PlatformResult<bool>;
 }

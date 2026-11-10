@@ -34,7 +34,7 @@ use block2::RcBlock;
 use objc2::rc::{autoreleasepool, Retained};
 use objc2::runtime::{AnyObject, NSObjectProtocol, ProtocolObject};
 use objc2::MainThreadMarker;
-use objc2_app_kit::{NSPasteboard, NSRunningApplication, NSWorkspace};
+use objc2_app_kit::{NSPasteboard, NSPasteboardContentsOptions, NSRunningApplication, NSWorkspace};
 use objc2_foundation::{
     NSArray, NSData, NSDistributedNotificationCenter, NSNotification, NSNotificationCenter,
     NSOperationQueue, NSString,
@@ -132,6 +132,16 @@ impl Drop for ObserverToken {
     }
 }
 
+/// Runs `sink` and swallows a panic instead of letting it unwind into Foundation.
+///
+/// Unwinding through an Objective-C block into `NSNotificationCenter` / `NSOperationQueue` frames
+/// is undefined behaviour. A lost notification is better than undefined state inside system code,
+/// and library code must not print, so the panic is dropped silently: the subscriber is
+/// responsible for not panicking.
+fn call_sink_guarded(sink: &dyn Fn()) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(sink));
+}
+
 /// Runs `handler` for every `name` notification on `center` until the token drops. The handler
 /// runs synchronously on the posting thread (`nil` queue; see the module docs).
 fn add_observer(
@@ -139,7 +149,7 @@ fn add_observer(
     name: &str,
     handler: impl Fn() + Send + Sync + 'static,
 ) -> ObserverToken {
-    let block = RcBlock::new(move |_: NonNull<NSNotification>| handler());
+    let block = RcBlock::new(move |_: NonNull<NSNotification>| call_sink_guarded(&handler));
     let name = NSString::from_str(name);
     autoreleasepool(|_| {
         // SAFETY: `object` is `None`, so its type cannot be wrong; the `nil` queue has no
@@ -228,10 +238,14 @@ fn stamp_of(change_count: isize) -> PlatformResult<ClipboardStamp> {
 }
 
 impl SecureClipboard for MacClipboard {
+    /// Starts a new pasteboard generation with `CurrentHostOnly`, which stops Handoff / Universal
+    /// Clipboard from copying the password to the user's other devices. The concealed marker and
+    /// the string land in that one generation; the stamp is the change count after all writes.
     fn write_secret(&self, text: &str) -> PlatformResult<ClipboardStamp> {
         autoreleasepool(|_| {
             let pasteboard = self.pasteboard();
-            pasteboard.clearContents();
+            pasteboard
+                .prepareForNewContentsWithOptions(NSPasteboardContentsOptions::CurrentHostOnly);
             // The concealed marker goes first, so a clipboard manager that polls between the two
             // writes never sees the text without it.
             let concealed = pasteboard
@@ -247,6 +261,8 @@ impl SecureClipboard for MacClipboard {
         })
     }
 
+    /// The OS has no atomic compare-and-clear: a copy by another app between the change-count
+    /// check and `clearContents` can be wiped. The window is a few microseconds and is accepted.
     fn clear_if_unchanged(&self, stamp: &ClipboardStamp) -> PlatformResult<bool> {
         autoreleasepool(|_| {
             let pasteboard = self.pasteboard();
@@ -328,7 +344,9 @@ fn current_label() -> Option<String> {
     let (tx, rx) = mpsc::channel();
     let block = RcBlock::new(move || {
         // A late answer after the waiter gave up is simply dropped.
-        let _ = tx.send(MainThreadMarker::new().and_then(label_on_main));
+        call_sink_guarded(&|| {
+            let _ = tx.send(MainThreadMarker::new().and_then(label_on_main));
+        });
     });
     autoreleasepool(|_| {
         // SAFETY: the block captures only an `mpsc::Sender`, which is `Send`, so it is sendable to
@@ -451,6 +469,7 @@ mod tests {
         let stamp = clipboard.write_secret("mypass-test-secret").unwrap();
         assert!(has_type(pb, CONCEALED_TYPE));
         assert_eq!(string_of(pb).as_deref(), Some("mypass-test-secret"));
+        assert_eq!(stamp_of(pb.changeCount()), Ok(stamp.clone()));
         assert_eq!(clipboard.clear_if_unchanged(&stamp), Ok(true));
         assert_eq!(string_of(pb), None);
 
@@ -463,6 +482,17 @@ mod tests {
         );
         assert_eq!(clipboard.clear_if_unchanged(&stamp), Ok(false));
         assert_eq!(string_of(pb).as_deref(), Some("foreign"));
+    }
+
+    #[test]
+    fn guarded_sink_call_swallows_panics_and_runs_later_calls() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        call_sink_guarded(&|| panic!("subscriber bug"));
+        let count = AtomicUsize::new(0);
+        call_sink_guarded(&|| {
+            count.fetch_add(1, Ordering::SeqCst);
+        });
+        assert_eq!(count.load(Ordering::SeqCst), 1);
     }
 
     #[test]

@@ -261,13 +261,42 @@ impl AppPaths {
     }
 
     /// Backups of one vault: `backups_dir/<vault_id>`.
-    pub fn vault_backups_dir(&self, vault_id: &str) -> PathBuf {
-        self.backups_dir.join(vault_id)
+    pub fn vault_backups_dir(&self, vault_id: &VaultId) -> PathBuf {
+        self.backups_dir.join(vault_id.as_str())
     }
 
     /// Drafts of one vault: `data_dir/drafts/<vault_id>`.
-    pub fn drafts_dir(&self, vault_id: &str) -> PathBuf {
-        self.data_dir.join("drafts").join(vault_id)
+    pub fn drafts_dir(&self, vault_id: &VaultId) -> PathBuf {
+        self.data_dir.join("drafts").join(vault_id.as_str())
+    }
+}
+
+/// A vault id that is safe to use as one path segment: 1 to 64 characters of `[A-Za-z0-9_-]`.
+///
+/// Joining an unvalidated id onto a base path lets an absolute value replace the base and `..`
+/// escape it, so the vault-scoped directory functions take this type instead of a bare `&str`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct VaultId(String);
+
+impl VaultId {
+    /// Validates `id`; anything that is not a single plain segment is rejected.
+    pub fn new(id: &str) -> PlatformResult<Self> {
+        let valid = (1..=64).contains(&id.len())
+            && id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        if valid {
+            Ok(Self(id.to_owned()))
+        } else {
+            Err(PlatformError::Failed(
+                "invalid vault id: expected 1 to 64 characters of [A-Za-z0-9_-]".to_owned(),
+            ))
+        }
+    }
+
+    /// The validated id.
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -438,10 +467,34 @@ mod tests {
     #[test]
     fn vault_scoped_dirs_end_with_vault_id() {
         let p = mac();
-        assert_eq!(p.vault_backups_dir("v1"), p.backups_dir.join("v1"));
-        assert_eq!(p.drafts_dir("v1"), p.data_dir.join("drafts").join("v1"));
-        assert!(p.vault_backups_dir("abc").ends_with("abc"));
-        assert!(p.drafts_dir("abc").ends_with("abc"));
+        let v1 = VaultId::new("v1").unwrap();
+        let abc = VaultId::new("abc").unwrap();
+        assert_eq!(p.vault_backups_dir(&v1), p.backups_dir.join("v1"));
+        assert_eq!(p.drafts_dir(&v1), p.data_dir.join("drafts").join("v1"));
+        assert!(p.vault_backups_dir(&abc).ends_with("abc"));
+        assert!(p.drafts_dir(&abc).ends_with("abc"));
+    }
+
+    #[test]
+    fn vault_id_rejects_anything_but_one_plain_segment() {
+        let too_long = "a".repeat(65);
+        for bad in [
+            "/etc/passwd",
+            "..",
+            ".",
+            "a/b",
+            "a\\b",
+            "",
+            too_long.as_str(),
+            "a b",
+            "caf\u{e9}",
+        ] {
+            assert!(VaultId::new(bad).is_err(), "{bad:?}");
+        }
+        assert!(VaultId::new(&"a".repeat(64)).is_ok());
+        assert!(VaultId::new("0123456789abcdef0123456789abcdef").is_ok());
+        assert!(VaultId::new("550e8400-e29b-41d4-a716-446655440000").is_ok());
+        assert!(VaultId::new("a_b-C").is_ok());
     }
 
     #[test]
