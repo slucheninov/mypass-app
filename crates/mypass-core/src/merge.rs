@@ -274,10 +274,15 @@ pub fn merge(local: &Database, remote: &Database) -> Database {
         // Also on repeated merges: peers may now advertise the same chosen bin
         // while the original local parent edge would recreate the former cycle.
         // Keep room for depth repair to retain descendants under the bin.
+        // `seen.len()` is the chosen bin's depth minus one (root is depth 1, as in the validator
+        // of `Database::save`, which accepts at most MAX_GROUP_DEPTH). A distinct second bin, or
+        // descendants rerouted by depth repair, are nested one level below the chosen bin, so the
+        // bin itself must sit at MAX_GROUP_DEPTH - 1 at the deepest. A bin at MAX_GROUP_DEPTH
+        // leaves no room and moves to the root; `seen.len() >= MAX_GROUP_DEPTH` would never fire.
         let mut seen = HashSet::new();
         let mut cursor = chosen;
         while cursor != root {
-            if !seen.insert(cursor) || seen.len() >= MAX_GROUP_DEPTH {
+            if !seen.insert(cursor) || seen.len() >= MAX_GROUP_DEPTH - 1 {
                 parents.insert(chosen, root);
                 break;
             }
@@ -1203,6 +1208,42 @@ mod tests {
             assert!(depth <= MAX_GROUP_DEPTH);
             stack.extend(g.groups.iter().map(|g| (g, depth + 1)));
         }
+        let password = secrecy::SecretString::from("synthetic");
+        assert_eq!(
+            Database::open(&m.save(&password).unwrap(), &password).unwrap(),
+            m
+        );
+        assert_eq!(merge(&l, &m), m);
+    }
+    #[test]
+    fn chosen_bin_at_maximum_depth_leaves_room_for_the_second_bin() {
+        // The chosen bin sits at depth MAX_GROUP_DEPTH (root is depth 1, the same count the
+        // validator in `Database::save` uses), so a distinct remote bin nested below it would end
+        // at MAX_GROUP_DEPTH + 1 and the merged tree could not be saved. The chosen bin must move
+        // to the root instead, which leaves the second bin (and its contents) nested under it.
+        let (mut l, r) = bins();
+        let mut chain = group(8);
+        for n in 0..MAX_GROUP_DEPTH - 2 {
+            let mut parent = group(5000 + n as u128);
+            parent.groups.push(chain);
+            chain = parent;
+        }
+        l.root.groups = vec![chain];
+        let mut stack = vec![(&l.root, 1)];
+        let mut bin_depth = 0;
+        while let Some((g, depth)) = stack.pop() {
+            if g.uuid == Uuid::from_u128(8) {
+                bin_depth = depth;
+            }
+            stack.extend(g.groups.iter().map(|g| (g, depth + 1)));
+        }
+        assert_eq!(
+            bin_depth, MAX_GROUP_DEPTH,
+            "fixture: bin at the maximum depth"
+        );
+        let m = merge(&l, &r);
+        assert!(m.is_in_recycle_bin(Uuid::from_u128(1)));
+        assert!(m.find_group(Uuid::from_u128(9)).is_some());
         let password = secrecy::SecretString::from("synthetic");
         assert_eq!(
             Database::open(&m.save(&password).unwrap(), &password).unwrap(),
