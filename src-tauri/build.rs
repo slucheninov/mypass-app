@@ -6,7 +6,8 @@ fn main() {
     // (`cargo test --workspace`, no Node) gets a placeholder page instead of a build error.
     // A real frontend build overwrites it.
     let dist = Path::new("..").join("dist");
-    if !dist.exists() {
+    // Keyed on the page, not the directory: an empty `dist/` would fail the same way.
+    if !dist.join("index.html").exists() {
         let written = std::fs::create_dir_all(&dist).and_then(|()| {
             std::fs::write(
                 dist.join("index.html"),
