@@ -368,8 +368,11 @@ mod tests {
                     "meta-secret",
                     "group-secret",
                     "83, 69, 67",
-                    "83,\n",
-                    "69,\n",
+                    // The leading space matters: an element of a pretty-printed byte array is
+                    // indented, while the random uuid line ends in `...69,` and would match a
+                    // bare "69,\n" about once in 256 runs.
+                    " 83,\n",
+                    " 69,\n",
                 ] {
                     assert!(!rendered.contains(secret), "{rendered}");
                 }
