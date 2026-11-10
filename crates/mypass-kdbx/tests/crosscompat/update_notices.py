@@ -31,7 +31,7 @@ APPROVED = {
 
 
 def cargo(*args):
-    return subprocess.check_output(["cargo", *args], cwd=ROOT, text=True)
+    return subprocess.check_output(["cargo", *args], cwd=ROOT, encoding="utf-8")
 
 
 def generate():
@@ -65,7 +65,7 @@ def generate():
 if __name__ == "__main__":
     table, count, linked = generate()
     path = ROOT / "THIRD_PARTY_NOTICES.md"
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     before, rest = text.split(START)
     _, after = rest.split(END)
     updated = before + table + after
@@ -73,5 +73,5 @@ if __name__ == "__main__":
         if updated != text:
             sys.exit("NOTICES_FAILED: regenerate Cargo tables")
     else:
-        path.write_text(updated)
+        path.write_text(updated, encoding="utf-8")
     print(f"NOTICES_OK: {count} packages audited; {linked} release graph packages; permissive/MPL choices only")
