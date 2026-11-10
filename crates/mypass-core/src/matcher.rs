@@ -1,4 +1,11 @@
 //! URL-based credential selection, with PSL-aware default matching.
+//!
+//! Credentials are offered only on targets parsed as HTTPS with a host, including
+//! scheme-less targets inferred as HTTPS. Plain-HTTP dev/router pages are
+//! intentionally not offered credentials, even on localhost, loopback or private IPs.
+//! Stored HTTP entry schemes are compared as HTTPS (the safe upgrade direction);
+//! default ports remain normalized and non-default ports must be equal. Other
+//! entry schemes retain lenient parsing, including the scheme-agnostic HTTPS retry.
 use crate::{
     entry_ext::{EntryExt, EntryType, UriMatchMode, GENERATOR_HISTORY_GROUP_UUID},
     psl,
@@ -63,7 +70,7 @@ fn parse_target(input: &str) -> Option<Url> {
         Ok(url) if url.has_host() || !host_port => url,
         _ => parse_lenient(input)?,
     };
-    (matches!(url.scheme(), "http" | "https") && url.has_host()).then_some(url)
+    (url.scheme() == "https" && url.has_host()).then_some(url)
 }
 fn host(url: &Url) -> Option<String> {
     match url.host()? {
@@ -87,12 +94,17 @@ pub fn registrable_domain_of(url_or_host: &str) -> Option<String> {
 /// Returns the complete canonical host without port or IPv6 brackets.
 /// Stored entry URLs use this lenient, scheme-agnostic parsing too: for Swift
 /// parity, `mailto:a@example.com` retries as an HTTPS authority with host `example.com`.
-/// Credential targets instead require a parsed HTTP(S) scheme and a host.
+/// Credential targets instead require a parsed HTTPS scheme and a host.
 pub fn host_of(url_or_host: &str) -> Option<String> {
     host(&parse_lenient(url_or_host)?)
 }
 fn same_origin(a: &Url, b: &Url) -> bool {
-    a.scheme() == b.scheme() && host(a) == host(b) && a.port() == b.port()
+    let entry_scheme = if a.scheme() == "http" {
+        "https"
+    } else {
+        a.scheme()
+    };
+    entry_scheme == b.scheme() && host(a) == host(b) && a.port() == b.port()
 }
 fn rest(url: &Url) -> String {
     // Excludes credentials, origin and fragment. Url normalises an empty web path
@@ -139,7 +151,12 @@ fn matches_parsed(entry: &Entry, target: &Url) -> bool {
         })
 }
 /// Matches one entry's primary or additional URLs using its stored mode.
-/// Targets must parse to HTTP(S) with a host; entry URLs remain scheme-agnostic.
+/// Targets must parse to HTTPS with a host. Plain-HTTP dev/router pages are
+/// intentionally not offered credentials, with no localhost, loopback or private-IP exception.
+/// Entry HTTP schemes are compared as HTTPS in Exact/StartsWith; default ports
+/// remain normalized and non-default ports must be equal. RegistrableDomain/Host
+/// ignore entry schemes; other entry schemes retain lenient, scheme-agnostic
+/// parsing with an HTTPS retry.
 pub fn matches(entry: &Entry, target_url: &str) -> bool {
     parse_target(target_url).is_some_and(|target| matches_parsed(entry, &target))
 }
@@ -207,13 +224,18 @@ mod tests {
         }
     }
     #[test]
-    fn targets_require_parsed_http_scheme_in_every_selection_api() {
+    fn targets_require_parsed_https_scheme_in_every_selection_api() {
         for mode in UriMatchMode::ALL {
             let mut e = make_entry("https://example.com/", "Entry");
             e.set_uri_match_mode(mode);
             let mut db = Database::new("test");
             db.root.entries.push(e.clone());
             for target in [
+                "http://example.com/",
+                "HTTP://EXAMPLE.COM/",
+                "h\tttp://example.com/",
+                "h\nttp://example.com/",
+                "\u{1}http://example.com/",
                 "java\tscript://example.com/",
                 "java\nscript://example.com/",
                 "\u{1}javascript://example.com/",
@@ -257,7 +279,7 @@ mod tests {
             check(
                 mode,
                 "http://example.com/",
-                "http://example.com/",
+                "https://example.com/",
                 mode != UriMatchMode::Never,
             );
         }
@@ -321,15 +343,85 @@ mod tests {
         }
     }
     #[test]
-    fn registrable_and_host_modes_ignore_scheme_difference() {
-        // Deliberate Swift parity; the scheme-downgrade decision is flagged for the owner.
-        for mode in [UriMatchMode::RegistrableDomain, UriMatchMode::Host] {
-            check(mode, "https://example.com/", "http://example.com/", true);
+    fn https_entry_is_not_offered_on_http_target_in_any_mode() {
+        for mode in UriMatchMode::ALL {
+            for (entry, target) in [
+                ("https://example.com/", "http://example.com/"),
+                ("https://localhost:8080/x", "http://localhost:8080/x"),
+                (
+                    "https://127.0.0.1:8766/callback",
+                    "http://127.0.0.1:8766/callback",
+                ),
+                ("https://192.168.0.1/admin", "http://192.168.0.1/admin"),
+            ] {
+                check(mode, entry, target, false);
+                let mut e = make_entry(entry, "Entry");
+                e.set_uri_match_mode(mode);
+                let mut db = Database::new("test");
+                db.root.entries.push(e);
+                assert!(
+                    credential_candidates(&db, target).is_empty(),
+                    "{mode:?}: {target}"
+                );
+            }
         }
+    }
+    #[test]
+    fn http_entry_matches_https_target_in_every_mode() {
+        for mode in UriMatchMode::ALL {
+            check(
+                mode,
+                "http://example.com/app",
+                "https://example.com/app",
+                mode != UriMatchMode::Never,
+            );
+        }
+    }
+    #[test]
+    fn http_entry_origin_upgrade_preserves_path_and_port_rules() {
         for mode in [UriMatchMode::Exact, UriMatchMode::StartsWith] {
-            check(mode, "https://example.com/", "http://example.com/", false);
-            check(mode, "http://example.com/", "https://example.com/", false);
+            for (entry, target, expected) in [
+                (
+                    "http://example.com:80/app",
+                    "https://example.com:443/app",
+                    true,
+                ),
+                (
+                    "http://example.com:8443/app",
+                    "https://example.com:8443/app",
+                    true,
+                ),
+                (
+                    "http://example.com:8443/app",
+                    "https://example.com:9443/app",
+                    false,
+                ),
+                (
+                    "http://example.com/app",
+                    "https://example.com.attacker.com/app",
+                    false,
+                ),
+                (
+                    "http://example.com/app",
+                    "https://example.com@evil.com/app",
+                    false,
+                ),
+            ] {
+                check(mode, entry, target, expected);
+            }
         }
+        check(
+            UriMatchMode::StartsWith,
+            "http://example.com/app",
+            "https://example.com/app/x",
+            true,
+        );
+        check(
+            UriMatchMode::Exact,
+            "http://example.com/app",
+            "https://example.com/app/x",
+            false,
+        );
     }
     #[test]
     fn generic_helpers_and_entry_urls_preserve_lenient_non_web_parsing() {
@@ -518,7 +610,7 @@ mod tests {
         check(
             UriMatchMode::RegistrableDomain,
             "http://192.168.0.1/admin",
-            "http://127.0.0.1:8766/login",
+            "https://127.0.0.1:8766/login",
             false,
         );
     }
@@ -527,7 +619,7 @@ mod tests {
         check(
             UriMatchMode::RegistrableDomain,
             "http://192.168.0.1/admin",
-            "http://192.168.0.1/login",
+            "https://192.168.0.1/login",
             true,
         );
     }
@@ -617,7 +709,7 @@ mod tests {
         check(
             UriMatchMode::Host,
             "http://192.168.0.1/admin",
-            "http://127.0.0.1/",
+            "https://127.0.0.1/",
             false,
         );
     }
