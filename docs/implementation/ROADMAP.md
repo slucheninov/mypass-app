@@ -4,9 +4,16 @@
 its tests pass, or, for manual-only items, once the manual check has actually been walked. History
 lives in `git log`, not here.
 
-Last updated: 2026-11-09
+Last updated: 2026-11-10
 
 ---
+
+## Stage 1 follow-ups
+
+- [ ] Manual: confirm that saving a vault on an SMB or FUSE mounted volume tolerates a failing
+  directory fsync. On Unix the atomic save treats a directory-sync `Unsupported` or `InvalidInput`
+  error as success by design; any other directory-sync error is reported after the replacement has
+  committed, and the caller must reload. Only real mounts can show which error they return.
 
 ## Stage 2a backend
 
