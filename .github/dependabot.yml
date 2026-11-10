@@ -1,0 +1,26 @@
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    cooldown:
+      default-days: 7
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    # The root Cargo.toml `=`-pins the tauri family, `specta` and `tauri-specta` because they must
+    # move together: one grouped pull request instead of one per crate (separate ones would each
+    # fail to resolve against the other pins).
+    groups:
+      tauri:
+        patterns:
+          - "tauri"
+          - "tauri-*"
+          - "specta"
+          - "tauri-specta"
+  - package-ecosystem: "github-actions"
+    cooldown:
+      default-days: 7
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5

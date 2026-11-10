@@ -1,0 +1,4 @@
+# Tests may unwrap, expect and index. Library and binary code may not (see `[workspace.lints.clippy]`).
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-indexing-slicing-in-tests = true

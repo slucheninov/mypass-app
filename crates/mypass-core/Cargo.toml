@@ -1,0 +1,32 @@
+[package]
+name = "mypass-core"
+version = "0.1.0"
+description = "MyPass core logic on top of the KDBX model: TOTP, generator, URL matching, merge."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+idna.workspace = true
+mypass-kdbx = { path = "../mypass-kdbx" }
+
+hmac.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+data-encoding.workspace = true
+zeroize.workspace = true
+rand.workspace = true
+url.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+secrecy.workspace = true
