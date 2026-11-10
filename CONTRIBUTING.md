@@ -1,8 +1,9 @@
 # Contributing to MyPass
 
 Thanks for helping. This file is the short version of how to build, test and submit a change.
-[`README.md`](README.md) explains what the project is; [`AGENTS.md`](AGENTS.md) is the instruction
-file for coding agents and carries the same project conventions.
+[`README.md`](README.md) is the end-user page; [`BUILD.md`](BUILD.md) has the full build and test
+notes; [`AGENTS.md`](AGENTS.md) is the instruction file for coding agents and carries the same
+project conventions.
 
 ## Setup
 
@@ -64,7 +65,7 @@ Keep a pull request to one concern. Comments that record why a constraint exists
 this code base; preserve them when editing. `docs/implementation/ROADMAP.md` lists only work that is
 still open: remove an item once it is implemented and its tests pass. Design notes and plans are
 local working files (`docs/superpowers/` is gitignored); do not commit them, and put anything
-contributors need to know in the README, this file or the code comments.
+contributors need to know in `BUILD.md`, this file or the code comments.
 
 Do not commit the generated or local files listed in `.gitignore` (`/target/`, `/dist/`,
 `node_modules/`, `docs/superpowers/`, `.worktrees/` and similar), vault files with real data, or
