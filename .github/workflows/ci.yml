@@ -3,7 +3,7 @@ name: CI
 # Fast on purpose: the work is split into independent jobs that run in parallel (the wall-clock
 # time is the slowest job instead of the sum of all of them, and a failure names its part): `lint`
 # (format and clippy), `test` (the Rust suite through scripts/test.sh, the same entry point agents
-# and humans use), the path-gated `crosscompat` and the disabled `windows-integration` skeleton.
+# and humans use), the Node-based `i18n` catalog tests, the path-gated `crosscompat` and the disabled `windows-integration` skeleton.
 # The final aggregator job `ci` reports one verdict. Every cargo job restores Swatinem/rust-cache.
 # The repository is public, so the extra runner minutes are free. CI is a second check, not a
 # substitute for running `bash scripts/test.sh` locally.
@@ -118,6 +118,22 @@ jobs:
       - name: Test
         run: bash scripts/test.sh --ci --only rust
 
+  # The JavaScript part of scripts/test.sh: today the i18n converter and catalog completeness tests
+  # (Node built-in runner, no dependencies, so nothing to install). Linux only: nothing here is
+  # platform specific.
+  i18n:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: i18n tests
+        run: bash scripts/test.sh --ci --only js
+
   # Disabled skeleton for stage 6: with the repository variable unset the job is `skipped`.
   windows-integration:
     runs-on: windows-latest
@@ -169,13 +185,13 @@ jobs:
           MYPASS_PYKEEPASS_VAULT="$RUNNER_TEMP/theirs.kdbx" cargo test --locked -p mypass-kdbx --test pykeepass_generated -- --nocapture
 
   # The required status check (keep the name `ci`). It needs every other job (`changes`, `lint`,
-  # `test`, `windows-integration`, `crosscompat`), so a job added in a later stage must be wired in
+  # `test`, `i18n`, `windows-integration`, `crosscompat`), so a job added in a later stage must be wired in
   # here (guard test `ci_aggregator_needs_every_job`). A job that never ran counts as success only
   # when it is gated: the `gated` set below. Every other result, `changes`, `lint` and `test`
   # included, must be `success`. `if: always()` makes it report even after a failed or cancelled
   # need, instead of being skipped (a skipped required check would count as passing).
   ci:
-    needs: [changes, lint, test, windows-integration, crosscompat]
+    needs: [changes, lint, test, i18n, windows-integration, crosscompat]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

@@ -41,6 +41,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `src/lib/bindings.ts` | Generated TypeScript bindings of the Tauri commands; never edited by hand |
 | `package.json`, `.nvmrc` | Node and pnpm pins only until stage 2b adds the UI toolchain |
 | `scripts/test.sh` | The single local and CI test entry point |
+| `scripts/convert-xcstrings.mjs` | One-time converter of the old app's String Catalogs; its output (`src/lib/i18n/locales/{en,uk,ru}.json`, `src-tauri/resources/macos/*.lproj/InfoPlist.strings`) is then the hand-edited source of truth |
 | `.github/` | Workflows (`ci.yml`, `codeql.yml`), Dependabot config, issue forms, pull request template |
 | `docs/implementation/ROADMAP.md` | The only tracked document under `docs/`: unfinished work |
 | `LICENSE`, `THIRD_PARTY_NOTICES.md` | Apache-2.0 and the notices for vendored data and linked crates |
@@ -65,8 +66,9 @@ bash scripts/test.sh [--ci] [--only rust|ui|js] [--no-js]   # the full suite
 
 - `scripts/test.sh` is the one entry point for humans, agents and CI (`--ci` is the CI mode, see
   `BUILD.md` for every flag).
-- `--no-js` is only for a local machine without `node`, and it prints that the JavaScript suites were
-  NOT run. It is never a way to report a change as tested when that change touches `extension/`.
+- The `js` part runs `node --test scripts/` (the i18n converter and catalog tests; plain Node, nothing
+  to install) and, from stage 3, the extension suites. `--no-js` is only for a local machine without
+  `node`, and it prints that the JavaScript suites were NOT run. It is never a way to report a change as tested when that change touches `extension/`.
 - Windows: run `cargo` commands from PowerShell, and `scripts/*.sh` from Git Bash.
 
 ## Continuous integration
@@ -90,10 +92,13 @@ jobs are independent and run in parallel, so the wall-clock time is the slowest 
   Python reads, then Python writes / Rust reads. It is path-gated on pull requests through
   `changes.outputs.crosscompat` and always runs on main pushes and manual dispatch.
   The env-gated Rust test prints a skip locally unless `MYPASS_PYKEEPASS_VAULT` is set.
+- `i18n` runs on Ubuntu with Node from `.nvmrc` (`actions/setup-node`): `bash scripts/test.sh --ci
+  --only js`, i.e. `node --test scripts/` (the xcstrings converter and the catalog completeness
+  tests; built-in runner, no dependencies, no package install). It always runs and must be `success`.
 - `windows-integration` is a disabled skeleton for stage 6: it runs only when the repository variable
   `MYPASS_WINDOWS_INTEGRATION_TESTS` is `true`, otherwise it is skipped.
 - `ci` is the aggregator and the required status check. It needs every other job (`changes`, `lint`,
-  `test`, `windows-integration`, `crosscompat`); a gated job may be `skipped`, every other result
+  `test`, `i18n`, `windows-integration`, `crosscompat`); a gated job may be `skipped`, every other result
   (`lint` and `test` included) must be `success`. A job added later must be wired into it
   (pinned by `ci_aggregator_needs_every_job`).
 - `.github/workflows/codeql.yml` is a separate workflow (push to `main`, weekly, manual; never on pull
@@ -285,7 +290,10 @@ skipped. Pause, re-read this file, dispatch the next chunk.
 
 English for code, comments, commit messages, docs, plans and specs. Cyrillic appears only inside tests
 as `\u{..}` escapes, in `*.xcstrings` and in the root `RUN.md` (the Ukrainian manual checklist,
-never translated). Literal Cyrillic is also allowed in `crates/mypass-kdbx/tests/unicode.rs`,
+never translated). Literal Cyrillic is also allowed in the translation files
+`src/lib/i18n/locales/{uk,ru}.json` and `src-tauri/resources/macos/{uk,ru}.lproj/InfoPlist.strings`
+(exactly these four; the English files stay Cyrillic-free, and the Node tests read their expectations
+from the catalogs), in `crates/mypass-kdbx/tests/unicode.rs`,
 vendored upstream data under `crates/mypass-core/resources/`, and opaque binary fixtures
 `crates/mypass-kdbx/tests/fixtures/*.kdbx` (fixture README and generator files follow the text rules).
 Pinned by `cyrillic_only_in_allowed_files`.

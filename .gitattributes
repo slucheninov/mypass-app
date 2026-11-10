@@ -2,3 +2,5 @@
 *.kdbx binary
 *.dat text eol=lf
 *.json text eol=lf
+*.strings text eol=lf
+*.mjs text eol=lf
