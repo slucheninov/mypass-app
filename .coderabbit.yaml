@@ -3,9 +3,11 @@
 language: en-US
 reviews:
   profile: assertive
-  request_changes_workflow: false
-  # AGENTS.md forbids generated text in pull request descriptions: keep the summary in comments.
-  high_level_summary: false
+  # AGENTS.md forbids generated text in pull request descriptions, and we have no
+  # `@coderabbitai summary` placeholder in them: keep the summary inside the walkthrough comment
+  # and never let CodeRabbit write it into the description.
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true
   poem: false
   auto_review:
     enabled: true
