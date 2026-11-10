@@ -420,8 +420,9 @@ fn codeql_uses_gating_build_mode_and_identical_action_revision() {
 }
 #[test]
 fn extracted_aggregator_executes_result_matrix() {
-    use std::process::Command;
-    if !Command::new("bash")
+    // `bash_command`, not a bare `Command::new("bash")`: on Windows the latter finds the WSL
+    // launcher in System32 instead of Git Bash.
+    if !repo_guards::bash_command()
         .args(["-c", "command -v jq"])
         .output()
         .is_ok_and(|o| o.status.success())
@@ -438,7 +439,7 @@ fn extracted_aggregator_executes_result_matrix() {
     for name in needs_of(job(&doc, "ci")) {
         for result in ["success", "skipped", "failure", "cancelled"] {
             let input = serde_json::json!({name.clone(): {"result": result}}).to_string();
-            let output = Command::new("bash")
+            let output = repo_guards::bash_command()
                 .args(["-c", &script])
                 .env("NEEDS_JSON", input)
                 .output()

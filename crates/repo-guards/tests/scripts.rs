@@ -4,17 +4,14 @@
 //! test-only support code: helpers here unwrap and index freely, a guard must fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
-use repo_guards::repo_root;
+use repo_guards::{bash_command, repo_root};
 use std::io::ErrorKind;
-use std::process::{Command, Output};
+use std::process::Output;
 
 /// Run `bash <args>` from the repo root. `None` (after printing a note) when bash is not on PATH.
+/// `bash_command` picks Git Bash over the WSL launcher in `System32` on Windows.
 fn bash(args: &[&str]) -> Option<Output> {
-    match Command::new("bash")
-        .args(args)
-        .current_dir(repo_root())
-        .output()
-    {
+    match bash_command().args(args).current_dir(repo_root()).output() {
         Ok(out) => Some(out),
         Err(e) if e.kind() == ErrorKind::NotFound => {
             println!("skipped: bash is not on PATH");

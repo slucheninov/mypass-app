@@ -6,6 +6,7 @@
 //! here because a guard helper that cannot read a file must fail the test loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -64,4 +65,73 @@ pub fn workflow_files() -> Vec<String> {
         .collect();
     files.sort();
     files
+}
+
+/// A `bash` command for running repository scripts (`scripts/*.sh`) and workflow `run:` text.
+///
+/// On Windows a bare `Command::new("bash")` goes through the `CreateProcess` search order, which
+/// looks in the Windows system directory BEFORE `PATH`. There it finds `C:\Windows\System32\bash.exe`,
+/// the WSL launcher, which exits non-zero with empty output when no distro is installed (as on
+/// `windows-latest`). The repository expects Git Bash ("`scripts/*.sh` from Git Bash"), so on
+/// Windows this scans `PATH` itself and takes the first `bash.exe` outside the Windows directory.
+/// It falls back to plain `bash` when there is none, so a missing bash still reports `NotFound`.
+/// On every other OS it is plain `bash`.
+pub fn bash_command() -> Command {
+    #[cfg(windows)]
+    {
+        let windir = std::env::var_os("SystemRoot")
+            .or_else(|| std::env::var_os("WINDIR"))
+            .unwrap_or_else(|| "C:\\Windows".into());
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        if let Some(found) = find_bash_outside(&path, Path::new(&windir), "bash.exe", Path::is_file)
+        {
+            return Command::new(found);
+        }
+    }
+    Command::new("bash")
+}
+
+/// First `<dir>/<exe>` over the `path_var` entries whose directory is not under `system_dir`
+/// (compared case-insensitively, as Windows paths are) and for which `exists` holds.
+/// Platform-independent so it can be unit tested anywhere; only [`bash_command`] calls it, on
+/// Windows.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn find_bash_outside(
+    path_var: &OsStr,
+    system_dir: &Path,
+    exe: &str,
+    exists: impl Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    let system = system_dir.to_string_lossy().to_lowercase();
+    let system = system.trim_end_matches(['\\', '/']);
+    std::env::split_paths(path_var)
+        .filter(|dir| {
+            let dir = dir.to_string_lossy().to_lowercase();
+            let dir = dir.trim_end_matches(['\\', '/']);
+            dir != system
+                && !dir.starts_with(&format!("{system}\\"))
+                && !dir.starts_with(&format!("{system}/"))
+        })
+        .map(|dir| dir.join(exe))
+        .find(|candidate| exists(candidate))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bash_search_skips_the_windows_directory() {
+        // Drive-less paths: `join_paths` rejects the `:` of `C:` on Unix, where `:` separates entries.
+        let dirs = ["/WINDOWS/System32", "/Program Files/Git/bin", "/other"];
+        let path = std::env::join_paths(dirs).unwrap();
+        let found = find_bash_outside(&path, Path::new("/windows/"), "bash.exe", |_| true);
+        assert_eq!(
+            found,
+            Some(PathBuf::from("/Program Files/Git/bin").join("bash.exe"))
+        );
+        let only_system = std::env::join_paths(["/Windows/System32", "/Windows"]).unwrap();
+        let none = find_bash_outside(&only_system, Path::new("/Windows"), "bash.exe", |_| true);
+        assert_eq!(none, None);
+    }
 }
