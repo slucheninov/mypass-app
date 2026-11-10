@@ -111,7 +111,10 @@ change is done.
   parallelism, salt length, AES-KDF rounds, block length, decompressed size, XML nesting). Parsers
   return `Err` and never panic.
 - **Merge.** Two-way merge keyed by UUID.
-- **Domain matching.** Always through the Public Suffix List; never suffix heuristics.
+- **Domain matching.** Always through the Public Suffix List; never suffix heuristics. Credentials
+  are offered only on `https` pages: a target whose parsed scheme is not `https` never matches (no
+  localhost or IP exception), an `http://` entry is treated as `https://`, and a scheme-less target is
+  read as `https`, so callers must pass the full page URL, never a bare host taken from an `http` page.
 - **Bundled resources.** The Public Suffix List and the Apple password rules are vendored data files
   under `crates/mypass-core/resources/`, listed in `THIRD_PARTY_NOTICES.md`.
 - **`FileIo` seam.** All vault-file I/O goes through the `FileIo` trait (`PlainFileIo` in production,
