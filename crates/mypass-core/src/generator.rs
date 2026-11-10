@@ -4,7 +4,7 @@ use crate::{CharacterClass, PasswordRules};
 use rand::{seq::SliceRandom, CryptoRng, Rng, RngCore};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use zeroize::Zeroizing;
-use CharacterClass::{AsciiPrintable, Custom, Digit, Lower, Special, Upper};
+use CharacterClass::{AsciiPrintable, Custom, Digit, Lower, Special, Unicode, Upper};
 /// Bound allocation and repair work for public API callers, including usize::MAX.
 /// Requests are capped; a site minimum above this cap is unsatisfiable.
 pub const MAX_PASSWORD_LENGTH: usize = 4096;
@@ -49,8 +49,12 @@ struct EffectivePool {
 fn effective_pool(opts: &GeneratorOptions, rules: &PasswordRules) -> EffectivePool {
     let required: BTreeSet<_> = rules.required_clauses.iter().flatten().cloned().collect();
     let forced = forced_on_toggle_classes(rules);
-    let unrestricted =
-        rules.allowed_classes.is_empty() || rules.allowed_classes.contains(&AsciiPrintable);
+    // `unicode` is a superset of `ascii-printable` in Apple's grammar, so it opens the gate too: a
+    // rule that only says `allowed: unicode;` permits every character. It adds no pool of its own
+    // (see the Unicode note below); the alphabet stays the enabled toggle baselines.
+    let unrestricted = rules.allowed_classes.is_empty()
+        || rules.allowed_classes.contains(&AsciiPrintable)
+        || rules.allowed_classes.contains(&Unicode);
     let toggles = [
         (Lower, opts.lowercase, LOWER),
         (Upper, opts.uppercase, UPPER),

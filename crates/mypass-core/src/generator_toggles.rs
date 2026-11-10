@@ -1,7 +1,7 @@
 //! The single rule evaluator used by generation and toggle presentation.
 use crate::{CharacterClass, GeneratorOptions, PasswordRules};
 use std::collections::BTreeSet;
-use CharacterClass::{AsciiPrintable, Custom, Digit, Lower, Special, Upper};
+use CharacterClass::{AsciiPrintable, Custom, Digit, Lower, Special, Unicode, Upper};
 /// Display order of the four user-facing toggles.
 pub const TOGGLE_BACKED_CLASSES: [CharacterClass; 4] = [Lower, Upper, Digit, Special];
 /// Non-ASCII characters belong to the symbol toggle, including Unicode letters.
@@ -19,7 +19,11 @@ pub fn toggle_backed_class_of(c: char) -> CharacterClass {
 /// None means no restriction. Custom sets permit only their own members,
 /// even when they cause the symbol toggle to appear permitted.
 pub fn permitted_toggle_classes(rules: &PasswordRules) -> Option<BTreeSet<CharacterClass>> {
-    if rules.allowed_classes.is_empty() || rules.allowed_classes.contains(&AsciiPrintable) {
+    // `unicode` is a superset of `ascii-printable` in Apple's grammar: it lifts the restriction too.
+    if rules.allowed_classes.is_empty()
+        || rules.allowed_classes.contains(&AsciiPrintable)
+        || rules.allowed_classes.contains(&Unicode)
+    {
         return None;
     }
     let mut result: BTreeSet<_> = TOGGLE_BACKED_CLASSES

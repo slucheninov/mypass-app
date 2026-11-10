@@ -456,3 +456,18 @@ fn cleanup_unicode_error_precedence_and_zero_consecutive() {
         Err(UnsatisfiableRules)
     );
 }
+#[test]
+fn allowed_unicode_only_rule_still_generates_from_the_enabled_toggles() {
+    // `unicode` is a superset of `ascii-printable`: every character is permitted, so the gate must
+    // be open rather than reporting NoCharacterClassSelected. The alphabet stays the toggle
+    // baselines (no invented non-ASCII pool).
+    let rules = parse_password_rules("minlength: 12; maxlength: 12; allowed: unicode;").unwrap();
+    let p = generate(
+        &GeneratorOptions::default(),
+        Some(&rules),
+        &mut StdRng::seed_from_u64(11),
+    )
+    .unwrap();
+    assert_eq!(p.chars().count(), 12);
+    assert!(p.is_ascii());
+}

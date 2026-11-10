@@ -131,3 +131,12 @@ fn unrestricted_and_multiple_permitted_classes_do_not_force_a_choice() {
     assert!(forced_on_toggle_classes(&r).is_empty());
     assert_eq!(TOGGLE_BACKED_CLASSES, [Lower, Upper, Digit, Special]);
 }
+#[test]
+fn allowed_unicode_is_unrestricted_like_ascii_printable() {
+    // Apple's grammar: `unicode` is a superset of `ascii-printable`, so a rule whose only allowed
+    // class is `unicode` permits every toggle class instead of excluding all of them.
+    let r = parse_password_rules("minlength: 12; allowed: unicode;").unwrap();
+    assert_eq!(permitted_toggle_classes(&r), None);
+    assert!(excluded_toggle_classes(&r).is_empty());
+    assert!(forced_on_toggle_classes(&r).is_empty());
+}

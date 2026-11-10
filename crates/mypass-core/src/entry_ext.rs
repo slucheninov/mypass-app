@@ -175,7 +175,12 @@ mod tests {
     }
     #[test]
     fn set_urls_keeps_the_protected_flag_of_the_url_field() {
-        let protected = |e: &Entry| e.fields.iter().find(|f| f.key == "URL").map(|f| f.protected);
+        let protected = |e: &Entry| {
+            e.fields
+                .iter()
+                .find(|f| f.key == "URL")
+                .map(|f| f.protected)
+        };
         // Another KeePass client may have marked the URL as protected: editing the value must not
         // silently strip that protection.
         let mut e = entry();
