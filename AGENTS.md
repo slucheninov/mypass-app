@@ -311,7 +311,13 @@ trailers on commits or pull request text. A dependency version bump is its own `
 
 ## Rust rules
 
-- No `unsafe` in our crates (`unsafe_code = "forbid"` through `[workspace.lints]`).
+- No `unsafe` in our crates (`unsafe_code = "forbid"` through `[workspace.lints]`), with one
+  exception: `mypass-platform` carries its own `[lints]` tables, an exact copy of the workspace
+  tables except `unsafe_code = "deny"`, and only `crates/mypass-platform/src/macos.rs` lifts it
+  with a module-level `#![allow(unsafe_code)]` for the Objective-C and Carbon calls (stage 6 may
+  add `windows.rs` the same way). Every `unsafe` block there is minimal, wrapped in a small safe
+  function and carries a `// SAFETY:` comment stating the invariant. Pinned by
+  `workspace_lints_forbid_unsafe` and `unsafe_only_in_allow_listed_modules`.
 - No `unwrap`, `expect` or indexing in non-test code (`clippy::unwrap_used`, `expect_used` and
   `indexing_slicing` are `warn`, CI runs `-D warnings`). Parsers return `Err` and never panic.
   Test-only support code (guard helpers, integration-test helpers) carries a file-level `allow`

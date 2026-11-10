@@ -3,7 +3,7 @@
 //! test-only support code: helpers here unwrap and index freely, a guard must fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
-use repo_guards::{read, repo_root, workflow_files};
+use repo_guards::{read, rel_str, repo_root, tracked_files, workflow_files};
 use std::path::PathBuf;
 use toml::{Table, Value};
 
@@ -252,9 +252,36 @@ fn workspace_lints_forbid_unsafe() {
         );
     }
     for (manifest, doc) in member_manifests() {
-        let inherits = doc
-            .get("lints")
-            .and_then(Value::as_table)
+        let name = doc
+            .get("package")
+            .and_then(|p| p.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let member_lints = doc.get("lints").and_then(Value::as_table);
+        if name == OWN_LINTS_MEMBER {
+            // The one exception: the macOS glue needs Objective-C / Carbon calls, so the crate
+            // copies the workspace tables verbatim except `unsafe_code = "deny"` (overridable per
+            // module, unlike `forbid`). `unsafe_only_in_allow_listed_modules` pins where.
+            let member_lints = member_lints
+                .unwrap_or_else(|| panic!("{manifest} must have its own [lints] tables"));
+            assert!(
+                !member_lints.contains_key("workspace"),
+                "{manifest} must not inherit the workspace lints (it overrides `unsafe_code`)"
+            );
+            let mut expected = lints.clone();
+            expected
+                .get_mut("rust")
+                .and_then(Value::as_table_mut)
+                .unwrap()
+                .insert("unsafe_code".to_owned(), Value::String("deny".to_owned()));
+            assert_eq!(
+                member_lints, &expected,
+                "{manifest}: [lints] must equal [workspace.lints] key by key except `unsafe_code = \"deny\"`"
+            );
+            continue;
+        }
+        let inherits = member_lints
             .and_then(|l| l.get("workspace"))
             .and_then(Value::as_bool);
         assert_eq!(
@@ -263,6 +290,60 @@ fn workspace_lints_forbid_unsafe() {
             "{manifest} must have `[lints] workspace = true`"
         );
     }
+}
+
+/// The only member allowed its own `[lints]` tables (see `workspace_lints_forbid_unsafe`).
+const OWN_LINTS_MEMBER: &str = "mypass-platform";
+
+/// Files of our crates where `unsafe` code may appear. Stage 6 adds
+/// `crates/mypass-platform/src/windows.rs` here for the Win32 calls; nothing else, ever.
+const UNSAFE_ALLOWED_FILES: &[&str] = &["crates/mypass-platform/src/macos.rs"];
+
+/// The `unsafe` tokens as code. Built with `concat!` so this guard file does not match itself.
+const UNSAFE_TOKENS: &[&str] = &[
+    concat!("unsafe", " {"),
+    concat!("unsafe", " fn"),
+    concat!("unsafe", " impl"),
+    concat!("unsafe", " extern"),
+    concat!("unsafe", " trait"),
+    concat!("#[unsafe", "("),
+    concat!("allow(unsafe", "_code)"),
+];
+
+#[test]
+fn unsafe_only_in_allow_listed_modules() {
+    let Some(files) = tracked_files() else {
+        println!("skipped: not a git checkout");
+        return;
+    };
+    let mut offenders = Vec::new();
+    for path in files {
+        let rel = rel_str(&path);
+        let ours = rel.starts_with("crates/") || rel.starts_with("src-tauri/");
+        if !ours || !rel.ends_with(".rs") || UNSAFE_ALLOWED_FILES.contains(&rel.as_str()) {
+            continue;
+        }
+        let text = read(&rel);
+        for token in UNSAFE_TOKENS {
+            if text.contains(token) {
+                offenders.push(format!("{rel}: `{token}`"));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "unsafe code outside {UNSAFE_ALLOWED_FILES:?}:\n{}",
+        offenders.join("\n")
+    );
+}
+
+#[test]
+fn unsafe_detector_detects_unsafe() {
+    let sample = format!("fn f() {{ {} }}", concat!("unsafe", " { g() }"));
+    assert!(UNSAFE_TOKENS.iter().any(|t| sample.contains(t)));
+    assert!(!UNSAFE_TOKENS
+        .iter()
+        .any(|t| "let unsafe_code = 1; // safe".contains(t)));
 }
 
 #[test]

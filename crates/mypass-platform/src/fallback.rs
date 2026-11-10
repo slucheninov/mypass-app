@@ -6,19 +6,26 @@
 //! until stages 3 and 5; Windows uses all of them until stage 6.
 
 use crate::{
-    AppPaths, BrowserRegistration, DeviceUnlock, DeviceUnlockAvailability, DeviceUnlockMode,
-    HostRegistrationReport, KeyboardLayout, LaunchAtLogin, LoginItemStatus, NativeHostRegistrar,
-    Platform, PlatformError, PlatformResult, SecretStore, SecureClipboard, Subscription,
-    SystemEvent, SystemEvents,
+    BrowserRegistration, DeviceUnlock, DeviceUnlockAvailability, DeviceUnlockMode,
+    HostRegistrationReport, LaunchAtLogin, LoginItemStatus, NativeHostRegistrar, PlatformError,
+    PlatformResult, SecretStore,
 };
 use secrecy::SecretString;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::Path;
+// Items used only off macOS (and by this module's tests on macOS).
+#[cfg(not(target_os = "macos"))]
+use crate::{AppPaths, Platform};
+#[cfg(any(not(target_os = "macos"), test))]
+use crate::{KeyboardLayout, Subscription, SystemEvent, SystemEvents};
+#[cfg(any(not(target_os = "macos"), test))]
+use std::{path::PathBuf, sync::Arc};
 
 /// No system events on this platform.
 #[derive(Debug, Default)]
+#[cfg(any(not(target_os = "macos"), test))]
 pub(crate) struct UnsupportedSystemEvents;
 
+#[cfg(any(not(target_os = "macos"), test))]
 impl SystemEvents for UnsupportedSystemEvents {
     fn subscribe(&self, _: Arc<dyn Fn(SystemEvent) + Send + Sync>) -> PlatformResult<Subscription> {
         Err(PlatformError::Unsupported("system events"))
@@ -94,8 +101,10 @@ impl LaunchAtLogin for UnsupportedLaunchAtLogin {
 
 /// No keyboard layout reading on this platform.
 #[derive(Debug, Default)]
+#[cfg(any(not(target_os = "macos"), test))]
 pub(crate) struct UnsupportedKeyboardLayout;
 
+#[cfg(any(not(target_os = "macos"), test))]
 impl KeyboardLayout for UnsupportedKeyboardLayout {
     fn current(&self) -> PlatformResult<Option<String>> {
         Err(PlatformError::Unsupported("keyboard layout"))
@@ -105,21 +114,6 @@ impl KeyboardLayout for UnsupportedKeyboardLayout {
         _: Arc<dyn Fn(Option<String>) + Send + Sync>,
     ) -> PlatformResult<Subscription> {
         Err(PlatformError::Unsupported("keyboard layout"))
-    }
-}
-
-/// No clipboard implementation: used only on macOS until its concealed clipboard lands.
-#[cfg(target_os = "macos")]
-#[derive(Debug, Default)]
-pub(crate) struct UnsupportedClipboard;
-
-#[cfg(target_os = "macos")]
-impl SecureClipboard for UnsupportedClipboard {
-    fn write_secret(&self, _: &str) -> PlatformResult<crate::ClipboardStamp> {
-        Err(PlatformError::Unsupported("clipboard"))
-    }
-    fn clear_if_unchanged(&self, _: &crate::ClipboardStamp) -> PlatformResult<bool> {
-        Err(PlatformError::Unsupported("clipboard"))
     }
 }
 
@@ -254,14 +248,11 @@ impl ClipboardBackend for ArboardBackend {
 
 /// The platform of a target without a native implementation: `arboard` for the clipboard off
 /// macOS, `Unsupported` for everything else.
+#[cfg(not(target_os = "macos"))]
 pub(crate) fn platform(_paths: &AppPaths) -> Platform {
-    #[cfg(not(target_os = "macos"))]
-    let clipboard: Arc<dyn SecureClipboard> = Arc::new(HashingClipboard::new(ArboardBackend));
-    #[cfg(target_os = "macos")]
-    let clipboard: Arc<dyn SecureClipboard> = Arc::new(UnsupportedClipboard);
     Platform {
         events: Arc::new(UnsupportedSystemEvents),
-        clipboard,
+        clipboard: Arc::new(HashingClipboard::new(ArboardBackend)),
         secrets: Arc::new(UnsupportedSecretStore),
         shared_secrets: Arc::new(UnsupportedSecretStore),
         device_unlock: Arc::new(UnsupportedDeviceUnlock),
@@ -272,6 +263,7 @@ pub(crate) fn platform(_paths: &AppPaths) -> Platform {
 }
 
 /// No running-application lookup off macOS.
+#[cfg(any(not(target_os = "macos"), test))]
 pub(crate) fn running_app_executables(_bundle_id: &str) -> Vec<PathBuf> {
     Vec::new()
 }

@@ -12,6 +12,8 @@ mod fallback;
 mod host_registrar;
 mod keyboard_layout;
 mod launch_at_login;
+#[cfg(target_os = "macos")]
+mod macos;
 mod paths;
 mod secrets;
 
@@ -56,11 +58,17 @@ impl std::fmt::Debug for Platform {
 
 /// The platform services of the running OS; the host registrar is built over `paths`.
 pub fn current(paths: &AppPaths) -> Platform {
-    fallback::platform(paths)
+    #[cfg(target_os = "macos")]
+    return macos::platform(paths);
+    #[cfg(not(target_os = "macos"))]
+    return fallback::platform(paths);
 }
 
 /// Executable paths of every running process with `bundle_id` (macOS); elsewhere empty. Not a
 /// `Platform` field: only the old-app guard (D7) uses it.
 pub fn running_app_executables(bundle_id: &str) -> Vec<PathBuf> {
-    fallback::running_app_executables(bundle_id)
+    #[cfg(target_os = "macos")]
+    return macos::running_app_executables(bundle_id);
+    #[cfg(not(target_os = "macos"))]
+    return fallback::running_app_executables(bundle_id);
 }
