@@ -241,23 +241,24 @@ pub fn merge(local: &Database, remote: &Database) -> Database {
     }
     // Preserve both devices' recycled contents. This is a structural override,
     // not a new user move: retain each group's metadata and location clock.
-    let chosen_bin = local
-        .meta
-        .recycle_bin_uuid
-        .filter(|u| !u.is_nil())
-        .or(remote.meta.recycle_bin_uuid.filter(|u| !u.is_nil()));
-    let second_bin = remote.meta.recycle_bin_uuid.filter(|u| !u.is_nil());
+    // A bin id counts only when it names a live, non-root group of the merged tree:
+    // `groups` already excludes tombstoned groups, and every group in it ends up in
+    // the output (orphans and cycle members are re-rooted). The root is never a usable
+    // bin, matching `Database::live_bin`. Checking liveness before choosing matters:
+    // a dangling local id (its bin permanently deleted, or naming the root) must not
+    // win over a live remote bin, or that bin would become an ordinary group and its
+    // recycled entries would be offered for autofill.
+    let live_bin =
+        |bin: Option<Uuid>| bin.filter(|id| !id.is_nil() && *id != root && groups.contains_key(id));
+    let chosen_bin =
+        live_bin(local.meta.recycle_bin_uuid).or(live_bin(remote.meta.recycle_bin_uuid));
+    let second_bin = live_bin(remote.meta.recycle_bin_uuid);
     if let (Some(chosen), Some(second)) = (chosen_bin, second_bin) {
-        if chosen != second
-            && chosen != root
-            && second != root
-            && groups.contains_key(&chosen)
-            && groups.contains_key(&second)
-        {
+        if chosen != second {
             parents.insert(second, chosen);
         }
     }
-    if let Some(chosen) = chosen_bin.filter(|id| *id != root && groups.contains_key(id)) {
+    if let Some(chosen) = chosen_bin {
         // Recognize a previous containment repair when the peer now advertises
         // our bin: an original local ancestor is already inside it remotely.
         if let Some((remote_bin, _)) = r.groups.get(&chosen) {
@@ -399,12 +400,10 @@ pub fn merge(local: &Database, remote: &Database) -> Database {
         .unwrap_or_else(|| metadata(&local.root));
     merged_root.groups.sort_by_key(|g| g.uuid);
     // Rule 8 (brief 7): nil means unset. All other meta/settings stay local.
+    // The bin id is the live one chosen above, so it never dangles; None when
+    // neither side names a live bin.
     let mut meta = local.meta.clone();
-    meta.recycle_bin_uuid = local
-        .meta
-        .recycle_bin_uuid
-        .filter(|u| !u.is_nil())
-        .or(remote.meta.recycle_bin_uuid.filter(|u| !u.is_nil()));
+    meta.recycle_bin_uuid = chosen_bin;
     Database {
         root: merged_root,
         meta,
@@ -684,7 +683,9 @@ mod tests {
     fn recycle_bin_uuid_prefers_non_nil_local_first() {
         for a in [None, Some(Uuid::nil()), Some(Uuid::from_u128(2))] {
             for b in [None, Some(Uuid::nil()), Some(Uuid::from_u128(3))] {
+                // Both candidate bins are live groups; dangling ids are covered below.
                 let mut l = make_db(vec![]);
+                l.root.groups = vec![group(2), group(3)];
                 let mut r = l.clone();
                 l.meta.recycle_bin_uuid = a;
                 r.meta.recycle_bin_uuid = b;
@@ -1250,6 +1251,89 @@ mod tests {
             m
         );
         assert_eq!(merge(&l, &m), m);
+    }
+    fn reopened(m: &Database) -> Database {
+        let password = secrecy::SecretString::from("synthetic");
+        Database::open(&m.save(&password).unwrap(), &password).unwrap()
+    }
+    #[test]
+    fn dangling_local_bin_id_falls_back_to_the_live_remote_bin() {
+        // The local bin was permanently deleted but its id is still advertised. The remote's
+        // live bin must stay a recycle bin; otherwise its entries become autofill candidates.
+        let (mut l, mut r) = bins();
+        l.root.groups.clear();
+        l.deleted_objects.push(DeletedObject {
+            uuid: Uuid::from_u128(8),
+            deleted_at: Timestamp(2000),
+        });
+        r.root.groups[0].entries[0].set_field("URL", "https://example.com", false);
+        let m = merge(&l, &r);
+        assert_eq!(m.meta.recycle_bin_uuid, Some(Uuid::from_u128(9)));
+        assert_eq!(
+            m.find_group(Uuid::from_u128(9)).unwrap().entries[0].uuid,
+            Uuid::from_u128(1)
+        );
+        assert!(m.is_in_recycle_bin(Uuid::from_u128(1)));
+        assert!(crate::matcher::credential_candidates(&m, "https://example.com/").is_empty());
+        let back = reopened(&m);
+        assert_eq!(back, m);
+        assert!(back.is_in_recycle_bin(Uuid::from_u128(1)));
+        assert_eq!(merge(&l, &m), m);
+        assert_eq!(merge(&m, &m), m);
+        assert_eq!(
+            merge(&r, &l).meta.recycle_bin_uuid,
+            Some(Uuid::from_u128(9))
+        );
+        // A merely absent (never tombstoned) local bin dangles the same way.
+        let (mut l, r) = bins();
+        l.root.groups.clear();
+        assert_eq!(
+            merge(&l, &r).meta.recycle_bin_uuid,
+            Some(Uuid::from_u128(9))
+        );
+    }
+    #[test]
+    fn both_bin_ids_dangling_yield_no_bin() {
+        let (mut l, mut r) = bins();
+        l.root.groups.clear();
+        r.root.groups.clear();
+        let m = merge(&l, &r);
+        assert_eq!(m.meta.recycle_bin_uuid, None);
+        assert_eq!(merge(&m, &m), m);
+        // A remote bin naming the remote's own (aliased) root is not a usable bin either.
+        let (mut l, mut r) = bins();
+        l.root.groups.clear();
+        r.root.uuid = Uuid::from_u128(101);
+        r.meta.recycle_bin_uuid = Some(r.root.uuid);
+        assert_eq!(merge(&l, &r).meta.recycle_bin_uuid, None);
+    }
+    #[test]
+    fn local_bin_id_naming_the_root_falls_back_to_the_live_remote_bin() {
+        let (mut l, r) = bins();
+        l.meta.recycle_bin_uuid = Some(l.root.uuid);
+        let m = merge(&l, &r);
+        assert_eq!(m.meta.recycle_bin_uuid, Some(Uuid::from_u128(9)));
+        assert!(m.is_in_recycle_bin(Uuid::from_u128(1)));
+        // The former local bin is now an ordinary group and is not nested anywhere special.
+        assert!(m.root.groups.iter().any(|g| g.uuid == Uuid::from_u128(8)));
+        assert!(m.root.groups.iter().any(|g| g.uuid == Uuid::from_u128(9)));
+        assert_eq!(reopened(&m), m);
+        assert_eq!(merge(&l, &m), m);
+        assert_eq!(merge(&m, &m), m);
+    }
+    #[test]
+    fn two_live_distinct_bins_nest_the_second_under_the_chosen_one() {
+        let (l, r) = bins();
+        for (a, b, chosen, second) in [(&l, &r, 8, 9), (&r, &l, 9, 8)] {
+            let m = merge(a, b);
+            assert_eq!(m.meta.recycle_bin_uuid, Some(Uuid::from_u128(chosen)));
+            let bin = m.find_group(Uuid::from_u128(chosen)).unwrap();
+            assert_eq!(bin.groups.len(), 1);
+            assert_eq!(bin.groups[0].uuid, Uuid::from_u128(second));
+            assert!(m.is_in_recycle_bin(Uuid::from_u128(1)));
+            assert_eq!(merge(a, &m), m);
+            assert_eq!(merge(&m, &m), m);
+        }
     }
     #[test]
     fn merged_history_obeys_item_and_attachment_size_limits() {
