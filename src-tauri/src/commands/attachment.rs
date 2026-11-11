@@ -156,9 +156,11 @@ mod tests {
     #[test]
     fn the_save_dialog_gets_the_sanitised_name() {
         let w = open_world();
-        let id = entry_with_attachment_named(&w, "..\\..\\evil.bat");
+        // A bidi override is a legal file name character on Unix and on Windows, so the
+        // fixture file can be created on both (a backslash is a path separator on Windows).
+        let id = entry_with_attachment_named(&w, "\u{202E}evil.bat");
         let picker = FakeFilePicker::default();
-        assert!(!export(&w.core, &picker, &id, "..\\..\\evil.bat").unwrap());
+        assert!(!export(&w.core, &picker, &id, "\u{202E}evil.bat").unwrap());
         assert_eq!(*picker.save_names.lock().unwrap(), vec!["evil.bat"]);
     }
 
