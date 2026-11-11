@@ -4,8 +4,11 @@
 //! keys), so they never change. Protection flags for the app's own fields are pinned where the
 //! fields are written (the edit path), not here.
 
+use crate::session::SessionError;
+use mypass_core::entry_ext::GENERATOR_HISTORY_GROUP_UUID;
 use mypass_core::TotpConfig;
-use mypass_kdbx::Entry;
+use mypass_kdbx::{Database, Entry, Group};
+use uuid::Uuid;
 
 pub const FAVORITE: &str = "Favorite";
 pub const OTP: &str = "otp";
@@ -26,6 +29,71 @@ pub const PASSKEY_CREATED: &str = "KPEX_PASSKEY_CREATED";
 pub const GROUP_EMOJI: &str = "MyPass.GroupEmoji";
 /// Group custom-data key that marks the generator history group (besides its fixed UUID).
 pub const GENERATOR_HISTORY_MARKER: &str = "MyPass.GeneratorHistory";
+
+/// The one definition of the recycle bin: `None` when no bin is configured, when its id is the
+/// root group (another client, corrupted meta) or when that group does not exist. Mirrors the
+/// kdbx layer, so `Database::is_in_recycle_bin`, deletes and the session's views agree.
+pub fn bin_id(db: &Database) -> Option<Uuid> {
+    db.meta
+        .recycle_bin_uuid
+        .filter(|id| *id != db.root_id())
+        .filter(|id| db.find_group(*id).is_some())
+}
+
+/// The one definition of the generator history group: its fixed UUID or the
+/// [`GENERATOR_HISTORY_MARKER`] custom-data key.
+pub fn is_history_group(group: &Group) -> bool {
+    group.uuid == GENERATOR_HISTORY_GROUP_UUID || group.custom(GENERATOR_HISTORY_MARKER).is_some()
+}
+
+/// Finds `id` below `group` and reports `(in_bin, in_history)`: the group is, or lies inside, the
+/// bin / a history group. The root itself is never either.
+fn locate(
+    group: &Group,
+    id: Uuid,
+    bin: Option<Uuid>,
+    (in_bin, in_history): (bool, bool),
+    is_root: bool,
+) -> Option<(bool, bool)> {
+    let flags = (
+        in_bin || (!is_root && bin == Some(group.uuid)),
+        in_history || (!is_root && is_history_group(group)),
+    );
+    if group.uuid == id {
+        return Some(flags);
+    }
+    group
+        .groups
+        .iter()
+        .find_map(|child| locate(child, id, bin, flags, false))
+}
+
+fn classify(db: &Database, id: Uuid) -> Result<(bool, bool), SessionError> {
+    locate(&db.root, id, bin_id(db), (false, false), true).ok_or(SessionError::NotFound)
+}
+
+/// `id` may receive user-written content (entries, subgroups) without being the generator history
+/// tree: it exists (`NotFound` otherwise) and is neither a history group nor inside one
+/// (`InvalidInput`). The recycle bin is allowed: moving there is the caller's business.
+pub fn require_not_history(db: &Database, id: Uuid) -> Result<(), SessionError> {
+    match classify(db, id)? {
+        (_, true) => Err(SessionError::InvalidInput(
+            "the generator history group cannot be used as a target".into(),
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// [`require_not_history`] and additionally not the recycle bin or inside it: a place the user
+/// can put new content (CSV import).
+pub fn is_valid_user_target(db: &Database, id: Uuid) -> Result<(), SessionError> {
+    match classify(db, id)? {
+        (false, false) => Ok(()),
+        _ => Err(SessionError::InvalidInput(
+            "this group cannot receive new content".into(),
+        )),
+    }
+}
 
 pub const ADDRESS_FIELDS: [&str; 14] = [
     "label",

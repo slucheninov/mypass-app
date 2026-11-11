@@ -18,8 +18,8 @@ use crate::dto::{
     EntryEditModel, EntryTypeDto, FieldRef, HistoryItem,
 };
 use crate::fields::{
-    EntryFields, ADDRESS_FIELDS, ADDRESS_LABELS, ADDRESS_PREFIX, CARD_CVV, CARD_EXPIRY,
-    CARD_HOLDER, CARD_NUMBER, GROUP_EMOJI, NOTES_BODY, OTP,
+    bin_id, require_not_history, EntryFields, ADDRESS_FIELDS, ADDRESS_LABELS, ADDRESS_PREFIX,
+    CARD_CVV, CARD_EXPIRY, CARD_HOLDER, CARD_NUMBER, GROUP_EMOJI, NOTES_BODY, OTP,
 };
 use crate::queries::totp_now;
 use crate::session::{SessionError, VaultSession};
@@ -31,6 +31,7 @@ use std::io::Read;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 /// Attachments an entry may hold; only further adds are refused beyond it.
 pub const MAX_ATTACHMENTS_PER_ENTRY: usize = 8;
@@ -195,16 +196,21 @@ pub fn edit_model(db: &Database, id: Uuid) -> Result<EntryEditModel, SessionErro
             expiry: field_or_empty(entry, CARD_EXPIRY),
             cvv: field_or_empty(entry, CARD_CVV),
         }),
-        custom_fields: entry
-            .fields
-            .iter()
-            .filter(|f| !Entry::is_reserved_key(&f.key))
-            .map(|f| CustomFieldEdit {
-                key: f.key.clone(),
-                value: f.value.clone(),
-                protected: f.protected,
-            })
-            .collect(),
+        // Another client can store the same key twice; the first one is the one the editor shows
+        // (and `Entry::field` returns), the extras are dropped by the next real save.
+        custom_fields: {
+            let mut seen = HashSet::new();
+            entry
+                .fields
+                .iter()
+                .filter(|f| !Entry::is_reserved_key(&f.key) && seen.insert(f.key.as_str()))
+                .map(|f| CustomFieldEdit {
+                    key: f.key.clone(),
+                    value: f.value.clone(),
+                    protected: f.protected,
+                })
+                .collect()
+        },
         attachments: entry
             .attachments
             .iter()
@@ -285,7 +291,34 @@ fn validate(model: &EntryEditModel) -> Result<UriMatchMode, SessionError> {
     Ok(mode)
 }
 
+/// The attachment name a file at `path` would get (the same rule as [`read_attachment_file`]).
+fn file_name_of(path: &Path) -> Option<String> {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|n| !n.is_empty())
+}
+
 fn resolve_ops(ops: &[AttachmentOp]) -> Result<Vec<ResolvedOp>, SessionError> {
+    // Cheap checks first, so nothing is read from disk for a model that is refused anyway.
+    let mut added = HashSet::new();
+    let mut adds = 0usize;
+    for op in ops {
+        if let AttachmentOp::Add { path } = op {
+            adds += 1;
+            if adds > MAX_ATTACHMENTS_PER_ENTRY {
+                return Err(SessionError::LimitExceeded(format!(
+                    "an entry holds at most {MAX_ATTACHMENTS_PER_ENTRY} attachments"
+                )));
+            }
+            if let Some(name) = file_name_of(Path::new(path)) {
+                if !added.insert(name.clone()) {
+                    return Err(SessionError::InvalidInput(format!(
+                        "two attachments are named {name}"
+                    )));
+                }
+            }
+        }
+    }
     ops.iter()
         .map(|op| match op {
             AttachmentOp::Add { path } => read_attachment_file(Path::new(path))
@@ -293,6 +326,14 @@ fn resolve_ops(ops: &[AttachmentOp]) -> Result<Vec<ResolvedOp>, SessionError> {
             AttachmentOp::Remove { name } => Ok(ResolvedOp::Remove { name: name.clone() }),
         })
         .collect()
+}
+
+/// Removes the later duplicates of every custom key (the first one wins, like `Entry::field`).
+fn dedupe_custom_fields(entry: &mut Entry) {
+    let mut seen: HashSet<String> = HashSet::new();
+    entry
+        .fields
+        .retain(|f| Entry::is_reserved_key(&f.key) || seen.insert(f.key.clone()));
 }
 
 /// Applies a validated model to an entry. Errors (attachment limits, a removal of a file that is
@@ -304,7 +345,9 @@ fn apply(
     mode: UriMatchMode,
     ops: Vec<ResolvedOp>,
 ) -> Result<(), SessionError> {
-    if core_type(model.entry_type) != entry.entry_type() {
+    let old_kind = entry.entry_type();
+    let new_kind = core_type(model.entry_type);
+    if new_kind != old_kind {
         match type_marker(model.entry_type) {
             Some(marker) => entry.set_field(ENTRY_TYPE_FIELD, marker, false),
             None => entry.remove_field(ENTRY_TYPE_FIELD),
@@ -348,13 +391,18 @@ fn apply(
     if model.favorite != entry.is_favorite() {
         entry.set_favorite(model.favorite);
     }
-    put(
-        entry,
-        notes_key(core_type(model.entry_type)),
-        &model.notes,
-        false,
-        false,
-    );
+    // The free text lives in `Notes` or `MyPass.NotesBody` by type. On a type change the model's
+    // text goes to the new type's key, unless that key already holds a different non-empty text
+    // (a value from another client): that one is never overwritten, the text stays in (or is
+    // written to) the old type's key instead, so no notes text is lost.
+    let target = notes_key(new_kind);
+    let foreign = new_kind != old_kind
+        && notes_key(old_kind) != target
+        && entry
+            .field(target)
+            .is_some_and(|v| !v.is_empty() && v != model.notes);
+    let notes_at = if foreign { notes_key(old_kind) } else { target };
+    put(entry, notes_at, &model.notes, false, false);
 
     if let (EntryTypeDto::Card, Some(card)) = (model.entry_type, &model.card) {
         put(entry, CARD_HOLDER, &card.holder, false, false);
@@ -381,15 +429,22 @@ fn apply(
         .fields
         .retain(|f| Entry::is_reserved_key(&f.key) || keep.contains(f.key.as_str()));
     for field in &model.custom_fields {
-        let same = entry.fields.iter().any(|f| {
-            f.key == field.key && f.value == field.value && f.protected == field.protected
-        });
+        // Compare with the first stored field of the key (the one that is shown and written).
+        let same = entry
+            .fields
+            .iter()
+            .find(|f| f.key == field.key)
+            .is_some_and(|f| f.value == field.value && f.protected == field.protected);
         if !same {
             entry.set_field(&field.key, &field.value, field.protected);
         }
     }
 
-    for op in ops {
+    // Removals first, so "remove X then add X" in one model is the supported replace.
+    let (removes, adds): (Vec<_>, Vec<_>) = ops
+        .into_iter()
+        .partition(|op| matches!(op, ResolvedOp::Remove { .. }));
+    for op in removes.into_iter().chain(adds) {
         match op {
             ResolvedOp::Remove { name } => {
                 let pos = entry
@@ -400,20 +455,22 @@ fn apply(
                 entry.attachments.remove(pos);
             }
             ResolvedOp::Add { name, data } => {
-                if let Some(existing) = entry.attachments.iter_mut().find(|a| a.name == name) {
-                    existing.data = data;
-                } else if entry.attachments.len() >= MAX_ATTACHMENTS_PER_ENTRY {
+                if entry.attachments.iter().any(|a| a.name == name) {
+                    return Err(SessionError::InvalidInput(format!(
+                        "an attachment named {name} already exists"
+                    )));
+                }
+                if entry.attachments.len() >= MAX_ATTACHMENTS_PER_ENTRY {
                     // Only adds are limited: an entry that already exceeds it stays editable.
                     return Err(SessionError::LimitExceeded(format!(
                         "an entry holds at most {MAX_ATTACHMENTS_PER_ENTRY} attachments"
                     )));
-                } else {
-                    entry.attachments.push(Attachment {
-                        name,
-                        data,
-                        protected: false,
-                    });
                 }
+                entry.attachments.push(Attachment {
+                    name,
+                    data,
+                    protected: false,
+                });
             }
         }
     }
@@ -427,29 +484,36 @@ pub fn save_entry(session: &VaultSession, model: EntryEditModel) -> Result<Uuid,
     let group = parse_id(&model.group_id)?;
     let mode = validate(&model)?;
     let ops = resolve_ops(&model.attachment_ops)?;
-    session.mutate(|db, now| {
-        require_group(db, group)?;
+    session.mutate_tracked(|db, now| {
+        require_not_history(db, group)?;
         match id {
             None => {
                 let mut entry = Entry::new(now);
                 apply(&mut entry, &model, mode, ops)?;
                 let id = entry.uuid;
                 db.add_entry(group, entry, now)?;
-                Ok(id)
+                Ok((id, true))
             }
             Some(id) => {
                 find_entry(db, id)?;
                 let mut failure = None;
-                db.update_entry(id, now, |entry| {
+                let changed = db.update_entry(id, now, |entry| {
+                    let before = entry.clone();
                     failure = apply(entry, &model, mode, ops).err();
+                    // Duplicate custom keys (another client) are dropped only with a real change;
+                    // an unchanged save stays a no-op.
+                    if failure.is_none() && !entry.content_eq(&before) {
+                        dedupe_custom_fields(entry);
+                    }
                 })?;
                 if let Some(error) = failure {
                     return Err(error);
                 }
-                if db.parent_of_entry(id) != Some(group) {
+                let moved = db.parent_of_entry(id) != Some(group);
+                if moved {
                     db.move_entry(id, group, now)?;
                 }
-                Ok(id)
+                Ok((id, changed || moved))
             }
         }
     })
@@ -506,24 +570,31 @@ pub fn reveal_at(
 /// Sets or clears the favorite marker. A raw edit: no history snapshot, `modified` moves so a
 /// merge keeps the newer state.
 pub fn set_favorite(session: &VaultSession, id: Uuid, value: bool) -> Result<(), SessionError> {
-    session.mutate(|db, now| {
+    session.mutate_tracked(|db, now| {
         find_entry(db, id)?;
+        let mut changed = false;
         if let Some(entry) = db.find_entry_mut(id) {
             if entry.is_favorite() != value {
                 entry.set_favorite(value);
                 entry.modified = now;
+                changed = true;
             }
         }
-        Ok(())
+        Ok(((), changed))
     })
 }
 
+/// Moves an entry to `group` (a no-op when it is already there). The generator history group is
+/// not a valid target; the recycle bin is accepted (delete is the usual way in).
 pub fn move_entry(session: &VaultSession, id: Uuid, group: Uuid) -> Result<(), SessionError> {
-    session.mutate(|db, now| {
+    session.mutate_tracked(|db, now| {
         find_entry(db, id)?;
-        require_group(db, group)?;
+        require_not_history(db, group)?;
+        if db.parent_of_entry(id) == Some(group) {
+            return Ok(((), false));
+        }
         db.move_entry(id, group, now)?;
-        Ok(())
+        Ok(((), true))
     })
 }
 
@@ -540,7 +611,7 @@ pub fn delete_entry(session: &VaultSession, id: Uuid) -> Result<(), SessionError
 pub fn restore_entry(session: &VaultSession, id: Uuid, group: Uuid) -> Result<(), SessionError> {
     session.mutate(|db, now| {
         find_entry(db, id)?;
-        require_group(db, group)?;
+        require_not_history(db, group)?;
         if !db.is_in_recycle_bin(id) {
             return Err(SessionError::InvalidInput(
                 "entry is not in the recycle bin".into(),
@@ -564,12 +635,9 @@ fn count_entries(group: &Group) -> usize {
     group.entries.len() + group.groups.iter().map(count_entries).sum::<usize>()
 }
 
-/// The recycle bin group, when one is configured, exists and is not the root.
+/// The recycle bin group (see [`bin_id`]).
 fn bin_of(db: &Database) -> Option<&Group> {
-    db.meta
-        .recycle_bin_uuid
-        .filter(|id| *id != db.root_id())
-        .and_then(|id| db.find_group(id))
+    bin_id(db).and_then(|id| db.find_group(id))
 }
 
 /// Permanently removes everything in the recycle bin; returns how many entries went.
@@ -715,20 +783,25 @@ pub fn read_attachment_file(path: &Path) -> Result<(String, Vec<u8>), SessionErr
     Ok((name, data))
 }
 
-/// Writes an attachment to `dest` atomically. The destination comes from the save dialog, so
-/// confirming an overwrite is the dialog's job.
-pub fn export_attachment(
+/// A copy of an attachment's bytes, taken under the session lock so the (slow) write to disk
+/// happens outside it, see [`write_attachment`].
+pub fn attachment_bytes(
     db: &Database,
     id: Uuid,
     name: &str,
-    dest: &Path,
-) -> Result<(), SessionError> {
-    let attachment = find_entry(db, id)?
+) -> Result<Zeroizing<Vec<u8>>, SessionError> {
+    find_entry(db, id)?
         .attachments
         .iter()
         .find(|a| a.name == name)
-        .ok_or(SessionError::NotFound)?;
-    mypass_kdbx::write_atomic(dest, &attachment.data)?;
+        .map(|a| Zeroizing::new(a.data.clone()))
+        .ok_or(SessionError::NotFound)
+}
+
+/// Writes attachment bytes to `dest` atomically. Needs no session lock. The destination comes
+/// from the save dialog, so confirming an overwrite is the dialog's job.
+pub fn write_attachment(dest: &Path, bytes: &[u8]) -> Result<(), SessionError> {
+    mypass_kdbx::write_atomic(dest, bytes)?;
     Ok(())
 }
 
@@ -759,7 +832,7 @@ pub fn create_group(
 ) -> Result<Uuid, SessionError> {
     let name = clean_name(name)?;
     session.mutate(|db, now| {
-        require_group(db, parent)?;
+        require_not_history(db, parent)?;
         let mut group = Group::new(name, now);
         set_emoji(&mut group, emoji);
         let id = group.uuid;
@@ -776,7 +849,7 @@ pub fn update_group(
     emoji: Option<&str>,
 ) -> Result<(), SessionError> {
     let name = clean_name(name)?;
-    session.mutate(|db, now| {
+    session.mutate_tracked(|db, now| {
         let group = db.find_group_mut(id).ok_or(SessionError::NotFound)?;
         let before = (
             group.name.clone(),
@@ -784,15 +857,15 @@ pub fn update_group(
         );
         group.name = name.to_owned();
         set_emoji(group, emoji);
-        if before
+        let changed = before
             != (
                 group.name.clone(),
                 group.custom(GROUP_EMOJI).map(str::to_owned),
-            )
-        {
+            );
+        if changed {
             group.modified = now;
         }
-        Ok(())
+        Ok(((), changed))
     })
 }
 
@@ -800,7 +873,7 @@ pub fn update_group(
 pub fn move_group(session: &VaultSession, id: Uuid, parent: Uuid) -> Result<(), SessionError> {
     session.mutate(|db, now| {
         require_group(db, id)?;
-        require_group(db, parent)?;
+        require_not_history(db, parent)?;
         db.move_group(id, parent, now)?;
         Ok(())
     })
@@ -823,10 +896,12 @@ pub fn delete_group(session: &VaultSession, id: Uuid) -> Result<(), SessionError
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fields::{CARD_CVV, CARD_EXPIRY, CARD_HOLDER, CARD_NUMBER, GROUP_EMOJI, NOTES_BODY};
+    use crate::fields::{
+        bin_id, CARD_CVV, CARD_EXPIRY, CARD_HOLDER, CARD_NUMBER, GROUP_EMOJI, NOTES_BODY,
+    };
     use crate::queries::totp_now;
     use crate::scheduler::ManualScheduler;
-    use crate::session::SessionDeps;
+    use crate::session::{SaveState, SessionDeps};
     use crate::settings::SettingsStore;
     use crate::testing::fast_database;
     use mypass_core::entry_ext::ENTRY_TYPE_FIELD;
@@ -1044,9 +1119,11 @@ mod tests {
             m.password = "p".into();
         });
         let before = f.entry(id);
+        f.session.flush().unwrap();
         f.edit(id, |_| {});
         assert_eq!(f.entry(id), before);
         assert!(f.entry(id).history.is_empty());
+        assert_eq!(f.session.status().save.state, SaveState::Idle);
     }
 
     #[test]
@@ -1337,10 +1414,12 @@ mod tests {
         let (db, id) = db_with(e);
         let f = fx_with(db);
         let dest = f.dir.path().join("out.bin");
-        f.db(|d| export_attachment(d, id, "blob", &dest)).unwrap();
+        let bytes = f.db(|d| attachment_bytes(d, id, "blob")).unwrap();
+        write_attachment(&dest, &bytes).unwrap();
         assert_eq!(fs::read(&dest).unwrap(), [0, 1, 2, 255]);
         assert_eq!(
-            f.db(|d| export_attachment(d, id, "nope", &dest)),
+            f.db(|d| attachment_bytes(d, id, "nope"))
+                .map(|b| b.to_vec()),
             Err(SessionError::NotFound)
         );
     }
@@ -1716,6 +1795,7 @@ mod tests {
         });
         let notes = f.create_as(EntryTypeDto::Notes, |m| m.notes = "body".into());
         let files = f.create_as(EntryTypeDto::Files, |m| m.title = "F".into());
+        f.session.flush().unwrap();
         for id in [login, card, address, notes, files] {
             let before = f.entry(id);
             let m = f.model(id);
@@ -1723,6 +1803,7 @@ mod tests {
             assert_eq!(save_entry(&f.session, m), Ok(id));
             assert_eq!(f.entry(id), before);
             assert!(before.history.is_empty());
+            assert_eq!(f.session.status().save.state, SaveState::Idle);
         }
         assert_eq!(f.model(login).uri_match_mode, "host");
     }
@@ -1817,5 +1898,277 @@ mod tests {
         assert_eq!(m.address.map(|a| a.label), Some("Home".to_owned()));
         let m = new_model(EntryTypeDto::Login, g);
         assert!(m.card.is_none() && m.address.is_none());
+    }
+
+    // ---- branch review fixes ----
+
+    fn history_group(f: &Fx, marker_only: bool) -> Uuid {
+        f.session
+            .mutate(|db, now| {
+                let mut g = Group::new("H", now);
+                if marker_only {
+                    g.set_custom(crate::fields::GENERATOR_HISTORY_MARKER, "1");
+                } else {
+                    g.uuid = mypass_core::entry_ext::GENERATOR_HISTORY_GROUP_UUID;
+                }
+                let id = g.uuid;
+                let root = db.root_id();
+                db.add_group(root, g, now)?;
+                Ok(id)
+            })
+            .unwrap()
+    }
+
+    fn invalid<T: std::fmt::Debug>(r: Result<T, SessionError>) {
+        assert!(matches!(r, Err(SessionError::InvalidInput(_))), "{r:?}");
+    }
+
+    #[test]
+    fn history_tree_is_refused_as_a_write_target() {
+        for marker_only in [false, true] {
+            let f = fx();
+            let hist = history_group(&f, marker_only);
+            let nested = f
+                .session
+                .mutate(|db, now| {
+                    let g = Group::new("N", now);
+                    let id = g.uuid;
+                    db.add_group(hist, g, now)?;
+                    Ok(id)
+                })
+                .unwrap();
+            let id = f.create(|m| m.title = "x".into());
+            let other = create_group(&f.session, f.root, "G", None).unwrap();
+            for target in [hist, nested] {
+                let mut m = new_model(EntryTypeDto::Login, target);
+                m.title = "new".into();
+                invalid(save_entry(&f.session, m));
+                let mut m = f.model(id);
+                m.group_id = target.simple().to_string();
+                invalid(save_entry(&f.session, m));
+                invalid(move_entry(&f.session, id, target));
+                invalid(create_group(&f.session, target, "sub", None));
+                invalid(move_group(&f.session, other, target));
+                delete_entry(&f.session, id).unwrap();
+                invalid(restore_entry(&f.session, id, target));
+                restore_entry(&f.session, id, f.root).unwrap();
+            }
+            assert_eq!(f.db(|d| d.parent_of_entry(id)), Some(f.root));
+        }
+    }
+
+    #[test]
+    fn bin_uuid_pointing_at_the_root_is_no_bin() {
+        let f = fx();
+        let id = f.create(|m| m.title = "x".into());
+        let root = f.root;
+        f.session
+            .mutate(|db, _| {
+                db.meta.recycle_bin_uuid = Some(root);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(f.db(bin_id), None);
+        assert_eq!(empty_bin(&f.session), Ok(0));
+        assert!(f.db(|d| d.find_entry(id).is_some()));
+        f.edit(id, |m| m.title = "y".into());
+    }
+
+    #[test]
+    fn same_value_operations_leave_the_session_idle() {
+        let f = fx();
+        let id = f.create(|m| m.title = "x".into());
+        let g = create_group(&f.session, f.root, "G", Some("a")).unwrap();
+        set_favorite(&f.session, id, true).unwrap();
+        f.session.flush().unwrap();
+        let idle = || assert_eq!(f.session.status().save.state, SaveState::Idle);
+        let before = f.db(|d| d.clone());
+        set_favorite(&f.session, id, true).unwrap();
+        idle();
+        update_group(&f.session, g, "G", Some("a")).unwrap();
+        idle();
+        move_entry(&f.session, id, f.root).unwrap();
+        idle();
+        assert!(f.db(|d| *d == before));
+        set_favorite(&f.session, id, false).unwrap();
+        assert_eq!(f.session.status().save.state, SaveState::Pending);
+    }
+
+    fn two_files(f: &Fx) -> (String, String) {
+        let one = f.write_file("note.txt", b"one");
+        std::fs::create_dir(f.dir.path().join("sub")).unwrap();
+        let two = f.write_file("sub/note.txt", b"two");
+        (
+            one.to_string_lossy().into_owned(),
+            two.to_string_lossy().into_owned(),
+        )
+    }
+
+    #[test]
+    fn attachment_add_of_an_existing_name_is_refused_unless_removed_first() {
+        let f = fx();
+        let (one, two) = two_files(&f);
+        let id = f.create(|m| {
+            m.title = "x".into();
+            m.attachment_ops = vec![AttachmentOp::Add { path: one }];
+        });
+        let mut m = f.model(id);
+        m.attachment_ops = vec![AttachmentOp::Add { path: two.clone() }];
+        let r = save_entry(&f.session, m);
+        assert!(
+            matches!(&r, Err(SessionError::InvalidInput(msg)) if msg.contains("note.txt")),
+            "{r:?}"
+        );
+        assert_eq!(f.entry(id).attachments[0].data, b"one");
+        // Remove then add in one model is the replace, whatever the order of the two ops.
+        let mut m = f.model(id);
+        m.attachment_ops = vec![
+            AttachmentOp::Add { path: two },
+            AttachmentOp::Remove {
+                name: "note.txt".into(),
+            },
+        ];
+        save_entry(&f.session, m).unwrap();
+        let e = f.entry(id);
+        assert_eq!(e.attachments.len(), 1);
+        assert_eq!(e.attachments[0].data, b"two");
+    }
+
+    #[test]
+    fn two_adds_with_the_same_name_are_refused() {
+        let f = fx();
+        let (one, two) = two_files(&f);
+        let mut m = new_model(EntryTypeDto::Login, f.root);
+        m.attachment_ops = vec![
+            AttachmentOp::Add { path: one },
+            AttachmentOp::Add { path: two },
+        ];
+        let r = save_entry(&f.session, m);
+        assert!(
+            matches!(&r, Err(SessionError::InvalidInput(msg)) if msg.contains("note.txt")),
+            "{r:?}"
+        );
+    }
+
+    #[test]
+    fn too_many_adds_are_refused_before_any_file_is_read() {
+        let f = fx();
+        // None of these files exists: reading one would be an `Io` error, not `LimitExceeded`.
+        let mut m = new_model(EntryTypeDto::Login, f.root);
+        m.attachment_ops = (0..=MAX_ATTACHMENTS_PER_ENTRY)
+            .map(|i| AttachmentOp::Add {
+                path: f
+                    .dir
+                    .path()
+                    .join(format!("absent{i}"))
+                    .to_string_lossy()
+                    .into_owned(),
+            })
+            .collect();
+        assert!(matches!(
+            save_entry(&f.session, m),
+            Err(SessionError::LimitExceeded(_))
+        ));
+    }
+
+    #[test]
+    fn duplicate_custom_keys_from_another_client_stay_saveable() {
+        let mut e = titled("Dup");
+        e.fields.push(mypass_kdbx::Field {
+            key: "dup".into(),
+            value: "first".into(),
+            protected: false,
+        });
+        e.fields.push(mypass_kdbx::Field {
+            key: "dup".into(),
+            value: "second".into(),
+            protected: false,
+        });
+        let (db, id) = db_with(e);
+        let f = fx_with(db);
+        f.session.flush().unwrap();
+        let m = f.model(id);
+        assert_eq!(m.custom_fields.len(), 1);
+        assert_eq!(m.custom_fields[0].value, "first");
+        // Unchanged: a no-op, the extra stays.
+        let before = f.entry(id);
+        save_entry(&f.session, m).unwrap();
+        assert_eq!(f.entry(id), before);
+        assert_eq!(f.session.status().save.state, SaveState::Idle);
+        // A real change drops the extra and keeps the first.
+        f.edit(id, |m| m.title = "Renamed".into());
+        let e = f.entry(id);
+        let dups: Vec<&str> = e
+            .fields
+            .iter()
+            .filter(|x| x.key == "dup")
+            .map(|x| x.value.as_str())
+            .collect();
+        assert_eq!(dups, ["first"]);
+        // Editing the value to what the extra held is a real edit of the first one.
+        f.edit(id, |m| m.custom_fields[0].value = "second".into());
+        assert_eq!(f.entry(id).field("dup"), Some("second"));
+    }
+
+    #[test]
+    fn type_change_never_overwrites_a_foreign_notes_value() {
+        let mut e = titled("N");
+        e.set_field(ENTRY_TYPE_FIELD, "Notes", false);
+        e.set_field(NOTES_BODY, "body", false);
+        e.set_field("Notes", "foreign", false);
+        let (db, id) = db_with(e);
+        let f = fx_with(db);
+        // Unchanged text: the foreign value stays in `Notes`, the body stays in place.
+        f.edit(id, |m| m.entry_type = EntryTypeDto::Login);
+        let e = f.entry(id);
+        assert_eq!(e.field("Notes"), Some("foreign"));
+        assert_eq!(e.field(NOTES_BODY), Some("body"));
+        // Edited text during a type change goes to the old key, never over `Notes`.
+        let mut e = titled("N2");
+        e.set_field(ENTRY_TYPE_FIELD, "Notes", false);
+        e.set_field(NOTES_BODY, "body", false);
+        e.set_field("Notes", "foreign", false);
+        let (db, id) = db_with(e);
+        let f = fx_with(db);
+        f.edit(id, |m| {
+            m.entry_type = EntryTypeDto::Login;
+            m.notes = "edited".into();
+        });
+        let e = f.entry(id);
+        assert_eq!(e.field("Notes"), Some("foreign"));
+        assert_eq!(e.field(NOTES_BODY), Some("edited"));
+        // Without a foreign value the text follows the type as before.
+        let id = f.create(|m| m.notes = "plain".into());
+        f.edit(id, |m| m.entry_type = EntryTypeDto::Notes);
+        assert_eq!(f.entry(id).field(NOTES_BODY), Some("plain"));
+    }
+
+    #[test]
+    fn history_max_size_trims_through_save_entry() {
+        let f = fx();
+        f.session
+            .mutate(|db, _| {
+                db.meta.history_max_size = 2_500;
+                Ok(())
+            })
+            .unwrap();
+        let big = |c: char| CustomFieldEdit {
+            key: "k".into(),
+            value: c.to_string().repeat(1_000),
+            protected: false,
+        };
+        let id = f.create(|m| {
+            m.title = "x".into();
+            m.custom_fields = vec![big('a')];
+        });
+        for c in ['b', 'c', 'd', 'e'] {
+            f.edit(id, |m| m.custom_fields = vec![big(c)]);
+        }
+        let e = f.entry(id);
+        // Each snapshot is about 1 KiB: two fit in 2500 bytes, the older ones were dropped.
+        assert_eq!(e.history.len(), 2);
+        assert_eq!(e.field("k"), Some("e".repeat(1_000).as_str()));
+        let newest = e.history.last().unwrap();
+        assert_eq!(newest.field("k"), Some("d".repeat(1_000).as_str()));
     }
 }

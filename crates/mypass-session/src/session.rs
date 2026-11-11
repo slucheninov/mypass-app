@@ -723,6 +723,16 @@ impl VaultSession {
         &self,
         f: impl FnOnce(&mut Database, Timestamp) -> Result<R, SessionError>,
     ) -> Result<R, SessionError> {
+        self.mutate_tracked(|db, now| f(db, now).map(|r| (r, true)))
+    }
+
+    /// Like [`VaultSession::mutate`], but the closure also reports whether it changed anything.
+    /// With `false` the clone is dropped: no swap, no dirty bump, no save scheduling and no
+    /// change event, so a no-op edit never rewrites the vault file or burns a backup slot.
+    pub fn mutate_tracked<R>(
+        &self,
+        f: impl FnOnce(&mut Database, Timestamp) -> Result<(R, bool), SessionError>,
+    ) -> Result<R, SessionError> {
         let now = self.now();
         let mut out = Outbox::default();
         let result = {
@@ -734,7 +744,10 @@ impl VaultSession {
                 return Err(inner.not_unlocked());
             };
             let mut draft = db.clone();
-            let r = f(&mut draft, now)?;
+            let (r, changed) = f(&mut draft, now)?;
+            if !changed {
+                return Ok(r);
+            }
             inner.db = Some(draft);
             inner.dirty_gen = inner.dirty_gen.wrapping_add(1);
             if !inner.in_flight {

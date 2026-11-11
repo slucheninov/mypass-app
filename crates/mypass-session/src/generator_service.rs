@@ -6,7 +6,7 @@
 use crate::dto::{
     timestamp_ms, GenerateRequest, GeneratedPassword, GeneratorHistoryItem, RulesSummary,
 };
-use crate::fields::GENERATOR_HISTORY_MARKER;
+use crate::fields::{is_history_group, GENERATOR_HISTORY_MARKER};
 use crate::session::{GeneratorRulesError, SessionError, VaultSession};
 use crate::settings::{GeneratorOptionsDto, GENERATOR_LENGTH};
 use mypass_core::entry_ext::GENERATOR_HISTORY_GROUP_UUID;
@@ -158,11 +158,23 @@ pub fn generate_password(
     })
 }
 
-/// Entries of the history group in insertion order, with their index.
+fn collect_history<'a>(group: &'a Group, out: &mut Vec<&'a Entry>) {
+    if is_history_group(group) {
+        out.extend(group.entries.iter());
+    }
+    for child in &group.groups {
+        collect_history(child, out);
+    }
+}
+
+/// The entries of every history group (by fixed UUID or marker, the same definition the queries
+/// hide) in document order.
 fn history_entries(db: &Database) -> Vec<&Entry> {
-    db.find_group(GENERATOR_HISTORY_GROUP_UUID)
-        .map(|g| g.entries.iter().collect())
-        .unwrap_or_default()
+    let mut out = Vec::new();
+    for child in &db.root.groups {
+        collect_history(child, &mut out);
+    }
+    out
 }
 
 /// Newest first; entries created in the same second list the later insert first.
@@ -230,7 +242,11 @@ pub fn history_reveal(db: &Database, id: Uuid) -> Result<String, SessionError> {
 /// Permanently removes history entry `id` (with a tombstone); `NotFound` for anything else.
 pub fn history_delete(session: &VaultSession, id: Uuid) -> Result<(), SessionError> {
     session.mutate(|db, now| {
-        if db.parent_of_entry(id) != Some(GENERATOR_HISTORY_GROUP_UUID) {
+        let in_history = db
+            .parent_of_entry(id)
+            .and_then(|g| db.find_group(g))
+            .is_some_and(is_history_group);
+        if !in_history {
             return Err(SessionError::NotFound);
         }
         db.purge_entry(id, now)?;
@@ -615,6 +631,36 @@ mod tests {
             })
             .unwrap();
         assert_eq!(history_delete(&f.session, id), Err(SessionError::NotFound));
+    }
+
+    #[test]
+    fn marker_only_history_group_is_a_history_group_everywhere() {
+        let f = fx();
+        let id = f
+            .session
+            .mutate(|db, now| {
+                let mut g = Group::new("H", now);
+                g.set_custom(GENERATOR_HISTORY_MARKER, "1");
+                let gid = g.uuid;
+                let root = db.root_id();
+                db.add_group(root, g, now)?;
+                let mut e = Entry::new(now);
+                e.set_field("Password", "marked", true);
+                let id = e.uuid;
+                db.add_entry(gid, e, now)?;
+                Ok(id)
+            })
+            .unwrap();
+        f.session
+            .with_db(|db| {
+                assert_eq!(history_list(db).len(), 1);
+                assert_eq!(history_reveal(db, id), Ok("marked".to_owned()));
+            })
+            .unwrap();
+        history_delete(&f.session, id).unwrap();
+        f.session
+            .with_db(|db| assert!(history_list(db).is_empty()))
+            .unwrap();
     }
 
     #[test]

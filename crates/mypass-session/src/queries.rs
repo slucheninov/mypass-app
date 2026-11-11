@@ -13,11 +13,11 @@ use crate::dto::{
     SecurityFlag, Sidebar, SortKey, TotpDto,
 };
 use crate::fields::{
-    EntryFields, ADDRESS_FIELDS, ADDRESS_LABELS, ADDRESS_PREFIX, CARD_CVV, CARD_EXPIRY,
-    CARD_HOLDER, CARD_NUMBER, GENERATOR_HISTORY_MARKER, GROUP_EMOJI, NOTES_BODY, PASSKEY_CREATED,
+    bin_id, is_history_group, EntryFields, ADDRESS_FIELDS, ADDRESS_LABELS, ADDRESS_PREFIX,
+    CARD_CVV, CARD_EXPIRY, CARD_HOLDER, CARD_NUMBER, GROUP_EMOJI, NOTES_BODY, PASSKEY_CREATED,
     PASSKEY_RELYING_PARTY, PASSKEY_USERNAME,
 };
-use mypass_core::entry_ext::{EntryExt, EntryType, GENERATOR_HISTORY_GROUP_UUID};
+use mypass_core::entry_ext::{EntryExt, EntryType};
 use mypass_core::matcher::host_of;
 use mypass_kdbx::{Database, Entry, Group, Timestamp};
 use sha2::{Digest, Sha256};
@@ -58,21 +58,17 @@ struct Walk<'a> {
     bin_groups: HashSet<Uuid>,
 }
 
-fn is_history_group(group: &Group) -> bool {
-    group.uuid == GENERATOR_HISTORY_GROUP_UUID || group.custom(GENERATOR_HISTORY_MARKER).is_some()
-}
-
 fn walk(db: &Database) -> Walk<'_> {
     let mut out = Walk {
         items: Vec::new(),
         bin_groups: HashSet::new(),
     };
-    walk_group(db, &db.root, false, &mut out);
+    walk_group(bin_id(db), &db.root, false, &mut out);
     out
 }
 
-fn walk_group<'a>(db: &Database, group: &'a Group, parent_in_bin: bool, out: &mut Walk<'a>) {
-    let in_bin = parent_in_bin || db.meta.recycle_bin_uuid == Some(group.uuid);
+fn walk_group<'a>(bin: Option<Uuid>, group: &'a Group, parent_in_bin: bool, out: &mut Walk<'a>) {
+    let in_bin = parent_in_bin || bin == Some(group.uuid);
     if in_bin {
         out.bin_groups.insert(group.uuid);
     }
@@ -85,7 +81,7 @@ fn walk_group<'a>(db: &Database, group: &'a Group, parent_in_bin: bool, out: &mu
         });
     }
     for child in group.groups.iter().filter(|g| !is_history_group(g)) {
-        walk_group(db, child, in_bin, out);
+        walk_group(bin, child, in_bin, out);
     }
 }
 
@@ -444,7 +440,7 @@ pub fn sidebar(db: &Database) -> Sidebar {
             }),
         })
         .collect();
-    let bin = db.meta.recycle_bin_uuid;
+    let bin = bin_id(db);
     let mut groups: Vec<GroupNode> = db
         .root
         .groups
@@ -753,6 +749,29 @@ mod tests {
         assert_eq!(get(Category::Deleted), Some(1));
         assert_eq!(get(Category::Security), None);
         assert_eq!(counts.len(), 10);
+    }
+
+    #[test]
+    fn bin_uuid_pointing_at_the_root_means_no_bin() {
+        let mut s = sample_database();
+        let root = s.db.root_id();
+        s.db.meta.recycle_bin_uuid = Some(root);
+        assert_eq!(bin_id(&s.db), None);
+        assert!(list_entries(&s.db, &cat(Category::Deleted, ""), true).is_empty());
+        let all = list_entries(&s.db, &cat(Category::All, ""), true);
+        assert!(all.iter().all(|e| !e.in_recycle_bin));
+        assert!(ids(&all).contains(&simple(s.a)));
+        assert!(!entry_detail(&s.db, s.a).unwrap().in_recycle_bin);
+        let sb = sidebar(&s.db);
+        let count = |c: Category| {
+            sb.categories
+                .iter()
+                .find(|x| x.category == c)
+                .unwrap()
+                .count
+        };
+        assert_eq!(count(Category::Deleted), Some(0));
+        assert!(sb.groups.iter().all(|g| !g.is_recycle_bin));
     }
 
     #[test]
