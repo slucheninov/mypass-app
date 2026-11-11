@@ -583,3 +583,29 @@ fn root_as_recycle_bin_delete_group_moves_to_a_fresh_bin() {
     assert!(db.is_in_recycle_bin(eid));
     assert!(db.deleted_objects.is_empty());
 }
+
+#[test]
+fn add_entries_matches_add_entry_and_is_all_or_nothing() {
+    let mut db = Database::new("t");
+    let root = db.root_id();
+    let batch = vec![make_entry("a"), make_entry("b")];
+    let ids: Vec<Uuid> = batch.iter().map(|e| e.uuid).collect();
+    db.add_entries(root, batch, t(5)).unwrap();
+    for id in &ids {
+        assert_eq!(db.find_entry(*id).unwrap().location_changed, t(5));
+        assert_eq!(db.parent_of_entry(*id), Some(root));
+    }
+    // A repeated id inside the batch, an id already in the tree and a missing parent change nothing.
+    let twin = make_entry("c");
+    let dup = vec![twin.clone(), twin];
+    assert!(db.add_entries(root, dup, t(6)).is_err());
+    let existing = db.find_entry(ids[0]).unwrap().clone();
+    assert!(db
+        .add_entries(root, vec![make_entry("d"), existing], t(6))
+        .is_err());
+    assert!(db
+        .add_entries(Uuid::nil(), vec![make_entry("e")], t(6))
+        .is_err());
+    assert_eq!(db.root.entries.len(), 2);
+    db.add_entries(root, Vec::new(), t(7)).unwrap();
+}

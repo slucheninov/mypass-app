@@ -10,16 +10,21 @@
 
 pub use crate::dto::{CsvPreview, ImportResult, SkipReason, SkippedRow};
 use crate::editing::put;
-use crate::fields::GENERATOR_HISTORY_MARKER;
+use crate::fields::is_valid_user_target;
 use crate::session::{SessionError, VaultSession};
-use mypass_core::entry_ext::{EntryExt, GENERATOR_HISTORY_GROUP_UUID};
-use mypass_kdbx::{Entry, Group};
+use mypass_core::entry_ext::EntryExt;
+use mypass_kdbx::Entry;
 use uuid::Uuid;
 use zeroize::Zeroize;
 
 /// The largest CSV file the facade reads and [`parse_csv`] accepts (16 MiB, tens of thousands of
 /// logins): a password export is kilobytes to a few megabytes, so more is a wrong file.
 pub const MAX_CSV_BYTES: usize = 16 * 1024 * 1024;
+
+/// The most data records (rows after the header, skipped ones included) [`parse_csv`] reads;
+/// more is [`CsvImportError::TooLarge`]. Bounds the work and the memory held under the session
+/// lock by one import.
+pub const MAX_IMPORT_ROWS: usize = 50_000;
 
 /// The most fields one record may have. A 16 MiB row of commas would otherwise build millions of
 /// empty strings; real exports have a handful of columns.
@@ -166,7 +171,8 @@ impl<'a> Tokenizer<'a> {
                         fields.push(std::mem::take(&mut cell));
                     } else {
                         too_wide = true;
-                        cell.clear();
+                        // The discarded cell may hold a password.
+                        cell.zeroize();
                     }
                     at_start = true;
                 }
@@ -276,9 +282,15 @@ pub fn parse_csv(bytes: &[u8]) -> Result<CsvParse, CsvImportError> {
 
     let mut logins = Vec::new();
     let mut skipped = Vec::new();
+    let mut rows = 0usize;
     while let Some(record) = tokens.next_record() {
         if record.blank {
             continue;
+        }
+        rows += 1;
+        if rows > MAX_IMPORT_ROWS {
+            // Stop at once; the logins read so far wipe their passwords on drop.
+            return Err(CsvImportError::TooLarge);
         }
         let line = record.line;
         let reason = match record.fields {
@@ -313,21 +325,6 @@ pub fn parse_csv(bytes: &[u8]) -> Result<CsvParse, CsvImportError> {
     Ok(CsvParse { logins, skipped })
 }
 
-/// `ancestor` is the group `id` or has it somewhere below.
-fn contains_group(ancestor: &Group, id: Uuid) -> bool {
-    ancestor.uuid == id || ancestor.groups.iter().any(|g| contains_group(g, id))
-}
-
-/// `id` lies in (or is) a generator history group somewhere under `group`.
-fn in_history_tree(group: &Group, id: Uuid) -> bool {
-    if group.uuid == GENERATOR_HISTORY_GROUP_UUID
-        || group.custom(GENERATOR_HISTORY_MARKER).is_some()
-    {
-        return contains_group(group, id);
-    }
-    group.groups.iter().any(|g| in_history_tree(g, id))
-}
-
 /// Adds every login to `group` in one mutation: all of them or none. Each is a Login with a fresh
 /// UUID and the mutation's time, its password protected like the editor's. Importing into a
 /// missing group is `NotFound`; the recycle bin and the generator history group are not valid
@@ -342,19 +339,9 @@ pub fn import_logins(
         return Ok(0);
     }
     session.mutate(|db, now| {
-        db.find_group(group).ok_or(SessionError::NotFound)?;
         // The bin and the generator history group, and everything nested in either, are off limits.
-        let in_bin = db
-            .meta
-            .recycle_bin_uuid
-            .and_then(|id| db.find_group(id))
-            .is_some_and(|bin| contains_group(bin, group));
-        let in_history = in_history_tree(&db.root, group);
-        if in_bin || in_history {
-            return Err(SessionError::InvalidInput(
-                "this group cannot receive imported logins".into(),
-            ));
-        }
+        is_valid_user_target(db, group)?;
+        let mut entries = Vec::with_capacity(logins.len());
         for login in &logins {
             let mut entry = Entry::new(now);
             put(&mut entry, "Title", &login.title, false, true);
@@ -365,8 +352,10 @@ pub fn import_logins(
             if !url.is_empty() {
                 entry.set_urls(&[url.to_owned()]);
             }
-            db.add_entry(group, entry, now)?;
+            entries.push(entry);
         }
+        // One bulk insert: `add_entry` per row would walk the whole vault for each of them.
+        db.add_entries(group, entries, now)?;
         Ok(count_u32(logins.len()))
     })
 }
@@ -739,5 +728,57 @@ mod tests {
         let f = fx();
         assert_eq!(import_logins(&f.session, f.root, Vec::new()), Ok(0));
         assert_eq!(f.session.status().save.state, SaveState::Idle);
+    }
+
+    #[test]
+    fn bin_uuid_pointing_at_the_root_does_not_block_import() {
+        let f = fx();
+        let root = f.root;
+        f.session
+            .mutate(|db, _| {
+                db.meta.recycle_bin_uuid = Some(root);
+                Ok(())
+            })
+            .unwrap();
+        let normal = f
+            .session
+            .mutate(|db, now| {
+                let g = mypass_kdbx::Group::new("G", now);
+                let id = g.uuid;
+                db.add_group(db.root_id(), g, now)?;
+                Ok(id)
+            })
+            .unwrap();
+        assert_eq!(import_logins(&f.session, normal, vec![login(1)]), Ok(1));
+        assert_eq!(import_logins(&f.session, f.root, vec![login(2)]), Ok(1));
+    }
+
+    #[test]
+    fn more_than_max_import_rows_is_too_large() {
+        let mut text = String::from("title,username,password\n");
+        for _ in 0..=MAX_IMPORT_ROWS {
+            text.push_str("T,u,p\n");
+        }
+        assert_eq!(
+            parse_csv(text.as_bytes()).unwrap_err(),
+            CsvImportError::TooLarge
+        );
+        let ok = text.replacen("T,u,p\n", "", 1);
+        assert_eq!(
+            parse_csv(ok.as_bytes()).unwrap().logins.len(),
+            MAX_IMPORT_ROWS
+        );
+    }
+
+    #[test]
+    fn import_of_5000_rows_yields_5000_entries() {
+        let f = fx();
+        let logins: Vec<ImportedLogin> = (0..5_000).map(login).collect();
+        assert_eq!(import_logins(&f.session, f.root, logins), Ok(5_000));
+        let n = f
+            .session
+            .with_db(|d| d.find_group(f.root).unwrap().entries.len())
+            .unwrap();
+        assert_eq!(n, 5_000);
     }
 }

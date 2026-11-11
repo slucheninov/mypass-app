@@ -148,6 +148,31 @@ impl Database {
         g.entries.push(entry);
         Ok(())
     }
+    /// Adds many entries to one group in time linear in the vault size plus the batch: the
+    /// identity check of [`Database::add_entry`] runs against a set built once. All or nothing:
+    /// a missing parent, an identity already in the live tree or repeated inside the batch
+    /// rejects the whole batch and changes nothing. Each entry gets what `add_entry` gives it
+    /// (`location_changed = now`).
+    pub fn add_entries(&mut self, parent: Uuid, entries: Vec<Entry>, now: Timestamp) -> Result<()> {
+        let mut taken: HashSet<Uuid> = HashSet::new();
+        for (g, _) in groups(&self.root) {
+            taken.insert(g.uuid);
+            taken.extend(g.entries.iter().map(|e| e.uuid));
+        }
+        for e in &entries {
+            if !taken.insert(e.uuid) {
+                return Err(invalid("duplicate UUID"));
+            }
+        }
+        let g = self
+            .find_group_mut(parent)
+            .ok_or_else(|| invalid("missing parent"))?;
+        g.entries.extend(entries.into_iter().map(|mut e| {
+            e.location_changed = now;
+            e
+        }));
+        Ok(())
+    }
     /// Edits content and records its previous version; rejects a missing entry.
     /// Identity and history are preserved regardless of edits to them by the closure.
     pub fn update_entry(
