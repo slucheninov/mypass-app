@@ -3,6 +3,7 @@
 //! Timestamps are `f64` Unix milliseconds and sizes are `f64` bytes (specta rejects 64-bit
 //! integers because JavaScript numbers cannot hold them).
 
+use crate::settings::GeneratorOptionsDto;
 use mypass_core::entry_ext::EntryType;
 use mypass_kdbx::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -348,4 +349,58 @@ pub struct HistoryItem {
     pub modified: f64,
     pub title: String,
     pub changed_fields: Vec<String>,
+}
+
+/// Input of the password generator. `host` selects the site rules; `record_url`, when present,
+/// also writes the generated value to the generator history.
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateRequest {
+    pub options: GeneratorOptionsDto,
+    pub host: Option<String>,
+    pub record_url: Option<String>,
+}
+
+/// The site rules that applied, as the generator panel shows them. Class names are `lowercase`,
+/// `uppercase`, `digits` and `symbols`.
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RulesSummary {
+    pub min_length: Option<u32>,
+    pub max_length: Option<u32>,
+    pub max_consecutive: Option<u32>,
+    pub forced_on: Vec<String>,
+    pub excluded: Vec<String>,
+}
+
+/// A freshly generated password: a display value, like the one a new-password field shows.
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedPassword {
+    pub value: String,
+    pub effective: GeneratorOptionsDto,
+    pub rules: Option<RulesSummary>,
+    pub history_id: Option<String>,
+}
+
+impl std::fmt::Debug for GeneratedPassword {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GeneratedPassword")
+            .field("value", &"<redacted>")
+            .field("effective", &self.effective)
+            .field("rules", &self.rules)
+            .field("history_id", &self.history_id)
+            .finish()
+    }
+}
+
+/// One generator history row. It never carries the password; reveal it by id.
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratorHistoryItem {
+    pub id: String,
+    pub url: String,
+    pub title: String,
+    /// Unix milliseconds.
+    pub created: f64,
 }

@@ -120,7 +120,7 @@ pub enum RequireAccountPasswordWindow {
 
 /// Generator defaults remembered between sessions (a partial object fills the rest from the
 /// defaults).
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq, Debug)]
 #[serde(default, rename_all = "camelCase")]
 pub struct GeneratorOptionsDto {
     pub length: u32,
