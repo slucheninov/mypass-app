@@ -1,0 +1,30 @@
+{
+  "language": "system",
+  "theme": "system",
+  "autoLockIdleTimeout": "thirtyMinutes",
+  "lockOnDeviceSleep": true,
+  "lockOnScreenLock": true,
+  "clipboardClearSeconds": 30,
+  "backupCount": 10,
+  "backupInterval": "everySave",
+  "launchAtLogin": false,
+  "showMenuBarExtra": true,
+  "shortcutLock": "CommandOrControl+Shift+L",
+  "shortcutShow": "",
+  "generator": {
+    "length": 20,
+    "lowercase": true,
+    "uppercase": true,
+    "digits": true,
+    "symbols": true
+  },
+  "passkeyProxyEnabled": true,
+  "unlockTouchIdEnabled": false,
+  "unlockMacPasswordEnabled": false,
+  "unlockWithDeviceWindow": "eightHours",
+  "requireAccountPasswordWindow": "thirtyDays",
+  "secondaryFolder": null,
+  "updateCheckEnabled": true,
+  "vaultPath": null,
+  "recentVaults": []
+}

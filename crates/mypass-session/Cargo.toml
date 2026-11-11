@@ -15,6 +15,10 @@ workspace = true
 mypass-kdbx = { path = "../mypass-kdbx" }
 mypass-core = { path = "../mypass-core" }
 mypass-platform = { path = "../mypass-platform" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 mypass-kdbx = { path = "../mypass-kdbx", features = ["test-util"] }
+tempfile.workspace = true
