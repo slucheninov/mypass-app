@@ -73,10 +73,13 @@ specta-typescript = "=0.0.13"
 
 # --- Stage 2a: OS glue, clipboard, drafts, locale (consumed by later 2a tasks) ---
 objc2 = "0.6.5"
-objc2-foundation = "0.3.2"
-objc2-app-kit = "0.3.2"
+# The default features of the two framework crates enable every class binding (minutes of build
+# time); members list the classes they use.
+objc2-foundation = { version = "0.3.2", default-features = false }
+objc2-app-kit = { version = "0.3.2", default-features = false }
 block2 = "0.6.2"
-arboard = "3.7.0"
+# `image-data` (default) would pull the `image` crate; only text is ever written.
+arboard = { version = "3.7.0", default-features = false }
 chacha20poly1305 = "0.11.0"
 sys-locale = "0.3.2"
 

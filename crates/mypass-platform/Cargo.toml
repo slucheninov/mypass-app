@@ -8,5 +8,54 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
-[lints]
-workspace = true
+# The only member with its own lint tables (guard `workspace_lints_forbid_unsafe`): an exact copy
+# of `[workspace.lints]` except `unsafe_code = "deny"` instead of `forbid`, because the macOS glue
+# calls Objective-C and Carbon. `deny` can be lifted per module; only `src/macos.rs` does so
+# (guard `unsafe_only_in_allow_listed_modules`). Keep these tables in sync with the workspace.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+indexing_slicing = "warn"
+
+[features]
+default = []
+# Exposes `mypass_platform::testing` (the fakes) to other crates' tests; never enable in production.
+test-util = []
+
+[dependencies]
+secrecy.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+arboard.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2.workspace = true
+objc2.workspace = true
+objc2-foundation = { workspace = true, features = [
+    "std",
+    "block2",
+    "NSArray",
+    "NSData",
+    "NSDate",
+    "NSDictionary",
+    "NSDistributedNotificationCenter",
+    "NSEnumerator",
+    "NSNotification",
+    "NSObject",
+    "NSOperation",
+    "NSRunLoop",
+    "NSString",
+    "NSThread",
+    "NSURL",
+] }
+objc2-app-kit = { workspace = true, features = [
+    "std",
+    "NSPasteboard",
+    "NSRunningApplication",
+    "NSWorkspace",
+] }

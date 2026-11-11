@@ -66,8 +66,8 @@ Last updated: 2026-11-10
 
 ## Stage 6 Windows
 
-- [ ] Windows bodies of every `mypass-platform` trait (DPAPI secret stores, lock and suspend events,
-  clipboard history exclusion).
+- [ ] Windows bodies of every `mypass-platform` trait (DPAPI secret stores, lock and suspend events;
+  the clipboard history exclusion already ships through `arboard`).
 - [ ] Native messaging host registration through the registry, Windows shell behaviour and zip
   packaging.
 - [ ] Windows jobs in CI and the release workflow, and the Windows-only integration suite behind
