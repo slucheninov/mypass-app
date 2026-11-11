@@ -470,3 +470,49 @@ pub enum OpenWarning {
     /// Another `com.mypass.app` process, with a different executable (the old Swift app), runs.
     OldAppRunning { executable: String },
 }
+
+// ---- app facade (Task 14) ----
+
+/// What the About pane and the unlock screen need to know about the running app.
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AppInfo {
+    pub version: String,
+    /// `macos`, `windows` or `linux`.
+    pub os: String,
+    /// Device unlock (Touch ID, account password) can be used on this platform.
+    pub device_unlock_available: bool,
+}
+
+/// The launch-at-login state, mirrored from `mypass_platform::LoginItemStatus` so the platform
+/// crate needs no `specta`. `Unsupported` is a value: the General pane hides the row.
+#[derive(Serialize, Deserialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum LoginItemStatus {
+    Enabled,
+    Disabled,
+    RequiresApproval,
+    NotFound,
+    Unsupported,
+}
+
+impl From<mypass_platform::LoginItemStatus> for LoginItemStatus {
+    fn from(s: mypass_platform::LoginItemStatus) -> Self {
+        use mypass_platform::LoginItemStatus as P;
+        match s {
+            P::Enabled => Self::Enabled,
+            P::Disabled => Self::Disabled,
+            P::RequiresApproval => Self::RequiresApproval,
+            P::NotFound => Self::NotFound,
+            P::Unsupported => Self::Unsupported,
+        }
+    }
+}
+
+/// Asks the main window to open entry `id` (in the editor when `edit`); the Tauri event wraps it.
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenEntryEvent {
+    pub id: String,
+    pub edit: bool,
+}

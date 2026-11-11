@@ -2592,6 +2592,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
  "chacha20poly1305",
+ "keepass",
  "mypass-core",
  "mypass-kdbx",
  "mypass-platform",

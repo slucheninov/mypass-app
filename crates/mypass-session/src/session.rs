@@ -437,6 +437,12 @@ impl VaultSession {
         }))
     }
 
+    /// The backup manager this session snapshots through (a clone shares its failure record, so
+    /// the backups pane reports the failures of the session's own snapshots).
+    pub fn backups(&self) -> BackupManager {
+        self.0.backups.clone()
+    }
+
     /// Registers an observer for every later event.
     pub fn add_observer(&self, o: Observer) {
         self.0
@@ -509,7 +515,7 @@ impl VaultSession {
         }
     }
 
-    fn check_not_quitting(&self) -> Result<(), SessionError> {
+    pub(crate) fn check_not_quitting(&self) -> Result<(), SessionError> {
         if lock(&self.0.inner).quitting {
             Err(SessionError::Quitting)
         } else {
