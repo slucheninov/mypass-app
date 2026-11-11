@@ -36,11 +36,7 @@ pub fn file_status(path: Option<&Path>) -> VaultFileStatus {
         },
         Ok(meta) => VaultFileStatus::Connected {
             size: meta.len() as f64,
-            modified: meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                .map_or(0.0, |d| d.as_millis() as f64),
+            modified: millis(&meta),
         },
         Err(e) if e.kind() == ErrorKind::NotFound => VaultFileStatus::Missing,
         Err(e) => VaultFileStatus::Unreadable {
@@ -116,6 +112,10 @@ fn millis(meta: &std::fs::Metadata) -> f64 {
         .map_or(0.0, |d| d.as_millis() as f64)
 }
 
+/// The clock is also read every this many directory entries, so one huge flat directory cannot
+/// outlast the time budget.
+const ENTRIES_PER_CLOCK_CHECK: usize = 256;
+
 /// Looks for `.kdbx` files below `roots`, newest modification first, unique by canonical path.
 ///
 /// Bounded by depth, result count and time (`now` is the injected clock; it is read once at the
@@ -142,8 +142,14 @@ pub fn scan_for_vaults(
         let Ok(read) = std::fs::read_dir(&dir) else {
             continue;
         };
-        for item in read {
+        for (n, item) in read.enumerate() {
             if found.len() >= limits.max_results {
+                break;
+            }
+            if n > 0
+                && n % ENTRIES_PER_CLOCK_CHECK == 0
+                && now().saturating_duration_since(start) >= limits.time_budget
+            {
                 break;
             }
             let Ok(item) = item else { continue };
@@ -165,6 +171,8 @@ pub fn scan_for_vaults(
             } else if file_type.is_file() && is_kdbx(&name) {
                 let path = item.path();
                 let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+                // The same file can be reached through overlapping roots (or a root that is itself
+                // a link): list it once, by its real path.
                 if !seen.insert(canonical) {
                     continue;
                 }
@@ -177,6 +185,8 @@ pub fn scan_for_vaults(
             }
         }
     }
+    // Newest first: the vault the user touched last is the one they most likely want; the path
+    // breaks ties so the order is deterministic.
     found.sort_by(|a, b| {
         b.modified
             .total_cmp(&a.modified)
@@ -457,12 +467,13 @@ mod tests {
         touch(&dir.path().join("top.kdbx"));
         touch(&dir.path().join("sub").join("deep.kdbx"));
         let base = Instant::now();
-        // Call 0 is the start, call 1 precedes the first directory; later calls are 11 s on.
+        // The first two reads (the scan start and the check before the first directory) see no
+        // time passing; every read after that is 11 s on, however many more the scan makes.
         let calls = std::cell::Cell::new(0_u32);
         let clock = || {
             let n = calls.get();
             calls.set(n + 1);
-            if n <= 1 {
+            if n < 2 {
                 base
             } else {
                 base + Duration::from_secs(11)
@@ -470,6 +481,28 @@ mod tests {
         };
         let found = scan_for_vaults(&[dir.path().to_path_buf()], &ScanLimits::default(), clock);
         assert_eq!(names(&found), ["top.kdbx"]);
+    }
+
+    #[test]
+    fn time_budget_interrupts_one_huge_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..(ENTRIES_PER_CLOCK_CHECK * 3) {
+            touch(&dir.path().join(format!("v{i}.kdbx")));
+        }
+        let base = Instant::now();
+        let calls = std::cell::Cell::new(0_u32);
+        let clock = || {
+            let n = calls.get();
+            calls.set(n + 1);
+            if n < 2 {
+                base
+            } else {
+                base + Duration::from_secs(11)
+            }
+        };
+        let found = scan_for_vaults(&[dir.path().to_path_buf()], &ScanLimits::default(), clock);
+        assert!(!found.is_empty());
+        assert!(found.len() < ENTRIES_PER_CLOCK_CHECK * 3);
     }
 
     #[test]

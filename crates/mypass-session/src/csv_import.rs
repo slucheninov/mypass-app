@@ -13,13 +13,17 @@ use crate::editing::put;
 use crate::fields::GENERATOR_HISTORY_MARKER;
 use crate::session::{SessionError, VaultSession};
 use mypass_core::entry_ext::{EntryExt, GENERATOR_HISTORY_GROUP_UUID};
-use mypass_kdbx::Entry;
+use mypass_kdbx::{Entry, Group};
 use uuid::Uuid;
 use zeroize::Zeroize;
 
 /// The largest CSV file the facade reads and [`parse_csv`] accepts (16 MiB, tens of thousands of
 /// logins): a password export is kilobytes to a few megabytes, so more is a wrong file.
 pub const MAX_CSV_BYTES: usize = 16 * 1024 * 1024;
+
+/// The most fields one record may have. A 16 MiB row of commas would otherwise build millions of
+/// empty strings; real exports have a handful of columns.
+const MAX_FIELDS_PER_RECORD: usize = 256;
 
 /// How many titles a [`CsvPreview`] carries.
 const PREVIEW_TITLES: usize = 5;
@@ -93,6 +97,8 @@ struct Record {
     line: u32,
     /// `None` when a quote was never closed.
     fields: Option<Vec<String>>,
+    /// More than [`MAX_FIELDS_PER_RECORD`] fields: the extra ones were not kept.
+    too_wide: bool,
     /// The record was a blank line (a single empty unquoted field).
     blank: bool,
 }
@@ -122,6 +128,7 @@ impl<'a> Tokenizer<'a> {
         let mut cell = String::new();
         let mut in_quotes = false;
         let mut quoted_seen = false;
+        let mut too_wide = false;
         // True until the first character of a field is read: only there does `"` open a quote.
         let mut at_start = true;
         loop {
@@ -130,6 +137,7 @@ impl<'a> Tokenizer<'a> {
                     return Some(Record {
                         line,
                         fields: None,
+                        too_wide,
                         blank: false,
                     });
                 }
@@ -152,7 +160,14 @@ impl<'a> Tokenizer<'a> {
             }
             match c {
                 ',' => {
-                    fields.push(std::mem::take(&mut cell));
+                    // Past the cap the record is already lost; keep reading to its end (so the
+                    // line count stays right) but stop accumulating.
+                    if fields.len() < MAX_FIELDS_PER_RECORD {
+                        fields.push(std::mem::take(&mut cell));
+                    } else {
+                        too_wide = true;
+                        cell.clear();
+                    }
                     at_start = true;
                 }
                 '\n' => {
@@ -178,10 +193,15 @@ impl<'a> Tokenizer<'a> {
             }
         }
         let blank = fields.is_empty() && cell.is_empty() && !quoted_seen;
-        fields.push(cell);
+        if fields.len() < MAX_FIELDS_PER_RECORD {
+            fields.push(cell);
+        } else {
+            too_wide = true;
+        }
         Some(Record {
             line,
             fields: Some(fields),
+            too_wide,
             blank,
         })
     }
@@ -244,7 +264,7 @@ pub fn parse_csv(bytes: &[u8]) -> Result<CsvParse, CsvImportError> {
             None => return Err(CsvImportError::Empty),
             Some(r) if r.blank => {}
             // An unterminated header quote leaves no usable header.
-            Some(Record { fields: None, .. }) => {
+            Some(Record { fields: None, .. }) | Some(Record { too_wide: true, .. }) => {
                 return Err(CsvImportError::MissingRequiredColumn("title".into()))
             }
             Some(Record {
@@ -263,16 +283,23 @@ pub fn parse_csv(bytes: &[u8]) -> Result<CsvParse, CsvImportError> {
         let line = record.line;
         let reason = match record.fields {
             None => Some(SkipReason::UnterminatedQuote),
+            Some(_) if record.too_wide => Some(SkipReason::FieldCountMismatch),
             Some(ref f) if f.len() != cols.width => Some(SkipReason::FieldCountMismatch),
             Some(_) => None,
         };
+        let Some(mut fields) = record.fields else {
+            skipped.push(SkippedRow {
+                line,
+                reason: SkipReason::UnterminatedQuote,
+            });
+            continue;
+        };
         if let Some(reason) = reason {
+            // A skipped row may still hold a password.
+            fields.iter_mut().for_each(Zeroize::zeroize);
             skipped.push(SkippedRow { line, reason });
             continue;
         }
-        let Some(mut fields) = record.fields else {
-            continue;
-        };
         logins.push(ImportedLogin {
             title: cell(&mut fields, Some(cols.title)),
             url: cell(&mut fields, cols.url),
@@ -284,6 +311,21 @@ pub fn parse_csv(bytes: &[u8]) -> Result<CsvParse, CsvImportError> {
         fields.iter_mut().for_each(Zeroize::zeroize);
     }
     Ok(CsvParse { logins, skipped })
+}
+
+/// `ancestor` is the group `id` or has it somewhere below.
+fn contains_group(ancestor: &Group, id: Uuid) -> bool {
+    ancestor.uuid == id || ancestor.groups.iter().any(|g| contains_group(g, id))
+}
+
+/// `id` lies in (or is) a generator history group somewhere under `group`.
+fn in_history_tree(group: &Group, id: Uuid) -> bool {
+    if group.uuid == GENERATOR_HISTORY_GROUP_UUID
+        || group.custom(GENERATOR_HISTORY_MARKER).is_some()
+    {
+        return contains_group(group, id);
+    }
+    group.groups.iter().any(|g| in_history_tree(g, id))
 }
 
 /// Adds every login to `group` in one mutation: all of them or none. Each is a Login with a fresh
@@ -300,10 +342,15 @@ pub fn import_logins(
         return Ok(0);
     }
     session.mutate(|db, now| {
-        let target = db.find_group(group).ok_or(SessionError::NotFound)?;
-        let is_history = group == GENERATOR_HISTORY_GROUP_UUID
-            || target.custom(GENERATOR_HISTORY_MARKER).is_some();
-        if db.meta.recycle_bin_uuid == Some(group) || is_history {
+        db.find_group(group).ok_or(SessionError::NotFound)?;
+        // The bin and the generator history group, and everything nested in either, are off limits.
+        let in_bin = db
+            .meta
+            .recycle_bin_uuid
+            .and_then(|id| db.find_group(id))
+            .is_some_and(|bin| contains_group(bin, group));
+        let in_history = in_history_tree(&db.root, group);
+        if in_bin || in_history {
             return Err(SessionError::InvalidInput(
                 "this group cannot receive imported logins".into(),
             ));
@@ -631,6 +678,59 @@ mod tests {
         assert!(matches!(
             import_logins(&f.session, hist, vec![login(1)]),
             Err(SessionError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn subgroups_of_the_bin_and_history_are_not_import_targets() {
+        let f = fx();
+        let (bin_child, hist_child) = f
+            .session
+            .mutate(|db, now| {
+                let root = db.root_id();
+                let bin = mypass_kdbx::Group::new("Bin", now);
+                let bin_id = bin.uuid;
+                db.add_group(root, bin, now)?;
+                db.meta.recycle_bin_uuid = Some(bin_id);
+                let c1 = mypass_kdbx::Group::new("InBin", now);
+                let c1_id = c1.uuid;
+                db.add_group(bin_id, c1, now)?;
+                let mut hist = mypass_kdbx::Group::new("H", now);
+                hist.set_custom(crate::fields::GENERATOR_HISTORY_MARKER, "1");
+                let hist_id = hist.uuid;
+                db.add_group(root, hist, now)?;
+                let c2 = mypass_kdbx::Group::new("InHist", now);
+                let c2_id = c2.uuid;
+                db.add_group(hist_id, c2, now)?;
+                Ok((c1_id, c2_id))
+            })
+            .unwrap();
+        for target in [bin_child, hist_child] {
+            assert!(matches!(
+                import_logins(&f.session, target, vec![login(1)]),
+                Err(SessionError::InvalidInput(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn row_of_100_000_commas_is_skipped_and_the_next_row_imports() {
+        let mut text = String::from("title,username,password\nA,u,p\n");
+        text.push_str(&",".repeat(100_000));
+        text.push_str("\nB,u,p\n");
+        let p = parse(&text);
+        assert_eq!(p.logins.len(), 2);
+        assert_eq!(
+            p.skipped,
+            vec![SkippedRow {
+                line: 3,
+                reason: SkipReason::FieldCountMismatch
+            }]
+        );
+        let header = format!("title,username,password{}\nA,u,p\n", ",".repeat(100_000));
+        assert!(matches!(
+            parse_csv(header.as_bytes()),
+            Err(CsvImportError::MissingRequiredColumn(_))
         ));
     }
 
