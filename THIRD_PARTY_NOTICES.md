@@ -62,6 +62,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 |---|---|---|
 | `Inflector` | 0.11.4 | BSD-2-Clause |
 | `adler2` | 2.0.1 | 0BSD OR MIT OR Apache-2.0 |
+| `aead` | 0.6.1 | MIT OR Apache-2.0 |
 | `aes` | 0.9.4 | MIT OR Apache-2.0 |
 | `aho-corasick` | 1.1.5 | Unlicense OR MIT |
 | `alloc-no-stdlib` | 3.0.0 | BSD-3-Clause |
@@ -113,6 +114,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `cfb` | 0.14.0 | MIT |
 | `cfg-if` | 1.0.5 | MIT OR Apache-2.0 |
 | `chacha20` | 0.10.2 | MIT OR Apache-2.0 |
+| `chacha20poly1305` | 0.11.0 | Apache-2.0 OR MIT |
 | `cipher` | 0.5.2 | MIT OR Apache-2.0 |
 | `clipboard-win` | 5.4.3 | BSL-1.0 |
 | `cmov` | 0.5.4 | Apache-2.0 OR MIT |
@@ -323,6 +325,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `plist` | 1.10.3 | MIT |
 | `png` | 0.18.1 | MIT OR Apache-2.0 |
 | `polling` | 3.11.0 | Apache-2.0 OR MIT |
+| `poly1305` | 0.9.1 | Apache-2.0 OR MIT |
 | `potential_utf` | 0.1.6 | Unicode-3.0 |
 | `powerfmt` | 0.2.1 | MIT OR Apache-2.0 |
 | `ppv-lite86` | 0.2.21 | MIT OR Apache-2.0 |
@@ -339,6 +342,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `r-efi` | 6.0.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later |
 | `rand` | 0.8.8 | MIT OR Apache-2.0 |
 | `rand_chacha` | 0.3.1 | MIT OR Apache-2.0 |
+| `rand_core` | 0.10.1 | MIT OR Apache-2.0 |
 | `rand_core` | 0.6.4 | MIT OR Apache-2.0 |
 | `raw-window-handle` | 0.6.2 | MIT OR Apache-2.0 OR Zlib |
 | `redox_syscall` | 0.5.18 | MIT |
@@ -451,6 +455,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `uds_windows` | 1.2.1 | MIT |
 | `unicode-ident` | 1.0.27 | (MIT OR Apache-2.0) AND Unicode-3.0 |
 | `unicode-segmentation` | 1.13.3 | MIT OR Apache-2.0 |
+| `universal-hash` | 0.6.1 | MIT OR Apache-2.0 |
 | `url` | 2.5.8 | MIT OR Apache-2.0 |
 | `urlpattern` | 0.6.0 | MIT |
 | `utf8_iter` | 1.1.0 | Apache-2.0 OR MIT |
@@ -585,7 +590,6 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `proptest` | 1.12.0 | MIT OR Apache-2.0 |
 | `quick-error` | 1.2.3 | MIT/Apache-2.0 |
 | `rand` | 0.10.3 | MIT OR Apache-2.0 |
-| `rand_core` | 0.10.1 | MIT OR Apache-2.0 |
 | `rand_xorshift` | 0.5.0 | MIT OR Apache-2.0 |
 | `ref-cast` | 1.0.27 | MIT OR Apache-2.0 |
 | `ref-cast-impl` | 1.0.27 | MIT OR Apache-2.0 |

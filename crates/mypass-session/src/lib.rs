@@ -6,6 +6,7 @@
 pub mod autolock;
 pub mod backups;
 pub mod clipboard_service;
+pub mod drafts;
 pub mod dto;
 pub mod editing;
 pub mod fields;
