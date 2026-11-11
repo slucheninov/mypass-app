@@ -2569,6 +2569,12 @@ dependencies = [
  "mypass-core",
  "mypass-kdbx",
  "mypass-platform",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "subtle",
+ "tempfile",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

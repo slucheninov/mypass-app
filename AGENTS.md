@@ -24,7 +24,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `mypass-core` | implemented | Everything that consumes the model: TOTP, generator and password rules, Public Suffix List, entry matcher, merge engine |
 | `repo-guards` | implemented | Test-only (`publish = false`, never shipped): guard tests for the workspace, CI, docs and scripts |
 | `mypass-platform` | in progress (stage 2a) | OS glue behind traits (system events, secure clipboard, secret stores, device unlock, native host registrar, launch at login, keyboard layout) and `AppPaths`; fakes behind the `test-util` feature, `Unsupported` fallbacks where a platform body has not landed |
-| `mypass-session` | scaffold (stage 2a) | Vault session, settings, scheduling and the `AppCore` command facade; no Tauri dependency |
+| `mypass-session` | in progress (stage 2a) | Vault session, settings, scheduling and the `AppCore` command facade; no Tauri dependency |
 | `src-tauri` (package `mypass-app`, lib `mypass_app_lib`) | scaffold (stage 2a) | The Tauri 2 app shell: typed IPC through `tauri-specta`, plugins; a workspace member listed explicitly |
 | `mypass-bridge` | planned | Browser bridge protocol and loopback server |
 | `mypass-host` | planned | Native messaging host binary |
@@ -143,6 +143,30 @@ change is done.
 - **Windows manifest.** `src-tauri/build.rs` embeds `src-tauri/windows-app-manifest.xml`
   (Common-Controls v6) into every target of the app package through linker arguments, because
   `tauri-build` alone covers only the bin and the lib test binary then dies with `0xc0000139`.
+- **Scheduler seam.** Every timing rule of the session (autosave, auto-lock, clipboard clear,
+  retries) runs through `mypass_session::scheduler::Scheduler`: `ThreadScheduler` (one worker
+  thread) in production, `ManualScheduler` (manual monotonic and wall clocks) in tests. Production
+  code never sleeps for a timing rule.
+- **Settings.** `mypass_session::settings::Settings` is the one persisted settings struct (every
+  field, struct-level `serde(default)`, one `Default` impl), stored atomically in
+  `<config_dir>/settings.json`; a field with a bad value falls back to its default alone (nested
+  objects field by field, unknown fields ignored), only a file that is not a JSON object loads as
+  defaults and is renamed `settings.json.bad`, and a file that cannot be read is never written over
+  (the store runs degraded on defaults).
+  The schema is pinned by `crates/mypass-session/tests/snapshots/settings.default.json`.
+- **Vault session.** `mypass_session::session::VaultSession` owns the one open vault (`NoVault`,
+  `Locked`, `Unlocked`). Edits go through `mutate`, which edits a clone and swaps it in only on
+  `Ok` (rollback by construction); `lock` saves first and keeps the encrypted bytes when that save
+  fails, and until the merge pipeline lands those edits are never dropped from memory while the app
+  runs but are written only when the file on disk is unchanged (otherwise `flush` returns
+  `ChangedOnDisk` without writing); observers run after the session lock is released;
+  `begin_quit` closes every opening and mutating call with `Quitting` while `lock` and `flush`
+  keep working. The master password lives only in the session as a `SecretString`. Tests use `mypass_session::testing::fast_database`
+  (Argon2id 8 MiB, 1 pass) so saves stay fast.
+- **Backups.** `mypass_session::backups::BackupManager` copies the on-disk vault bytes to
+  `<backups_dir>/<vault_id>/backup-<unix_secs>[-<n>].kdbx` before it is overwritten (first write of
+  a session always, then per `backupInterval`), keeps the newest `backupCount`, and never blocks a
+  save: a failure is recorded in `last-failure.json` and cleared by the next success.
 - **Platform seam.** Everything OS-specific goes through `mypass_platform::Platform` (trait objects,
   built by `mypass_platform::current`) and every on-disk location through `AppPaths`. Tests use
   `mypass_platform::testing::fake_platform()` under the `test-util` feature; no non-ignored test touches the
