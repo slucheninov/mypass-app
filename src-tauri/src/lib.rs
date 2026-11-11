@@ -75,6 +75,7 @@ pub fn commands() -> Commands<tauri::Wry> {
         settings::settings_get,
         settings::settings_login_item_status,
         settings::settings_update,
+        settings::shortcut_conflicts_take,
         sidebar::sidebar_get,
         vault::vault_create,
         vault::vault_find_files,
@@ -136,7 +137,6 @@ pub fn run() -> tauri::Result<()> {
     let app = tauri_builder
         .invoke_handler(builder.invoke_handler())
         .on_window_event(shell_runtime::on_window_event)
-        .on_page_load(shell_runtime::on_page_load)
         .setup(move |app| {
             builder.mount_events(app);
             wiring::install(app)?;
@@ -238,7 +238,7 @@ mod tests {
 
     #[test]
     fn command_names_follow_domain_verb_convention() {
-        const DOMAINS: [&str; 12] = [
+        const DOMAINS: [&str; 13] = [
             "vault",
             "entry",
             "group",
@@ -251,6 +251,7 @@ mod tests {
             "sidebar",
             "app",
             "platform",
+            "shortcut",
         ];
         let names = command_names();
         assert!(!names.is_empty());

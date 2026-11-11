@@ -29,7 +29,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, PhysicalPosition, RunEvent, Runtime, Window, WindowEvent, Wry};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tauri_plugin_dialog::{
+    DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult,
+};
 use tauri_specta::Event;
 
 /// Keeps what must live as long as the app: the platform event subscription.
@@ -327,7 +329,7 @@ fn apply_startup_ui(handle: &AppHandle, core: &Arc<AppCore>, settings: &Settings
         // `setup` runs on the main thread.
         let _ = create_tray(handle, &current_tray_model(core, None));
     }
-    // Held until the main page has loaded: nothing listens yet.
+    // Held until the frontend takes them (`shortcut_conflicts_take`): nothing listens yet.
     if let Some(gate) = handle.try_state::<Arc<ConflictGate>>() {
         emit_conflicts(handle, gate.submit(hotkeys::register_all(handle, settings)));
     }
@@ -368,19 +370,6 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
             let _ = window.hide();
         }
         _ => {}
-    }
-}
-
-/// `on_page_load`: when the main window's page has loaded, emits the shortcut conflicts held
-/// since startup (once). A Rust hook, not a webview-callable command.
-pub fn on_page_load(webview: &tauri::Webview, payload: &tauri::webview::PageLoadPayload<'_>) {
-    if webview.label() != MAIN_WINDOW || payload.event() != tauri::webview::PageLoadEvent::Finished
-    {
-        return;
-    }
-    let app = webview.app_handle();
-    if let Some(gate) = app.try_state::<Arc<ConflictGate>>() {
-        emit_conflicts(app, gate.main_page_loaded());
     }
 }
 
@@ -433,10 +422,16 @@ fn start_quit_flow<R: Runtime>(app: tauri::AppHandle<R>) {
                     let language = core.settings.get().language;
                     let ask = |error: &str| port.confirm_quit_anyway(language, error);
                     let outcome = on_exit_requested(core.as_ref(), &ask);
+                    // The gate FIRST: `exit` posts `ExitRequested` to the main loop, and if that
+                    // were handled before the gate is confirmed it would read `AlreadyRunning`,
+                    // prevent the exit and nothing would exit again.
+                    if let Some(gate) = app.try_state::<ExitGate>() {
+                        gate.finish(outcome);
+                    }
                     if outcome == ExitOutcome::Exit {
                         port.exit();
                     }
-                    outcome
+                    return;
                 }
                 _ => ExitOutcome::Stay,
             };
@@ -454,12 +449,22 @@ fn start_quit_flow<R: Runtime>(app: tauri::AppHandle<R>) {
 /// [`QuitPort`] over the real app: the dialog plugin and `exit`.
 pub struct TauriQuitPort(pub AppHandle);
 
+/// Whether a data-loss dialog result means Quit Anyway: ONLY the explicit press of the button
+/// labelled `quit_label`. Every other result (the other button, a generic Ok/Cancel/Yes/No, a
+/// closed dialog or Esc, whatever an OS reports for those) means Cancel, the safe answer.
+pub fn quit_anyway_chosen(result: &MessageDialogResult, quit_label: &str) -> bool {
+    matches!(result, MessageDialogResult::Custom(label) if label == quit_label)
+}
+
 impl QuitPort for TauriQuitPort {
     fn confirm_quit_anyway(&self, language: Language, error: &str) -> bool {
-        // The first button is the default one (Return), so it is Cancel, the safe answer: the
-        // dialog API has no separate "default button" setting. `blocking_show` is true when the
-        // FIRST button was pressed, so Quit Anyway is the negation.
-        let cancelled = self
+        let quit_label = i18n::t(language, "Quit Anyway", &[]);
+        // Quit Anyway takes the "ok" slot and Cancel the "cancel" slot: the plugin reports a
+        // closed dialog (Esc, the close button) as the cancel slot on every OS (on Linux it maps
+        // it to that slot's label), so closing can never read as Quit Anyway. The price is that
+        // the default (Return) button is Quit Anyway; the dialog API has no default-button
+        // setting, and a correct Esc outweighs that.
+        let result = self
             .0
             .dialog()
             .message(i18n::t(
@@ -470,11 +475,11 @@ impl QuitPort for TauriQuitPort {
             .title(i18n::t(language, "Quit MyPass", &[]))
             .kind(MessageDialogKind::Warning)
             .buttons(MessageDialogButtons::OkCancelCustom(
+                quit_label.clone(),
                 i18n::t(language, "Cancel", &[]),
-                i18n::t(language, "Quit Anyway", &[]),
             ))
-            .blocking_show();
-        !cancelled
+            .blocking_show_with_result();
+        quit_anyway_chosen(&result, &quit_label)
     }
 
     fn exit(&self) {
@@ -495,6 +500,9 @@ mod tests {
     struct FakePort {
         answer: bool,
         calls: mpsc::Sender<String>,
+        /// Set once the mock app is built: `exit` re-enters the gate through it, as the real
+        /// `ExitRequested` raised by `exit` would.
+        app: Arc<std::sync::Mutex<Option<tauri::AppHandle<tauri::test::MockRuntime>>>>,
     }
 
     impl QuitPort for FakePort {
@@ -503,6 +511,18 @@ mod tests {
             self.answer
         }
         fn exit(&self) {
+            // The real exit raises `ExitRequested`, which asks the gate again; the quit flow
+            // must have confirmed the gate by then or the exit would be prevented.
+            let seen = self
+                .app
+                .lock()
+                .ok()
+                .and_then(|app| app.as_ref().map(|a| a.state::<ExitGate>().request()));
+            assert_eq!(
+                seen,
+                Some(ExitRequest::Allow),
+                "the gate is confirmed before exit"
+            );
             let _ = self.calls.send("exit".into());
         }
     }
@@ -521,7 +541,12 @@ mod tests {
                 .expect("the mock app builds");
             app.manage(AppState(core));
             app.manage(ExitGate::default());
-            app.manage::<Arc<dyn QuitPort>>(Arc::new(FakePort { answer, calls: tx }));
+            let handle = Arc::new(std::sync::Mutex::new(Some(app.handle().clone())));
+            app.manage::<Arc<dyn QuitPort>>(Arc::new(FakePort {
+                answer,
+                calls: tx,
+                app: handle,
+            }));
             WebviewWindowBuilder::new(&app, MAIN_WINDOW, WebviewUrl::App("index.html".into()))
                 .build()
                 .expect("the mock window builds");
@@ -579,5 +604,23 @@ mod tests {
         assert!(next(&rx).starts_with("ask "));
         assert_eq!(next(&rx), "exit");
         assert!(w.core.is_quitting());
+    }
+
+    #[test]
+    fn only_the_explicit_quit_anyway_button_means_quit() {
+        let quit = "Quit Anyway";
+        let table = [
+            (MessageDialogResult::Custom("Quit Anyway".into()), true),
+            (MessageDialogResult::Custom("Cancel".into()), false),
+            (MessageDialogResult::Custom("Other".into()), false),
+            (MessageDialogResult::Cancel, false),
+            (MessageDialogResult::Ok, false),
+            (MessageDialogResult::Yes, false),
+            (MessageDialogResult::No, false),
+        ];
+        for (result, expected) in table {
+            assert_eq!(quit_anyway_chosen(&result, quit), expected, "{result:?}");
+        }
+        assert_eq!(MessageDialogResult::default(), MessageDialogResult::Cancel);
     }
 }

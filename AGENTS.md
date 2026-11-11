@@ -43,6 +43,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `scripts/test.sh` | The single local and CI test entry point |
 | `scripts/convert-xcstrings.mjs` | One-time converter of the old app's String Catalogs; its output (`src/lib/i18n/locales/{en,uk,ru}.json`, `src-tauri/resources/macos/*.lproj/InfoPlist.strings`) is then the hand-edited source of truth |
 | `.github/` | Workflows (`ci.yml`, `codeql.yml`), Dependabot config, issue forms, pull request template |
+| `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts) |
 | `docs/implementation/ROADMAP.md` | The only tracked document under `docs/`: unfinished work |
 | `LICENSE`, `THIRD_PARTY_NOTICES.md` | Apache-2.0 and the notices for vendored data and linked crates |
 

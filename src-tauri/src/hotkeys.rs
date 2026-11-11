@@ -92,8 +92,10 @@ pub fn register_with(
     conflicts
 }
 
-/// Holds the shortcut conflicts found at startup until the main window has loaded its page (an
-/// event emitted earlier reaches no listener), then lets every later conflict through at once.
+/// Holds the shortcut conflicts of the latest registration until the frontend asks for them
+/// (`shortcut_conflicts_take`), because an event emitted before the frontend listens reaches
+/// nobody. Registrations before the first take REPLACE the held set (it always reflects the
+/// latest registration, never stale ones); after the first take, conflicts are emitted live.
 #[derive(Debug, Default)]
 pub struct ConflictGate {
     state: std::sync::Mutex<GateState>,
@@ -101,33 +103,34 @@ pub struct ConflictGate {
 
 #[derive(Debug, Default)]
 struct GateState {
-    main_loaded: bool,
+    taken: bool,
     held: Vec<ShortcutConflictEvent>,
 }
 
 impl ConflictGate {
-    /// The conflicts to emit now: `conflicts` themselves once the main page has loaded, nothing
-    /// before (they are held for [`ConflictGate::main_page_loaded`]).
+    /// The conflicts to emit now: `conflicts` themselves once the frontend has taken the startup
+    /// set, nothing before (they replace the held set).
     pub fn submit(&self, conflicts: Vec<ShortcutConflictEvent>) -> Vec<ShortcutConflictEvent> {
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.main_loaded {
+        if state.taken {
             conflicts
         } else {
-            state.held.extend(conflicts);
+            state.held = conflicts;
             Vec::new()
         }
     }
 
-    /// The main page finished loading: the held conflicts, once (a reload gets nothing again).
-    pub fn main_page_loaded(&self) -> Vec<ShortcutConflictEvent> {
+    /// The held conflicts, once: later calls (a page reload) get nothing, and the gate is open
+    /// for live emission from now on.
+    pub fn take(&self) -> Vec<ShortcutConflictEvent> {
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.main_loaded = true;
+        state.taken = true;
         std::mem::take(&mut state.held)
     }
 }
@@ -328,34 +331,41 @@ mod tests {
     }
 
     #[test]
-    fn startup_conflicts_are_held_until_the_first_main_page_load_and_emitted_once() {
+    fn take_returns_the_startup_conflicts_once() {
         let gate = ConflictGate::default();
         let lock = conflict(ShortcutKind::Lock, "CommandOrControl+Shift+L");
         // At startup: held, nothing emitted.
         assert!(gate.submit(vec![lock.clone()]).is_empty());
-        // The main page loads: the held conflict comes out once.
-        assert_eq!(gate.main_page_loaded(), [lock]);
-        // A reload of the page does not repeat it.
-        assert!(gate.main_page_loaded().is_empty());
+        assert_eq!(gate.take(), [lock]);
+        // A second take (a page reload) is empty.
+        assert!(gate.take().is_empty());
     }
 
     #[test]
-    fn conflicts_after_the_main_page_load_are_emitted_live() {
-        let gate = ConflictGate::default();
-        assert!(gate.main_page_loaded().is_empty());
-        let show = conflict(ShortcutKind::Show, "CommandOrControl+Alt+M");
-        assert_eq!(gate.submit(vec![show.clone()]), [show]);
-        assert!(gate.submit(Vec::new()).is_empty());
-    }
-
-    #[test]
-    fn a_settings_change_before_the_page_load_is_held_with_the_startup_conflicts() {
+    fn a_registration_before_the_take_replaces_the_held_set() {
         let gate = ConflictGate::default();
         let a = conflict(ShortcutKind::Lock, "A");
         let b = conflict(ShortcutKind::Show, "B");
-        assert!(gate.submit(vec![a.clone()]).is_empty());
+        assert!(gate.submit(vec![a]).is_empty());
         assert!(gate.submit(vec![b.clone()]).is_empty());
-        assert_eq!(gate.main_page_loaded(), [a, b]);
+        assert_eq!(gate.take(), [b]);
+        // A later clean registration before the take clears stale conflicts.
+        let fresh = ConflictGate::default();
+        assert!(fresh
+            .submit(vec![conflict(ShortcutKind::Lock, "A")])
+            .is_empty());
+        assert!(fresh.submit(Vec::new()).is_empty());
+        assert!(fresh.take().is_empty());
+    }
+
+    #[test]
+    fn conflicts_after_the_take_are_emitted_live() {
+        let gate = ConflictGate::default();
+        assert!(gate.take().is_empty());
+        let show = conflict(ShortcutKind::Show, "CommandOrControl+Alt+M");
+        assert_eq!(gate.submit(vec![show.clone()]), [show]);
+        assert!(gate.submit(Vec::new()).is_empty());
+        assert!(gate.take().is_empty(), "live conflicts are not held");
     }
 
     #[test]

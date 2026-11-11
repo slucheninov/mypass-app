@@ -142,7 +142,8 @@ pub trait QuitPort: Send + Sync {
 
 /// What an `ExitRequested` run event does. The quit flow blocks (a flush, then a modal dialog),
 /// so it never runs on the event-loop thread: the event is always prevented, the flow runs on a
-/// worker, and a confirmed exit calls `exit` again, which this gate lets through.
+/// worker, and a confirmed exit calls `exit` again, which this gate lets through. The worker calls
+/// `finish` BEFORE `exit`: `exit` raises `ExitRequested`, which must already read `Allow`.
 #[derive(Debug, Default)]
 pub struct ExitGate {
     running: AtomicBool,

@@ -64,6 +64,12 @@ export const commands = {
 	settingsGet: () => typedError<Settings_Serialize, ApiError>(__TAURI_INVOKE("settings_get")),
 	settingsLoginItemStatus: () => typedError<LoginItemStatus, ApiError>(__TAURI_INVOKE("settings_login_item_status")),
 	settingsUpdate: (patch: SettingsPatch_Deserialize) => typedError<Settings_Serialize, ApiError>(__TAURI_INVOKE("settings_update", { patch })),
+	/**
+	 *  The shortcut conflicts found while registering the global shortcuts at startup, once: the
+	 *  frontend calls it after registering its `ShortcutConflictEvent` listener, so no timing
+	 *  decides whether the notice is seen. Read-only, takes nothing from the webview.
+	 */
+	shortcutConflictsTake: () => __TAURI_INVOKE<ShortcutConflictEvent[]>("shortcut_conflicts_take"),
 	sidebarGet: () => typedError<Sidebar_Serialize, ApiError>(__TAURI_INVOKE("sidebar_get")),
 	vaultCreate: (path: string, password: string, name: string) => typedError<SessionStatus_Serialize, ApiError>(__TAURI_INVOKE("vault_create", { path, password, name })),
 	vaultFindFiles: () => typedError<FoundVaultFileDto[], ApiError>(__TAURI_INVOKE("vault_find_files")),

@@ -45,6 +45,7 @@ platform_keyboard_layout
 settings_get
 settings_login_item_status
 settings_update
+shortcut_conflicts_take
 sidebar_get
 vault_create
 vault_find_files

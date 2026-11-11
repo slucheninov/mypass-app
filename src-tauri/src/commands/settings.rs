@@ -16,6 +16,17 @@ pub fn settings_get(state: State<'_, AppState>) -> Result<Settings, ApiError> {
     state.0.settings_get()
 }
 
+/// The shortcut conflicts found while registering the global shortcuts at startup, once: the
+/// frontend calls it after registering its `ShortcutConflictEvent` listener, so no timing
+/// decides whether the notice is seen. Read-only, takes nothing from the webview.
+#[tauri::command]
+#[specta::specta]
+pub fn shortcut_conflicts_take(
+    gate: State<'_, std::sync::Arc<crate::hotkeys::ConflictGate>>,
+) -> Vec<crate::events::ShortcutConflictEvent> {
+    gate.take()
+}
+
 /// Applies `patch` and returns the new settings with the effects the change calls for.
 pub fn update(core: &AppCore, patch: SettingsPatch) -> Result<(Settings, Vec<Effect>), ApiError> {
     let old = core.settings_get()?;
