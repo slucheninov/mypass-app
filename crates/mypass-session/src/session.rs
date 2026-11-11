@@ -8,37 +8,29 @@
 //! The cost is one clone per edit (typical vaults are a few MiB); it was chosen over undo logs
 //! because the rollback is obviously correct.
 //!
-//! Saving in this module is the simple synchronous form: [`VaultSession::flush`] writes through
-//! the guarded `VaultFile::save` while holding the session lock. The debounced autosave, the
-//! retry and the external-change merge replace it in the saving module (Task 7).
-//!
-//! Interim limit until that merge lands: edits are never dropped from memory while the app runs,
-//! but they are written only when the disk is unchanged. A failed save on lock keeps the
-//! encrypted bytes (`pending_bytes`) together with the `VaultFile` stamp of the disk content the
-//! session last read or wrote. The next unlock restores the edits; if the file changed on disk
-//! meanwhile (another device synced, or the file was replaced), the save status is `Failed` with
-//! the `ChangedOnDisk` message and every `flush` returns `ChangedOnDisk` without writing, so the
-//! external change is never overwritten. If the file no longer opens with the password that
-//! decrypts the kept edits (the password was changed elsewhere), the unlock fails with
-//! `WrongPassword` and the edits stay kept; opening another vault is refused while they are kept.
-//! What the user can do then: make the file open with the old password again (revert the
-//! password change on the other device, or restore that file version), after which the unlock
-//! brings the edits back (still unsaved while the file differs). Kept edits live only in memory:
-//! quitting the app loses them, so `flush` failing is what the quit flow must surface.
+//! Saving (debounced autosave, `flush`, `lock`, the external-change merge, the kept encrypted
+//! edits after a failed save on lock and their recovery) lives in the `saving` module; its module
+//! docs describe the guarantees and the ordering between a background write and a lock-time
+//! flush.
 //!
 //! Locking discipline: observers and the conflict hook are always called after the session lock
 //! is released, so they may call back into the session. Closures passed to `with_db`, `mutate`,
-//! `touch` and `with_db_and_password` run UNDER the lock and must not call the session.
+//! `touch` and `with_db_and_password` run UNDER the lock and must not call the session. Lock
+//! order: the session lock first, then the settings lock (`SettingsStore` never calls the
+//! session), then a scheduler's internal lock (schedulers never run a job while holding it).
+//! No other component (auto-lock, clipboard service) holds its own lock while calling the
+//! session.
 
-use crate::scheduler::{lock, Scheduler};
+use crate::backups::BackupManager;
+use crate::scheduler::{lock, Scheduler, TaskHandle};
 use crate::settings::{SettingsPatch, SettingsStore};
 use crate::vault_files::{file_status, VaultFileStatus};
-use mypass_kdbx::{Database, FileIo, FileMeta, KdbxError, Timestamp, VaultFile};
+use mypass_kdbx::{Database, FileIo, FileMeta, KdbxError, Meta, Timestamp, VaultFile};
 use secrecy::{ExposeSecret, SecretString};
 use serde::Serialize;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError, RwLock};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, RwLock};
 use std::time::UNIX_EPOCH;
 use subtle::ConstantTimeEq;
 
@@ -89,13 +81,19 @@ impl SaveStatus {
             message: None,
         }
     }
-    fn pending() -> Self {
+    pub(crate) fn pending() -> Self {
         Self {
             state: SaveState::Pending,
             message: None,
         }
     }
-    fn failed(message: String) -> Self {
+    pub(crate) fn saving() -> Self {
+        Self {
+            state: SaveState::Saving,
+            message: None,
+        }
+    }
+    pub(crate) fn failed(message: String) -> Self {
         Self {
             state: SaveState::Failed,
             message: Some(message),
@@ -219,7 +217,7 @@ pub struct SessionDeps {
 /// The IO seam every `VaultFile` of the session is opened with: it forwards to a replaceable
 /// target, so [`VaultSession::set_file_io`] takes effect for the next save without reopening
 /// the file (reopening would refresh the change-detection stamp and could hide an external edit).
-struct SwitchIo(RwLock<Arc<dyn FileIo>>);
+pub(crate) struct SwitchIo(RwLock<Arc<dyn FileIo>>);
 
 impl SwitchIo {
     fn get(&self) -> Arc<dyn FileIo> {
@@ -245,26 +243,54 @@ impl FileIo for SwitchIo {
     }
 }
 
+/// The name shown for a vault: its database name, or the file stem when that is empty.
+pub(crate) fn vault_name_for(db: &Database, path: &Path) -> Option<String> {
+    Some(db.meta.database_name.clone())
+        .filter(|n| !n.is_empty())
+        .or_else(|| path.file_stem().map(|s| s.to_string_lossy().into_owned()))
+}
+
 pub(crate) struct Inner {
-    path: Option<PathBuf>,
-    vault_name: Option<String>,
-    vault_id: Option<String>,
-    file: Option<VaultFile>,
-    db: Option<Database>,
+    pub(crate) path: Option<PathBuf>,
+    pub(crate) vault_name: Option<String>,
+    pub(crate) vault_id: Option<String>,
+    /// Taken out (`None`) while a write or an external-change check runs outside the lock.
+    pub(crate) file: Option<VaultFile>,
+    pub(crate) db: Option<Database>,
     /// The master password, only while unlocked; `SecretString` zeroizes on drop.
     pub(crate) password: Option<SecretString>,
-    dirty_gen: u64,
-    saved_gen: u64,
-    /// The encrypted database kept when the save on lock failed; restored on the next unlock.
-    pending_bytes: Option<Vec<u8>>,
+    pub(crate) dirty_gen: u64,
+    pub(crate) saved_gen: u64,
+    /// The encrypted database kept when the save on lock failed; written by the retry timer or
+    /// merged on the next unlock.
+    pub(crate) pending_bytes: Option<Vec<u8>>,
     /// The `VaultFile` that went with `pending_bytes`: its stamp is the disk content as the
-    /// session last knew it, so a save through it refuses to overwrite an external change.
-    pending_file: Option<VaultFile>,
-    save: SaveStatus,
-    lock_reason: Option<LockReason>,
-    quitting: bool,
-    /// Called by the save and external-check paths (Task 7).
-    conflict_hook: ConflictHook,
+    /// session last knew it, so the retry never writes over an external change.
+    pub(crate) pending_file: Option<VaultFile>,
+    pub(crate) save: SaveStatus,
+    pub(crate) lock_reason: Option<LockReason>,
+    pub(crate) quitting: bool,
+    /// Called by the save and external-check paths.
+    pub(crate) conflict_hook: ConflictHook,
+    /// The scheduled autosave (debounce) or retry job, cancelled when replaced.
+    pub(crate) save_job: Option<TaskHandle>,
+    /// A write (or a check) runs outside the lock; `Shared::idle` is signalled when it ends.
+    pub(crate) in_flight: bool,
+    /// The next save is the first since this vault was opened or unlocked (always snapshots).
+    pub(crate) first_write_of_session: bool,
+    /// The file was created by this session; its first save takes no snapshot (there is
+    /// nothing of the user's on disk yet).
+    pub(crate) fresh_file: bool,
+    /// Bumped by every scheduled save job; a job clears `save_job` when it starts only if it is
+    /// still the current one, so `save_job` is `Some` exactly while a save job is armed.
+    pub(crate) save_job_id: u64,
+    /// A snapshot of the current disk state was already taken (or attempted): retries of a
+    /// failed write take none. Cleared by a successful write and by seeing the disk change.
+    pub(crate) snapshot_taken: bool,
+    /// The metadata last read from or written to disk: the base that tells a local metadata
+    /// edit from an untouched one when remote content is merged (see the saving module docs).
+    /// Kept while locked, for the merge of kept edits on unlock.
+    pub(crate) disk_meta: Option<Meta>,
 }
 
 impl Inner {
@@ -284,10 +310,17 @@ impl Inner {
             lock_reason: None,
             quitting: false,
             conflict_hook: Arc::new(|_| {}),
+            save_job: None,
+            in_flight: false,
+            first_write_of_session: false,
+            fresh_file: false,
+            save_job_id: 0,
+            snapshot_taken: false,
+            disk_meta: None,
         }
     }
 
-    fn state(&self) -> SessionState {
+    pub(crate) fn state(&self) -> SessionState {
         match (&self.db, &self.path) {
             (Some(_), _) => SessionState::Unlocked,
             (None, Some(_)) => SessionState::Locked,
@@ -295,7 +328,7 @@ impl Inner {
         }
     }
 
-    fn not_unlocked(&self) -> SessionError {
+    pub(crate) fn not_unlocked(&self) -> SessionError {
         if self.path.is_some() {
             SessionError::Locked
         } else {
@@ -303,60 +336,24 @@ impl Inner {
         }
     }
 
-    fn is_dirty(&self) -> bool {
+    pub(crate) fn is_dirty(&self) -> bool {
         self.dirty_gen != self.saved_gen
     }
 
     /// Sets the save status; returns it when it changed (to notify after unlocking).
-    fn set_save(&mut self, s: SaveStatus) -> Option<SaveStatus> {
+    pub(crate) fn set_save(&mut self, s: SaveStatus) -> Option<SaveStatus> {
         (self.save != s).then(|| {
             self.save = s.clone();
             s
         })
     }
 
-    /// Synchronous guarded save of the live database when it is dirty.
-    fn flush(&mut self) -> (Result<(), SessionError>, Option<SaveStatus>) {
-        if self.db.is_none() {
-            if self.pending_bytes.is_some() {
-                let msg = "unsaved changes are kept until the next unlock".to_owned();
-                return (Err(SessionError::Io(msg)), None);
-            }
-            return (Ok(()), None);
-        }
-        if !self.is_dirty() {
-            return (Ok(()), None);
-        }
-        let (Some(file), Some(db), Some(password)) = (&mut self.file, &self.db, &self.password)
-        else {
-            return (Err(SessionError::Locked), None);
-        };
-        let target = self.dirty_gen;
-        match file.save(db, password) {
-            Ok(mypass_kdbx::SaveOutcome::Saved) => {
-                self.saved_gen = target;
-                (Ok(()), self.set_save(SaveStatus::idle()))
-            }
-            Ok(mypass_kdbx::SaveOutcome::ChangedOnDisk) => {
-                let e = SessionError::ChangedOnDisk;
-                let changed = self.set_save(SaveStatus::failed(e.to_string()));
-                (Err(e), changed)
-            }
-            Err(e) => {
-                let e = SessionError::from(e);
-                let changed = self.set_save(SaveStatus::failed(e.to_string()));
-                (Err(e), changed)
-            }
-        }
-    }
-
     /// Makes `file` + `db` the open vault. The caller has flushed the previous one.
-    fn install(&mut self, file: VaultFile, db: Database, password: SecretString) {
+    pub(crate) fn install(&mut self, file: VaultFile, db: Database, password: SecretString) {
         let path = file.path().to_path_buf();
-        let name = Some(db.meta.database_name.clone())
-            .filter(|n| !n.is_empty())
-            .or_else(|| path.file_stem().map(|s| s.to_string_lossy().into_owned()));
-        self.vault_name = name;
+        self.vault_name = vault_name_for(&db, &path);
+        self.disk_meta = Some(db.meta.clone());
+        self.snapshot_taken = false;
         self.vault_id = Some(db.root_id().simple().to_string());
         self.path = Some(path);
         self.file = Some(file);
@@ -368,19 +365,31 @@ impl Inner {
         self.pending_bytes = None;
         self.pending_file = None;
         self.save = SaveStatus::idle();
+        self.cancel_save_job();
+        self.first_write_of_session = true;
+        self.fresh_file = false;
+    }
+
+    pub(crate) fn cancel_save_job(&mut self) {
+        if let Some(h) = self.save_job.take() {
+            h.cancel();
+        }
     }
 }
 
-struct Shared {
-    inner: Mutex<Inner>,
-    io: Arc<SwitchIo>,
+pub(crate) struct Shared {
+    pub(crate) inner: Mutex<Inner>,
+    /// Signalled whenever `Inner::in_flight` drops to `false`.
+    pub(crate) idle: Condvar,
+    pub(crate) io: Arc<SwitchIo>,
     observers: RwLock<Vec<Observer>>,
-    deps: SessionDeps,
+    pub(crate) deps: SessionDeps,
+    pub(crate) backups: BackupManager,
 }
 
 /// The vault session handle (cheap to clone; every clone is the same session).
 #[derive(Clone)]
-pub struct VaultSession(Arc<Shared>);
+pub struct VaultSession(pub(crate) Arc<Shared>);
 
 impl std::fmt::Debug for VaultSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -395,10 +404,19 @@ impl std::fmt::Debug for VaultSession {
 
 /// Events gathered under the lock and delivered after it is released.
 #[derive(Default)]
-struct Outbox {
-    state_changed: bool,
-    vault_changed: bool,
-    save: Option<SaveStatus>,
+pub(crate) struct Outbox {
+    pub(crate) state_changed: bool,
+    pub(crate) vault_changed: bool,
+    pub(crate) save: Option<SaveStatus>,
+}
+
+impl Outbox {
+    /// Keeps the latest save status of two (the later change wins).
+    pub(crate) fn save(&mut self, s: Option<SaveStatus>) {
+        if s.is_some() {
+            self.save = s;
+        }
+    }
 }
 
 fn path_string(path: &Path) -> String {
@@ -408,11 +426,14 @@ fn path_string(path: &Path) -> String {
 impl VaultSession {
     pub fn new(deps: SessionDeps) -> Self {
         let io = Arc::new(SwitchIo(RwLock::new(deps.file_io.clone())));
+        let backups = BackupManager::new(deps.backups_root.clone(), deps.settings.clone());
         Self(Arc::new(Shared {
             inner: Mutex::new(Inner::new()),
+            idle: Condvar::new(),
             io,
             observers: RwLock::new(Vec::new()),
             deps,
+            backups,
         }))
     }
 
@@ -461,7 +482,7 @@ impl VaultSession {
         lock(&self.0.inner).path.clone()
     }
 
-    fn emit(&self, out: Outbox) {
+    pub(crate) fn emit(&self, out: Outbox) {
         let mut events = Vec::new();
         if out.state_changed {
             events.push(SessionEvent::StateChanged(self.status()));
@@ -496,46 +517,37 @@ impl VaultSession {
         }
     }
 
-    fn now(&self) -> Timestamp {
+    pub(crate) fn now(&self) -> Timestamp {
         match self.0.deps.scheduler.wall_now().duration_since(UNIX_EPOCH) {
             Ok(d) => Timestamp(i64::try_from(d.as_secs()).unwrap_or(i64::MAX)),
             Err(e) => Timestamp(-i64::try_from(e.duration().as_secs()).unwrap_or(i64::MAX)),
         }
     }
 
-    /// Flushes the current vault before another one replaces it; an unsaved edit blocks the swap.
-    fn flush_before_switch(&self, inner: &mut Inner, out: &mut Outbox) -> Result<(), SessionError> {
-        if inner.db.is_none() && inner.pending_bytes.is_some() {
-            return Err(SessionError::InvalidInput(
-                "the open vault has unsaved changes; unlock it to save them first".into(),
-            ));
-        }
-        let (r, save) = inner.flush();
-        out.save = save.or(out.save.take());
-        r
-    }
-
-    /// Installs a freshly opened vault (after flushing the previous one), then records it in the
-    /// settings and notifies.
+    /// Installs a freshly opened vault (after saving the previous one), then records it in the
+    /// settings and notifies. `fresh` marks a file this session has just created.
     fn finish_open(
         &self,
         file: VaultFile,
         db: Database,
         password: SecretString,
+        fresh: bool,
     ) -> Result<(), SessionError> {
+        self.prepare_switch()?;
         let mut out = Outbox::default();
         let path = {
-            let mut inner = lock(&self.0.inner);
+            let mut inner = self.wait_idle(lock(&self.0.inner));
             if inner.quitting {
                 return Err(SessionError::Quitting);
             }
-            let flushed = self.flush_before_switch(&mut inner, &mut out);
-            if let Err(e) = flushed {
-                drop(inner);
-                self.emit(out);
-                return Err(e);
+            if (inner.db.is_some() && inner.is_dirty()) || inner.pending_bytes.is_some() {
+                // Edits landed between the save above and this point; never drop them.
+                return Err(SessionError::InvalidInput(
+                    "the open vault has unsaved changes; try again".into(),
+                ));
             }
             inner.install(file, db, password);
+            inner.fresh_file = fresh;
             out.state_changed = true;
             out.vault_changed = true;
             inner.path.clone()
@@ -586,7 +598,7 @@ impl VaultSession {
         let bytes = db.save(&password)?;
         self.0.io.write_atomic(path, &bytes)?;
         let (file, db) = VaultFile::open_with(self.0.io.clone(), path, &password)?;
-        self.finish_open(file, db, password)
+        self.finish_open(file, db, password, true)
     }
 
     /// Opens an existing vault file and makes it the unlocked session; also records it as the
@@ -598,115 +610,102 @@ impl VaultSession {
             let same = std::fs::canonicalize(path).ok() == inner.path;
             if same && inner.pending_bytes.is_some() {
                 drop(inner);
-                // Reopening the locked vault that holds unsaved changes is an unlock.
-                self.unlock(password)?;
-                if let Some(p) = self.vault_path() {
-                    self.remember(&p);
+                // Reopening the locked vault that holds unsaved changes is an unlock. When the
+                // password opens the disk but not the kept edits (changed elsewhere), the normal
+                // open below runs instead: the switch writes the kept edits as an `unsaved-*`
+                // copy first (see the saving module docs).
+                match self.unlock(password.clone()) {
+                    Ok(()) => {
+                        if let Some(p) = self.vault_path() {
+                            self.remember(&p);
+                        }
+                        return Ok(());
+                    }
+                    Err(SessionError::WrongPassword) => {}
+                    Err(e) => return Err(e),
                 }
-                return Ok(());
             }
         }
         // The KDF runs without the session lock, so status() stays responsive meanwhile.
         let (file, db) =
             VaultFile::open_with(self.0.io.clone(), path, &password).map_err(open_error)?;
-        self.finish_open(file, db, password)
+        self.finish_open(file, db, password, false)
     }
 
     /// Unlocks the locked vault with `password`. Unlocking an unlocked session only verifies the
     /// password.
+    ///
+    /// When the last lock kept unsaved edits (`pending_bytes`), they are decrypted with the same
+    /// password, merged with the vault on disk (which may have changed meanwhile) and saved. A
+    /// password that opens the disk but not the kept edits (or the reverse) is `WrongPassword`
+    /// and keeps them; see the module docs for the recovery path.
     pub fn unlock(&self, password: SecretString) -> Result<(), SessionError> {
-        let path = {
-            let inner = lock(&self.0.inner);
-            if inner.quitting {
-                return Err(SessionError::Quitting);
-            }
-            if inner.db.is_some() {
-                drop(inner);
-                return self.verify_password(&password);
-            }
-            inner.path.clone().ok_or(SessionError::NoVault)?
-        };
-        let (file, disk_db) =
-            VaultFile::open_with(self.0.io.clone(), &path, &password).map_err(open_error)?;
-        let mut out = Outbox::default();
-        {
-            let mut inner = lock(&self.0.inner);
-            if inner.quitting {
-                return Err(SessionError::Quitting);
-            }
-            if inner.db.is_some() || inner.path.as_deref() != Some(path.as_path()) {
-                // Another call unlocked or switched vaults meanwhile; that state wins.
-                drop(inner);
-                return self.verify_password(&password);
-            }
-            let restored = match &inner.pending_bytes {
-                Some(bytes) => Some(Database::open(bytes, &password)?),
+        // The KDF runs without the session lock; a retry write that consumed the kept edits
+        // meanwhile makes the loop start over with the new state.
+        for _ in 0..3 {
+            let (path, pending, base) = {
+                let inner = self.wait_idle(lock(&self.0.inner));
+                if inner.quitting {
+                    return Err(SessionError::Quitting);
+                }
+                if inner.db.is_some() {
+                    drop(inner);
+                    return self.verify_password(&password);
+                }
+                let path = inner.path.clone().ok_or(SessionError::NoVault)?;
+                (path, inner.pending_bytes.clone(), inner.disk_meta.clone())
+            };
+            let (file, disk_db) =
+                VaultFile::open_with(self.0.io.clone(), &path, &password).map_err(open_error)?;
+            let restored = match &pending {
+                Some(bytes) => Some(crate::saving::reconcile(
+                    &Database::open(bytes, &password)?,
+                    &disk_db,
+                    base.as_ref(),
+                )),
                 None => None,
             };
-            match restored {
-                Some(db) => {
-                    // The stamp of the file as it was before the failed save decides whether the
-                    // disk changed meanwhile. If it did, the edits stay in memory and every save
-                    // through that stale stamp is refused (`ChangedOnDisk`) until the merge
-                    // pipeline (Task 7) reconciles them; nothing is written over the change.
-                    let known = inner.pending_file.take().unwrap_or(file);
-                    let changed = known.has_changed_on_disk().unwrap_or(true);
-                    inner.install(known, db, password);
-                    inner.dirty_gen = 1;
-                    out.save = inner.set_save(if changed {
-                        SaveStatus::failed(SessionError::ChangedOnDisk.to_string())
-                    } else {
-                        SaveStatus::pending()
-                    });
+            let had_pending = restored.is_some();
+            let mut out = Outbox::default();
+            {
+                let mut inner = self.wait_idle(lock(&self.0.inner));
+                if inner.quitting {
+                    return Err(SessionError::Quitting);
                 }
-                None => inner.install(file, disk_db, password),
+                if inner.db.is_some() || inner.path.as_deref() != Some(path.as_path()) {
+                    // Another call unlocked or switched vaults meanwhile; that state wins.
+                    drop(inner);
+                    return self.verify_password(&password);
+                }
+                if inner.pending_bytes != pending {
+                    continue;
+                }
+                match restored {
+                    Some(merged) => {
+                        let unsaved = !crate::saving::same_on_disk(&merged, &disk_db);
+                        let disk_meta = disk_db.meta.clone();
+                        inner.install(file, merged, password);
+                        inner.disk_meta = Some(disk_meta);
+                        if unsaved {
+                            inner.dirty_gen = 1;
+                            out.save(inner.set_save(SaveStatus::pending()));
+                        }
+                    }
+                    None => inner.install(file, disk_db, password),
+                }
+                out.state_changed = true;
+                out.vault_changed = true;
             }
-            out.state_changed = true;
-            out.vault_changed = true;
+            self.emit(out);
+            if had_pending {
+                // A failure shows as `Failed` and schedules a retry; the unlock itself succeeded.
+                let _ = self.flush();
+            }
+            return Ok(());
         }
-        self.emit(out);
-        Ok(())
-    }
-
-    /// Saves pending edits, then drops the database and the password (zeroized) and keeps the
-    /// path. If the save fails, the encrypted bytes are kept and restored on the next unlock.
-    /// Works while quitting.
-    pub fn lock(&self, reason: LockReason) {
-        let mut out = Outbox::default();
-        {
-            let mut inner = lock(&self.0.inner);
-            if inner.db.is_none() {
-                return;
-            }
-            let (flushed, save) = inner.flush();
-            out.save = save;
-            if flushed.is_err() {
-                if let (Some(db), Some(password)) = (&inner.db, &inner.password) {
-                    // Only fails when the OS has no randomness left; nothing more can be kept.
-                    inner.pending_bytes = db.save(password).ok();
-                }
-                if inner.pending_bytes.is_some() {
-                    inner.pending_file = inner.file.take();
-                }
-            }
-            inner.db = None;
-            inner.password = None;
-            inner.file = None;
-            inner.lock_reason = Some(reason);
-            out.state_changed = true;
-        }
-        self.emit(out);
-    }
-
-    /// Writes unsaved edits now (synchronous). `Ok` only when everything is on disk.
-    /// Works while quitting.
-    pub fn flush(&self) -> Result<(), SessionError> {
-        let (result, save) = lock(&self.0.inner).flush();
-        self.emit(Outbox {
-            save,
-            ..Outbox::default()
-        });
-        result
+        Err(SessionError::Io(
+            "the unsaved changes were being written; try again".into(),
+        ))
     }
 
     /// Read access to the unlocked database. Works while quitting.
@@ -738,7 +737,10 @@ impl VaultSession {
             let r = f(&mut draft, now)?;
             inner.db = Some(draft);
             inner.dirty_gen = inner.dirty_gen.wrapping_add(1);
-            out.save = inner.set_save(SaveStatus::pending());
+            if !inner.in_flight {
+                out.save = inner.set_save(SaveStatus::pending());
+            }
+            self.schedule_autosave(&mut inner);
             out.vault_changed = true;
             r
         };
@@ -805,8 +807,12 @@ impl VaultSession {
     /// target exists), reopens the session there and records the new path in the settings. The
     /// old file is left untouched. Refused while quitting.
     pub fn relocate(&self, new_path: &Path, io: Arc<dyn FileIo>) -> Result<(), SessionError> {
+        self.check_not_quitting()?;
+        if self.is_unlocked() {
+            self.flush()?;
+        }
         let mut out = Outbox::default();
-        let result = self.relocate_locked(new_path, io, &mut out);
+        let result = self.relocate_locked(new_path, io);
         if result.is_ok() {
             if let Some(p) = self.vault_path() {
                 self.remember(&p);
@@ -817,22 +823,20 @@ impl VaultSession {
         result
     }
 
-    fn relocate_locked(
-        &self,
-        new_path: &Path,
-        io: Arc<dyn FileIo>,
-        out: &mut Outbox,
-    ) -> Result<(), SessionError> {
-        let mut inner = lock(&self.0.inner);
+    fn relocate_locked(&self, new_path: &Path, io: Arc<dyn FileIo>) -> Result<(), SessionError> {
+        let inner = self.wait_idle(lock(&self.0.inner));
         if inner.quitting {
             return Err(SessionError::Quitting);
         }
         if inner.db.is_none() {
             return Err(inner.not_unlocked());
         }
-        let (flushed, save) = inner.flush();
-        out.save = save;
-        flushed?;
+        let mut inner = inner;
+        if inner.is_dirty() {
+            return Err(SessionError::Io(
+                "edits arrived while relocating; try again".into(),
+            ));
+        }
         if std::fs::symlink_metadata(new_path).is_ok() {
             return Err(SessionError::AlreadyExists);
         }
@@ -1078,102 +1082,6 @@ mod tests {
         assert_eq!(f.session.status().save.state, SaveState::Idle);
         f.session.unlock(pw("pw")).unwrap();
         assert_eq!(f.entries(), 2);
-    }
-
-    #[test]
-    fn failed_save_on_lock_keeps_the_edit_for_the_next_unlock() {
-        let f = fx();
-        f.created();
-        let failing = Arc::new(FailingFileIo::new(Arc::new(PlainFileIo)));
-        f.session.set_file_io(failing.clone());
-        f.add_entry().unwrap();
-        failing.fail_write_atomic(ErrorKind::PermissionDenied);
-        f.session.lock(LockReason::Manual);
-        assert_eq!(f.session.status().save.state, SaveState::Failed);
-        failing.heal();
-        f.session.unlock(pw("pw")).unwrap();
-        assert_eq!(f.entries(), 2);
-        assert_eq!(f.session.status().save.state, SaveState::Pending);
-        f.session.flush().unwrap();
-        f.session.lock(LockReason::Manual);
-        f.session.unlock(pw("pw")).unwrap();
-        assert_eq!(f.entries(), 2);
-    }
-
-    /// Locks with an unsaved edit whose save fails, so the session keeps `pending_bytes`.
-    fn lock_with_pending_bytes(f: &Fx) -> PathBuf {
-        let path = f.created();
-        let failing = Arc::new(FailingFileIo::new(Arc::new(PlainFileIo)));
-        f.session.set_file_io(failing.clone());
-        f.add_entry().unwrap();
-        failing.fail_write_atomic(ErrorKind::PermissionDenied);
-        f.session.lock(LockReason::Manual);
-        failing.heal();
-        assert_eq!(f.session.status().state, SessionState::Locked);
-        path
-    }
-
-    #[test]
-    fn pending_bytes_plus_external_change_refuses_to_overwrite() {
-        let f = fx();
-        let path = lock_with_pending_bytes(&f);
-        let external = fast_database("other device").save(&pw("pw")).unwrap();
-        fs::write(&path, &external).unwrap();
-        f.session.unlock(pw("pw")).unwrap();
-        assert_eq!(f.entries(), 2, "the pending edits are restored");
-        let s = f.session.status().save;
-        assert_eq!(s.state, SaveState::Failed);
-        assert_eq!(
-            s.message,
-            Some(SessionError::ChangedOnDisk.to_string()),
-            "the conflict is reported"
-        );
-        assert_eq!(f.session.flush(), Err(SessionError::ChangedOnDisk));
-        assert_eq!(fs::read(&path).unwrap(), external);
-        assert_eq!(f.entries(), 2, "the pending edits stay in the session");
-        // Locking again keeps them (the save is still refused) and the next unlock restores them.
-        f.session.lock(LockReason::Manual);
-        assert_eq!(fs::read(&path).unwrap(), external);
-        f.session.unlock(pw("pw")).unwrap();
-        assert_eq!(f.entries(), 2);
-        assert_eq!(f.session.flush(), Err(SessionError::ChangedOnDisk));
-    }
-
-    #[test]
-    fn pending_bytes_without_external_change_flush_succeeds() {
-        let f = fx();
-        let path = lock_with_pending_bytes(&f);
-        f.session.unlock(pw("pw")).unwrap();
-        assert_eq!(f.session.status().save.state, SaveState::Pending);
-        f.session.flush().unwrap();
-        assert_eq!(f.session.status().save, SaveStatus::idle());
-        let g = fx();
-        g.session.open_vault(&path, pw("pw")).unwrap();
-        assert_eq!(g.entries(), 2);
-    }
-
-    #[test]
-    fn pending_bytes_survive_a_password_change_on_disk() {
-        let f = fx();
-        let path = lock_with_pending_bytes(&f);
-        let external = fast_database("other device").save(&pw("new")).unwrap();
-        fs::write(&path, &external).unwrap();
-        assert_eq!(f.session.unlock(pw("pw")), Err(SessionError::WrongPassword));
-        // The new password opens the disk but not the kept edits: still refused, still kept.
-        assert_eq!(
-            f.session.unlock(pw("new")),
-            Err(SessionError::WrongPassword)
-        );
-        assert_eq!(f.session.status().state, SessionState::Locked);
-        assert_eq!(fs::read(&path).unwrap(), external);
-        // Recovery: once the file opens with the old password again, the edits come back and are
-        // still not written over the changed file.
-        let reverted = fast_database("other device").save(&pw("pw")).unwrap();
-        fs::write(&path, &reverted).unwrap();
-        f.session.unlock(pw("pw")).unwrap();
-        assert_eq!(f.entries(), 2);
-        assert_eq!(f.session.flush(), Err(SessionError::ChangedOnDisk));
-        assert_eq!(fs::read(&path).unwrap(), reverted);
     }
 
     #[test]
@@ -1509,17 +1417,6 @@ mod tests {
         failing.heal();
         f.session.flush().unwrap();
         assert_eq!(f.session.status().save, SaveStatus::idle());
-    }
-
-    #[test]
-    fn flush_refuses_to_overwrite_an_external_change() {
-        let f = fx();
-        let path = f.created();
-        f.add_entry().unwrap();
-        let other = fast_database("other").save(&pw("pw")).unwrap();
-        fs::write(&path, &other).unwrap();
-        assert_eq!(f.session.flush(), Err(SessionError::ChangedOnDisk));
-        assert_eq!(fs::read(&path).unwrap(), other);
     }
 
     #[test]

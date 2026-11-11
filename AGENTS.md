@@ -156,17 +156,32 @@ change is done.
   The schema is pinned by `crates/mypass-session/tests/snapshots/settings.default.json`.
 - **Vault session.** `mypass_session::session::VaultSession` owns the one open vault (`NoVault`,
   `Locked`, `Unlocked`). Edits go through `mutate`, which edits a clone and swaps it in only on
-  `Ok` (rollback by construction); `lock` saves first and keeps the encrypted bytes when that save
-  fails, and until the merge pipeline lands those edits are never dropped from memory while the app
-  runs but are written only when the file on disk is unchanged (otherwise `flush` returns
-  `ChangedOnDisk` without writing); observers run after the session lock is released;
+  `Ok` (rollback by construction). Saving (`mypass_session::saving`) is a debounced autosave
+  (1 s) that writes outside the session lock, one write at a time (an in-flight flag plus a
+  condvar orders autosave, `flush` and `lock`, and its one finish path re-arms the autosave while
+  the session is dirty); a file changed on disk is reloaded and adopted wholesale by a clean
+  session (nothing written) or two-way merged into a dirty one, which is then written, never
+  overwritten blindly (the remote's save settings are always kept, the remote's metadata unless
+  it was edited locally); `flush` is `Ok` only when every edit is on disk. `lock` saves first and keeps the encrypted bytes when that
+  save fails: a timer writes them over an unchanged file, otherwise the next unlock merges them,
+  and switching vaults first writes them as an `unsaved-*` copy into the backup folder (the
+  path when the password was changed elsewhere); observers run after the session lock is released;
   `begin_quit` closes every opening and mutating call with `Quitting` while `lock` and `flush`
   keep working. The master password lives only in the session as a `SecretString`. Tests use `mypass_session::testing::fast_database`
   (Argon2id 8 MiB, 1 pass) so saves stay fast.
 - **Backups.** `mypass_session::backups::BackupManager` copies the on-disk vault bytes to
   `<backups_dir>/<vault_id>/backup-<unix_secs>[-<n>].kdbx` before it is overwritten (first write of
-  a session always, then per `backupInterval`), keeps the newest `backupCount`, and never blocks a
-  save: a failure is recorded in `last-failure.json` and cleared by the next success.
+  a session always, then per `backupInterval`; once per disk state, so retries of a failed write
+  take none, and never when the bytes equal the newest backup), keeps the newest `backupCount`,
+  and never blocks a save: a failure is recorded in `last-failure.json` and cleared by the next
+  success.
+- **Auto-lock and clipboard clear.** `mypass_session::autolock::AutoLock` locks on the idle
+  timer, on sleep and screen lock (per settings) and, after `Wake`, when the idle time ran out
+  (idle time is the larger of the wall-clock and the monotonic measure, so neither a sleep nor a
+  clock set back defeats it); platform event sinks only hand events to the scheduler (`AutoLock::event_sink`),
+  because a sink must never block and `lock` waits for an in-flight save.
+  `mypass_session::clipboard_service::ClipboardService` always schedules the clear and clears
+  only through `clear_if_unchanged`, so a later copy by the user is never wiped.
 - **Platform seam.** Everything OS-specific goes through `mypass_platform::Platform` (trait objects,
   built by `mypass_platform::current`) and every on-disk location through `AppPaths`. Tests use
   `mypass_platform::testing::fake_platform()` under the `test-util` feature; no non-ignored test touches the
