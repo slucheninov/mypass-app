@@ -8,6 +8,11 @@ use uuid::Uuid;
 pub struct Timestamp(pub i64);
 impl Timestamp {
     pub const EPOCH_OFFSET_SECS: i64 = 62_135_596_800;
+    /// Parses the strict `YYYY-MM-DDTHH:MM:SSZ` form (what KeePass and MyPass write for ISO 8601
+    /// times); anything else, including impossible dates, is `None`.
+    pub fn parse_iso8601(s: &str) -> Option<Self> {
+        crate::format::xml::time::iso(s)
+    }
     pub fn now() -> Self {
         match SystemTime::now().duration_since(UNIX_EPOCH) {
             Ok(d) => Self(i64::try_from(d.as_secs()).unwrap_or(i64::MAX)),
@@ -438,5 +443,20 @@ mod tests {
         assert!(e.fields[0].protected);
         e.remove_field("a");
         assert_eq!(e.field("a"), None);
+    }
+}
+
+#[cfg(test)]
+mod iso_tests {
+    use super::Timestamp;
+
+    #[test]
+    fn parse_iso8601_accepts_valid_and_rejects_the_rest() {
+        assert_eq!(
+            Timestamp::parse_iso8601("2023-11-14T22:13:20Z"),
+            Some(Timestamp(1_700_000_000))
+        );
+        assert_eq!(Timestamp::parse_iso8601("2023-02-31T00:00:00Z"), None);
+        assert_eq!(Timestamp::parse_iso8601("garbage"), None);
     }
 }

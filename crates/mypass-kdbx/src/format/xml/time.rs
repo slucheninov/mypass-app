@@ -16,7 +16,7 @@ pub(super) fn parse(s: &str) -> Result<Timestamp> {
     );
     Timestamp::from_kdbx_seconds(raw).ok_or_else(|| corrupt("time overflow"))
 }
-fn iso(s: &str) -> Option<Timestamp> {
+pub(crate) fn iso(s: &str) -> Option<Timestamp> {
     if s.len() != 20
         || s.get(4..5)? != "-"
         || s.get(7..8)? != "-"

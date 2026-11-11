@@ -15,11 +15,18 @@ workspace = true
 mypass-kdbx = { path = "../mypass-kdbx" }
 mypass-core = { path = "../mypass-core" }
 mypass-platform = { path = "../mypass-platform" }
+base64.workspace = true
+chacha20poly1305.workspace = true
+rand.workspace = true
 secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+specta.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 mypass-kdbx = { path = "../mypass-kdbx", features = ["test-util"] }
