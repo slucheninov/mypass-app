@@ -87,3 +87,15 @@ impl World {
         path
     }
 }
+
+/// A core whose vault has an unsaved edit and whose writes all fail (`PermissionDenied`).
+pub fn dirty_world_with_failing_writes() -> World {
+    use mypass_kdbx::test_util::FailingFileIo;
+    use mypass_kdbx::PlainFileIo;
+    let w = open_world();
+    let io = Arc::new(FailingFileIo::new(Arc::new(PlainFileIo)));
+    w.core.session.set_file_io(io.clone());
+    io.fail_write_atomic(std::io::ErrorKind::PermissionDenied);
+    w.login("Unsaved");
+    w
+}

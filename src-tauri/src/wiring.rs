@@ -7,9 +7,11 @@
 
 use crate::events::{ClipboardClearedEvent, SaveStateChanged, SessionChanged, VaultChanged};
 use crate::files::{FileGrants, TauriFilePicker};
+use crate::hotkeys::ConflictGate;
+use crate::lifecycle::{ExitGate, QuitPort};
 use crate::lifecycle::{ShellEffects, TRAY_REFRESH_DELAY};
 use crate::shell::TauriWindowOps;
-use crate::shell_runtime::{hide_panel, tray_refresher, TauriTarget};
+use crate::shell_runtime::{hide_panel, tray_refresher, TauriQuitPort, TauriTarget};
 use crate::state::{AppState, ShellState, SystemProcessLookup};
 use mypass_session::clipboard_service::ClearedSink;
 use mypass_session::session::SessionEvent;
@@ -135,7 +137,16 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     core.clipboard
         .set_cleared_sink(Arc::new(EmitCleared(handle.clone())));
 
-    let target = Arc::new(TauriTarget::new(handle.clone(), core.clone(), refresher));
+    let conflicts = Arc::new(ConflictGate::default());
+    let target = Arc::new(TauriTarget::new(
+        handle.clone(),
+        core.clone(),
+        refresher,
+        conflicts.clone(),
+    ));
+    app.manage(conflicts);
+    app.manage(ExitGate::default());
+    app.manage::<Arc<dyn QuitPort>>(Arc::new(TauriQuitPort(handle.clone())));
     app.manage(AppState(core.clone()));
     app.manage(ShellState {
         picker: Arc::new(TauriFilePicker(handle.clone())),

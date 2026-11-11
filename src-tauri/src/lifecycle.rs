@@ -16,7 +16,7 @@ use crate::tray::{tray_menu_model, RecentEntry, TrayMenuModel, MAX_RECENTS};
 use mypass_platform::{PlatformResult, Subscription};
 use mypass_session::scheduler::Scheduler;
 use mypass_session::session::SessionError;
-use mypass_session::settings::{Settings, SettingsPatch, Theme};
+use mypass_session::settings::{Language, Settings, SettingsPatch, Theme};
 use mypass_session::{AppCore, LockReason, Platform, SaveState, SaveStatus, SessionState};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -77,6 +77,9 @@ pub trait QuitSteps {
     fn flush(&self, timeout: Duration) -> Result<(), SessionError>;
     /// Re-opens the session after a cancelled quit.
     fn cancel_quit(&self);
+    /// After Quit Anyway: keeps the unsaved edits as a recovery copy in the backup folder, within
+    /// `timeout`. Best effort: the user consented to the loss if it fails.
+    fn keep_unsaved(&self, timeout: Duration);
 }
 
 impl QuitSteps for AppCore {
@@ -89,19 +92,35 @@ impl QuitSteps for AppCore {
     fn cancel_quit(&self) {
         AppCore::cancel_quit(self);
     }
+    fn keep_unsaved(&self, timeout: Duration) {
+        // On a helper thread so a hung drive cannot hold the exit: `lock` waits for an
+        // in-flight write.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let session = self.session.clone();
+        let spawned = std::thread::Builder::new()
+            .name("mypass-keep-unsaved".into())
+            .spawn(move || {
+                let _ = tx.send(session.keep_unsaved_for_quit());
+            });
+        if spawned.is_ok() {
+            let _ = rx.recv_timeout(timeout);
+        }
+    }
 }
 
 /// The quit flow. `begin_quit` comes FIRST, so no edit can arrive after the decision; then the
-/// final flush; then `quit_decision`. A failed flush asks the user through `ask` (`true` means
-/// Quit Anyway): Cancel re-opens the session and stays, Quit Anyway exits with the gate still set
-/// (the encrypted bytes were kept by `lock`/the session, nothing is silently dropped).
+/// final flush; then `quit_decision`. A failed flush asks the user through `ask` (it receives
+/// the error text; `true` means Quit Anyway): Cancel re-opens the session and stays, Quit Anyway
+/// first tries to keep the unsaved edits as an `unsaved-*` recovery copy in the backup folder
+/// (best effort, the loss is consented to if even that fails) and exits with the gate still set.
 pub fn on_exit_requested(steps: &dyn QuitSteps, ask: &dyn Fn(&str) -> bool) -> ExitOutcome {
     use crate::shell::{quit_decision, QuitDecision};
     steps.begin_quit();
     match quit_decision(steps.flush(FLUSH_TIMEOUT)) {
         QuitDecision::Proceed => ExitOutcome::Exit,
-        QuitDecision::PromptUser { message } => {
-            if ask(&message) {
+        QuitDecision::PromptUser { error } => {
+            if ask(&error) {
+                steps.keep_unsaved(FLUSH_TIMEOUT);
                 ExitOutcome::Exit
             } else {
                 steps.cancel_quit();
@@ -109,6 +128,16 @@ pub fn on_exit_requested(steps: &dyn QuitSteps, ask: &dyn Fn(&str) -> bool) -> E
             }
         }
     }
+}
+
+/// What the quit worker needs from the runtime: the data-loss prompt and the final exit. A seam
+/// so the whole `ExitRequested` path runs in tests with a fake dialog.
+pub trait QuitPort: Send + Sync {
+    /// The Cancel / Quit Anyway prompt for a failed final save, in `language`, around the error
+    /// text. `true` means Quit Anyway. Blocks: never call it on the main thread.
+    fn confirm_quit_anyway(&self, language: Language, error: &str) -> bool;
+    /// Exits the process (through the runtime, which asks `ExitGate` once more).
+    fn exit(&self);
 }
 
 /// What an `ExitRequested` run event does. The quit flow blocks (a flush, then a modal dialog),
@@ -374,7 +403,7 @@ pub fn emit_save_state<R: tauri::Runtime>(app: &tauri::AppHandle<R>, status: Sav
 mod tests {
     use super::*;
     use crate::shell::{settings_effects, FakeWindowOps};
-    use crate::testing::{open_world, pw, world};
+    use crate::testing::{dirty_world_with_failing_writes, open_world, pw, world};
     use crate::tray::TrayItem;
     use mypass_platform::{LoginItemStatus, PlatformError, SystemEvent};
     use mypass_session::settings::Language;
@@ -425,12 +454,26 @@ mod tests {
     }
 
     #[test]
-    fn lock_via_scheduler_defers_and_ignores_a_locked_session() {
-        let w = world();
-        // No vault: nothing to lock, nothing happens.
+    fn lock_via_scheduler_defers_the_lock_and_ignores_locked_and_empty_sessions() {
+        let w = open_world();
         lock_via_scheduler(&w.core, LockReason::Hotkey);
+        assert!(w.core.session.is_unlocked(), "nothing happens inline");
         w.run_scheduled();
-        assert_eq!(w.core.session.status().state, SessionState::NoVault);
+        let status = w.core.session.status();
+        assert_eq!(status.state, SessionState::Locked);
+        assert_eq!(status.lock_reason, Some(LockReason::Hotkey));
+        // Already locked: a second request changes nothing (the reason stays).
+        lock_via_scheduler(&w.core, LockReason::Manual);
+        w.run_scheduled();
+        assert_eq!(
+            w.core.session.status().lock_reason,
+            Some(LockReason::Hotkey)
+        );
+        // No vault: nothing to lock.
+        let empty = world();
+        lock_via_scheduler(&empty.core, LockReason::Hotkey);
+        empty.run_scheduled();
+        assert_eq!(empty.core.session.status().state, SessionState::NoVault);
     }
 
     // ---- exit ----
@@ -456,6 +499,9 @@ mod tests {
         }
         fn cancel_quit(&self) {
             self.log.borrow_mut().push("cancel_quit");
+        }
+        fn keep_unsaved(&self, _timeout: Duration) {
+            self.log.borrow_mut().push("keep_unsaved");
         }
     }
 
@@ -483,19 +529,17 @@ mod tests {
         );
         assert_eq!(asked.borrow().len(), 1);
         assert!(asked.borrow()[0].contains("disk full"));
-    }
 
-    /// A core whose vault has an unsaved edit and whose writes fail.
-    fn dirty_world_with_failing_writes() -> crate::testing::World {
-        use mypass_kdbx::test_util::FailingFileIo;
-        use mypass_kdbx::PlainFileIo;
-        use std::io::ErrorKind;
-        let w = open_world();
-        let io = Arc::new(FailingFileIo::new(Arc::new(PlainFileIo)));
-        w.core.session.set_file_io(io.clone());
-        io.fail_write_atomic(ErrorKind::PermissionDenied);
-        w.login("Unsaved");
-        w
+        // Quit Anyway keeps the unsaved edits (after the decision) and exits.
+        let anyway = Recorder {
+            flush_fails: true,
+            ..Recorder::default()
+        };
+        assert_eq!(on_exit_requested(&anyway, &|_| true), ExitOutcome::Exit);
+        assert_eq!(
+            *anyway.log.borrow(),
+            ["begin_quit", "flush", "keep_unsaved"]
+        );
     }
 
     #[test]
@@ -516,19 +560,78 @@ mod tests {
     #[test]
     fn exit_quit_anyway_exits_with_gate_still_set() {
         let w = dirty_world_with_failing_writes();
+        let root = uuid::Uuid::parse_str(&w.root()).unwrap();
         let outcome = on_exit_requested(&w.core, &|_| true);
         assert_eq!(outcome, ExitOutcome::Exit);
         assert!(w.core.is_quitting());
-        // The gate refuses further edits.
-        let mut model = mypass_session::editing::new_model(
-            mypass_session::dto::EntryTypeDto::Login,
-            uuid::Uuid::parse_str(&w.root()).unwrap(),
-        );
+        // The gate refuses further edits (the session is locked by then, so `Locked` answers
+        // first; either way nothing is accepted).
+        let mut model =
+            mypass_session::editing::new_model(mypass_session::dto::EntryTypeDto::Login, root);
         model.title = "late".into();
-        assert_eq!(
-            w.core.entry_save(model).unwrap_err().code,
-            mypass_session::ErrorCode::Quitting
-        );
+        assert!(w.core.entry_save(model).is_err());
+    }
+
+    fn unsaved_copies(w: &crate::testing::World) -> Vec<std::path::PathBuf> {
+        let folder = w.core.backup_folder().unwrap();
+        std::fs::read_dir(folder)
+            .map(|dir| {
+                dir.filter_map(Result::ok)
+                    .map(|e| e.path())
+                    .filter(|p| {
+                        p.file_name()
+                            .and_then(|n| n.to_str())
+                            .is_some_and(|n| n.starts_with("unsaved-") && n.ends_with(".kdbx"))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// A real failing drive: the vault lives in a folder that is then made read-only, while the
+    /// backup folder stays writable.
+    #[cfg(unix)]
+    #[test]
+    fn quit_anyway_keeps_the_unsaved_edits_as_a_recovery_copy_in_the_backup_folder() {
+        use std::os::unix::fs::PermissionsExt;
+        let w = world();
+        let vault_dir = w.dir.path().join("vault");
+        std::fs::create_dir(&vault_dir).unwrap();
+        w.core
+            .session
+            .create_vault_with(
+                &vault_dir.join("v.kdbx"),
+                pw("pw"),
+                mypass_session::testing::fast_database("T"),
+            )
+            .unwrap();
+        w.core.session.flush().unwrap();
+        w.login("Unsaved");
+        std::fs::set_permissions(&vault_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let outcome = on_exit_requested(&w.core, &|error| {
+            assert!(!error.is_empty());
+            true
+        });
+        std::fs::set_permissions(&vault_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(outcome, ExitOutcome::Exit);
+        let copies = unsaved_copies(&w);
+        assert_eq!(copies.len(), 1, "one recovery copy: {copies:?}");
+        // The copy opens with the vault's password and holds the unsaved entry.
+        let bytes = std::fs::read(&copies[0]).unwrap();
+        let db = mypass_kdbx::Database::open(&bytes, &pw("pw")).unwrap();
+        assert!(db
+            .entries_excluding(&[])
+            .iter()
+            .any(|e| e.title() == "Unsaved"));
+    }
+
+    #[test]
+    fn quit_anyway_still_exits_when_no_copy_can_be_written() {
+        let w = dirty_world_with_failing_writes();
+        // Every write fails, the copy included: the exit is consented, never blocked.
+        assert_eq!(on_exit_requested(&w.core, &|_| true), ExitOutcome::Exit);
+        assert!(unsaved_copies(&w).is_empty());
+        assert!(w.core.is_quitting());
     }
 
     #[test]
@@ -756,12 +859,36 @@ mod tests {
             Effect::SetTrayVisible(false),
             Effect::RegisterHotkeys,
             Effect::ApplyLanguage(Language::Ru),
-            Effect::RearmAutoLock,
         ]);
         assert_eq!(
             *target.calls.lock().unwrap(),
             ["theme Dark", "tray_visible false", "register_hotkeys"]
         );
+    }
+
+    #[test]
+    fn rearm_auto_lock_arms_the_timer_with_the_new_timeout() {
+        use mypass_session::settings::IdleTimeout;
+        let w = open_world();
+        let effects = ShellEffects::new(
+            Arc::new(w.core.clone()),
+            Arc::new(RecordingTarget::default()),
+        );
+        // Written straight to the store, so the auto-lock timer still runs on the old 30 minutes.
+        w.core
+            .settings
+            .update(SettingsPatch {
+                auto_lock_idle_timeout: Some(IdleTimeout::OneMinute),
+                ..SettingsPatch::default()
+            })
+            .unwrap();
+        w.clock.advance(Duration::from_secs(61));
+        assert!(w.core.session.is_unlocked(), "not re-armed yet");
+        effects.run(vec![Effect::RearmAutoLock]);
+        w.clock.advance(Duration::from_secs(60));
+        let status = w.core.session.status();
+        assert_eq!(status.state, SessionState::Locked);
+        assert_eq!(status.lock_reason, Some(LockReason::Idle));
     }
 
     #[test]

@@ -38,6 +38,7 @@ tauri-plugin-dialog.workspace = true
 tauri-plugin-opener.workspace = true
 
 [dev-dependencies]
+tauri = { workspace = true, features = ["test"] }
 tempfile.workspace = true
 mypass-platform = { path = "../crates/mypass-platform", features = ["test-util"] }
 mypass-kdbx = { path = "../crates/mypass-kdbx", features = ["test-util"] }

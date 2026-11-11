@@ -461,6 +461,7 @@
   "The vault at that location is still downloading from iCloud. Wait until it finishes, then try again.": "Хранилище в этом расположении ещё загружается из iCloud. Дождитесь завершения и повторите попытку.",
   "The vault at that location uses a different password. Nothing was changed on either side.": "Хранилище в этом расположении использует другой пароль. Ничего не изменено ни в одном из расположений.",
   "The vault at the new location could not be opened with your password. Nothing was changed.": "Хранилище в новом расположении не удалось открыть вашим паролем. Ничего не изменено.",
+  "The vault could not be saved (%@). If you quit anyway, MyPass tries to keep your unsaved changes as a recovery copy in the backups folder.": "Не удалось сохранить хранилище ({0}). Если выйти сейчас, MyPass попытается сохранить несохранённые изменения как копию для восстановления в папке резервных копий.",
   "The vault file at %@ can't be found. Choose it again or create a new vault.": "Файл хранилища в {0} не найден. Выберите его снова или создайте новое хранилище.",
   "The vault is already at that location. Nothing was changed.": "Хранилище уже находится в этом расположении. Ничего не изменено.",
   "The vault is now at the new location.": "Теперь хранилище находится в новом расположении.",

@@ -97,26 +97,37 @@ impl Catalog {
 fn substitute(message: &str, args: &[&str]) -> String {
     let mut out = String::with_capacity(message.len());
     let mut rest = message;
-    while let Some(open) = rest.find('{') {
-        out.push_str(&rest[..open]);
-        let tail = &rest[open..];
-        let replacement = tail.find('}').and_then(|close| {
-            let index: usize = tail[1..close].parse().ok()?;
-            args.get(index).map(|arg| (*arg, close + 1))
+    while let Some((head, tail)) = rest.split_once('{') {
+        out.push_str(head);
+        let argument = tail.split_once('}').and_then(|(name, after)| {
+            if name.is_empty() || !name.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            let index: usize = name.parse().ok()?;
+            args.get(index).map(|arg| (*arg, after))
         });
-        match replacement {
-            Some((arg, consumed)) => {
+        match argument {
+            Some((arg, after)) => {
                 out.push_str(arg);
-                rest = &tail[consumed..];
+                rest = after;
             }
             None => {
                 out.push('{');
-                rest = &tail[1..];
+                rest = tail;
             }
         }
     }
     out.push_str(rest);
     out
+}
+
+/// The message of `key` from `primary`, else from `fallback`, else the key itself, with `args`
+/// substituted. The one lookup rule of [`t_resolved`] (tests give it stub catalogs).
+pub fn translate_with(primary: &Catalog, fallback: &Catalog, key: &str, args: &[&str]) -> String {
+    primary
+        .format(key, args)
+        .or_else(|| fallback.format(key, args))
+        .unwrap_or_else(|| substitute(key, args))
 }
 
 /// The parsed catalog of a language, parsed once per process.
@@ -182,10 +193,7 @@ pub fn t(lang: SettingsLanguage, key: &str, args: &[&str]) -> String {
 
 /// [`t`] for an already resolved language.
 pub fn t_resolved(lang: Language, key: &str, args: &[&str]) -> String {
-    catalog(lang)
-        .format(key, args)
-        .or_else(|| catalog(Language::En).format(key, args))
-        .unwrap_or_else(|| substitute(key, args))
+    translate_with(catalog(lang), catalog(Language::En), key, args)
 }
 
 #[cfg(test)]
@@ -238,13 +246,18 @@ mod tests {
         for lang in [Language::En, Language::Uk, Language::Ru] {
             assert_eq!(t_resolved(lang, "No such key {0}", &["x"]), "No such key x");
         }
-        // A key only English holds (a stub catalog) falls back to English.
-        let uk = Catalog::from_json(r#"{"A": "uk-a"}"#);
-        let en = Catalog::from_json(r#"{"A": "en-a", "B": "en-b"}"#);
-        let pick = |key: &str| uk.format(key, &[]).or_else(|| en.format(key, &[]));
-        assert_eq!(pick("A").as_deref(), Some("uk-a"));
-        assert_eq!(pick("B").as_deref(), Some("en-b"));
-        assert_eq!(pick("C"), None);
+        // A key only English holds (stub catalogs) falls back to English; without the
+        // fallback the key itself would come back.
+        let uk = Catalog::from_json(r#"{"A": "uk-a {0}"}"#);
+        let en = Catalog::from_json(r#"{"A": "en-a", "B": "en-b {0}"}"#);
+        assert_eq!(translate_with(&uk, &en, "A", &["x"]), "uk-a x");
+        assert_eq!(translate_with(&uk, &en, "B", &["x"]), "en-b x");
+        assert_eq!(translate_with(&uk, &en, "C {0}", &["x"]), "C x");
+        assert_eq!(
+            translate_with(&uk, &Catalog::default(), "B", &[]),
+            "B",
+            "no fallback catalog: the key"
+        );
     }
 
     #[test]

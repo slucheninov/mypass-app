@@ -96,9 +96,10 @@ pub fn close_action(os: &str, tray_visible: bool) -> CloseAction {
 #[derive(Debug, PartialEq, Eq)]
 pub enum QuitDecision {
     Proceed,
-    /// Ask the user (Cancel / Quit Anyway). The message carries no secrets.
+    /// Ask the user (Cancel / Quit Anyway). `error` is the failure text (no secrets); the
+    /// dialog builds its localised message around it.
     PromptUser {
-        message: String,
+        error: String,
     },
 }
 
@@ -107,7 +108,7 @@ pub fn quit_decision(flush: Result<(), SessionError>) -> QuitDecision {
     match flush {
         Ok(()) => QuitDecision::Proceed,
         Err(error) => QuitDecision::PromptUser {
-            message: format!("The vault could not be saved: {error}"),
+            error: error.to_string(),
         },
     }
 }
@@ -552,7 +553,7 @@ mod tests {
     #[test]
     fn quit_with_failed_flush_prompts_instead_of_exiting() {
         match quit_decision(Err(SessionError::Io("disk full".into()))) {
-            QuitDecision::PromptUser { message } => assert!(message.contains("disk full")),
+            QuitDecision::PromptUser { error } => assert!(error.contains("disk full")),
             other => panic!("unexpected {other:?}"),
         }
     }

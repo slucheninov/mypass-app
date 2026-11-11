@@ -461,6 +461,7 @@
   "The vault at that location is still downloading from iCloud. Wait until it finishes, then try again.": "The vault at that location is still downloading from iCloud. Wait until it finishes, then try again.",
   "The vault at that location uses a different password. Nothing was changed on either side.": "The vault at that location uses a different password. Nothing was changed on either side.",
   "The vault at the new location could not be opened with your password. Nothing was changed.": "The vault at the new location could not be opened with your password. Nothing was changed.",
+  "The vault could not be saved (%@). If you quit anyway, MyPass tries to keep your unsaved changes as a recovery copy in the backups folder.": "The vault could not be saved ({0}). If you quit anyway, MyPass tries to keep your unsaved changes as a recovery copy in the backups folder.",
   "The vault file at %@ can't be found. Choose it again or create a new vault.": "The vault file at {0} can't be found. Choose it again or create a new vault.",
   "The vault is already at that location. Nothing was changed.": "The vault is already at that location. Nothing was changed.",
   "The vault is now at the new location.": "The vault is now at the new location.",

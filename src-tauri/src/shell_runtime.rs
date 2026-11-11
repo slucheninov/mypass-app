@@ -10,12 +10,12 @@
 
 use crate::commands::app::{app_open_settings, open_entry, MAIN_WINDOW};
 use crate::events::ShortcutConflictEvent;
-use crate::hotkeys;
+use crate::hotkeys::{self, ConflictGate};
 use crate::i18n;
 use crate::lifecycle::{
     attach_platform_events, current_tray_model, emit_save_state, emit_settings, lock_via_scheduler,
     on_exit_requested, start_external_poll, sync_login_item, ExitGate, ExitOutcome, ExitRequest,
-    ExternalWatcher, ShellTarget, TrayRefresher, EXTERNAL_POLL,
+    ExternalWatcher, QuitPort, ShellTarget, TrayRefresher, EXTERNAL_POLL,
 };
 use crate::shell::{close_action, current_os, panel_position, show_main, CloseAction, PanelRect};
 use crate::state::{AppState, ShellState};
@@ -28,7 +28,7 @@ use mypass_session::{AppCore, LockReason};
 use std::sync::{Arc, Mutex, PoisonError};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, PhysicalPosition, RunEvent, Window, WindowEvent, Wry};
+use tauri::{AppHandle, Manager, PhysicalPosition, RunEvent, Runtime, Window, WindowEvent, Wry};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_specta::Event;
 
@@ -204,14 +204,21 @@ pub struct TauriTarget {
     app: AppHandle,
     core: Arc<AppCore>,
     refresher: Arc<TrayRefresher>,
+    conflicts: Arc<ConflictGate>,
 }
 
 impl TauriTarget {
-    pub fn new(app: AppHandle, core: Arc<AppCore>, refresher: Arc<TrayRefresher>) -> Self {
+    pub fn new(
+        app: AppHandle,
+        core: Arc<AppCore>,
+        refresher: Arc<TrayRefresher>,
+        conflicts: Arc<ConflictGate>,
+    ) -> Self {
         Self {
             app,
             core,
             refresher,
+            conflicts,
         }
     }
 
@@ -240,7 +247,10 @@ impl ShellTarget for TauriTarget {
 
     fn register_hotkeys(&self) {
         let settings = self.core.settings.get();
-        self.on_main(move |app| emit_conflicts(app, hotkeys::register_all(app, &settings)));
+        let gate = self.conflicts.clone();
+        self.on_main(move |app| {
+            emit_conflicts(app, gate.submit(hotkeys::register_all(app, &settings)));
+        });
     }
 
     fn apply_theme(&self, theme: Theme) {
@@ -307,7 +317,6 @@ pub fn start(app: &tauri::App) {
     );
     start_external_poll(watcher.clone(), core.scheduler(), EXTERNAL_POLL);
     app.manage(watcher);
-    app.manage(ExitGate::default());
 
     app.set_theme(native_theme(settings.theme));
     apply_startup_ui(&handle, &core, &settings);
@@ -318,7 +327,10 @@ fn apply_startup_ui(handle: &AppHandle, core: &Arc<AppCore>, settings: &Settings
         // `setup` runs on the main thread.
         let _ = create_tray(handle, &current_tray_model(core, None));
     }
-    emit_conflicts(handle, hotkeys::register_all(handle, settings));
+    // Held until the main page has loaded: nothing listens yet.
+    if let Some(gate) = handle.try_state::<Arc<ConflictGate>>() {
+        emit_conflicts(handle, gate.submit(hotkeys::register_all(handle, settings)));
+    }
     if let Some(shell) = handle.try_state::<ShellState>() {
         let _ = show_main(shell.windows.as_ref());
     }
@@ -359,8 +371,22 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
     }
 }
 
-/// `RunEvent` handler: the quit flow (`ExitRequested`) and the Dock reopen.
-pub fn on_run_event(app: &AppHandle, event: &RunEvent) {
+/// `on_page_load`: when the main window's page has loaded, emits the shortcut conflicts held
+/// since startup (once). A Rust hook, not a webview-callable command.
+pub fn on_page_load(webview: &tauri::Webview, payload: &tauri::webview::PageLoadPayload<'_>) {
+    if webview.label() != MAIN_WINDOW || payload.event() != tauri::webview::PageLoadEvent::Finished
+    {
+        return;
+    }
+    let app = webview.app_handle();
+    if let Some(gate) = app.try_state::<Arc<ConflictGate>>() {
+        emit_conflicts(app, gate.main_page_loaded());
+    }
+}
+
+/// `RunEvent` handler: the quit flow (`ExitRequested`) and the Dock reopen. Generic over the
+/// runtime so the tests drive it with the mock runtime.
+pub fn on_run_event<R: Runtime>(app: &tauri::AppHandle<R>, event: &RunEvent) {
     match event {
         RunEvent::ExitRequested { api, .. } => {
             let Some(gate) = app.try_state::<ExitGate>() else {
@@ -391,21 +417,31 @@ pub fn on_run_event(app: &AppHandle, event: &RunEvent) {
 /// Runs the quit flow on a worker (it flushes to disk and shows a blocking dialog). A confirmed
 /// exit calls `exit` again, which the gate lets through. If the worker cannot start, the app
 /// stays open: nothing is lost.
-fn start_quit_flow(app: AppHandle) {
+fn start_quit_flow<R: Runtime>(app: tauri::AppHandle<R>) {
     let worker_app = app.clone();
     let spawned = std::thread::Builder::new()
         .name("mypass-quit".into())
         .spawn(move || {
             let app = worker_app;
-            let core = app.state::<AppState>().0.clone();
-            let language = core.settings.get().language;
-            let ask = |message: &str| ask_quit_anyway(&app, language, message);
-            let outcome = on_exit_requested(core.as_ref(), &ask);
+            let outcome = match (
+                app.try_state::<AppState>(),
+                app.try_state::<Arc<dyn QuitPort>>(),
+            ) {
+                (Some(core), Some(port)) => {
+                    let core = core.0.clone();
+                    let port = Arc::clone(&port);
+                    let language = core.settings.get().language;
+                    let ask = |error: &str| port.confirm_quit_anyway(language, error);
+                    let outcome = on_exit_requested(core.as_ref(), &ask);
+                    if outcome == ExitOutcome::Exit {
+                        port.exit();
+                    }
+                    outcome
+                }
+                _ => ExitOutcome::Stay,
+            };
             if let Some(gate) = app.try_state::<ExitGate>() {
                 gate.finish(outcome);
-            }
-            if outcome == ExitOutcome::Exit {
-                app.exit(0);
             }
         });
     if spawned.is_err() {
@@ -415,15 +451,133 @@ fn start_quit_flow(app: AppHandle) {
     }
 }
 
-/// The blocking Cancel / Quit Anyway dialog (never called on the main thread). `true` = quit.
-fn ask_quit_anyway(app: &AppHandle, language: Language, message: &str) -> bool {
-    app.dialog()
-        .message(message)
-        .title(i18n::t(language, "Quit MyPass", &[]))
-        .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            i18n::t(language, "Quit Anyway", &[]),
-            i18n::t(language, "Cancel", &[]),
-        ))
-        .blocking_show()
+/// [`QuitPort`] over the real app: the dialog plugin and `exit`.
+pub struct TauriQuitPort(pub AppHandle);
+
+impl QuitPort for TauriQuitPort {
+    fn confirm_quit_anyway(&self, language: Language, error: &str) -> bool {
+        // The first button is the default one (Return), so it is Cancel, the safe answer: the
+        // dialog API has no separate "default button" setting. `blocking_show` is true when the
+        // FIRST button was pressed, so Quit Anyway is the negation.
+        let cancelled = self
+            .0
+            .dialog()
+            .message(i18n::t(
+                language,
+                "The vault could not be saved (%@). If you quit anyway, MyPass tries to keep your unsaved changes as a recovery copy in the backups folder.",
+                &[error],
+            ))
+            .title(i18n::t(language, "Quit MyPass", &[]))
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                i18n::t(language, "Cancel", &[]),
+                i18n::t(language, "Quit Anyway", &[]),
+            ))
+            .blocking_show();
+        !cancelled
+    }
+
+    fn exit(&self) {
+        self.0.exit(0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::{dirty_world_with_failing_writes, open_world, World};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+    use tauri::test::{mock_builder, mock_context, noop_assets};
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+    /// A quit port with a programmed answer; reports every call on a channel.
+    struct FakePort {
+        answer: bool,
+        calls: mpsc::Sender<String>,
+    }
+
+    impl QuitPort for FakePort {
+        fn confirm_quit_anyway(&self, _language: Language, error: &str) -> bool {
+            let _ = self.calls.send(format!("ask {error}"));
+            self.answer
+        }
+        fn exit(&self) {
+            let _ = self.calls.send("exit".into());
+        }
+    }
+
+    /// Runs the real `ExitRequested` path on the mock runtime: the app's last window closes, the
+    /// mock event loop raises `ExitRequested`, and `on_run_event`, `ExitGate`, the quit worker
+    /// and `on_exit_requested` run as in production, with only the dialog and the final exit
+    /// behind the fake port. The loop keeps running after a prevented exit, so its thread is
+    /// left to die with the test process.
+    fn drive_exit_requested(world: &World, answer: bool) -> mpsc::Receiver<String> {
+        let (tx, rx) = mpsc::channel();
+        let core = Arc::new(world.core.clone());
+        std::thread::spawn(move || {
+            let app = mock_builder()
+                .build(mock_context(noop_assets()))
+                .expect("the mock app builds");
+            app.manage(AppState(core));
+            app.manage(ExitGate::default());
+            app.manage::<Arc<dyn QuitPort>>(Arc::new(FakePort { answer, calls: tx }));
+            WebviewWindowBuilder::new(&app, MAIN_WINDOW, WebviewUrl::App("index.html".into()))
+                .build()
+                .expect("the mock window builds");
+            app.run(|app, event| {
+                if matches!(event, RunEvent::Ready) {
+                    // The last window closing is what makes the mock loop raise `ExitRequested`
+                    // (a close before the loop runs is handled inline, so it waits for `Ready`).
+                    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+                        window.as_ref().window().close().expect("close is queued");
+                    }
+                }
+                on_run_event(app, &event);
+            });
+        });
+        rx
+    }
+
+    fn next(rx: &mpsc::Receiver<String>) -> String {
+        rx.recv_timeout(Duration::from_secs(15))
+            .expect("the quit flow reported in time")
+    }
+
+    fn wait_until(what: &str, condition: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !condition() {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn exit_requested_smoke_clean_quit_exits_without_a_prompt() {
+        let w = open_world();
+        w.login("Saved by the final flush");
+        let rx = drive_exit_requested(&w, false);
+        assert_eq!(next(&rx), "exit", "no prompt on a clean flush");
+        assert!(w.core.is_quitting());
+    }
+
+    #[test]
+    fn exit_requested_smoke_failing_flush_and_cancel_stays_and_accepts_edits() {
+        let w = dirty_world_with_failing_writes();
+        let rx = drive_exit_requested(&w, false);
+        assert!(next(&rx).starts_with("ask "), "the user is asked");
+        wait_until("the session to re-open", || !w.core.is_quitting());
+        // No exit followed the Cancel, and the session takes edits again.
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
+        w.login("After cancel");
+    }
+
+    #[test]
+    fn exit_requested_smoke_failing_flush_and_quit_anyway_exits_with_the_gate_set() {
+        let w = dirty_world_with_failing_writes();
+        let rx = drive_exit_requested(&w, true);
+        assert!(next(&rx).starts_with("ask "));
+        assert_eq!(next(&rx), "exit");
+        assert!(w.core.is_quitting());
+    }
 }

@@ -136,6 +136,7 @@ pub fn run() -> tauri::Result<()> {
     let app = tauri_builder
         .invoke_handler(builder.invoke_handler())
         .on_window_event(shell_runtime::on_window_event)
+        .on_page_load(shell_runtime::on_page_load)
         .setup(move |app| {
             builder.mount_events(app);
             wiring::install(app)?;

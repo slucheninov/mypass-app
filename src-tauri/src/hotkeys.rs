@@ -92,6 +92,46 @@ pub fn register_with(
     conflicts
 }
 
+/// Holds the shortcut conflicts found at startup until the main window has loaded its page (an
+/// event emitted earlier reaches no listener), then lets every later conflict through at once.
+#[derive(Debug, Default)]
+pub struct ConflictGate {
+    state: std::sync::Mutex<GateState>,
+}
+
+#[derive(Debug, Default)]
+struct GateState {
+    main_loaded: bool,
+    held: Vec<ShortcutConflictEvent>,
+}
+
+impl ConflictGate {
+    /// The conflicts to emit now: `conflicts` themselves once the main page has loaded, nothing
+    /// before (they are held for [`ConflictGate::main_page_loaded`]).
+    pub fn submit(&self, conflicts: Vec<ShortcutConflictEvent>) -> Vec<ShortcutConflictEvent> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.main_loaded {
+            conflicts
+        } else {
+            state.held.extend(conflicts);
+            Vec::new()
+        }
+    }
+
+    /// The main page finished loading: the held conflicts, once (a reload gets nothing again).
+    pub fn main_page_loaded(&self) -> Vec<ShortcutConflictEvent> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.main_loaded = true;
+        std::mem::take(&mut state.held)
+    }
+}
+
 /// What a press does. `Lock` is a no-op while nothing is unlocked (the session ignores it).
 pub fn run_hotkey(action: HotkeyAction, core: &AppCore, windows: &dyn WindowOps) {
     match action {
@@ -278,6 +318,44 @@ mod tests {
             .log
             .borrow()
             .contains(&"register Show Cmd+Alt+M".to_owned()));
+    }
+
+    fn conflict(kind: ShortcutKind, shortcut: &str) -> ShortcutConflictEvent {
+        ShortcutConflictEvent {
+            kind,
+            shortcut: shortcut.into(),
+        }
+    }
+
+    #[test]
+    fn startup_conflicts_are_held_until_the_first_main_page_load_and_emitted_once() {
+        let gate = ConflictGate::default();
+        let lock = conflict(ShortcutKind::Lock, "CommandOrControl+Shift+L");
+        // At startup: held, nothing emitted.
+        assert!(gate.submit(vec![lock.clone()]).is_empty());
+        // The main page loads: the held conflict comes out once.
+        assert_eq!(gate.main_page_loaded(), [lock]);
+        // A reload of the page does not repeat it.
+        assert!(gate.main_page_loaded().is_empty());
+    }
+
+    #[test]
+    fn conflicts_after_the_main_page_load_are_emitted_live() {
+        let gate = ConflictGate::default();
+        assert!(gate.main_page_loaded().is_empty());
+        let show = conflict(ShortcutKind::Show, "CommandOrControl+Alt+M");
+        assert_eq!(gate.submit(vec![show.clone()]), [show]);
+        assert!(gate.submit(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn a_settings_change_before_the_page_load_is_held_with_the_startup_conflicts() {
+        let gate = ConflictGate::default();
+        let a = conflict(ShortcutKind::Lock, "A");
+        let b = conflict(ShortcutKind::Show, "B");
+        assert!(gate.submit(vec![a.clone()]).is_empty());
+        assert!(gate.submit(vec![b.clone()]).is_empty());
+        assert_eq!(gate.main_page_loaded(), [a, b]);
     }
 
     #[test]
