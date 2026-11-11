@@ -57,6 +57,8 @@ const MAGIC: &[u8; 4] = b"MPD1";
 const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
 const EXTENSION: &str = "mpd";
+/// Suffix of a draft file that failed to read and was moved aside by `save`.
+const UNREADABLE_SUFFIX: &str = "unreadable";
 
 /// One saved version of an entry's notes, as the webview sees it.
 #[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq)]
@@ -116,7 +118,22 @@ impl DraftStore {
     /// when nothing was stored (I/O failure, or the text is too large); a text identical to the
     /// newest version is a no-op that returns `true`.
     pub fn save(&self, entry: Uuid, notes: &str, now: i64) -> bool {
-        let mut versions = self.read_fresh(entry, now);
+        let mut versions = match self.load(entry) {
+            Loaded::Absent => Vec::new(),
+            Loaded::Versions(mut all) => {
+                all.retain(|v| !expired(v.saved_at, now));
+                all
+            }
+            // Present but unreadable (wrong key, garbled, oversized, transient I/O error): never
+            // overwrite it, a later correct key may still read it. Move it aside first; if that
+            // fails nothing is written.
+            Loaded::Unreadable => {
+                if fs::rename(self.path(entry), self.unreadable_path(entry)).is_err() {
+                    return false;
+                }
+                Vec::new()
+            }
+        };
         if versions.first().is_some_and(|v| v.notes == notes) {
             return true;
         }
@@ -149,8 +166,11 @@ impl DraftStore {
     /// The live versions of `entry`, newest first. Expired, undecryptable and foreign files
     /// yield nothing.
     pub fn versions(&self, entry: Uuid, now: i64) -> Vec<DraftVersionDto> {
-        self.read_fresh(entry, now)
-            .into_iter()
+        let Loaded::Versions(mut all) = self.load(entry) else {
+            return Vec::new();
+        };
+        all.retain(|v| !expired(v.saved_at, now));
+        all.into_iter()
             .map(|v| DraftVersionDto {
                 id: v.id,
                 saved_at: timestamp_ms(mypass_kdbx::Timestamp(v.saved_at)),
@@ -159,9 +179,11 @@ impl DraftStore {
             .collect()
     }
 
-    /// Removes the drafts of one entry. Missing files are fine.
+    /// Removes the drafts of one entry, including a moved-aside unreadable copy. Missing files
+    /// are fine.
     pub fn clear(&self, entry: Uuid) {
         let _ = fs::remove_file(self.path(entry));
+        let _ = fs::remove_file(self.unreadable_path(entry));
     }
 
     /// Removes every draft of this vault (the folder is dedicated to it).
@@ -179,37 +201,54 @@ impl DraftStore {
         let _ = fs::remove_dir(&self.dir);
     }
 
-    /// Drops expired versions everywhere: files with no live version, and files that no longer
-    /// decrypt, are removed; files with some expired versions are rewritten.
+    /// Drops expired drafts. A file that decrypts is removed when every version is past the TTL
+    /// and rewritten without the expired ones when only some are. A file that cannot be read (for
+    /// instance under a wrong key) is never judged by its content: it is left alone until the
+    /// file's own modification time is older than the TTL, then it has aged out and is removed.
+    /// Moved-aside `.unreadable` copies follow the same age rule. Other names are never touched.
     pub fn purge_expired(&self, now: i64) {
         let Ok(read) = fs::read_dir(&self.dir) else {
             return;
         };
         for item in read.flatten() {
             let path = item.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let dotted = format!(".{EXTENSION}");
+            if name.ends_with(&format!("{dotted}.{UNREADABLE_SUFFIX}")) {
+                if aged_out(&path, now) {
+                    let _ = fs::remove_file(&path);
+                }
+                continue;
+            }
             if path.extension().and_then(|e| e.to_str()) != Some(EXTENSION) {
                 continue;
             }
-            let Some(entry) = path
+            let entry = path
                 .file_stem()
                 .and_then(|s| s.to_str())
-                .and_then(|s| Uuid::parse_str(s).ok())
-            else {
-                let _ = fs::remove_file(&path);
-                continue;
-            };
-            let all = self.read_all(entry);
-            let live: Vec<StoredVersion> = all
-                .iter()
-                .filter(|v| !expired(v.saved_at, now))
-                .cloned()
-                .collect();
-            if live.is_empty() {
-                let _ = fs::remove_file(&path);
-            } else if live.len() != all.len() {
-                match self.encode(entry, &live) {
-                    Some(bytes) if self.write(entry, &bytes) => {}
-                    _ => {
+                .and_then(|s| Uuid::parse_str(s).ok());
+            let loaded = entry.map_or(Loaded::Unreadable, |e| self.load(e));
+            match (entry, loaded) {
+                (_, Loaded::Absent) => {}
+                (Some(entry), Loaded::Versions(all)) => {
+                    let live: Vec<StoredVersion> = all
+                        .iter()
+                        .filter(|v| !expired(v.saved_at, now))
+                        .cloned()
+                        .collect();
+                    if live.is_empty() {
+                        let _ = fs::remove_file(&path);
+                    } else if live.len() != all.len() {
+                        // On failure the old file stays: nothing is lost.
+                        if let Some(bytes) = self.encode(entry, &live) {
+                            let _ = self.write(entry, &bytes);
+                        }
+                    }
+                }
+                _ => {
+                    if aged_out(&path, now) {
                         let _ = fs::remove_file(&path);
                     }
                 }
@@ -221,23 +260,27 @@ impl DraftStore {
         self.dir.join(format!("{}.{EXTENSION}", entry.simple()))
     }
 
+    fn unreadable_path(&self, entry: Uuid) -> PathBuf {
+        self.dir.join(format!(
+            "{}.{EXTENSION}.{UNREADABLE_SUFFIX}",
+            entry.simple()
+        ))
+    }
+
     fn aad(&self, entry: Uuid) -> Vec<u8> {
         format!("{}|{}", self.vault_id, entry.simple()).into_bytes()
     }
 
-    fn read_fresh(&self, entry: Uuid, now: i64) -> Vec<StoredVersion> {
-        let mut all = self.read_all(entry);
-        all.retain(|v| !expired(v.saved_at, now));
-        all
-    }
-
-    /// Every version in the file, or nothing when it is absent, oversized, malformed, foreign or
-    /// tampered with.
-    fn read_all(&self, entry: Uuid) -> Vec<StoredVersion> {
-        let Some(bytes) = read_bounded(&self.path(entry)) else {
-            return Vec::new();
-        };
-        self.decode(entry, &bytes).unwrap_or_default()
+    /// Absent, readable, or present-but-unreadable (oversized, not a regular file, malformed,
+    /// foreign, tampered with, or an I/O error other than "not found").
+    fn load(&self, entry: Uuid) -> Loaded {
+        match read_bounded(&self.path(entry)) {
+            Raw::Absent => Loaded::Absent,
+            Raw::Bad => Loaded::Unreadable,
+            Raw::Bytes(bytes) => self
+                .decode(entry, &bytes)
+                .map_or(Loaded::Unreadable, Loaded::Versions),
+        }
     }
 
     fn decode(&self, entry: Uuid, bytes: &[u8]) -> Option<Vec<StoredVersion>> {
@@ -296,14 +339,54 @@ fn expired(saved_at: i64, now: i64) -> bool {
     now.saturating_sub(saved_at) > ttl
 }
 
-/// Reads at most [`MAX_DRAFT_FILE_BYTES`]; a longer file is refused without reading it all.
-fn read_bounded(path: &Path) -> Option<Vec<u8>> {
-    let file = fs::File::open(path).ok()?;
+enum Loaded {
+    Absent,
+    Versions(Vec<StoredVersion>),
+    Unreadable,
+}
+
+enum Raw {
+    Absent,
+    Bad,
+    Bytes(Vec<u8>),
+}
+
+/// Reads at most [`MAX_DRAFT_FILE_BYTES`]; a longer file is refused without reading it all. Only
+/// regular files are opened (a FIFO would block forever, a symlink is not followed). Anything but
+/// "not found" that goes wrong is `Bad`, never "empty".
+fn read_bounded(path: &Path) -> Raw {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_file() => {}
+        Ok(_) => return Raw::Bad,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Raw::Absent,
+        Err(_) => return Raw::Bad,
+    }
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Raw::Absent,
+        Err(_) => return Raw::Bad,
+    };
     let mut bytes = Vec::new();
-    file.take(MAX_DRAFT_FILE_BYTES as u64 + 1)
+    if file
+        .take(MAX_DRAFT_FILE_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
-        .ok()?;
-    (bytes.len() <= MAX_DRAFT_FILE_BYTES).then_some(bytes)
+        .is_err()
+        || bytes.len() > MAX_DRAFT_FILE_BYTES
+    {
+        return Raw::Bad;
+    }
+    Raw::Bytes(bytes)
+}
+
+/// Whether the file's modification time is older than the TTL relative to `now` (Unix seconds).
+/// An unknown time never counts as aged out.
+fn aged_out(path: &Path, now: i64) -> bool {
+    fs::symlink_metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|d| i64::try_from(d.as_secs()).ok())
+        .is_some_and(|mtime| expired(mtime, now))
 }
 
 fn create_private_dir(dir: &Path) -> std::io::Result<()> {
@@ -339,7 +422,8 @@ fn decode_key(value: &str) -> Option<[u8; 32]> {
 
 /// The draft key, created on first use. The vault is modified (through `mutate`, so the session
 /// turns pending once) only when no valid key exists yet; call this from the first draft save
-/// only, never from a read path.
+/// only, never from a read path. Callers must persist the vault before relying on drafts written
+/// with a freshly created key: a crash in between would leave drafts the vault cannot decrypt.
 pub fn load_or_create_key(session: &VaultSession) -> Result<[u8; 32], SessionError> {
     if let Some(key) = session.with_db(existing_key)? {
         return Ok(key);
@@ -349,9 +433,9 @@ pub fn load_or_create_key(session: &VaultSession) -> Result<[u8; 32], SessionErr
         if let Some(key) = existing_key(db) {
             return Ok(key);
         }
-        let mut key = [0u8; 32];
-        rand::rngs::OsRng.fill_bytes(&mut key);
-        let encoded = base64::engine::general_purpose::STANDARD.encode(key);
+        let mut key = Zeroizing::new([0u8; 32]);
+        rand::rngs::OsRng.fill_bytes(&mut *key);
+        let encoded = Zeroizing::new(base64::engine::general_purpose::STANDARD.encode(*key));
         match db
             .meta
             .custom_data
@@ -360,16 +444,16 @@ pub fn load_or_create_key(session: &VaultSession) -> Result<[u8; 32], SessionErr
         {
             // A malformed item is repaired in place rather than duplicated.
             Some(item) => {
-                item.value = encoded;
+                item.value = (*encoded).clone();
                 item.last_modified = Some(now);
             }
             None => db.meta.custom_data.push(CustomDataItem {
                 key: DRAFT_KEY_CUSTOM_DATA.to_owned(),
-                value: encoded,
+                value: (*encoded).clone(),
                 last_modified: Some(now),
             }),
         }
-        Ok(key)
+        Ok(*key)
     })
 }
 
@@ -573,18 +657,96 @@ mod tests {
         s.clear_all();
     }
 
+    fn set_mtime(path: &Path, secs: u64) {
+        let file = fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.set_modified(UNIX_EPOCH + Duration::from_secs(secs))
+            .unwrap();
+    }
+
+    fn wrong_key_store(dir: &TempDir) -> DraftStore {
+        DraftStore::new(dir.path().join("drafts"), VAULT, [9; 32])
+    }
+
     #[test]
-    fn purge_expired_removes_only_expired_and_unreadable_files() {
+    fn purge_expired_removes_only_provably_expired_files() {
         let dir = tempfile::tempdir().unwrap();
         let s = store(&dir);
-        let (old, fresh, junk) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let (old, fresh) = (Uuid::new_v4(), Uuid::new_v4());
         assert!(s.save(old, "old", 0));
         assert!(s.save(fresh, "fresh", 8 * 86_400));
-        fs::write(file_of(&dir, junk), b"garbage").unwrap();
+        fs::write(dir.path().join("drafts").join("notes.txt"), b"x").unwrap();
         s.purge_expired(8 * 86_400 + 1);
         assert!(!file_of(&dir, old).exists());
-        assert!(!file_of(&dir, junk).exists());
         assert_eq!(s.versions(fresh, 8 * 86_400 + 1).len(), 1);
+        assert!(dir.path().join("drafts").join("notes.txt").exists());
+    }
+
+    #[test]
+    fn wrong_key_file_survives_purge_while_fresh_by_mtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let e = Uuid::new_v4();
+        assert!(store(&dir).save(e, "mine", 1));
+        let path = file_of(&dir, e);
+        set_mtime(&path, 1_000_000);
+        // The file's mtime is one day old at `now`: not aged out.
+        wrong_key_store(&dir).purge_expired(1_000_000 + 86_400);
+        assert!(path.exists());
+        assert_eq!(texts(&store(&dir).versions(e, 2)), ["mine"]);
+    }
+
+    #[test]
+    fn wrong_key_file_with_old_mtime_is_removed_by_purge() {
+        let dir = tempfile::tempdir().unwrap();
+        let e = Uuid::new_v4();
+        assert!(store(&dir).save(e, "mine", 1));
+        let path = file_of(&dir, e);
+        set_mtime(&path, 1_000_000);
+        let aside = dir
+            .path()
+            .join("drafts")
+            .join(format!("{}.mpd.unreadable", e.simple()));
+        fs::write(&aside, b"old copy").unwrap();
+        set_mtime(&aside, 1_000_000);
+        wrong_key_store(&dir).purge_expired(1_000_000 + 7 * 86_400 + 1);
+        assert!(!path.exists());
+        assert!(!aside.exists());
+    }
+
+    #[test]
+    fn save_over_unreadable_file_moves_it_aside_and_clear_removes_both() {
+        let dir = tempfile::tempdir().unwrap();
+        let e = Uuid::new_v4();
+        assert!(store(&dir).save(e, "original", 1));
+        let path = file_of(&dir, e);
+        let old_bytes = fs::read(&path).unwrap();
+        let aside = dir
+            .path()
+            .join("drafts")
+            .join(format!("{}.mpd.unreadable", e.simple()));
+        let wrong = wrong_key_store(&dir);
+        assert!(wrong.save(e, "new", 2));
+        assert_eq!(fs::read(&aside).unwrap(), old_bytes);
+        assert_eq!(texts(&wrong.versions(e, 3)), ["new"]);
+        // The right key still reads the preserved copy once restored.
+        fs::rename(&aside, &path).unwrap();
+        assert_eq!(texts(&store(&dir).versions(e, 3)), ["original"]);
+        // `versions` ignores a leftover .unreadable file.
+        fs::write(&aside, b"junk").unwrap();
+        assert!(wrong.save(e, "again", 4));
+        wrong.clear(e);
+        assert!(!path.exists());
+        assert!(!aside.exists());
+    }
+
+    #[test]
+    fn non_regular_draft_path_is_unreadable_and_not_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = store(&dir);
+        let e = Uuid::new_v4();
+        fs::create_dir_all(dir.path().join("drafts")).unwrap();
+        // A directory in place of the file: never opened, reported as no versions.
+        fs::create_dir(file_of(&dir, e)).unwrap();
+        assert!(s.versions(e, 1).is_empty());
     }
 
     #[test]
@@ -615,7 +777,12 @@ mod tests {
         assert!(s.save(e, "very private words", 1));
         let v = s.versions(e, 2);
         assert!(!format!("{v:?}").contains("very private words"));
-        assert!(!format!("{s:?}").contains("[7"));
+        let shown = format!("{s:?} {v:?}");
+        assert!(!shown.contains("very private words"));
+        // No rendering of the key bytes: decimal list, hex, or base64.
+        assert!(!shown.contains("7, 7"));
+        assert!(!shown.contains("0707"));
+        assert!(!shown.contains("BwcH"));
     }
 
     fn pw(s: &str) -> SecretString {
