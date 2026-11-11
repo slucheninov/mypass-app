@@ -83,6 +83,7 @@ fn ci_aggregator_needs_every_job() {
         [
             "changes",
             "crosscompat",
+            "i18n",
             "lint",
             "test",
             "windows-integration"
@@ -209,9 +210,11 @@ fn ci_cargo_jobs_use_rust_cache() {
         for (id, job) in jobs(&doc) {
             let steps = steps(job);
             let first_cargo = steps.iter().position(|s| {
-                run_text(s)
-                    .lines()
-                    .any(|l| l.trim_start().starts_with("cargo ") || l.contains("scripts/test.sh"))
+                run_text(s).lines().any(|l| {
+                    l.trim_start().starts_with("cargo ")
+                            // `--only js` runs Node suites only and never invokes cargo.
+                            || (l.contains("scripts/test.sh") && !l.contains("--only js"))
+                })
             });
             let Some(first_cargo) = first_cargo else {
                 continue;
@@ -550,4 +553,41 @@ fn extracted_aggregator_executes_result_matrix() {
             assert_eq!(output.status.success(), expected, "{name}: {result}");
         }
     }
+}
+
+#[test]
+fn ci_i18n_job_runs_the_js_part_with_node_from_nvmrc() {
+    let doc = workflow(".github/workflows/ci.yml");
+    let i18n = job(&doc, "i18n");
+    assert_eq!(
+        i18n.get("runs-on").and_then(Value::as_str),
+        Some("ubuntu-latest")
+    );
+    let setup = steps(i18n)
+        .into_iter()
+        .find(|s| {
+            s.get("uses")
+                .and_then(Value::as_str)
+                .is_some_and(|u| u.starts_with("actions/setup-node@"))
+        })
+        .expect("job `i18n` must set up Node through actions/setup-node");
+    assert_eq!(
+        setup
+            .get("with")
+            .and_then(|w| w.get("node-version-file"))
+            .and_then(Value::as_str),
+        Some(".nvmrc"),
+        "Node must come from .nvmrc"
+    );
+    let runs: Vec<String> = steps(i18n).iter().map(|s| run_text(s)).collect();
+    let step = runs
+        .iter()
+        .find(|r| r.contains("scripts/test.sh"))
+        .expect("job `i18n` must run scripts/test.sh");
+    assert!(
+        step.contains("--ci") && step.contains("--only js"),
+        "expected `scripts/test.sh --ci --only js`, found `{step}`"
+    );
+    // The i18n job must be a hard requirement of the aggregator, never a tolerated skip.
+    assert!(!GATED_JOBS.contains(&"i18n"));
 }

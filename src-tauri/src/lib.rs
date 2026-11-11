@@ -4,6 +4,8 @@
 //! Stage 2a scaffold: no commands or events are registered yet; they arrive with the `AppCore`
 //! facade. `src/lib/bindings.ts` is generated from [`specta_builder`], never edited by hand.
 
+pub mod i18n;
+
 use std::path::Path;
 
 use specta_typescript::Typescript;

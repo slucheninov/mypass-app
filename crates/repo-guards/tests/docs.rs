@@ -178,6 +178,33 @@ fn cyrillic_allowed(rel: &str) -> bool {
         // Vendored upstream data (Public Suffix List, Apple password rules) is added verbatim by
         // later tasks and is not ours to rewrite; the PSL contains internationalised names.
         || rel.starts_with("crates/mypass-core/resources/")
+        // The UI translation catalogs and the macOS InfoPlist translations. Exactly these files:
+        // the English catalog stays Cyrillic-free (pinned by the Node completeness tests).
+        || matches!(
+            rel,
+            "src/lib/i18n/locales/uk.json"
+                | "src/lib/i18n/locales/ru.json"
+                | "src-tauri/resources/macos/uk.lproj/InfoPlist.strings"
+                | "src-tauri/resources/macos/ru.lproj/InfoPlist.strings"
+        )
+}
+
+#[test]
+fn cyrillic_allowlist_covers_only_the_translation_files() {
+    assert!(cyrillic_allowed("src/lib/i18n/locales/uk.json"));
+    assert!(cyrillic_allowed("src/lib/i18n/locales/ru.json"));
+    assert!(cyrillic_allowed(
+        "src-tauri/resources/macos/uk.lproj/InfoPlist.strings"
+    ));
+    assert!(cyrillic_allowed(
+        "src-tauri/resources/macos/ru.lproj/InfoPlist.strings"
+    ));
+    assert!(!cyrillic_allowed("src/lib/i18n/locales/en.json"));
+    assert!(!cyrillic_allowed("src/lib/i18n/index.ts"));
+    assert!(!cyrillic_allowed("scripts/convert-xcstrings.test.mjs"));
+    assert!(!cyrillic_allowed(
+        "src-tauri/resources/macos/en.lproj/InfoPlist.strings"
+    ));
 }
 
 #[test]
@@ -205,7 +232,7 @@ fn cyrillic_only_in_allowed_files() {
         };
         assert!(
             !has_cyrillic(&text),
-            "{rel} contains Cyrillic; use \\u{{..}} escapes (literal Cyrillic is allowed only in *.xcstrings, RUN.md, crates/mypass-kdbx/tests/unicode.rs, vendored data under crates/mypass-core/resources/ and binary fixtures crates/mypass-kdbx/tests/fixtures/*.kdbx)"
+            "{rel} contains Cyrillic; use \\u{{..}} escapes (literal Cyrillic is allowed only in *.xcstrings, RUN.md, src/lib/i18n/locales/{{uk,ru}}.json, src-tauri/resources/macos/{{uk,ru}}.lproj/InfoPlist.strings, crates/mypass-kdbx/tests/unicode.rs, vendored data under crates/mypass-core/resources/ and binary fixtures crates/mypass-kdbx/tests/fixtures/*.kdbx)"
         );
     }
 }
