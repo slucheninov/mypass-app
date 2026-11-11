@@ -2569,6 +2569,7 @@ dependencies = [
  "mypass-core",
  "mypass-kdbx",
  "mypass-platform",
+ "secrecy",
  "serde",
  "serde_json",
  "tempfile",

@@ -151,6 +151,13 @@ change is done.
   field, struct-level `serde(default)`, one `Default` impl), stored atomically in
   `<config_dir>/settings.json`; a corrupt file loads as defaults and is renamed `settings.json.bad`.
   The schema is pinned by `crates/mypass-session/tests/snapshots/settings.default.json`.
+- **Vault session.** `mypass_session::session::VaultSession` owns the one open vault (`NoVault`,
+  `Locked`, `Unlocked`). Edits go through `mutate`, which edits a clone and swaps it in only on
+  `Ok` (rollback by construction); `lock` saves first and keeps the encrypted bytes when that save
+  fails; observers run after the session lock is released; `begin_quit` closes every opening and
+  mutating call with `Quitting` while `lock` and `flush` keep working. The master password lives
+  only in the session as a `SecretString`. Tests use `mypass_session::testing::fast_database`
+  (Argon2id 8 MiB, 1 pass) so saves stay fast.
 - **Platform seam.** Everything OS-specific goes through `mypass_platform::Platform` (trait objects,
   built by `mypass_platform::current`) and every on-disk location through `AppPaths`. Tests use
   `mypass_platform::testing::fake_platform()` under the `test-util` feature; no non-ignored test touches the
