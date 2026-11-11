@@ -34,6 +34,7 @@ tauri-plugin-opener.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+mypass-platform = { path = "../crates/mypass-platform", features = ["test-util"] }
 
 [lints]
 workspace = true

@@ -5,6 +5,7 @@
 //! facade. `src/lib/bindings.ts` is generated from [`specta_builder`], never edited by hand.
 
 pub mod i18n;
+pub mod shell;
 
 use std::path::Path;
 
