@@ -156,10 +156,14 @@ change is done.
   The schema is pinned by `crates/mypass-session/tests/snapshots/settings.default.json`.
 - **Vault session.** `mypass_session::session::VaultSession` owns the one open vault (`NoVault`,
   `Locked`, `Unlocked`). Edits go through `mutate`, which edits a clone and swaps it in only on
-  `Ok` (rollback by construction); `lock` saves first and keeps the encrypted bytes when that save
-  fails, and until the merge pipeline lands those edits are never dropped from memory while the app
-  runs but are written only when the file on disk is unchanged (otherwise `flush` returns
-  `ChangedOnDisk` without writing); observers run after the session lock is released;
+  `Ok` (rollback by construction). Saving (`mypass_session::saving`) is a debounced autosave
+  (1 s) that writes outside the session lock, one write at a time (an in-flight flag plus a
+  condvar orders autosave, `flush` and `lock`); a file changed on disk is reloaded and two-way
+  merged into the live database, which is then written, never overwritten blindly; `flush` is
+  `Ok` only when every edit is on disk. `lock` saves first and keeps the encrypted bytes when that
+  save fails: a timer writes them over an unchanged file, otherwise the next unlock merges them,
+  and switching vaults first writes them as an `unsaved-*` copy into the backup folder (the
+  path when the password was changed elsewhere); observers run after the session lock is released;
   `begin_quit` closes every opening and mutating call with `Quitting` while `lock` and `flush`
   keep working. The master password lives only in the session as a `SecretString`. Tests use `mypass_session::testing::fast_database`
   (Argon2id 8 MiB, 1 pass) so saves stay fast.
