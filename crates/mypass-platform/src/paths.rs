@@ -271,7 +271,7 @@ impl AppPaths {
     }
 }
 
-/// A vault id that is safe to use as one path segment: 1 to 64 characters of `[A-Za-z0-9_-]`.
+/// A vault id that is safe to use as one path segment: 1 to 64 characters of `[A-Za-z0-9_-]` that is not a Windows device name.
 ///
 /// Joining an unvalidated id onto a base path lets an absolute value replace the base and `..`
 /// escape it, so the vault-scoped directory functions take this type instead of a bare `&str`.
@@ -285,11 +285,12 @@ impl VaultId {
             && id
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
-        if valid {
+        if valid && !is_windows_reserved_name(id) {
             Ok(Self(id.to_owned()))
         } else {
             Err(PlatformError::Failed(
-                "invalid vault id: expected 1 to 64 characters of [A-Za-z0-9_-]".to_owned(),
+                "invalid vault id: expected 1 to 64 characters of [A-Za-z0-9_-], not a Windows device name"
+                    .to_owned(),
             ))
         }
     }
@@ -298,6 +299,20 @@ impl VaultId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+}
+
+/// Windows device names (`CON`, `NUL`, `COM1`..., case-insensitive) cannot be used as file or
+/// directory names there. Rejected on every target because the Windows layout is built everywhere.
+fn is_windows_reserved_name(id: &str) -> bool {
+    let upper = id.to_ascii_uppercase();
+    if matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL") {
+        return true;
+    }
+    ["COM", "LPT"].iter().any(|prefix| {
+        upper
+            .strip_prefix(prefix)
+            .is_some_and(|d| matches!(d.as_bytes(), [b'1'..=b'9']))
+    })
 }
 
 /// A root folder read from the environment: unset, empty or relative is an error.
@@ -488,8 +503,17 @@ mod tests {
             too_long.as_str(),
             "a b",
             "caf\u{e9}",
+            "con",
+            "NUL",
+            "Com1",
+            "lpt9",
+            "AUX",
+            "prn",
         ] {
             assert!(VaultId::new(bad).is_err(), "{bad:?}");
+        }
+        for ok in ["COM10", "console", "nul1", "COM0", "LPT"] {
+            assert!(VaultId::new(ok).is_ok(), "{ok:?}");
         }
         assert!(VaultId::new(&"a".repeat(64)).is_ok());
         assert!(VaultId::new("0123456789abcdef0123456789abcdef").is_ok());

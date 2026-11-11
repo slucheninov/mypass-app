@@ -146,7 +146,8 @@ mod hashing {
     /// counter plus a SHA-256 of the last written text. `clear_if_unchanged` reads the clipboard back
     /// and clears it only when the stamp is our latest write and the text still hashes the same.
     ///
-    /// Stage 6 adds the Windows clipboard-history and cloud-clipboard exclusion formats in the backend.
+    /// The Windows clipboard-history and cloud-clipboard exclusion formats are set by the `arboard`
+    /// backend (`ArboardBackend::set_text` under `cfg(windows)`); other targets use the plain setter.
     pub(crate) struct HashingClipboard<B> {
         state: Mutex<HashingState<B>>,
     }
@@ -227,6 +228,23 @@ pub(crate) struct ArboardBackend;
 
 #[cfg(not(target_os = "macos"))]
 impl ClipboardBackend for ArboardBackend {
+    // Only ever called for secrets (`HashingClipboard::write_secret`), so on Windows the write
+    // opts out of clipboard history, the cloud clipboard and monitoring.
+    #[cfg(windows)]
+    fn set_text(&mut self, text: &str) -> Result<(), String> {
+        use arboard::SetExtWindows;
+        arboard::Clipboard::new()
+            .and_then(|mut c| {
+                c.set()
+                    .exclude_from_monitoring()
+                    .exclude_from_cloud()
+                    .exclude_from_history()
+                    .text(text)
+            })
+            .map_err(|e| e.to_string())
+    }
+
+    #[cfg(not(windows))]
     fn set_text(&mut self, text: &str) -> Result<(), String> {
         arboard::Clipboard::new()
             .and_then(|mut c| c.set_text(text))

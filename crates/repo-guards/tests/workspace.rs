@@ -299,27 +299,173 @@ const OWN_LINTS_MEMBER: &str = "mypass-platform";
 /// `crates/mypass-platform/src/windows.rs` here for the Win32 calls; nothing else, ever.
 const UNSAFE_ALLOWED_FILES: &[&str] = &["crates/mypass-platform/src/macos.rs"];
 
-/// The `unsafe` tokens as code. Built with `concat!` so this guard file does not match itself.
-const UNSAFE_TOKENS: &[&str] = &[
-    concat!("unsafe", " {"),
-    concat!("unsafe", " fn"),
-    concat!("unsafe", " impl"),
-    concat!("unsafe", " extern"),
-    concat!("unsafe", " trait"),
-    concat!("#[unsafe", "("),
-];
+/// Blanks out comments (line, nested block), string literals (plain and raw) and char literals,
+/// keeping every other byte, so token scans see code only. Lifetimes (`'a`) are left alone.
+fn strip_comments_and_strings(src: &str) -> String {
+    let c: Vec<char> = src.chars().collect();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0;
+    let blank = |out: &mut String, ch: char| out.push(if ch == '\n' { '\n' } else { ' ' });
+    while i < c.len() {
+        let at = |k: usize| c.get(i + k).copied();
+        match (c[i], at(1)) {
+            ('/', Some('/')) => {
+                while i < c.len() && c[i] != '\n' {
+                    out.push(' ');
+                    i += 1;
+                }
+            }
+            ('/', Some('*')) => {
+                let mut depth = 0usize;
+                while i < c.len() {
+                    if c[i] == '/' && c.get(i + 1) == Some(&'*') {
+                        depth += 1;
+                        out.push_str("  ");
+                        i += 2;
+                    } else if c[i] == '*' && c.get(i + 1) == Some(&'/') {
+                        depth -= 1;
+                        out.push_str("  ");
+                        i += 2;
+                        if depth == 0 {
+                            break;
+                        }
+                    } else {
+                        blank(&mut out, c[i]);
+                        i += 1;
+                    }
+                }
+            }
+            ('r', _) if i == 0 || !is_ident(c[i - 1]) => {
+                // Raw string: r"..", r#".."#, with any number of hashes.
+                let hashes = c[i + 1..].iter().take_while(|&&h| h == '#').count();
+                if c.get(i + 1 + hashes) == Some(&'"') {
+                    let mut j = i + 2 + hashes;
+                    while j < c.len() {
+                        if c[j] == '"' && (1..=hashes).all(|k| c.get(j + k) == Some(&'#')) {
+                            j += 1 + hashes;
+                            break;
+                        }
+                        j += 1;
+                    }
+                    for &ch in &c[i..j.min(c.len())] {
+                        blank(&mut out, ch);
+                    }
+                    i = j;
+                } else {
+                    out.push('r');
+                    i += 1;
+                }
+            }
+            ('"', _) => {
+                out.push(' ');
+                i += 1;
+                while i < c.len() {
+                    let ch = c[i];
+                    blank(&mut out, ch);
+                    i += 1;
+                    if ch == '\\' && i < c.len() {
+                        blank(&mut out, c[i]);
+                        i += 1;
+                    } else if ch == '"' {
+                        break;
+                    }
+                }
+            }
+            ('\'', _) => {
+                // A char literal is `'x'` or `'\..'`; anything else is a lifetime.
+                let end = if at(1) == Some('\\') {
+                    (i + 2..c.len().min(i + 12)).find(|&k| c[k] == '\'')
+                } else if at(2) == Some('\'') {
+                    Some(i + 2)
+                } else {
+                    None
+                };
+                if let Some(end) = end {
+                    for &ch in &c[i..=end] {
+                        blank(&mut out, ch);
+                    }
+                    i = end + 1;
+                } else {
+                    out.push('\'');
+                    i += 1;
+                }
+            }
+            (ch, _) => {
+                out.push(ch);
+                i += 1;
+            }
+        }
+    }
+    out
+}
 
-/// True when `text` names `unsafe_code` inside any `allow(...)` or `expect(...)` attribute, inner
-/// or outer, alone or in a combined list.
-fn allows_unsafe_code(text: &str) -> bool {
-    let lint = concat!("unsafe", "_code");
-    ["allow(", "expect("].iter().any(|opener| {
-        text.match_indices(opener).any(|(at, _)| {
-            let rest = text.get(at + opener.len()..).unwrap_or_default();
-            let list = rest.split(')').next().unwrap_or_default();
-            list.split(',').any(|item| item.trim() == lint)
+fn is_ident(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
+}
+
+/// Byte offsets where `word` occurs as a whole identifier in comment-free code.
+fn word_positions<'a>(code: &'a str, word: &'a str) -> impl Iterator<Item = usize> + 'a {
+    code.match_indices(word)
+        .map(|(at, _)| at)
+        .filter(move |&at| {
+            let before = code.get(..at).and_then(|s| s.chars().next_back());
+            let after = code.get(at + word.len()..).and_then(|s| s.chars().next());
+            !before.is_some_and(is_ident) && !after.is_some_and(is_ident)
         })
-    })
+}
+
+/// True when comment- and string-free `code` uses the `unsafe` keyword as a block, fn, impl,
+/// extern, trait or `#[unsafe(..)]` attribute.
+fn uses_unsafe_code(src: &str) -> bool {
+    let code = strip_comments_and_strings(src);
+    let found = word_positions(&code, "unsafe").any(|at| {
+        let rest = code.get(at + "unsafe".len()..).unwrap_or_default();
+        let rest = rest.trim_start();
+        let before = code.get(..at).unwrap_or_default().trim_end();
+        rest.starts_with('{')
+            || (rest.starts_with('(') && before.ends_with('['))
+            || ["fn", "impl", "extern", "trait"].iter().any(|kw| {
+                rest.strip_prefix(kw)
+                    .is_some_and(|r| !r.chars().next().is_some_and(is_ident))
+            })
+    });
+    found
+}
+
+/// True when `src` names `unsafe_code` inside any `allow(...)` or `expect(...)` attribute (also
+/// nested in `cfg_attr`), inner or outer, alone or in a combined list, ignoring comments.
+fn allows_unsafe_code(src: &str) -> bool {
+    let code = strip_comments_and_strings(src);
+    let lint = concat!("unsafe", "_code");
+    let found = ["allow", "expect"].iter().any(|opener| {
+        let hit = word_positions(&code, opener).any(|at| {
+            let rest = code
+                .get(at + opener.len()..)
+                .unwrap_or_default()
+                .trim_start();
+            let Some(body) = rest.strip_prefix('(') else {
+                return false;
+            };
+            let mut depth = 1usize;
+            let end = body
+                .char_indices()
+                .find(|&(_, ch)| {
+                    match ch {
+                        '(' => depth += 1,
+                        ')' => depth -= 1,
+                        _ => {}
+                    }
+                    depth == 0
+                })
+                .map_or(body.len(), |(k, _)| k);
+            body.get(..end)
+                .unwrap_or_default()
+                .split(',')
+                .any(|item| item.trim() == lint)
+        });
+        hit
+    });
+    found
 }
 
 #[test]
@@ -336,10 +482,8 @@ fn unsafe_only_in_allow_listed_modules() {
             continue;
         }
         let text = read(&rel);
-        for token in UNSAFE_TOKENS {
-            if text.contains(token) {
-                offenders.push(format!("{rel}: `{token}`"));
-            }
+        if uses_unsafe_code(&text) {
+            offenders.push(format!("{rel}: an unsafe block, fn, impl, extern or trait"));
         }
         if allows_unsafe_code(&text) {
             offenders.push(format!("{rel}: an allow/expect of the unsafe-code lint"));
@@ -354,11 +498,33 @@ fn unsafe_only_in_allow_listed_modules() {
 
 #[test]
 fn unsafe_detector_detects_unsafe() {
-    let sample = format!("fn f() {{ {} }}", concat!("unsafe", " { g() }"));
-    assert!(UNSAFE_TOKENS.iter().any(|t| sample.contains(t)));
-    assert!(!UNSAFE_TOKENS
-        .iter()
-        .any(|t| "let unsafe_code = 1; // safe".contains(t)));
+    let kw = "unsafe";
+    for sample in [
+        format!("fn f() {{ {kw} {{ g() }} }}"),
+        format!("fn f() {{ {kw}{{ g() }} }}"),
+        format!("{kw}  impl Send for X {{}}"),
+        format!("pub {kw}\nfn g() {{}}"),
+        format!("{kw} extern \"C\" {{}}"),
+        format!("{kw} trait T {{}}"),
+        format!("#[{kw}(no_mangle)] fn g() {{}}"),
+        format!("/* c */ {kw}/* c */{{ }}"),
+        format!("let s = 'a'; {kw} {{ }}"),
+    ] {
+        assert!(uses_unsafe_code(&sample), "{sample}");
+    }
+    for sample in [
+        format!("// {kw} {{ g() }}"),
+        format!("/// {kw} fn is documented here"),
+        format!("/* {kw} {{ /* nested */ }} */ fn f() {{}}"),
+        format!("let s = \"{kw} {{ g() }}\";"),
+        format!("let s = r#\"{kw} fn \"quoted\" \"#;"),
+        "let unsafe_code = 1;".to_owned(),
+        "fn not_unsafe() {}".to_owned(),
+        format!("fn {kw}_fn() {{}}"),
+        format!("fn f<'a>(x: &'a str) -> &'a str {{ x }} // {kw} {{"),
+    ] {
+        assert!(!uses_unsafe_code(&sample), "{sample}");
+    }
 }
 
 #[test]
@@ -371,6 +537,10 @@ fn allow_matcher_sees_combined_and_inner_lists() {
         format!("#[allow(dead_code,{lint}, unused)]"),
         format!("#![expect(dead_code, {lint})]"),
         format!("#[allow(\n    dead_code,\n    {lint},\n)]"),
+        format!("#[allow({lint} /* c */)]"),
+        format!("#[allow(/* c */ {lint})]"),
+        format!("#[allow ({lint})]"),
+        format!("#[cfg_attr(test, allow({lint}))]"),
     ] {
         assert!(allows_unsafe_code(&attr), "{attr}");
     }
@@ -380,6 +550,10 @@ fn allow_matcher_sees_combined_and_inner_lists() {
         format!("#[deny({lint})]"),
         format!("#[allow(dead_code)] // mentions {lint} later"),
         format!("#[allow(not_{lint})]"),
+        format!("// #[allow({lint})]"),
+        format!("let s = \"{lint} = \\\"deny\\\"\";"),
+        format!("let s = \"#[allow({lint})]\";"),
+        format!("/// #[allow({lint})]\nfn f() {{}}"),
     ] {
         assert!(!allows_unsafe_code(&text), "{text}");
     }
