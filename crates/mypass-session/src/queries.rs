@@ -19,7 +19,7 @@ use crate::fields::{
 };
 use mypass_core::entry_ext::{EntryExt, EntryType, GENERATOR_HISTORY_GROUP_UUID};
 use mypass_core::matcher::host_of;
-use mypass_kdbx::{Database, Entry, Group};
+use mypass_kdbx::{Database, Entry, Group, Timestamp};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
@@ -238,10 +238,11 @@ pub fn entry_matches(
         return true;
     }
     if entry.entry_type() == EntryType::Address
-        && ADDRESS_FIELDS.iter().any(|name| {
-            hit(entry
-                .field(&format!("{ADDRESS_PREFIX}{name}"))
-                .unwrap_or(""))
+        && entry.fields.iter().any(|f| {
+            f.key
+                .strip_prefix(ADDRESS_PREFIX)
+                .is_some_and(|name| ADDRESS_FIELDS.contains(&name))
+                && hit(&f.value)
         })
     {
         return true;
@@ -490,7 +491,10 @@ pub fn entry_detail(db: &Database, id: Uuid) -> Option<EntryDetailDto> {
     let passkey = entry.has_passkey().then(|| PasskeyMeta {
         relying_party: entry.field(PASSKEY_RELYING_PARTY).unwrap_or("").to_owned(),
         username: entry.field(PASSKEY_USERNAME).unwrap_or("").to_owned(),
-        created: entry.field(PASSKEY_CREATED).and_then(parse_iso8601_ms),
+        created: entry
+            .field(PASSKEY_CREATED)
+            .and_then(Timestamp::parse_iso8601)
+            .map(timestamp_ms),
     });
     let card = (entry_type == EntryType::Card).then(|| CardDto {
         holder: entry.field(CARD_HOLDER).unwrap_or("").to_owned(),
@@ -567,45 +571,6 @@ pub fn recent_entries(db: &Database, limit: usize) -> Vec<EntrySummary> {
         .take(limit)
         .map(|i| summary(i, &audit))
         .collect()
-}
-
-/// Parses `YYYY-MM-DDTHH:MM:SS[.fff]Z` (what MyPass writes into `KPEX_PASSKEY_CREATED`) into
-/// Unix milliseconds, dropping any fraction. Anything else is `None`.
-fn parse_iso8601_ms(s: &str) -> Option<f64> {
-    let s = s.trim().strip_suffix('Z')?;
-    let (date, time) = s.split_once('T')?;
-    let time = time.split_once('.').map_or(time, |(whole, _)| whole);
-    let mut d = date.split('-');
-    let (year, month, day): (i64, i64, i64) = (
-        d.next()?.parse().ok()?,
-        d.next()?.parse().ok()?,
-        d.next()?.parse().ok()?,
-    );
-    let mut t = time.split(':');
-    let (hour, minute, second): (i64, i64, i64) = (
-        t.next()?.parse().ok()?,
-        t.next()?.parse().ok()?,
-        t.next()?.parse().ok()?,
-    );
-    if d.next().is_some()
-        || t.next().is_some()
-        || !(1..=12).contains(&month)
-        || !(1..=31).contains(&day)
-        || !(0..24).contains(&hour)
-        || !(0..60).contains(&minute)
-        || !(0..61).contains(&second)
-    {
-        return None;
-    }
-    // Days since 1970-01-01 (Howard Hinnant's civil-from-days inverse).
-    let y = if month <= 2 { year - 1 } else { year };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let mp = (month + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
-    Some(((days * 86_400 + hour * 3600 + minute * 60 + second) * 1000) as f64)
 }
 
 // ---- tests ----
@@ -1249,6 +1214,7 @@ mod tests {
             "KPEX_PASSKEY_USERNAME",
             "Favorite",
             "KP2A_URL",
+            "KP2A_URL_1",
             "MyPass.URIMatchMode",
             "MyPass.EntryType",
             "MyPass.Address.city",
@@ -1260,18 +1226,27 @@ mod tests {
     }
 
     #[test]
-    fn passkey_created_parses_iso8601() {
-        assert_eq!(parse_iso8601_ms("1970-01-01T00:00:00Z"), Some(0.0));
-        assert_eq!(
-            parse_iso8601_ms("2023-11-14T22:13:20Z"),
-            Some(1_700_000_000_000.0)
+    fn passkey_created_unparseable_is_none() {
+        let mut db = fast_database("p");
+        let root = db.root_id();
+        let mut e = entry("pk");
+        e.set_field(PASSKEY_CREDENTIAL_ID, "abc", true);
+        e.set_field(PASSKEY_PRIVATE_KEY_PEM, "pem", true);
+        e.set_field(
+            crate::fields::PASSKEY_CREATED,
+            "2023-11-14T22:13:20Z",
+            false,
         );
-        assert_eq!(
-            parse_iso8601_ms("2023-11-14T22:13:20.500Z"),
-            Some(1_700_000_000_000.0)
+        let id = e.uuid;
+        db.add_entry(root, e, NOW).unwrap();
+        let created = |db: &Database| entry_detail(db, id).unwrap().passkey.unwrap().created;
+        assert_eq!(created(&db), Some(1_700_000_000_000.0));
+        db.find_entry_mut(id).unwrap().set_field(
+            crate::fields::PASSKEY_CREATED,
+            "2023-02-31T00:00:00Z",
+            false,
         );
-        assert_eq!(parse_iso8601_ms("garbage"), None);
-        assert_eq!(parse_iso8601_ms("2023-13-14T22:13:20Z"), None);
+        assert_eq!(created(&db), None);
     }
 
     #[test]

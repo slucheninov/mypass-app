@@ -108,7 +108,7 @@ impl EntryFields for Entry {
 
     fn is_reserved_key(key: &str) -> bool {
         STANDARD_KEYS.contains(&key)
-            || key == mypass_core::entry_ext::ADDITIONAL_URLS_KEY
+            || key.starts_with(mypass_core::entry_ext::ADDITIONAL_URLS_KEY)
             || key.starts_with(PASSKEY_PREFIX)
             || key
                 .strip_prefix(ADDRESS_PREFIX)
