@@ -158,9 +158,11 @@ change is done.
   `Locked`, `Unlocked`). Edits go through `mutate`, which edits a clone and swaps it in only on
   `Ok` (rollback by construction). Saving (`mypass_session::saving`) is a debounced autosave
   (1 s) that writes outside the session lock, one write at a time (an in-flight flag plus a
-  condvar orders autosave, `flush` and `lock`); a file changed on disk is reloaded and two-way
-  merged into the live database, which is then written, never overwritten blindly; `flush` is
-  `Ok` only when every edit is on disk. `lock` saves first and keeps the encrypted bytes when that
+  condvar orders autosave, `flush` and `lock`, and its one finish path re-arms the autosave while
+  the session is dirty); a file changed on disk is reloaded and adopted wholesale by a clean
+  session (nothing written) or two-way merged into a dirty one, which is then written, never
+  overwritten blindly (the remote's save settings are always kept, the remote's metadata unless
+  it was edited locally); `flush` is `Ok` only when every edit is on disk. `lock` saves first and keeps the encrypted bytes when that
   save fails: a timer writes them over an unchanged file, otherwise the next unlock merges them,
   and switching vaults first writes them as an `unsaved-*` copy into the backup folder (the
   path when the password was changed elsewhere); observers run after the session lock is released;

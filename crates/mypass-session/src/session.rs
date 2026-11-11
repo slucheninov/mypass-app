@@ -25,8 +25,7 @@ use crate::backups::BackupManager;
 use crate::scheduler::{lock, Scheduler, TaskHandle};
 use crate::settings::{SettingsPatch, SettingsStore};
 use crate::vault_files::{file_status, VaultFileStatus};
-use mypass_core::merge::merge;
-use mypass_kdbx::{Database, FileIo, FileMeta, KdbxError, Timestamp, VaultFile};
+use mypass_kdbx::{Database, FileIo, FileMeta, KdbxError, Meta, Timestamp, VaultFile};
 use secrecy::{ExposeSecret, SecretString};
 use serde::Serialize;
 use std::io::ErrorKind;
@@ -244,6 +243,13 @@ impl FileIo for SwitchIo {
     }
 }
 
+/// The name shown for a vault: its database name, or the file stem when that is empty.
+pub(crate) fn vault_name_for(db: &Database, path: &Path) -> Option<String> {
+    Some(db.meta.database_name.clone())
+        .filter(|n| !n.is_empty())
+        .or_else(|| path.file_stem().map(|s| s.to_string_lossy().into_owned()))
+}
+
 pub(crate) struct Inner {
     pub(crate) path: Option<PathBuf>,
     pub(crate) vault_name: Option<String>,
@@ -275,6 +281,13 @@ pub(crate) struct Inner {
     /// The file was created by this session; its first save takes no snapshot (there is
     /// nothing of the user's on disk yet).
     pub(crate) fresh_file: bool,
+    /// Bumped by every scheduled save job; a job clears `save_job` when it starts only if it is
+    /// still the current one, so `save_job` is `Some` exactly while a save job is armed.
+    pub(crate) save_job_id: u64,
+    /// The metadata last read from or written to disk: the base that tells a local metadata
+    /// edit from an untouched one when remote content is merged (see the saving module docs).
+    /// Kept while locked, for the merge of kept edits on unlock.
+    pub(crate) disk_meta: Option<Meta>,
 }
 
 impl Inner {
@@ -298,6 +311,8 @@ impl Inner {
             in_flight: false,
             first_write_of_session: false,
             fresh_file: false,
+            save_job_id: 0,
+            disk_meta: None,
         }
     }
 
@@ -332,10 +347,8 @@ impl Inner {
     /// Makes `file` + `db` the open vault. The caller has flushed the previous one.
     pub(crate) fn install(&mut self, file: VaultFile, db: Database, password: SecretString) {
         let path = file.path().to_path_buf();
-        let name = Some(db.meta.database_name.clone())
-            .filter(|n| !n.is_empty())
-            .or_else(|| path.file_stem().map(|s| s.to_string_lossy().into_owned()));
-        self.vault_name = name;
+        self.vault_name = vault_name_for(&db, &path);
+        self.disk_meta = Some(db.meta.clone());
         self.vault_id = Some(db.root_id().simple().to_string());
         self.path = Some(path);
         self.file = Some(file);
@@ -625,7 +638,7 @@ impl VaultSession {
         // The KDF runs without the session lock; a retry write that consumed the kept edits
         // meanwhile makes the loop start over with the new state.
         for _ in 0..3 {
-            let (path, pending) = {
+            let (path, pending, base) = {
                 let inner = self.wait_idle(lock(&self.0.inner));
                 if inner.quitting {
                     return Err(SessionError::Quitting);
@@ -635,12 +648,16 @@ impl VaultSession {
                     return self.verify_password(&password);
                 }
                 let path = inner.path.clone().ok_or(SessionError::NoVault)?;
-                (path, inner.pending_bytes.clone())
+                (path, inner.pending_bytes.clone(), inner.disk_meta.clone())
             };
             let (file, disk_db) =
                 VaultFile::open_with(self.0.io.clone(), &path, &password).map_err(open_error)?;
             let restored = match &pending {
-                Some(bytes) => Some(merge(&Database::open(bytes, &password)?, &disk_db)),
+                Some(bytes) => Some(crate::saving::reconcile(
+                    &Database::open(bytes, &password)?,
+                    &disk_db,
+                    base.as_ref(),
+                )),
                 None => None,
             };
             let had_pending = restored.is_some();
@@ -660,8 +677,10 @@ impl VaultSession {
                 }
                 match restored {
                     Some(merged) => {
-                        let unsaved = !crate::saving::same_content(&merged, &disk_db);
+                        let unsaved = !crate::saving::same_on_disk(&merged, &disk_db);
+                        let disk_meta = disk_db.meta.clone();
                         inner.install(file, merged, password);
+                        inner.disk_meta = Some(disk_meta);
                         if unsaved {
                             inner.dirty_gen = 1;
                             out.save(inner.set_save(SaveStatus::pending()));
