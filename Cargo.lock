@@ -2512,6 +2512,8 @@ dependencies = [
  "mypass-kdbx",
  "mypass-platform",
  "mypass-session",
+ "secrecy",
+ "serde",
  "serde_json",
  "specta",
  "specta-typescript",
@@ -2523,6 +2525,8 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-specta",
  "tempfile",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]

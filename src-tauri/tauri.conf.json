@@ -17,6 +17,17 @@
         "minWidth": 760,
         "minHeight": 480,
         "visible": false
+      },
+      {
+        "label": "tray-panel",
+        "title": "MyPass",
+        "width": 320,
+        "height": 440,
+        "decorations": false,
+        "visible": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false
       }
     ],
     "security": {

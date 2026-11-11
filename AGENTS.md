@@ -25,7 +25,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `repo-guards` | implemented | Test-only (`publish = false`, never shipped): guard tests for the workspace, CI, docs and scripts |
 | `mypass-platform` | in progress (stage 2a) | OS glue behind traits (system events, secure clipboard, secret stores, device unlock, native host registrar, launch at login, keyboard layout) and `AppPaths`; fakes behind the `test-util` feature, `Unsupported` fallbacks where a platform body has not landed |
 | `mypass-session` | in progress (stage 2a) | Vault session, settings, scheduling and the `AppCore` command facade; no Tauri dependency |
-| `src-tauri` (package `mypass-app`, lib `mypass_app_lib`) | scaffold (stage 2a) | The Tauri 2 app shell: typed IPC through `tauri-specta`, plugins; a workspace member listed explicitly |
+| `src-tauri` (package `mypass-app`, lib `mypass_app_lib`) | in progress (stage 2a) | The Tauri 2 app shell: the typed commands and events (`tauri-specta`), capabilities, native file dialogs, plugins; a workspace member listed explicitly |
 | `mypass-bridge` | planned | Browser bridge protocol and loopback server |
 | `mypass-host` | planned | Native messaging host binary |
 | `extension/` | planned | The Chromium extension (JavaScript, with its own Node test suites) |
@@ -50,7 +50,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 
 Stage 1 (the Rust core: KDBX4 engine, TOTP, generator, Public Suffix List, matcher, merge, atomic
 vault file) is implemented.
-Stage 2a (the app backend behind the glass: `mypass-platform`, `mypass-session`, the Tauri shell) is in progress; its scaffold has landed.
+Stage 2a (the app backend behind the glass: `mypass-platform`, `mypass-session`, the Tauri shell) is in progress; the command layer, events and capabilities have landed.
 Later stages (rest of the app backend, UI, extension bridge, passkeys, macOS release, Windows) are listed in `docs/implementation/ROADMAP.md`.
 
 ## Build, run, test
@@ -135,9 +135,9 @@ change is done.
 - **Generated files.** `src/lib/bindings.ts` is generated: regenerate it with
   `cargo test -p mypass-app export_bindings_regenerate -- --ignored` and never edit it (the test
   `bindings_are_up_to_date` fails when it drifts). `src-tauri/tests/commands.snap` lists every
-  command; a stage that adds or removes a command regenerates it with
-  `cargo test -p mypass-app command_snapshot_regenerate -- --ignored` in the same commit (the file
-  and its tests arrive with the command surface).
+  command, sorted, one per line; a stage that adds or removes a command regenerates it with
+  `cargo test -p mypass-app command_snapshot_regenerate -- --ignored` in the same commit
+  (`command_snapshot_matches` fails otherwise).
 - **Node-free Rust build.** `src-tauri/build.rs` creates a placeholder `dist/index.html` when `dist/`
   is absent, so `cargo test --workspace` never needs Node. `dist/` is git-ignored.
 - **Windows manifest.** `src-tauri/build.rs` embeds `src-tauri/windows-app-manifest.xml`
@@ -186,6 +186,13 @@ change is done.
   built by `mypass_platform::current`) and every on-disk location through `AppPaths`. Tests use
   `mypass_platform::testing::fake_platform()` under the `test-util` feature; no non-ignored test touches the
   real clipboard, Keychain or system notifications.
+- **File dialogs.** The webview never supplies a path for an attachment, an attachment export or
+  a CSV import. The dialogs open from Rust behind `mypass_app_lib::files::FilePicker`: picked
+  attachments come back as single-use random tokens that `entry_save` swaps for the real path, the
+  CSV chosen for a preview is remembered for one `import_csv_commit`, and `attachment_export`
+  opens the save dialog itself. Only vault open and create take a path from the UI. Capabilities
+  grant no `fs`, `shell`, `http`, `clipboard-manager` or `global-shortcut` permission to any window
+  (pinned by `capabilities_grant_no_fs_shell_or_clipboard_read`).
 - **Signing.** The stable team `W645B93PPQ` arrives in stage 5. Never sign ad-hoc: it breaks the
   Keychain access that guards the unlock key.
 

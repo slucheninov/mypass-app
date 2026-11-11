@@ -1,23 +1,107 @@
 //! The MyPass desktop app shell: thin `#[tauri::command]` wrappers over `mypass-session`, typed
 //! IPC through `tauri-specta`, and the plugin wiring.
 //!
-//! Stage 2a scaffold: no commands or events are registered yet; they arrive with the `AppCore`
-//! facade. `src/lib/bindings.ts` is generated from [`specta_builder`], never edited by hand.
+//! `src/lib/bindings.ts` is generated from [`specta_builder`], never edited by hand; the command
+//! list is pinned by `tests/commands.snap`.
 
+pub mod commands;
+pub mod events;
+pub mod files;
 pub mod i18n;
 pub mod shell;
+pub mod state;
+#[cfg(test)]
+mod testing;
+pub mod wiring;
 
 use std::path::Path;
 
 use specta_typescript::Typescript;
-use tauri_specta::{collect_commands, collect_events, Builder};
+use tauri_specta::{collect_commands, collect_events, Builder, Commands};
+
+/// Every command, in one place (the tests read their names from here).
+pub fn commands() -> Commands<tauri::Wry> {
+    use commands::{app, attachment, backup, draft, entry, generator, group, import};
+    use commands::{platform, settings, sidebar, vault};
+    collect_commands![
+        app::app_info,
+        app::app_open_entry,
+        app::app_open_settings,
+        app::app_record_activity,
+        app::app_reveal_backups,
+        attachment::attachment_export,
+        attachment::attachment_pick,
+        backup::backup_list,
+        backup::backup_restore,
+        draft::draft_clear,
+        draft::draft_save,
+        draft::draft_versions,
+        entry::entry_copy,
+        entry::entry_delete,
+        entry::entry_edit_model,
+        entry::entry_empty_bin,
+        entry::entry_get,
+        entry::entry_history,
+        entry::entry_history_restore,
+        entry::entry_list,
+        entry::entry_move,
+        entry::entry_new_model,
+        entry::entry_purge,
+        entry::entry_recent,
+        entry::entry_restore,
+        entry::entry_reveal,
+        entry::entry_save,
+        entry::entry_set_favorite,
+        entry::entry_totp,
+        entry::entry_touch,
+        generator::generator_copy,
+        generator::generator_generate,
+        generator::generator_history_copy,
+        generator::generator_history_delete,
+        generator::generator_history_list,
+        generator::generator_history_reveal,
+        generator::generator_rules_summary,
+        group::group_create,
+        group::group_delete,
+        group::group_move,
+        group::group_update,
+        import::import_csv_commit,
+        import::import_csv_preview,
+        platform::platform_keyboard_layout,
+        settings::settings_get,
+        settings::settings_login_item_status,
+        settings::settings_update,
+        sidebar::sidebar_get,
+        vault::vault_create,
+        vault::vault_find_files,
+        vault::vault_forget,
+        vault::vault_lock,
+        vault::vault_open,
+        vault::vault_open_warnings,
+        vault::vault_recent,
+        vault::vault_status,
+        vault::vault_unlock,
+    ]
+}
 
 /// The single place where commands and events are registered. Both the running app and the
 /// bindings exporter go through it, so the generated TypeScript can never drift from the app.
 pub fn specta_builder() -> Builder<tauri::Wry> {
+    use events::{
+        ClipboardClearedEvent, OpenEntryEvent, SaveStateChanged, SessionChanged, SettingsChanged,
+        ShortcutConflictEvent, VaultChanged,
+    };
     Builder::<tauri::Wry>::new()
-        .commands(collect_commands![])
-        .events(collect_events![])
+        .commands(commands())
+        .events(collect_events![
+            ClipboardClearedEvent,
+            OpenEntryEvent,
+            SaveStateChanged,
+            SessionChanged,
+            SettingsChanged,
+            ShortcutConflictEvent,
+            VaultChanged,
+        ])
 }
 
 /// Write the TypeScript bindings to `path`.
@@ -42,6 +126,7 @@ pub fn run() -> tauri::Result<()> {
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);
+            wiring::install(app)?;
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -98,7 +183,322 @@ mod tests {
             "CSP names a remote origin: {csp}"
         );
         let windows = conf["app"]["windows"].as_array().unwrap();
-        assert_eq!(windows.len(), 1);
-        assert_eq!(windows[0]["label"], "main");
+        let labels: Vec<_> = windows
+            .iter()
+            .map(|w| w["label"].as_str().unwrap())
+            .collect();
+        // `settings` is created lazily by `app_open_settings`, so it is not declared here.
+        assert_eq!(labels, ["main", "tray-panel"]);
+    }
+
+    #[test]
+    fn tray_panel_window_is_a_hidden_frameless_always_on_top_panel() {
+        let conf = tauri_conf();
+        let panel = &conf["app"]["windows"][1];
+        assert_eq!(panel["label"], "tray-panel");
+        assert_eq!(panel["decorations"], false);
+        assert_eq!(panel["visible"], false);
+        assert_eq!(panel["alwaysOnTop"], true);
+        assert_eq!(panel["skipTaskbar"], true);
+        assert_eq!(panel["width"], 320);
+        assert_eq!(panel["height"], 440);
+    }
+
+    fn command_names() -> Vec<String> {
+        let mut types = specta::Types::default();
+        let collected = (commands().1)(&mut types);
+        let mut names: Vec<String> = collected
+            .functions
+            .iter()
+            .map(|f| f.name().to_string())
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn committed_snapshot() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/commands.snap")
+    }
+
+    #[test]
+    fn command_names_follow_domain_verb_convention() {
+        const DOMAINS: [&str; 12] = [
+            "vault",
+            "entry",
+            "group",
+            "attachment",
+            "draft",
+            "generator",
+            "settings",
+            "backup",
+            "import",
+            "sidebar",
+            "app",
+            "platform",
+        ];
+        let names = command_names();
+        assert!(!names.is_empty());
+        for name in &names {
+            let (domain, rest) = name.split_once('_').unwrap();
+            assert!(DOMAINS.contains(&domain), "{name}: unknown domain");
+            assert!(
+                !rest.is_empty()
+                    && rest.split('_').all(|part| {
+                        !part.is_empty() && part.chars().all(|c| c.is_ascii_lowercase())
+                    }),
+                "{name}: not <domain>_<verb>[_<noun>] in snake_case"
+            );
+        }
+        let mut unique = names.clone();
+        unique.dedup();
+        assert_eq!(unique, names, "a command is registered twice");
+    }
+
+    #[test]
+    fn command_snapshot_matches() {
+        let committed = normalise(&fs::read_to_string(committed_snapshot()).unwrap());
+        let actual = command_names().join("\n") + "\n";
+        assert_eq!(
+            actual, committed,
+            "src-tauri/tests/commands.snap is stale: run `cargo test -p mypass-app command_snapshot_regenerate -- --ignored`"
+        );
+    }
+
+    /// Not a check: rewrites the committed command list. Run it explicitly in the same commit as
+    /// any command change (`-- --ignored`).
+    #[test]
+    #[ignore = "regenerates src-tauri/tests/commands.snap"]
+    fn command_snapshot_regenerate() {
+        fs::write(committed_snapshot(), command_names().join("\n") + "\n").unwrap();
+    }
+
+    #[test]
+    fn ipc_contract_commands_consumed_by_2b_are_registered() {
+        let names = command_names();
+        let snapshot = fs::read_to_string(committed_snapshot()).unwrap();
+        for required in [
+            "platform_keyboard_layout",
+            "app_open_entry",
+            "app_reveal_backups",
+            "settings_login_item_status",
+            "vault_open_warnings",
+            "app_open_settings",
+            "attachment_pick",
+            "attachment_export",
+            "import_csv_preview",
+            "import_csv_commit",
+            "entry_save",
+            "vault_unlock",
+        ] {
+            assert!(names.iter().any(|n| n == required), "{required} missing");
+            assert!(
+                snapshot.lines().any(|l| l == required),
+                "{required} not in snap"
+            );
+        }
+        use tauri_specta::Event;
+        assert_eq!(events::OpenEntryEvent::NAME, "open-entry-event");
+    }
+
+    #[test]
+    fn events_have_stable_names() {
+        use tauri_specta::Event;
+        assert_eq!(events::SessionChanged::NAME, "session-changed");
+        assert_eq!(events::VaultChanged::NAME, "vault-changed");
+        assert_eq!(events::SaveStateChanged::NAME, "save-state-changed");
+        assert_eq!(events::SettingsChanged::NAME, "settings-changed");
+        assert_eq!(
+            events::ClipboardClearedEvent::NAME,
+            "clipboard-cleared-event"
+        );
+        assert_eq!(
+            events::ShortcutConflictEvent::NAME,
+            "shortcut-conflict-event"
+        );
+        assert_eq!(events::OpenEntryEvent::NAME, "open-entry-event");
+    }
+
+    /// Every permission identifier of every capability file, with the file's windows.
+    fn capabilities() -> Vec<(String, Vec<String>, Vec<String>)> {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+        let mut out = Vec::new();
+        for item in fs::read_dir(dir).unwrap() {
+            let path = item.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let json: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            let strings = |v: &serde_json::Value| -> Vec<String> {
+                v.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|p| match p {
+                        serde_json::Value::String(s) => s.clone(),
+                        other => other["identifier"].as_str().unwrap().to_owned(),
+                    })
+                    .collect()
+            };
+            out.push((
+                json["identifier"].as_str().unwrap().to_owned(),
+                strings(&json["windows"]),
+                strings(&json["permissions"]),
+            ));
+        }
+        out
+    }
+
+    #[test]
+    fn capabilities_grant_no_fs_shell_or_clipboard_read() {
+        let all = capabilities();
+        assert_eq!(all.len(), 3);
+        for (id, windows, permissions) in &all {
+            assert_eq!(
+                windows.as_slice(),
+                std::slice::from_ref(id),
+                "a capability is scoped to its own window"
+            );
+            for permission in permissions {
+                for forbidden in [
+                    "fs:",
+                    "shell:",
+                    "http:",
+                    "clipboard-manager:",
+                    "global-shortcut:",
+                ] {
+                    assert!(
+                        !permission.starts_with(forbidden),
+                        "{id} grants {permission}"
+                    );
+                }
+                if id == "tray-panel" {
+                    assert!(!permission.starts_with("core:window:allow-set-"));
+                }
+                if permission == "opener:allow-open-url" {
+                    assert_eq!(id, "main", "only main may open URLs");
+                }
+            }
+            if id == "tray-panel" {
+                assert_eq!(permissions, &["core:default"]);
+            }
+        }
+        let main = all.iter().find(|c| c.0 == "main").unwrap();
+        assert!(main.2.iter().any(|p| p == "opener:allow-open-url"));
+    }
+
+    #[test]
+    fn opener_scope_is_http_and_https_only() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities/main.json");
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        let opener = json["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["identifier"] == "opener:allow-open-url")
+            .unwrap();
+        let urls: Vec<&str> = opener["allow"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["url"].as_str().unwrap())
+            .collect();
+        assert_eq!(urls, ["https://*", "http://*"]);
+    }
+
+    #[test]
+    fn command_wrappers_do_not_log_arguments() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = vec![
+            dir.join("wiring.rs"),
+            dir.join("state.rs"),
+            dir.join("files.rs"),
+        ];
+        for item in fs::read_dir(dir.join("commands")).unwrap() {
+            files.push(item.unwrap().path());
+        }
+        for file in files {
+            let text = fs::read_to_string(&file).unwrap();
+            // Only code before the test module is the shipped code.
+            let code = text.split("#[cfg(test)]").next().unwrap();
+            for needle in [
+                "println!",
+                "eprintln!",
+                "print!",
+                "dbg!",
+                "log::",
+                "tracing::",
+                "info!(",
+                "warn!(",
+                "error!(",
+                "debug!(",
+                "trace!(",
+            ] {
+                // A needle counts only at the start of a path or macro name (`dialog::` is not
+                // `log::`).
+                let found = code.match_indices(needle).any(|(at, _)| {
+                    !code[..at]
+                        .chars()
+                        .next_back()
+                        .is_some_and(|c| c.is_alphanumeric() || c == '_')
+                });
+                assert!(!found, "{} uses {needle}", file.display());
+            }
+        }
+    }
+
+    #[test]
+    fn into_secret_wraps_the_password_and_empties_the_source() {
+        use secrecy::ExposeSecret;
+        let mut password = String::from("hunter2-correct-horse");
+        let secret = commands::into_secret(&mut password);
+        assert_eq!(secret.expose_secret(), "hunter2-correct-horse");
+        // The source `String` was zeroized in place (and so is empty).
+        assert!(password.is_empty());
+        // The wrapper redacts itself.
+        let shown = format!("{secret:?}");
+        assert!(!shown.contains("hunter2"), "{shown}");
+    }
+
+    #[test]
+    fn error_serialisation_shape() {
+        use mypass_session::{ApiError, ErrorCode};
+        let json = |code| {
+            serde_json::to_value(ApiError {
+                code,
+                message: "x".to_owned(),
+            })
+            .unwrap()
+        };
+        assert_eq!(
+            json(ErrorCode::Locked),
+            serde_json::json!({"code": "locked", "message": "x"})
+        );
+        for (code, wire) in [
+            (ErrorCode::Quitting, "quitting"),
+            (ErrorCode::GeneratorNoClass, "generatorNoClass"),
+            (ErrorCode::NotEnrolledOnDevice, "notEnrolledOnDevice"),
+            (
+                ErrorCode::DeviceUnlockUnavailable,
+                "deviceUnlockUnavailable",
+            ),
+            (ErrorCode::Cancelled, "cancelled"),
+        ] {
+            assert_eq!(json(code)["code"], wire);
+        }
+    }
+
+    #[test]
+    fn system_process_lookup_delegates_to_the_platform() {
+        use mypass_session::vault_files::ProcessLookup;
+        // A bundle id nobody runs: both sides agree on "none".
+        let bundle = "invalid.mypass.test.nobody";
+        assert_eq!(
+            state::SystemProcessLookup.other_app_executables(bundle),
+            mypass_platform::running_app_executables(bundle)
+        );
+        assert!(state::SystemProcessLookup
+            .other_app_executables(bundle)
+            .is_empty());
     }
 }
