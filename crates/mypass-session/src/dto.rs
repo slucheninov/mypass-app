@@ -404,3 +404,69 @@ pub struct GeneratorHistoryItem {
     /// Unix milliseconds.
     pub created: f64,
 }
+
+// ---- CSV import, vault discovery and the open-time guards (Task 13) ----
+
+/// Why a CSV data row was not imported. A stable code: the UI localises it, the backend never
+/// emits prose (and never echoes a cell value).
+#[derive(Serialize, Deserialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum SkipReason {
+    /// The row has a different number of fields than the header.
+    FieldCountMismatch,
+    /// A quoted field was never closed (the rest of the file belongs to that row).
+    UnterminatedQuote,
+}
+
+/// A skipped CSV row; `line` is the 1-based physical line on which the row starts.
+#[derive(Serialize, Deserialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedRow {
+    pub line: u32,
+    pub reason: SkipReason,
+}
+
+/// What the import dialog shows before anything is written: no passwords, only the first titles.
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CsvPreview {
+    pub total: u32,
+    pub skipped: Vec<SkippedRow>,
+    pub sample_titles: Vec<String>,
+}
+
+/// The outcome of an import: rows written and rows skipped by the parser.
+#[derive(Serialize, Deserialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportResult {
+    pub imported: u32,
+    pub skipped: u32,
+}
+
+/// A `.kdbx` file found by the scanner. `modified` is Unix milliseconds, `size` bytes.
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct FoundVaultFileDto {
+    pub path: String,
+    pub modified: f64,
+    pub size: f64,
+}
+
+/// One row of the recent-vaults list.
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentVaultDto {
+    pub path: String,
+    pub file_name: String,
+    pub exists: bool,
+}
+
+/// A reason to ask for confirmation before creating or opening a vault (D6, D7).
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq, Debug)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum OpenWarning {
+    /// The file lives under `~/Library/Mobile Documents` (iCloud Drive).
+    Icloud,
+    /// Another `com.mypass.app` process, with a different executable (the old Swift app), runs.
+    OldAppRunning { executable: String },
+}

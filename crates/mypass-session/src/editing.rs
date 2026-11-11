@@ -228,7 +228,7 @@ enum ResolvedOp {
 /// Writes `value` to `key`, keeping the protection flag of an existing field (`protected` is the
 /// flag of a new one). An absent field is created only for a non-empty value, or when
 /// `create_empty` is set; an unchanged value is not touched at all.
-fn put(entry: &mut Entry, key: &str, value: &str, protected: bool, create_empty: bool) {
+pub(crate) fn put(entry: &mut Entry, key: &str, value: &str, protected: bool, create_empty: bool) {
     match entry.fields.iter().find(|f| f.key == key) {
         Some(f) if f.value == value => {}
         Some(f) => {
