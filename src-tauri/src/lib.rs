@@ -414,7 +414,14 @@ mod tests {
             ]
         );
         assert_eq!(sorted("tray-panel"), ["core:event:default"]);
-        assert_eq!(sorted("settings"), ["core:event:default"]);
+        assert_eq!(
+            sorted("settings"),
+            [
+                "core:event:default",
+                "dialog:allow-open",
+                "dialog:allow-save"
+            ]
+        );
     }
 
     #[test]

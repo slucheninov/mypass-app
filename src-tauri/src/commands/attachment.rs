@@ -6,26 +6,45 @@
 use super::{blocking, ensure_unlocked};
 use crate::files::{FileGrants, FilePicker, PickedFile};
 use crate::state::{AppState, ShellState};
-use mypass_session::{ApiError, AppCore};
+use mypass_session::{ApiError, AppCore, ErrorCode};
 use tauri::State;
 
+/// Windows device names that must not be a file's stem.
+const RESERVED_STEMS: [&str; 22] = [
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+/// Unicode format characters that can disguise a name (bidi marks and overrides, isolates).
+fn is_bidi_format(c: char) -> bool {
+    matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
 /// The file name offered to the save dialog: the attachment's name is vault content (a hostile
-/// vault may carry `..\\..\\x.bat`), so only its last component survives. Splits on both `/`
-/// and `\`, drops control characters, strips leading dots and a Windows drive prefix, and falls
-/// back to `attachment` when nothing is left.
+/// vault may carry `..\\..\\x.bat`), so only a safe last component survives. It splits on both
+/// `/` and `\`, drops control and bidi format characters, strips a Windows drive prefix, cuts at
+/// the first `:` (an NTFS stream name), trims dots and whitespace at both ends (Windows drops
+/// trailing ones, and a leading dot would hide the file), prefixes `_` to a reserved device name
+/// such as `CON` or `LPT1`, and falls back to `attachment` when nothing is left.
 pub fn sanitize_file_name(name: &str) -> String {
     let last = name.rsplit(['/', '\\']).next().unwrap_or_default();
-    let cleaned: String = last.chars().filter(|c| !c.is_control()).collect();
-    // A drive prefix survives the split only as `C:name` (the separator was the colon's
-    // neighbour); drop `X:` at the start.
+    let cleaned: String = last
+        .chars()
+        .filter(|c| !c.is_control() && !is_bidi_format(*c))
+        .collect();
     let mut chars = cleaned.chars();
     let without_drive = match (chars.next(), chars.next()) {
         (Some(letter), Some(':')) if letter.is_ascii_alphabetic() => chars.as_str(),
         _ => cleaned.as_str(),
     };
-    let trimmed = without_drive.trim_start_matches('.').trim();
+    let before_stream = without_drive.split(':').next().unwrap_or_default();
+    let trimmed = before_stream.trim_matches(|c: char| c == '.' || c.is_whitespace());
     if trimmed.is_empty() {
-        "attachment".to_owned()
+        return "attachment".to_owned();
+    }
+    let stem = trimmed.split('.').next().unwrap_or_default().trim_end();
+    if RESERVED_STEMS.iter().any(|r| r.eq_ignore_ascii_case(stem)) {
+        format!("_{trimmed}")
     } else {
         trimmed.to_owned()
     }
@@ -49,7 +68,14 @@ pub fn export(
     entry_id: &str,
     name: &str,
 ) -> Result<bool, ApiError> {
-    ensure_unlocked(core)?;
+    // The attachment must exist before the user is asked where to put it.
+    let detail = core.entry_get(entry_id)?;
+    if !detail.attachments.iter().any(|a| a.name == name) {
+        return Err(ApiError {
+            code: ErrorCode::NotFound,
+            message: "no such attachment".to_owned(),
+        });
+    }
     let Some(dest) = picker.save_as(&sanitize_file_name(name)) else {
         return Ok(false);
     };
@@ -105,6 +131,19 @@ mod tests {
             (".hidden", "hidden"),
             ("a\u{0}b\u{7}.txt", "ab.txt"),
             ("plain.txt", "plain.txt"),
+            (". .", "attachment"),
+            (" .hidden", "hidden"),
+            ("report.txt. . ", "report.txt"),
+            ("a.txt:stream:$DATA", "a.txt"),
+            ("\u{202E}gpj.exe", "gpj.exe"),
+            ("a\u{200F}b\u{2066}c\u{2069}.txt", "abc.txt"),
+            ("CON", "_CON"),
+            ("con.txt", "_con.txt"),
+            ("Lpt1.tar.gz", "_Lpt1.tar.gz"),
+            ("COM9", "_COM9"),
+            ("COM0", "COM0"),
+            ("console.txt", "console.txt"),
+            ("dir\\NUL", "_NUL"),
             (
                 "caf\u{e9} \u{43f}\u{440}.pdf",
                 "caf\u{e9} \u{43f}\u{440}.pdf",
@@ -117,12 +156,29 @@ mod tests {
     #[test]
     fn the_save_dialog_gets_the_sanitised_name() {
         let w = open_world();
+        let id = entry_with_attachment_named(&w, "..\\..\\evil.bat");
+        let picker = FakeFilePicker::default();
+        assert!(!export(&w.core, &picker, &id, "..\\..\\evil.bat").unwrap());
+        assert_eq!(*picker.save_names.lock().unwrap(), vec!["evil.bat"]);
+    }
+
+    #[test]
+    fn export_of_an_unknown_attachment_opens_no_dialog() {
+        let w = open_world();
         let id = entry_with_attachment(&w);
         let picker = FakeFilePicker::default();
-        // The attachment is called in.txt; a hostile caller asks for another name: the dialog
-        // still only sees the safe last component (the facade then refuses the unknown name).
-        let _ = export(&w.core, &picker, &id, "..\\..\\evil.bat");
-        assert_eq!(*picker.save_names.lock().unwrap(), vec!["evil.bat"]);
+        let err = export(&w.core, &picker, &id, "nope.txt").unwrap_err();
+        assert_eq!(err.code, ErrorCode::NotFound);
+        assert_eq!(picker.dialog_count(), 0);
+        let err = export(
+            &w.core,
+            &picker,
+            &Uuid::new_v4().simple().to_string(),
+            "in.txt",
+        )
+        .unwrap_err();
+        assert_eq!(err.code, ErrorCode::NotFound);
+        assert_eq!(picker.dialog_count(), 0);
     }
 
     #[test]
@@ -161,9 +217,15 @@ mod tests {
     }
 
     fn entry_with_attachment(w: &crate::testing::World) -> String {
+        entry_with_attachment_named(w, "in.txt")
+    }
+
+    fn entry_with_attachment_named(w: &crate::testing::World, name: &str) -> String {
         let mut m = new_model(EntryTypeDto::Login, Uuid::parse_str(&w.root()).unwrap());
         m.title = "E".into();
-        let path = w.file("in.txt", b"payload");
+        // The facade names the attachment after the file (a backslash is a legal file name
+        // character on Unix, so a hostile name can be made here).
+        let path = w.file(name, b"payload");
         m.attachment_ops = vec![AttachmentOp::Add {
             path: path.to_string_lossy().into_owned(),
         }];

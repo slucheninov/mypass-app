@@ -262,6 +262,20 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_save_does_not_restore_tokens_after_the_grants_were_cleared() {
+        let w = open_world();
+        let grants = FileGrants::default();
+        let token = grant(&grants, w.file("a.txt", b"a"));
+        let mut ops = vec![add(&token)];
+        let redeemed = grants.redeem(&mut ops).unwrap();
+        // The vault locked while the save was in flight.
+        grants.clear();
+        grants.restore(redeemed);
+        let err = save(&w.core, &grants, model_with(&w, vec![add(&token)])).unwrap_err();
+        assert_eq!(err.code, ErrorCode::InvalidInput);
+    }
+
+    #[test]
     fn a_failed_save_does_not_spend_the_token() {
         let w = open_world();
         let grants = FileGrants::default();

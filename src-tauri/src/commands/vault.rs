@@ -104,9 +104,11 @@ pub async fn vault_forget(state: State<'_, AppState>, path: String) -> Result<()
 
 #[tauri::command]
 #[specta::specta]
-pub fn vault_open_warnings(
+pub async fn vault_open_warnings(
     state: State<'_, AppState>,
     path: String,
 ) -> Result<Vec<OpenWarning>, ApiError> {
-    state.0.vault_open_warnings(&path)
+    // Enumerates processes and stats paths.
+    let core = state.0.clone();
+    blocking(move || core.vault_open_warnings(&path)).await
 }

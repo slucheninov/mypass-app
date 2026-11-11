@@ -146,6 +146,15 @@ pub struct PickedFile {
 struct Grants {
     tokens: VecDeque<(String, PathBuf)>,
     csv: Option<PathBuf>,
+    /// Bumped by [`FileGrants::clear`]; a [`Redeemed`] from an older generation is not restored.
+    generation: u64,
+}
+
+/// What [`FileGrants::redeem`] consumed, and the generation it was consumed in.
+#[derive(Debug)]
+pub struct Redeemed {
+    taken: Vec<(String, PathBuf)>,
+    generation: u64,
 }
 
 /// The app state behind the dialog commands (cheap to clone).
@@ -190,7 +199,7 @@ impl FileGrants {
     /// An unknown or already used token (also a token repeated inside the list) is
     /// `InvalidInput` and nothing is consumed. Returns the consumed `(token, path)` pairs, which
     /// [`FileGrants::restore`] puts back when the save then fails.
-    pub fn redeem(&self, ops: &mut [AttachmentOp]) -> Result<Vec<(String, PathBuf)>, ApiError> {
+    pub fn redeem(&self, ops: &mut [AttachmentOp]) -> Result<Redeemed, ApiError> {
         self.with(|g| {
             let mut taken: Vec<(String, PathBuf)> = Vec::new();
             for op in ops.iter() {
@@ -214,15 +223,23 @@ impl FileGrants {
                     }
                 }
             }
-            Ok(taken)
+            Ok(Redeemed {
+                taken,
+                generation: g.generation,
+            })
         })
     }
 
     /// Puts redeemed tokens back (the save they were redeemed for failed, so the editor still
     /// holds them).
-    pub fn restore(&self, taken: Vec<(String, PathBuf)>) {
+    /// A no-op when the grants were cleared since (the vault locked or was switched meanwhile:
+    /// the tokens belong to a session that is gone).
+    pub fn restore(&self, redeemed: Redeemed) {
         self.with(|g| {
-            for pair in taken {
+            if g.generation != redeemed.generation {
+                return;
+            }
+            for pair in redeemed.taken {
                 if !g.tokens.iter().any(|(t, _)| *t == pair.0) {
                     g.tokens.push_back(pair);
                 }
@@ -235,7 +252,12 @@ impl FileGrants {
 
     /// Forgets every token and the remembered CSV file (the vault locked or was switched).
     pub fn clear(&self) {
-        self.with(|g| *g = Grants::default());
+        self.with(|g| {
+            *g = Grants {
+                generation: g.generation.wrapping_add(1),
+                ..Grants::default()
+            };
+        });
     }
 
     /// Remembers the CSV file of the last preview (replacing an earlier one).

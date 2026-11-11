@@ -12,6 +12,10 @@ pub struct AppState(pub Arc<AppCore>);
 
 /// Runs the effects `settings_update` computed (autostart, tray, hotkeys, theme, language).
 /// Task 17 installs the real runner; until then [`NoEffects`] drops them.
+///
+/// `run` is called OFF the main thread (on the blocking pool, while `settings_update` holds the
+/// shell's settings lock), so an implementation must hop to the main thread itself for tray,
+/// menu and window work (`AppHandle::run_on_main_thread`), and must not call `settings_update`.
 pub trait EffectRunner: Send + Sync {
     fn run(&self, effects: Vec<Effect>);
 }
@@ -30,6 +34,10 @@ pub struct ShellState {
     pub grants: FileGrants,
     pub windows: Arc<dyn WindowOps>,
     pub effects: Arc<dyn EffectRunner>,
+    /// Serialises `settings_update` end to end (read old, apply, compute effects, run effects,
+    /// emit), so effects are computed against the previous committed settings and the events
+    /// leave in call order.
+    pub settings_gate: Arc<std::sync::Mutex<()>>,
 }
 
 /// [`ProcessLookup`] over `mypass_platform::running_app_executables` (macOS; empty elsewhere).

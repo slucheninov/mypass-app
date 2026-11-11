@@ -3,9 +3,10 @@
 use super::blocking;
 use crate::events::SettingsChanged;
 use crate::shell::{settings_effects, Effect};
-use crate::state::{AppState, ShellState};
+use crate::state::{AppState, EffectRunner, ShellState};
 use mypass_session::dto::LoginItemStatus;
 use mypass_session::{ApiError, AppCore, Settings, SettingsPatch};
+use std::sync::{Mutex, PoisonError};
 use tauri::{AppHandle, State};
 use tauri_specta::Event;
 
@@ -23,6 +24,23 @@ pub fn update(core: &AppCore, patch: SettingsPatch) -> Result<(Settings, Vec<Eff
     Ok((new, effects))
 }
 
+/// The whole update sequence under `gate`: read the old settings, apply the patch, compute and run
+/// the effects, then `emit`. Two quick updates therefore cannot interleave: each one's effects
+/// are computed against the previous committed settings and the events go out in call order.
+pub fn apply(
+    core: &AppCore,
+    gate: &Mutex<()>,
+    runner: &dyn EffectRunner,
+    emit: impl FnOnce(&Settings),
+    patch: SettingsPatch,
+) -> Result<Settings, ApiError> {
+    let _serial = gate.lock().unwrap_or_else(PoisonError::into_inner);
+    let (new, effects) = update(core, patch)?;
+    runner.run(effects);
+    emit(&new);
+    Ok(new)
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn settings_update(
@@ -33,12 +51,21 @@ pub async fn settings_update(
 ) -> Result<Settings, ApiError> {
     // The settings file is written atomically, so off the main thread.
     let core = state.0.clone();
-    let (new, effects) = blocking(move || update(&core, patch)).await?;
-    // Task 17's runner executes them; the default drops them.
-    shell.effects.run(effects);
-    // A window that is gone is not an error of the update.
-    let _ = SettingsChanged(new.clone()).emit(&app);
-    Ok(new)
+    let gate = shell.settings_gate.clone();
+    let runner = shell.effects.clone();
+    blocking(move || {
+        apply(
+            &core,
+            &gate,
+            runner.as_ref(),
+            // A window that is gone is not an error of the update.
+            |new| {
+                let _ = SettingsChanged(new.clone()).emit(&app);
+            },
+            patch,
+        )
+    })
+    .await
 }
 
 #[tauri::command]
@@ -51,7 +78,87 @@ pub fn settings_login_item_status(state: State<'_, AppState>) -> Result<LoginIte
 mod tests {
     use super::*;
     use crate::testing::world;
-    use mypass_session::Theme;
+    use mypass_session::{Language, Theme};
+    use std::sync::mpsc;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// Records every run; the first one blocks until released.
+    struct Gated {
+        log: Mutex<Vec<Vec<Effect>>>,
+        entered: mpsc::SyncSender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+        first: std::sync::atomic::AtomicBool,
+    }
+
+    impl EffectRunner for Gated {
+        fn run(&self, effects: Vec<Effect>) {
+            if !self.first.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                self.entered.send(()).unwrap();
+                self.release.lock().unwrap().recv().unwrap();
+            }
+            self.log.lock().unwrap().push(effects);
+        }
+    }
+
+    #[test]
+    fn concurrent_updates_are_serialised_and_computed_in_call_order() {
+        let w = world();
+        let core = Arc::new(w.core.clone());
+        let gate = Arc::new(Mutex::new(()));
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::channel();
+        let runner = Arc::new(Gated {
+            log: Mutex::new(Vec::new()),
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+            first: false.into(),
+        });
+        let emitted: Arc<Mutex<Vec<Settings>>> = Arc::default();
+
+        let spawn = |patch: SettingsPatch| {
+            let (core, gate, runner, emitted) =
+                (core.clone(), gate.clone(), runner.clone(), emitted.clone());
+            std::thread::spawn(move || {
+                apply(
+                    &core,
+                    &gate,
+                    runner.as_ref(),
+                    |s| emitted.lock().unwrap().push(s.clone()),
+                    patch,
+                )
+                .unwrap()
+            })
+        };
+        let first = spawn(SettingsPatch {
+            theme: Some(Theme::Dark),
+            ..SettingsPatch::default()
+        });
+        // The first update is now inside its effects, holding the gate.
+        entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let second = spawn(SettingsPatch {
+            theme: Some(Theme::Light),
+            language: Some(Language::Uk),
+            ..SettingsPatch::default()
+        });
+        std::thread::sleep(Duration::from_millis(150));
+        // The second one has not even applied its patch yet.
+        assert_eq!(core.settings_get().unwrap().theme, Theme::Dark);
+        assert!(emitted.lock().unwrap().is_empty());
+        release_tx.send(()).unwrap();
+        first.join().unwrap();
+        second.join().unwrap();
+
+        let emitted = emitted.lock().unwrap();
+        assert_eq!(emitted.len(), 2);
+        assert_eq!(emitted[0].theme, Theme::Dark);
+        assert_eq!(emitted[1].theme, Theme::Light);
+        // Each effect set is the diff against the previous committed settings.
+        let log = runner.log.lock().unwrap();
+        assert_eq!(log[0], vec![Effect::ApplyTheme(Theme::Dark)]);
+        assert!(log[1].contains(&Effect::ApplyTheme(Theme::Light)));
+        assert!(log[1].contains(&Effect::ApplyLanguage(Language::Uk)));
+    }
 
     #[test]
     fn update_returns_the_new_settings_and_their_effects() {

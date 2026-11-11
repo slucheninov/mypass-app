@@ -107,6 +107,7 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         grants,
         windows: Arc::new(TauriWindowOps(handle)),
         effects: Arc::new(NoEffects),
+        settings_gate: Arc::new(Mutex::new(())),
     });
     Ok(())
 }
