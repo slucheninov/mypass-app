@@ -10,9 +10,21 @@
 //!
 //! Saving in this module is the simple synchronous form: [`VaultSession::flush`] writes through
 //! the guarded `VaultFile::save` while holding the session lock. The debounced autosave, the
-//! retry and the external-change merge replace it in the saving module (Task 7). A failed save on
-//! lock keeps the encrypted bytes (`pending_bytes`) and restores them on the next unlock, so
-//! locking never drops an edit.
+//! retry and the external-change merge replace it in the saving module (Task 7).
+//!
+//! Interim limit until that merge lands: edits are never dropped from memory while the app runs,
+//! but they are written only when the disk is unchanged. A failed save on lock keeps the
+//! encrypted bytes (`pending_bytes`) together with the `VaultFile` stamp of the disk content the
+//! session last read or wrote. The next unlock restores the edits; if the file changed on disk
+//! meanwhile (another device synced, or the file was replaced), the save status is `Failed` with
+//! the `ChangedOnDisk` message and every `flush` returns `ChangedOnDisk` without writing, so the
+//! external change is never overwritten. If the file no longer opens with the password that
+//! decrypts the kept edits (the password was changed elsewhere), the unlock fails with
+//! `WrongPassword` and the edits stay kept; opening another vault is refused while they are kept.
+//! What the user can do then: make the file open with the old password again (revert the
+//! password change on the other device, or restore that file version), after which the unlock
+//! brings the edits back (still unsaved while the file differs). Kept edits live only in memory:
+//! quitting the app loses them, so `flush` failing is what the quit flow must surface.
 //!
 //! Locking discipline: observers and the conflict hook are always called after the session lock
 //! is released, so they may call back into the session. Closures passed to `with_db`, `mutate`,
@@ -28,6 +40,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::UNIX_EPOCH;
+use subtle::ConstantTimeEq;
 
 /// Lifecycle state shown by the UI.
 #[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -244,6 +257,9 @@ pub(crate) struct Inner {
     saved_gen: u64,
     /// The encrypted database kept when the save on lock failed; restored on the next unlock.
     pending_bytes: Option<Vec<u8>>,
+    /// The `VaultFile` that went with `pending_bytes`: its stamp is the disk content as the
+    /// session last knew it, so a save through it refuses to overwrite an external change.
+    pending_file: Option<VaultFile>,
     save: SaveStatus,
     lock_reason: Option<LockReason>,
     quitting: bool,
@@ -263,6 +279,7 @@ impl Inner {
             dirty_gen: 0,
             saved_gen: 0,
             pending_bytes: None,
+            pending_file: None,
             save: SaveStatus::idle(),
             lock_reason: None,
             quitting: false,
@@ -349,6 +366,7 @@ impl Inner {
         self.dirty_gen = 0;
         self.saved_gen = 0;
         self.pending_bytes = None;
+        self.pending_file = None;
         self.save = SaveStatus::idle();
     }
 }
@@ -381,18 +399,6 @@ struct Outbox {
     state_changed: bool,
     vault_changed: bool,
     save: Option<SaveStatus>,
-}
-
-/// Compares two secrets without an early exit on the first differing byte (the length still
-/// shows, as with any password comparison).
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    let mut diff = a.len() ^ b.len();
-    for i in 0..a.len().max(b.len()) {
-        let x = a.get(i).copied().unwrap_or(0);
-        let y = b.get(i).copied().unwrap_or(0);
-        diff |= usize::from(x ^ y);
-    }
-    std::hint::black_box(diff) == 0
 }
 
 fn path_string(path: &Path) -> String {
@@ -639,9 +645,19 @@ impl VaultSession {
             };
             match restored {
                 Some(db) => {
-                    inner.install(file, db, password);
+                    // The stamp of the file as it was before the failed save decides whether the
+                    // disk changed meanwhile. If it did, the edits stay in memory and every save
+                    // through that stale stamp is refused (`ChangedOnDisk`) until the merge
+                    // pipeline (Task 7) reconciles them; nothing is written over the change.
+                    let known = inner.pending_file.take().unwrap_or(file);
+                    let changed = known.has_changed_on_disk().unwrap_or(true);
+                    inner.install(known, db, password);
                     inner.dirty_gen = 1;
-                    out.save = inner.set_save(SaveStatus::pending());
+                    out.save = inner.set_save(if changed {
+                        SaveStatus::failed(SessionError::ChangedOnDisk.to_string())
+                    } else {
+                        SaveStatus::pending()
+                    });
                 }
                 None => inner.install(file, disk_db, password),
             }
@@ -668,6 +684,9 @@ impl VaultSession {
                 if let (Some(db), Some(password)) = (&inner.db, &inner.password) {
                     // Only fails when the OS has no randomness left; nothing more can be kept.
                     inner.pending_bytes = db.save(password).ok();
+                }
+                if inner.pending_bytes.is_some() {
+                    inner.pending_file = inner.file.take();
                 }
             }
             inner.db = None;
@@ -748,10 +767,14 @@ impl VaultSession {
         let inner = lock(&self.0.inner);
         match (&inner.db, &inner.password) {
             (Some(_), Some(p)) => {
-                if constant_time_eq(
-                    p.expose_secret().as_bytes(),
-                    candidate.expose_secret().as_bytes(),
-                ) {
+                // `subtle` compares without an early exit on the first differing byte (a length
+                // mismatch still returns early, as with any password comparison).
+                let same: bool = p
+                    .expose_secret()
+                    .as_bytes()
+                    .ct_eq(candidate.expose_secret().as_bytes())
+                    .into();
+                if same {
                     Ok(())
                 } else {
                     Err(SessionError::WrongPassword)
@@ -1071,6 +1094,82 @@ mod tests {
         f.session.lock(LockReason::Manual);
         f.session.unlock(pw("pw")).unwrap();
         assert_eq!(f.entries(), 2);
+    }
+
+    /// Locks with an unsaved edit whose save fails, so the session keeps `pending_bytes`.
+    fn lock_with_pending_bytes(f: &Fx) -> PathBuf {
+        let path = f.created();
+        let failing = Arc::new(FailingFileIo::new(Arc::new(PlainFileIo)));
+        f.session.set_file_io(failing.clone());
+        f.add_entry().unwrap();
+        failing.fail_write_atomic(ErrorKind::PermissionDenied);
+        f.session.lock(LockReason::Manual);
+        failing.heal();
+        assert_eq!(f.session.status().state, SessionState::Locked);
+        path
+    }
+
+    #[test]
+    fn pending_bytes_plus_external_change_refuses_to_overwrite() {
+        let f = fx();
+        let path = lock_with_pending_bytes(&f);
+        let external = fast_database("other device").save(&pw("pw")).unwrap();
+        fs::write(&path, &external).unwrap();
+        f.session.unlock(pw("pw")).unwrap();
+        assert_eq!(f.entries(), 2, "the pending edits are restored");
+        let s = f.session.status().save;
+        assert_eq!(s.state, SaveState::Failed);
+        assert_eq!(
+            s.message,
+            Some(SessionError::ChangedOnDisk.to_string()),
+            "the conflict is reported"
+        );
+        assert_eq!(f.session.flush(), Err(SessionError::ChangedOnDisk));
+        assert_eq!(fs::read(&path).unwrap(), external);
+        assert_eq!(f.entries(), 2, "the pending edits stay in the session");
+        // Locking again keeps them (the save is still refused) and the next unlock restores them.
+        f.session.lock(LockReason::Manual);
+        assert_eq!(fs::read(&path).unwrap(), external);
+        f.session.unlock(pw("pw")).unwrap();
+        assert_eq!(f.entries(), 2);
+        assert_eq!(f.session.flush(), Err(SessionError::ChangedOnDisk));
+    }
+
+    #[test]
+    fn pending_bytes_without_external_change_flush_succeeds() {
+        let f = fx();
+        let path = lock_with_pending_bytes(&f);
+        f.session.unlock(pw("pw")).unwrap();
+        assert_eq!(f.session.status().save.state, SaveState::Pending);
+        f.session.flush().unwrap();
+        assert_eq!(f.session.status().save, SaveStatus::idle());
+        let g = fx();
+        g.session.open_vault(&path, pw("pw")).unwrap();
+        assert_eq!(g.entries(), 2);
+    }
+
+    #[test]
+    fn pending_bytes_survive_a_password_change_on_disk() {
+        let f = fx();
+        let path = lock_with_pending_bytes(&f);
+        let external = fast_database("other device").save(&pw("new")).unwrap();
+        fs::write(&path, &external).unwrap();
+        assert_eq!(f.session.unlock(pw("pw")), Err(SessionError::WrongPassword));
+        // The new password opens the disk but not the kept edits: still refused, still kept.
+        assert_eq!(
+            f.session.unlock(pw("new")),
+            Err(SessionError::WrongPassword)
+        );
+        assert_eq!(f.session.status().state, SessionState::Locked);
+        assert_eq!(fs::read(&path).unwrap(), external);
+        // Recovery: once the file opens with the old password again, the edits come back and are
+        // still not written over the changed file.
+        let reverted = fast_database("other device").save(&pw("pw")).unwrap();
+        fs::write(&path, &reverted).unwrap();
+        f.session.unlock(pw("pw")).unwrap();
+        assert_eq!(f.entries(), 2);
+        assert_eq!(f.session.flush(), Err(SessionError::ChangedOnDisk));
+        assert_eq!(fs::read(&path).unwrap(), reverted);
     }
 
     #[test]

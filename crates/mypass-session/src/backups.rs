@@ -7,7 +7,9 @@
 //!   afterwards the configured interval must have elapsed since the newest backup, and a newest
 //!   backup dated in the future (clock skew) counts as due;
 //! - the count is read from the settings at the moment of the save, so a settings change applies
-//!   to the very next save; after writing, backups beyond the count are deleted oldest first;
+//!   to the very next save; after writing, backups beyond the count are deleted oldest first, and
+//!   the snapshot just written is never deleted: it is named `max(now, newest + 1)` so it sorts
+//!   newest even when older backups are dated in the future (the clock went backwards);
 //! - a missing source file (the first save of a new vault) writes nothing and records nothing;
 //! - a backup failure NEVER blocks the save: it is recorded (`last_failure`, kept in memory and
 //!   in `<folder>/last-failure.json` so Settings can show it after a restart) and cleared by the
@@ -203,15 +205,33 @@ impl BackupManager {
             Err(e) => return Err(format!("reading the vault failed: {e}")),
         };
         fs::create_dir_all(folder).map_err(|e| format!("creating the folder failed: {e}"))?;
-        let target = (0..=MAX_SAME_SECOND)
-            .map(|n| folder.join(backup_name(now, n)))
-            .find(|p| matches!(fs::symlink_metadata(p), Err(e) if e.kind() == ErrorKind::NotFound))
+        // Rotation sorts by the time in the file name, so the fresh snapshot must sort newest even
+        // when existing backups are dated in the future (the clock went backwards): it is then
+        // named one second after the newest one. Equal seconds are told apart by the `-<n>` suffix.
+        let secs = match newest {
+            Some(newest) if newest > now => newest.saturating_add(1),
+            _ => now,
+        };
+        let (target_name, target) = (0..=MAX_SAME_SECOND)
+            .map(|n| {
+                let name = backup_name(secs, n);
+                let path = folder.join(&name);
+                (name, path)
+            })
+            .find(|(_, p)| {
+                matches!(fs::symlink_metadata(p), Err(e) if e.kind() == ErrorKind::NotFound)
+            })
             .ok_or_else(|| "no free backup file name".to_owned())?;
         mypass_kdbx::write_atomic(&target, &bytes)
             .map_err(|e| format!("writing the backup failed: {e}"))?;
         // Rotation is best effort: an undeletable old backup must not mark the snapshot failed.
+        // The snapshot just written is never a rotation victim, whatever the names say.
         let keep = usize::try_from(settings.backup_count).unwrap_or(usize::MAX);
-        for (_, _, item) in self.list_folder(folder).into_iter().skip(keep) {
+        let older = self
+            .list_folder(folder)
+            .into_iter()
+            .filter(|(_, _, item)| item.id != target_name);
+        for (_, _, item) in older.skip(keep.saturating_sub(1)) {
             let _ = fs::remove_file(folder.join(item.id));
         }
         Ok(true)
@@ -441,6 +461,26 @@ mod tests {
     }
 
     #[test]
+    fn rotation_never_deletes_the_fresh_snapshot_when_backups_are_future_dated() {
+        let f = fx();
+        f.count(3);
+        let folder = f.backups.ensure_folder(VID).unwrap();
+        for secs in [5000, 5001, 5002] {
+            fs::write(folder.join(backup_name(secs, 0)), b"old").unwrap();
+        }
+        fs::write(&f.vault, b"vault-fresh").unwrap();
+        f.backups.snapshot_before_save(VID, &f.vault, 100, false);
+        let ids = f.ids();
+        assert_eq!(ids.len(), 3, "{ids:?}");
+        assert!(!ids.contains(&"backup-5000.kdbx".to_owned()), "{ids:?}");
+        assert!(ids.contains(&"backup-5001.kdbx".to_owned()), "{ids:?}");
+        assert!(ids.contains(&"backup-5002.kdbx".to_owned()), "{ids:?}");
+        let fresh = ids.first().unwrap();
+        assert_eq!(f.backups.read(VID, fresh).unwrap(), b"vault-fresh");
+        assert_eq!(f.backups.status(VID).last_failure, None);
+    }
+
+    #[test]
     fn count_change_applies_to_next_save() {
         let f = fx();
         f.count(10);
@@ -536,11 +576,16 @@ mod tests {
     #[test]
     fn list_is_newest_first() {
         let f = fx();
-        for now in [30, 10, 20] {
-            f.backups.snapshot_before_save(VID, &f.vault, now, true);
+        // Written out of order by hand: a snapshot is always named newest (see the rotation test).
+        let folder = f.backups.ensure_folder(VID).unwrap();
+        for name in [
+            "backup-30.kdbx",
+            "backup-10.kdbx",
+            "backup-20.kdbx",
+            "backup-20-1.kdbx",
+        ] {
+            fs::write(folder.join(name), b"x").unwrap();
         }
-        f.backups.snapshot_before_save(VID, &f.vault, 20, true);
-        let folder = f.backups.folder(VID).unwrap();
         fs::write(folder.join("notes.txt"), b"ignored").unwrap();
         assert_eq!(
             f.ids(),
