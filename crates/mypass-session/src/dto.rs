@@ -225,3 +225,127 @@ pub struct TotpDto {
     pub seconds_remaining: u32,
     pub period: u32,
 }
+
+// ---- the edit model: the one sanctioned place where secrets cross into the webview ----
+//
+// `entry_edit_model` returns the plain values after the user explicitly opens Edit; the UI drops
+// the model on close, save and lock. Because these types carry secrets, their `Debug` impls are
+// manual and print structure (counts, field names) but never a value.
+
+/// One user-defined field of an entry. `key` is never a reserved key.
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomFieldEdit {
+    pub key: String,
+    pub value: String,
+    pub protected: bool,
+}
+
+impl std::fmt::Debug for CustomFieldEdit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CustomFieldEdit")
+            .field("key", &self.key)
+            .field("protected", &self.protected)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The four card fields as typed by the user.
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CardEdit {
+    pub holder: String,
+    pub number: String,
+    pub expiry: String,
+    pub cvv: String,
+}
+
+impl std::fmt::Debug for CardEdit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CardEdit").finish_non_exhaustive()
+    }
+}
+
+/// A pending attachment change, applied in order on save.
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq, Debug)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum AttachmentOp {
+    /// Reads the file at `path` (its name and bytes) when the entry is saved.
+    Add {
+        path: String,
+    },
+    Remove {
+        name: String,
+    },
+}
+
+/// Everything the editor shows and saves. `id` is `None` for a new entry. `attachments` is
+/// informational (the current files); changes go through `attachment_ops`.
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct EntryEditModel {
+    pub id: Option<String>,
+    pub entry_type: EntryTypeDto,
+    pub group_id: String,
+    pub title: String,
+    pub favorite: bool,
+    pub username: String,
+    pub password: String,
+    pub urls: Vec<String>,
+    pub uri_match_mode: String,
+    pub totp: String,
+    pub notes: String,
+    pub address: Option<AddressDto>,
+    pub card: Option<CardEdit>,
+    pub custom_fields: Vec<CustomFieldEdit>,
+    pub attachments: Vec<AttachmentMeta>,
+    pub attachment_ops: Vec<AttachmentOp>,
+}
+
+impl std::fmt::Debug for EntryEditModel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EntryEditModel")
+            .field("id", &self.id)
+            .field("entry_type", &self.entry_type)
+            .field("group_id", &self.group_id)
+            .field("urls", &self.urls.len())
+            .field("custom_fields", &self.custom_fields.len())
+            .field("attachments", &self.attachments.len())
+            .field("attachment_ops", &self.attachment_ops.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// A single field to reveal or copy. `Totp` resolves to the current code.
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq, Debug)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum FieldRef {
+    Username,
+    Password,
+    Url,
+    NotesBody,
+    CardNumber,
+    CardCvv,
+    Totp,
+    Custom { key: String },
+}
+
+/// One earlier version of an entry. `index` 0 is the newest; `changed_fields` names what the next
+/// newer version (or the current entry) changed relative to this one.
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryItem {
+    pub index: u32,
+    /// Unix milliseconds.
+    pub modified: f64,
+    pub title: String,
+    pub changed_fields: Vec<String>,
+}
