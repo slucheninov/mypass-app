@@ -41,6 +41,10 @@ pub trait Scheduler: Send + Sync {
     fn schedule(&self, after: Duration, job: Job) -> TaskHandle;
     /// Current wall-clock time (the injected clock in tests).
     fn wall_now(&self) -> SystemTime;
+    /// Position on the monotonic timeline the delays run on: time since an arbitrary fixed
+    /// origin, never going backwards (`Instant` in production, the manual timeline in tests).
+    /// Rules that must survive a wall clock set back (auto-lock) measure with it as well.
+    fn monotonic_now(&self) -> Duration;
 }
 
 /// Locks a mutex, recovering the data if a panicking thread poisoned it (jobs are caught, so the
@@ -109,6 +113,8 @@ const PURGE_THRESHOLD: usize = 64;
 /// unlocked and still idle) instead of trusting that a cancelled timer never fires.
 pub struct ThreadScheduler {
     shared: Arc<ThreadShared>,
+    /// Origin of [`Scheduler::monotonic_now`].
+    origin: Instant,
 }
 
 impl ThreadScheduler {
@@ -119,7 +125,10 @@ impl ThreadScheduler {
         std::thread::Builder::new()
             .name(thread_name.to_owned())
             .spawn(move || worker_loop(&worker))?;
-        Ok(Arc::new(Self { shared }))
+        Ok(Arc::new(Self {
+            shared,
+            origin: Instant::now(),
+        }))
     }
 }
 
@@ -186,6 +195,10 @@ impl Scheduler for ThreadScheduler {
 
     fn wall_now(&self) -> SystemTime {
         SystemTime::now()
+    }
+
+    fn monotonic_now(&self) -> Duration {
+        self.origin.elapsed()
     }
 }
 
@@ -282,6 +295,12 @@ impl ManualScheduler {
         st.wall = st.wall.checked_add(by).unwrap_or(st.wall);
     }
 
+    /// Sets only the wall clock, in either direction (a user or NTP changing the system time);
+    /// the monotonic timeline stands still and no job runs.
+    pub fn set_wall_clock(&self, at: SystemTime) {
+        lock(&self.state).wall = at;
+    }
+
     /// Number of scheduled jobs that are neither run nor cancelled.
     pub fn pending(&self) -> usize {
         lock(&self.state)
@@ -310,6 +329,10 @@ impl Scheduler for ManualScheduler {
     fn wall_now(&self) -> SystemTime {
         lock(&self.state).wall
     }
+
+    fn monotonic_now(&self) -> Duration {
+        lock(&self.state).elapsed
+    }
 }
 
 #[cfg(test)]
@@ -320,6 +343,26 @@ mod tests {
 
     fn start() -> SystemTime {
         UNIX_EPOCH + Duration::from_secs(1_000_000)
+    }
+
+    #[test]
+    fn manual_monotonic_clock_ignores_wall_clock_changes() {
+        let s = ManualScheduler::new(start());
+        s.advance(Duration::from_secs(10));
+        s.set_wall_clock(start() - Duration::from_secs(3600));
+        s.jump_wall_clock(Duration::from_secs(5));
+        assert_eq!(s.monotonic_now(), Duration::from_secs(10));
+        assert_eq!(s.wall_now(), start() - Duration::from_secs(3595));
+        s.advance(Duration::from_secs(1));
+        assert_eq!(s.monotonic_now(), Duration::from_secs(11));
+    }
+
+    #[test]
+    fn thread_monotonic_clock_never_goes_backwards() {
+        let s = ThreadScheduler::new("test-monotonic").unwrap();
+        let a = s.monotonic_now();
+        let b = s.monotonic_now();
+        assert!(b >= a);
     }
 
     type Log = Arc<Mutex<Vec<u32>>>;

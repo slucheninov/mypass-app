@@ -284,6 +284,9 @@ pub(crate) struct Inner {
     /// Bumped by every scheduled save job; a job clears `save_job` when it starts only if it is
     /// still the current one, so `save_job` is `Some` exactly while a save job is armed.
     pub(crate) save_job_id: u64,
+    /// A snapshot of the current disk state was already taken (or attempted): retries of a
+    /// failed write take none. Cleared by a successful write and by seeing the disk change.
+    pub(crate) snapshot_taken: bool,
     /// The metadata last read from or written to disk: the base that tells a local metadata
     /// edit from an untouched one when remote content is merged (see the saving module docs).
     /// Kept while locked, for the merge of kept edits on unlock.
@@ -312,6 +315,7 @@ impl Inner {
             first_write_of_session: false,
             fresh_file: false,
             save_job_id: 0,
+            snapshot_taken: false,
             disk_meta: None,
         }
     }
@@ -349,6 +353,7 @@ impl Inner {
         let path = file.path().to_path_buf();
         self.vault_name = vault_name_for(&db, &path);
         self.disk_meta = Some(db.meta.clone());
+        self.snapshot_taken = false;
         self.vault_id = Some(db.root_id().simple().to_string());
         self.path = Some(path);
         self.file = Some(file);

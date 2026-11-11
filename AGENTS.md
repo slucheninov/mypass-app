@@ -171,11 +171,14 @@ change is done.
   (Argon2id 8 MiB, 1 pass) so saves stay fast.
 - **Backups.** `mypass_session::backups::BackupManager` copies the on-disk vault bytes to
   `<backups_dir>/<vault_id>/backup-<unix_secs>[-<n>].kdbx` before it is overwritten (first write of
-  a session always, then per `backupInterval`), keeps the newest `backupCount`, and never blocks a
-  save: a failure is recorded in `last-failure.json` and cleared by the next success.
+  a session always, then per `backupInterval`; once per disk state, so retries of a failed write
+  take none, and never when the bytes equal the newest backup), keeps the newest `backupCount`,
+  and never blocks a save: a failure is recorded in `last-failure.json` and cleared by the next
+  success.
 - **Auto-lock and clipboard clear.** `mypass_session::autolock::AutoLock` locks on the idle
-  timer, on sleep and screen lock (per settings) and, after `Wake`, when the wall-clock idle time
-  ran out; platform event sinks only hand events to the scheduler (`AutoLock::event_sink`),
+  timer, on sleep and screen lock (per settings) and, after `Wake`, when the idle time ran out
+  (idle time is the larger of the wall-clock and the monotonic measure, so neither a sleep nor a
+  clock set back defeats it); platform event sinks only hand events to the scheduler (`AutoLock::event_sink`),
   because a sink must never block and `lock` waits for an in-flight save.
   `mypass_session::clipboard_service::ClipboardService` always schedules the clear and clears
   only through `clear_if_unchanged`, so a later copy by the user is never wiped.

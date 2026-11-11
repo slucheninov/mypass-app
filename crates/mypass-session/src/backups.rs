@@ -159,7 +159,8 @@ impl BackupManager {
         Ok(folder)
     }
 
-    /// Copies `vault_file` into the vault's folder when a snapshot is due. Never returns an
+    /// Copies `vault_file` into the vault's folder when a snapshot is due and its bytes differ
+    /// from the newest backup (identical bytes are never copied twice in a row). Never returns an
     /// error and never panics: a failure is recorded and the save goes ahead.
     pub fn snapshot_before_save(
         &self,
@@ -179,8 +180,8 @@ impl BackupManager {
         }
     }
 
-    /// `Ok(true)` when a backup was written, `Ok(false)` when none was due or the source is
-    /// missing.
+    /// `Ok(true)` when a backup was written, `Ok(false)` when none was due, the source is
+    /// missing or it equals the newest backup.
     fn try_snapshot(
         &self,
         folder: &Path,
@@ -190,7 +191,8 @@ impl BackupManager {
     ) -> Result<bool, String> {
         let settings = self.settings.get();
         let now = now.max(0);
-        let newest = self.list_folder(folder).first().map(|(secs, _, _)| *secs);
+        let newest_item = self.list_folder(folder).into_iter().next();
+        let newest = newest_item.as_ref().map(|(secs, _, _)| *secs);
         if !Self::is_snapshot_due(
             settings.backup_interval,
             newest,
@@ -204,6 +206,13 @@ impl BackupManager {
             Err(e) if e.kind() == ErrorKind::NotFound => return Ok(false),
             Err(e) => return Err(format!("reading the vault failed: {e}")),
         };
+        // The same bytes as the newest backup (a failing disk retried, a save that changed
+        // nothing): another copy would only push a distinct, older backup out of the rotation.
+        if let Some((_, _, item)) = &newest_item {
+            if fs::read(folder.join(&item.id)).is_ok_and(|newest_bytes| newest_bytes == bytes) {
+                return Ok(false);
+            }
+        }
         fs::create_dir_all(folder).map_err(|e| format!("creating the folder failed: {e}"))?;
         // Rotation sorts by the time in the file name, so the fresh snapshot must sort newest even
         // when existing backups are dated in the future (the clock went backwards): it is then
@@ -374,6 +383,12 @@ mod tests {
         fn ids(&self) -> Vec<String> {
             self.backups.list(VID).into_iter().map(|i| i.id).collect()
         }
+        /// Changes the vault bytes (identical bytes are never backed up twice), then snapshots.
+        fn snap_changed(&self, now: i64) {
+            fs::write(&self.vault, format!("vault-at-{now}")).unwrap();
+            self.backups
+                .snapshot_before_save(VID, &self.vault, now, false);
+        }
     }
 
     fn is_backup_name(id: &str) -> bool {
@@ -440,10 +455,10 @@ mod tests {
                 ..SettingsPatch::default()
             })
             .unwrap();
-        f.backups.snapshot_before_save(VID, &f.vault, 1000, false);
-        f.backups.snapshot_before_save(VID, &f.vault, 1599, false);
+        f.snap_changed(1000);
+        f.snap_changed(1599);
         assert_eq!(f.ids(), vec!["backup-1000.kdbx"]);
-        f.backups.snapshot_before_save(VID, &f.vault, 1600, false);
+        f.snap_changed(1600);
         assert_eq!(f.ids().len(), 2);
     }
 
@@ -452,7 +467,7 @@ mod tests {
         let f = fx();
         f.count(3);
         for now in 1..=6 {
-            f.backups.snapshot_before_save(VID, &f.vault, now, false);
+            f.snap_changed(now);
         }
         assert_eq!(
             f.ids(),
@@ -485,16 +500,37 @@ mod tests {
         let f = fx();
         f.count(10);
         for now in 1..=5 {
-            f.backups.snapshot_before_save(VID, &f.vault, now, false);
+            f.snap_changed(now);
         }
         assert_eq!(f.ids().len(), 5);
         f.count(2);
         assert_eq!(f.ids().len(), 5);
-        f.backups.snapshot_before_save(VID, &f.vault, 6, false);
+        f.snap_changed(6);
         assert_eq!(f.ids(), vec!["backup-6.kdbx", "backup-5.kdbx"]);
         let status = f.backups.status(VID);
         assert_eq!(status.count, 2);
         assert_eq!(status.interval, BackupInterval::EverySave);
+    }
+
+    #[test]
+    fn snapshot_of_bytes_equal_to_the_newest_backup_is_skipped() {
+        let f = fx();
+        f.count(2);
+        f.backups.snapshot_before_save(VID, &f.vault, 1, true);
+        fs::write(&f.vault, b"vault-v2").unwrap();
+        f.backups.snapshot_before_save(VID, &f.vault, 2, true);
+        // A failing disk retried every 30 s: the same bytes again and again.
+        for now in 3..=8 {
+            f.backups.snapshot_before_save(VID, &f.vault, now, true);
+        }
+        assert_eq!(f.ids(), vec!["backup-2.kdbx", "backup-1.kdbx"]);
+        assert_eq!(f.backups.read(VID, "backup-1.kdbx").unwrap(), b"vault-v1");
+        assert_eq!(f.backups.read(VID, "backup-2.kdbx").unwrap(), b"vault-v2");
+        assert_eq!(f.backups.status(VID).last_failure, None);
+        // Equal to an OLDER backup but not the newest: a real change back, kept.
+        fs::write(&f.vault, b"vault-v1").unwrap();
+        f.backups.snapshot_before_save(VID, &f.vault, 9, false);
+        assert_eq!(f.ids(), vec!["backup-9.kdbx", "backup-2.kdbx"]);
     }
 
     #[test]
@@ -549,6 +585,7 @@ mod tests {
         {
             fs::create_dir(folder.join(name)).unwrap();
         }
+        fs::write(&f.vault, b"vault-v2").unwrap();
         f.backups.snapshot_before_save(VID, &f.vault, 5, false);
         let failure = f.backups.status(VID).last_failure.expect("recorded");
         let restarted = BackupManager::new(f.dir.path().join("backups"), f.settings.clone());

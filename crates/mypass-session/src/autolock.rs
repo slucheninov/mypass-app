@@ -1,13 +1,22 @@
 //! Auto-lock: the idle timer and the system events (sleep, wake, screen lock) that lock the vault.
 //!
 //! The idle timer runs on the [`Scheduler`]'s monotonic timeline, which on macOS does not advance
-//! while the machine sleeps. After `Wake` the rule is therefore checked against the WALL clock
-//! (`wall_now - last_activity >= timeout`), the only reliable measure across a sleep.
+//! while the machine sleeps. Last activity is therefore recorded on BOTH clocks, and the idle
+//! time is the larger of the two measures:
+//!
+//! - the wall-clock measure (`wall_now - last_activity`) is the only one that covers a sleep,
+//!   so `Wake` locks when the sleep used up the timeout;
+//! - the monotonic measure ([`Scheduler::monotonic_now`]) covers a wall clock that was set back
+//!   (by the user or a time sync): the wall measure then fails or shrinks, and without the
+//!   monotonic one every tick would re-arm the full timeout and the vault would never lock.
+//!
+//! The vault locks when EITHER measure reaches the timeout. A wall clock set FORWARD can only
+//! lock early, which is the safe direction.
 //!
 //! Rules:
 //! - Unlocking (any `StateChanged` to `Unlocked`) counts as activity and arms the timer; locking
 //!   cancels it. A timer job that runs although it was cancelled (a cancelled job may still run
-//!   once) re-checks the session state and the wall-clock idle time before locking.
+//!   once) re-checks the session state and the idle time before locking.
 //! - [`AutoLock::record_activity`] is for deliberate user activity only and is a no-op while
 //!   locked (it never arms a timer then).
 //! - `Sleep` locks when `lockOnDeviceSleep`, `ScreenLocked` locks when `lockOnScreenLock` (the
@@ -29,12 +38,28 @@ use mypass_platform::{PlatformResult, Subscription, SystemEvent, SystemEvents};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, SystemTime};
 
+/// The moment of the last activity on both clocks (see the module docs).
+#[derive(Clone, Copy)]
+struct Activity {
+    wall: SystemTime,
+    monotonic: Duration,
+}
+
 struct Inner {
     session: VaultSession,
     settings: SettingsStore,
     scheduler: Arc<dyn Scheduler>,
-    last_activity: Mutex<SystemTime>,
+    last_activity: Mutex<Activity>,
     tick: Mutex<Option<TaskHandle>>,
+}
+
+impl Activity {
+    fn now(scheduler: &dyn Scheduler) -> Self {
+        Self {
+            wall: scheduler.wall_now(),
+            monotonic: scheduler.monotonic_now(),
+        }
+    }
 }
 
 /// The auto-lock service (cheap to clone; every clone is the same service).
@@ -57,7 +82,7 @@ impl AutoLock {
         settings: SettingsStore,
         scheduler: Arc<dyn Scheduler>,
     ) -> Self {
-        let now = scheduler.wall_now();
+        let now = Activity::now(scheduler.as_ref());
         let me = Self(Arc::new(Inner {
             session,
             settings,
@@ -84,7 +109,7 @@ impl AutoLock {
     fn on_session_event(&self, e: &SessionEvent) {
         if let SessionEvent::StateChanged(s) = e {
             if s.state == SessionState::Unlocked {
-                *lock(&self.0.last_activity) = self.0.scheduler.wall_now();
+                *lock(&self.0.last_activity) = Activity::now(self.0.scheduler.as_ref());
                 self.arm();
             } else {
                 self.disarm();
@@ -101,13 +126,17 @@ impl AutoLock {
             .map(Duration::from_secs)
     }
 
+    /// The idle time so far: the larger of the wall-clock and the monotonic measure. A wall
+    /// clock that went backwards gives a wall measure of zero, so the monotonic one decides.
     fn idle_for(&self) -> Duration {
         let last = *lock(&self.0.last_activity);
-        self.0
-            .scheduler
+        let scheduler = &self.0.scheduler;
+        let wall = scheduler
             .wall_now()
-            .duration_since(last)
-            .unwrap_or(Duration::ZERO)
+            .duration_since(last.wall)
+            .unwrap_or(Duration::ZERO);
+        let monotonic = scheduler.monotonic_now().saturating_sub(last.monotonic);
+        wall.max(monotonic)
     }
 
     fn disarm(&self) {
@@ -152,7 +181,7 @@ impl AutoLock {
         if !self.0.session.is_unlocked() {
             return;
         }
-        *lock(&self.0.last_activity) = self.0.scheduler.wall_now();
+        *lock(&self.0.last_activity) = Activity::now(self.0.scheduler.as_ref());
         self.arm();
     }
 
@@ -291,6 +320,19 @@ mod tests {
     fn idle_timeout_locks_after_configured_time() {
         let f = fx();
         f.advance(30 * MIN - 1);
+        assert!(f.session.is_unlocked());
+        f.advance(1);
+        assert_eq!(f.locked_for(), Some(LockReason::Idle));
+    }
+
+    #[test]
+    fn wall_clock_set_back_still_locks_at_the_monotonic_deadline() {
+        let f = fx();
+        f.advance(5 * MIN);
+        let now = f.clock.wall_now();
+        f.clock
+            .set_wall_clock(now - Duration::from_secs(2 * 60 * MIN));
+        f.advance(25 * MIN - 1);
         assert!(f.session.is_unlocked());
         f.advance(1);
         assert_eq!(f.locked_for(), Some(LockReason::Idle));

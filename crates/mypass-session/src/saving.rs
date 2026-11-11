@@ -26,6 +26,10 @@
 //!   the file on disk is unchanged since the session last read or wrote it. Otherwise they wait
 //!   for the next `unlock`, which decrypts them with the supplied password, merges them with the
 //!   vault on disk and saves.
+//! - **A failing disk does not rotate the backups away.** The snapshot before a write is taken
+//!   once per disk state: the retries of a failed write (and of the kept edits) take none until
+//!   a write succeeds or the disk is seen changed. The backup manager also skips a snapshot whose
+//!   bytes equal the newest backup.
 //!
 //! # Remote content: entries, metadata and save settings
 //!
@@ -145,7 +149,7 @@ struct Work {
     gen: u64,
     vault_id: Option<String>,
     first_write: bool,
-    /// Take the snapshot before this write (never for a fresh file).
+    /// Take the snapshot before this write (once per disk state, never for a fresh file).
     snapshot: bool,
 }
 
@@ -394,7 +398,11 @@ impl VaultSession {
         let file = inner.file.take()?;
         inner.cancel_save_job();
         out.save(inner.set_save(SaveStatus::saving()));
-        let snapshot = !std::mem::take(&mut inner.fresh_file);
+        let fresh_file = std::mem::take(&mut inner.fresh_file);
+        let snapshot = !fresh_file && !inner.snapshot_taken;
+        if snapshot {
+            inner.snapshot_taken = true;
+        }
         let work = Work {
             db,
             password,
@@ -406,7 +414,7 @@ impl VaultSession {
         Some((work, InFlight::begin(self, inner, file, Slot::File)))
     }
 
-    /// Snapshot, then one guarded write; on `ChangedOnDisk` the remote
+    /// Snapshot (once per disk state), then one guarded write; on `ChangedOnDisk` the remote
     /// content is reloaded.
     fn write_work(&self, w: &Work, guard: &mut InFlight<'_>) -> WriteResult {
         let now = self.now().0;
@@ -454,6 +462,7 @@ impl VaultSession {
                 let step = match result {
                     WriteResult::Saved(gen) => {
                         inner.saved_gen = gen;
+                        inner.snapshot_taken = false;
                         inner.disk_meta = Some(work.db.meta.clone());
                         if inner.is_dirty() {
                             out.save(inner.set_save(SaveStatus::pending()));
@@ -531,6 +540,7 @@ impl VaultSession {
         }
         inner.db = Some(next);
         inner.disk_meta = Some(remote.meta.clone());
+        inner.snapshot_taken = false;
         if changed {
             out.vault_changed = true;
         }
@@ -563,6 +573,11 @@ impl VaultSession {
     /// [`VaultSession::flush`] with a deadline (the quit path uses 5 s). On expiry it returns
     /// `Err(Io("flush timed out"))` and the session stays dirty; the write keeps running on a
     /// helper thread and completes (or fails) on its own.
+    ///
+    /// Every call spawns one helper thread (`mypass-flush`) that runs `flush` to its end, even
+    /// after the deadline. It is meant for the single call on the quit path; a caller that
+    /// loops on it while a write hangs piles up one blocked thread per call (each then waits for
+    /// the hung write in turn).
     pub fn flush_blocking(&self, timeout: Duration) -> Result<(), SessionError> {
         let (tx, rx) = mpsc::channel();
         let session = self.clone();
@@ -619,9 +634,10 @@ impl VaultSession {
     }
 
     /// Writes the kept edits while locked, only over an unchanged file. `Ok` when nothing is
-    /// kept any more.
+    /// kept any more. The snapshot before the write is taken on the first attempt for a disk
+    /// state only.
     fn retry_pending(&self) -> Result<(), SessionError> {
-        let (bytes, mut guard, vault_id) = {
+        let (bytes, mut guard, vault_id, snapshot) = {
             let mut inner = self.wait_idle(lock(&self.0.inner));
             if inner.db.is_some() {
                 return Ok(());
@@ -634,15 +650,17 @@ impl VaultSession {
                     "unsaved changes are kept until the next unlock".into(),
                 ));
             };
+            let snapshot = !inner.snapshot_taken;
+            inner.snapshot_taken = true;
             let vault_id = inner.vault_id.clone();
             let guard = InFlight::begin(self, &mut inner, file, Slot::Pending);
-            (bytes, guard, vault_id)
+            (bytes, guard, vault_id, snapshot)
         };
         let now = self.now().0;
         let result = guard
             .run(|file| match file.has_changed_on_disk() {
                 Ok(false) => {
-                    if let Some(id) = &vault_id {
+                    if let (true, Some(id)) = (snapshot, &vault_id) {
                         self.0
                             .backups
                             .snapshot_before_save(id, file.path(), now, true);
@@ -662,6 +680,7 @@ impl VaultSession {
             let mut inner = guard.finish();
             match result {
                 Ok(true) => {
+                    inner.snapshot_taken = false;
                     if inner.pending_bytes.as_ref() == Some(&bytes) {
                         inner.pending_bytes = None;
                         inner.pending_file = None;
@@ -672,6 +691,7 @@ impl VaultSession {
                 }
                 Ok(false) => {
                     // The file changed on disk: the next unlock merges the kept edits.
+                    inner.snapshot_taken = false;
                     Err(SessionError::ChangedOnDisk)
                 }
                 Err(e) => {
@@ -879,22 +899,27 @@ mod tests {
             let g = self.gate.lock().unwrap();
             let (g, _) = self
                 .cv
-                .wait_timeout_while(g, Duration::from_secs(10), |g| !g.entered)
+                .wait_timeout_while(g, HELPER_TIMEOUT, |g| !g.entered)
                 .unwrap();
-            assert!(g.entered, "the gated call never started");
+            assert!(g.entered, "the gated call never started within 5 s");
         }
+        /// Opens the gate; never blocks.
         fn release(&self) {
             self.gate.lock().unwrap().open = true;
             self.cv.notify_all();
         }
-        /// Blocks the caller while the gate is armed for `op`, until `release`.
+        /// Blocks the caller while the gate is armed for `op`, at most [`HELPER_TIMEOUT`].
         fn pass(&self, op: GateOp) {
             let mut g = self.gate.lock().unwrap();
             if g.armed && g.op == op {
                 g.armed = false;
                 g.entered = true;
                 self.cv.notify_all();
-                let _g = self.cv.wait_while(g, |g| !g.open).unwrap();
+                let (g, _) = self
+                    .cv
+                    .wait_timeout_while(g, HELPER_TIMEOUT, |g| !g.open)
+                    .unwrap();
+                assert!(g.open, "the gate was not released within 5 s");
             }
         }
     }
@@ -1906,5 +1931,56 @@ mod tests {
             })
             .unwrap_or(0);
         assert_eq!(copies, 0);
+    }
+
+    // --- Retries and backups ----------------------------------------------------------------
+
+    fn every_save(f: &Fx) {
+        f.settings
+            .update(SettingsPatch {
+                backup_interval: Some(BackupInterval::EverySave),
+                ..SettingsPatch::default()
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn failed_autosave_retries_take_one_backup() {
+        let (f, io) = failing_setup();
+        every_save(&f);
+        io.fail_write_atomic(ErrorKind::PermissionDenied);
+        f.add("A").unwrap();
+        f.clock.advance(AUTOSAVE_DEBOUNCE);
+        for _ in 0..5 {
+            f.clock.advance(PENDING_RETRY);
+        }
+        assert_eq!(f.state(), SaveState::Failed);
+        assert_eq!(f.backups(), 1, "one copy of the unchanged disk");
+        io.heal();
+        f.clock.advance(PENDING_RETRY);
+        assert_eq!(f.disk(), v(&["A", "first"]));
+        assert_eq!(f.backups(), 1);
+        f.add("B").unwrap();
+        f.clock.advance(AUTOSAVE_DEBOUNCE);
+        assert_eq!(f.backups(), 2, "a new disk state is backed up again");
+    }
+
+    #[test]
+    fn failed_pending_retries_take_one_backup() {
+        let (f, io) = failing_setup();
+        every_save(&f);
+        f.add("A").unwrap();
+        io.fail_write_atomic(ErrorKind::PermissionDenied);
+        f.session.lock(LockReason::Manual);
+        assert!(f.has_pending_bytes());
+        for _ in 0..5 {
+            f.clock.advance(PENDING_RETRY);
+        }
+        assert_eq!(f.backups(), 1);
+        io.heal();
+        f.clock.advance(PENDING_RETRY);
+        assert!(!f.has_pending_bytes());
+        assert_eq!(f.disk(), v(&["A", "first"]));
+        assert_eq!(f.backups(), 1);
     }
 }
