@@ -9,6 +9,7 @@
 
 use std::sync::Mutex;
 
+use crate::commands::app::MAIN_WINDOW;
 use mypass_platform::{LaunchAtLogin, LoginItemStatus, PlatformError};
 use mypass_session::session::SessionError;
 use mypass_session::settings::{Language, Settings, Theme};
@@ -59,6 +60,19 @@ pub fn settings_effects(old: &Settings, new: &Settings) -> Vec<Effect> {
         effects.push(Effect::RearmAutoLock);
     }
     effects
+}
+
+/// The OS name every OS-dependent shell rule is fed with (`close_action`, the hotkey rendering).
+/// The one place that reads `std::env::consts::OS`; macOS is `"macos"`.
+pub fn current_os() -> &'static str {
+    std::env::consts::OS
+}
+
+/// Shows the main window and then focuses it (a hidden window has to be visible to take focus).
+/// The one path of the second launch, the tray, the hotkey and the Dock reopen.
+pub fn show_main(windows: &dyn WindowOps) -> Result<(), String> {
+    windows.show(MAIN_WINDOW)?;
+    windows.focus(MAIN_WINDOW)
 }
 
 /// What closing the main window does.
@@ -191,6 +205,7 @@ pub fn reconcile_login_item(desired: bool, launcher: &dyn LaunchAtLogin) -> Logi
 /// (pairing raises the main window) can reuse it.
 pub trait WindowOps: Send + Sync {
     fn show(&self, label: &str) -> Result<(), String>;
+    fn hide(&self, label: &str) -> Result<(), String>;
     fn focus(&self, label: &str) -> Result<(), String>;
     fn set_always_on_top(&self, label: &str, on: bool) -> Result<(), String>;
 }
@@ -210,6 +225,9 @@ impl WindowOps for TauriWindowOps {
     fn show(&self, label: &str) -> Result<(), String> {
         self.window(label)?.show().map_err(|e| e.to_string())
     }
+    fn hide(&self, label: &str) -> Result<(), String> {
+        self.window(label)?.hide().map_err(|e| e.to_string())
+    }
     fn focus(&self, label: &str) -> Result<(), String> {
         self.window(label)?.set_focus().map_err(|e| e.to_string())
     }
@@ -227,7 +245,7 @@ pub struct FakeWindowOps {
 }
 
 impl FakeWindowOps {
-    /// The recorded calls as `(op, label, flag)`; `op` is `show`, `focus` or `set_always_on_top`.
+    /// The recorded calls as `(op, label, flag)`; `op` is `show`, `hide`, `focus` or `set_always_on_top`.
     pub fn calls(&self) -> Vec<(String, String, Option<bool>)> {
         self.calls
             .lock()
@@ -247,6 +265,9 @@ impl FakeWindowOps {
 impl WindowOps for FakeWindowOps {
     fn show(&self, label: &str) -> Result<(), String> {
         self.record("show", label, None)
+    }
+    fn hide(&self, label: &str) -> Result<(), String> {
+        self.record("hide", label, None)
     }
     fn focus(&self, label: &str) -> Result<(), String> {
         self.record("focus", label, None)
@@ -605,5 +626,31 @@ mod tests {
             420.0,
         );
         assert_eq!(pos.1, 448.0);
+    }
+
+    #[test]
+    fn current_os_is_the_string_close_action_expects_for_macos() {
+        // A typo in the macOS string would fall through to the non-macOS rule (quit on close
+        // without a tray icon). Pin both the constant and what the running OS reports.
+        #[cfg(target_os = "macos")]
+        assert_eq!(current_os(), "macos");
+        #[cfg(target_os = "windows")]
+        assert_eq!(current_os(), "windows");
+        assert_eq!(close_action("macos", false), CloseAction::HideWindow);
+        assert_eq!(close_action("windows", false), CloseAction::QuitApp);
+    }
+
+    #[test]
+    fn show_main_shows_then_focuses_the_main_window() {
+        let windows = FakeWindowOps::default();
+        show_main(&windows).unwrap();
+        let calls: Vec<_> = windows.calls().into_iter().map(|c| (c.0, c.1)).collect();
+        assert_eq!(
+            calls,
+            [
+                ("show".to_string(), "main".to_string()),
+                ("focus".to_string(), "main".to_string())
+            ]
+        );
     }
 }

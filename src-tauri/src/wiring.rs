@@ -1,14 +1,16 @@
 //! Startup wiring: builds the `AppCore`, manages the app state and forwards backend events to
 //! the webview.
 //!
-//! Tray, global hotkeys, exit handling and platform event subscriptions are not wired here (the
-//! next task owns them); they reach the core through [`AppState`] and the effect runner of
-//! [`ShellState`].
+//! The shell pieces that need the running app (tray, hotkeys, exit handling, platform events)
+//! start from `shell_runtime::start` once this has managed the state; the effect runner of
+//! [`ShellState`] is the real [`ShellEffects`] built here.
 
 use crate::events::{ClipboardClearedEvent, SaveStateChanged, SessionChanged, VaultChanged};
 use crate::files::{FileGrants, TauriFilePicker};
+use crate::lifecycle::{ShellEffects, TRAY_REFRESH_DELAY};
 use crate::shell::TauriWindowOps;
-use crate::state::{AppState, NoEffects, ShellState, SystemProcessLookup};
+use crate::shell_runtime::{hide_panel, tray_refresher, TauriTarget};
+use crate::state::{AppState, ShellState, SystemProcessLookup};
 use mypass_session::clipboard_service::ClearedSink;
 use mypass_session::session::SessionEvent;
 use mypass_session::{AppCore, AppPaths, SaveStatus, SessionState, SessionStatus};
@@ -30,6 +32,27 @@ pub fn outgoing(event: &SessionEvent) -> Outgoing {
         SessionEvent::StateChanged(status) => Outgoing::Session(status.clone()),
         SessionEvent::VaultChanged => Outgoing::Vault,
         SessionEvent::SaveChanged(status) => Outgoing::Save(status.clone()),
+    }
+}
+
+/// What a session event does to the tray.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrayReaction {
+    /// The lock state changed away from unlocked: hide the panel and rebuild the menu now.
+    HideNow,
+    /// The menu may be stale (state change to unlocked, or vault edits): rebuild it, coalesced.
+    Refresh,
+    None,
+}
+
+/// The one mapping from session events to tray work.
+pub fn tray_reaction(event: &SessionEvent) -> TrayReaction {
+    match event {
+        SessionEvent::StateChanged(status) if status.state != SessionState::Unlocked => {
+            TrayReaction::HideNow
+        }
+        SessionEvent::StateChanged(_) | SessionEvent::VaultChanged => TrayReaction::Refresh,
+        SessionEvent::SaveChanged(_) => TrayReaction::None,
     }
 }
 
@@ -90,23 +113,35 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let mut core = AppCore::new(paths, platform)?;
     core.set_process_lookup(Arc::new(SystemProcessLookup));
 
+    let core = Arc::new(core);
     let grants = FileGrants::default();
     let reset = GrantsReset::new(grants.clone());
+    let refresher = tray_refresher(&handle, core.clone());
     let observer_handle = handle.clone();
+    let observer_refresher = refresher.clone();
     core.session
         .add_observer(Arc::new(move |event: &SessionEvent| {
             reset.on_event(event);
             emit(&observer_handle, outgoing(event));
+            match tray_reaction(event) {
+                TrayReaction::HideNow => {
+                    hide_panel(&observer_handle);
+                    observer_refresher.request(std::time::Duration::ZERO);
+                }
+                TrayReaction::Refresh => observer_refresher.request(TRAY_REFRESH_DELAY),
+                TrayReaction::None => {}
+            }
         }));
     core.clipboard
         .set_cleared_sink(Arc::new(EmitCleared(handle.clone())));
 
-    app.manage(AppState(Arc::new(core)));
+    let target = Arc::new(TauriTarget::new(handle.clone(), core.clone(), refresher));
+    app.manage(AppState(core.clone()));
     app.manage(ShellState {
         picker: Arc::new(TauriFilePicker(handle.clone())),
         grants,
         windows: Arc::new(TauriWindowOps(handle)),
-        effects: Arc::new(NoEffects),
+        effects: Arc::new(ShellEffects::new(core, target)),
         settings_gate: Arc::new(Mutex::new(())),
     });
     Ok(())
@@ -177,6 +212,30 @@ mod tests {
         assert!(grants.redeem(&mut ops).is_ok());
         let mut old = vec![mypass_session::dto::AttachmentOp::Add { path: token }];
         assert!(grants.redeem(&mut old).is_err());
+    }
+
+    #[test]
+    fn tray_reacts_to_lock_and_vault_changes_only() {
+        let w = crate::testing::open_world();
+        let unlocked = w.core.session.status();
+        w.core.vault_lock().unwrap();
+        let locked = w.core.session.status();
+        assert_eq!(
+            tray_reaction(&SessionEvent::StateChanged(locked)),
+            TrayReaction::HideNow
+        );
+        assert_eq!(
+            tray_reaction(&SessionEvent::StateChanged(unlocked)),
+            TrayReaction::Refresh
+        );
+        assert_eq!(
+            tray_reaction(&SessionEvent::VaultChanged),
+            TrayReaction::Refresh
+        );
+        assert_eq!(
+            tray_reaction(&SessionEvent::SaveChanged(SaveStatus::idle())),
+            TrayReaction::None
+        );
     }
 
     #[test]

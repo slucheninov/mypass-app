@@ -7,11 +7,15 @@
 pub mod commands;
 pub mod events;
 pub mod files;
+pub mod hotkeys;
 pub mod i18n;
+pub mod lifecycle;
 pub mod shell;
+pub mod shell_runtime;
 pub mod state;
 #[cfg(test)]
 mod testing;
+pub mod tray;
 pub mod wiring;
 
 use std::path::Path;
@@ -115,21 +119,32 @@ pub fn export_bindings(path: &Path) -> Result<(), String> {
 pub fn run() -> tauri::Result<()> {
     let builder = specta_builder();
     let tauri_builder = tauri::Builder::default();
-    // The single-instance plugin must be the first one registered.
+    // The single-instance plugin must be the first one registered; there is no autostart plugin
+    // (launch at login goes through the platform seam).
     #[cfg(desktop)]
     let tauri_builder = tauri_builder
-        .plugin(tauri_plugin_single_instance::init(|_app, _argv, _cwd| {}))
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            use tauri::Manager;
+            // The state may not exist yet when a second launch arrives very early.
+            if let Some(shell) = app.try_state::<state::ShellState>() {
+                lifecycle::handle_second_instance(shell.windows.as_ref(), &argv);
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init());
-    tauri_builder
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build());
+    let app = tauri_builder
         .invoke_handler(builder.invoke_handler())
+        .on_window_event(shell_runtime::on_window_event)
         .setup(move |app| {
             builder.mount_events(app);
             wiring::install(app)?;
+            shell_runtime::start(app);
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())?;
+    app.run(|app, event| shell_runtime::on_run_event(app, &event));
+    Ok(())
 }
 
 #[cfg(test)]

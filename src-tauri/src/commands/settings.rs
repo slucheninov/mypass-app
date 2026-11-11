@@ -37,8 +37,11 @@ pub fn apply(
     let _serial = gate.lock().unwrap_or_else(PoisonError::into_inner);
     let (new, effects) = update(core, patch)?;
     runner.run(effects);
-    emit(&new);
-    Ok(new)
+    // The effects may have corrected the store (a refused login item is written back off), so
+    // the webview gets what is stored now, not the value the patch asked for.
+    let current = core.settings_get().unwrap_or(new);
+    emit(&current);
+    Ok(current)
 }
 
 #[tauri::command]
@@ -178,5 +181,39 @@ mod tests {
         let w = world();
         let (_, effects) = update(&w.core, SettingsPatch::default()).unwrap();
         assert!(effects.is_empty());
+    }
+
+    /// Writes the theme back, as the login-item effect does when the OS refuses.
+    struct Corrects(AppCore);
+
+    impl EffectRunner for Corrects {
+        fn run(&self, _effects: Vec<Effect>) {
+            self.0
+                .settings_update(SettingsPatch {
+                    theme: Some(Theme::Dark),
+                    ..SettingsPatch::default()
+                })
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn the_emitted_and_returned_settings_include_what_the_effects_corrected() {
+        let w = world();
+        let emitted = Mutex::new(None);
+        let returned = apply(
+            &w.core,
+            &Mutex::new(()),
+            &Corrects(w.core.clone()),
+            |s| *emitted.lock().unwrap() = Some(s.clone()),
+            SettingsPatch {
+                language: Some(Language::Uk),
+                ..SettingsPatch::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(returned.language, Language::Uk);
+        assert_eq!(returned.theme, Theme::Dark);
+        assert_eq!(emitted.lock().unwrap().as_ref(), Some(&returned));
     }
 }

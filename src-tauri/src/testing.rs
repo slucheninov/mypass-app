@@ -2,7 +2,7 @@
 //! clipboard, Keychain, notification or dialog.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use mypass_platform::testing::fake_platform;
+use mypass_platform::testing::{fake_platform, FakePlatform};
 use mypass_session::dto::EntryTypeDto;
 use mypass_session::editing::new_model;
 use mypass_session::scheduler::ManualScheduler;
@@ -11,6 +11,7 @@ use mypass_session::testing::fast_database;
 use mypass_session::{AppCore, AppPaths};
 use secrecy::SecretString;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -19,6 +20,10 @@ pub struct World {
     pub dir: TempDir,
     pub core: AppCore,
     pub path: PathBuf,
+    /// The manual clock every timer of `core` runs on.
+    pub clock: Arc<ManualScheduler>,
+    /// The fake platform `core` was built over.
+    pub fake: FakePlatform,
 }
 
 pub fn pw(text: &str) -> SecretString {
@@ -33,11 +38,17 @@ pub fn world() -> World {
     let core = AppCore::with_parts(
         AppPaths::macos(dir.path()),
         fake.platform.clone(),
-        clock,
+        clock.clone(),
         SettingsStore::in_memory(),
     );
     let path = dir.path().join("v.kdbx");
-    World { dir, core, path }
+    World {
+        dir,
+        core,
+        path,
+        clock,
+        fake,
+    }
 }
 
 /// A core with an unlocked, empty vault (password `pw`, cheap KDF).
@@ -51,6 +62,11 @@ pub fn open_world() -> World {
 }
 
 impl World {
+    /// Runs every job that is due now (zero-delay jobs such as a platform event or a hotkey).
+    pub fn run_scheduled(&self) {
+        self.clock.advance(Duration::ZERO);
+    }
+
     pub fn root(&self) -> String {
         self.core.sidebar_get().unwrap().root_group_id
     }

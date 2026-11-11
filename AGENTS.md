@@ -25,7 +25,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `repo-guards` | implemented | Test-only (`publish = false`, never shipped): guard tests for the workspace, CI, docs and scripts |
 | `mypass-platform` | in progress (stage 2a) | OS glue behind traits (system events, secure clipboard, secret stores, device unlock, native host registrar, launch at login, keyboard layout) and `AppPaths`; fakes behind the `test-util` feature, `Unsupported` fallbacks where a platform body has not landed |
 | `mypass-session` | in progress (stage 2a) | Vault session, settings, scheduling and the `AppCore` command facade; no Tauri dependency |
-| `src-tauri` (package `mypass-app`, lib `mypass_app_lib`) | in progress (stage 2a) | The Tauri 2 app shell: the typed commands and events (`tauri-specta`), capabilities, native file dialogs, plugins; a workspace member listed explicitly |
+| `src-tauri` (package `mypass-app`, lib `mypass_app_lib`) | in progress (stage 2a) | The Tauri 2 app shell: the typed commands and events (`tauri-specta`), capabilities, native file dialogs, plugins, tray, global hotkeys, single instance, quit flow, native-side i18n; a workspace member listed explicitly |
 | `mypass-bridge` | planned | Browser bridge protocol and loopback server |
 | `mypass-host` | planned | Native messaging host binary |
 | `extension/` | planned | The Chromium extension (JavaScript, with its own Node test suites) |
@@ -50,7 +50,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 
 Stage 1 (the Rust core: KDBX4 engine, TOTP, generator, Public Suffix List, matcher, merge, atomic
 vault file) is implemented.
-Stage 2a (the app backend behind the glass: `mypass-platform`, `mypass-session`, the Tauri shell) is in progress; the command layer, events and capabilities have landed.
+Stage 2a (the app backend behind the glass: `mypass-platform`, `mypass-session`, the Tauri shell) is in progress; the command layer, events, capabilities and the shell integration (tray, hotkeys, single instance, quit flow) have landed.
 Later stages (rest of the app backend, UI, extension bridge, passkeys, macOS release, Windows) are listed in `docs/implementation/ROADMAP.md`.
 
 ## Build, run, test
@@ -193,6 +193,20 @@ change is done.
   opens the save dialog itself. Only vault open and create take a path from the UI. Capabilities
   grant no `fs`, `shell`, `http`, `clipboard-manager` or `global-shortcut` permission to any window
   (pinned by `capabilities_grant_no_fs_shell_or_clipboard_read`).
+- **Shell.** Decisions are plain functions, the Tauri glue is thin: `shell.rs` (settings effects, close
+  and quit rules, login-item reconcile, `WindowOps`), `tray.rs` (menu model and ids), `hotkeys.rs`
+  (plan, `HotkeyRegistry` seam), `lifecycle.rs` (platform events into auto-lock, the quit flow,
+  the external-change watcher, `ShellEffects`, tray refresh) and `i18n.rs` (the shared catalogs, `{0}`
+  substitution, English fallback); only `shell_runtime.rs` touches the runtime. Webviews hold
+  `core:event:default`, so no Rust listener acts on a webview-emittable event: every trigger is
+  a Rust call (session observer, platform sink, menu, tray, window or run-event callback). Tray
+  icon and menus are built in Rust only (no `core:tray`/`core:menu` permission). Work for the main
+  thread is posted with `run_on_main_thread` and never awaited; callbacks that would lock hand the
+  lock to the scheduler (`lock_via_scheduler`). The quit flow (`on_exit_requested`: `begin_quit`
+  first, then `flush_blocking(5 s)`, then `quit_decision`, Cancel re-opens the session) runs on a
+  worker because it blocks on a dialog: `ExitRequested` is always prevented and a confirmed exit
+  calls `exit` again through `ExitGate`. The effect runner is called off the main thread under the
+  settings gate and never takes it.
 - **Signing.** The stable team `W645B93PPQ` arrives in stage 5. Never sign ad-hoc: it breaks the
   Keychain access that guards the unlock key.
 

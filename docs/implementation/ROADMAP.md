@@ -24,8 +24,6 @@ Last updated: 2026-11-10
 
 - [ ] `VaultFile`: reject non-regular files (FIFO/device symlink targets) at open and cap the
   encoded vault read size, once stage 2 fixes a size policy.
-- [ ] Tauri 2 shell that compiles on macOS and Windows, with tray, hotkeys, single instance and the
-  quit gate.
 - [ ] `mypass-platform`: OS glue behind traits (lock and sleep events, concealed clipboard, secret
   stores, launch at login, keyboard layout).
 - [ ] `mypass-session`: the unlocked vault session with debounced atomic saves, concurrent-write
