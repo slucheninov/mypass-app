@@ -642,15 +642,25 @@ fn bin_of(db: &Database) -> Option<&Group> {
 
 /// Permanently removes everything in the recycle bin; returns how many entries went.
 pub fn empty_bin(session: &VaultSession) -> Result<u32, SessionError> {
+    empty_bin_removed(session).map(|(count, _)| count)
+}
+
+/// [`empty_bin`], also returning the ids of the entries that were removed (collected inside the
+/// same mutation, so they are exactly what went).
+pub fn empty_bin_removed(session: &VaultSession) -> Result<(u32, Vec<Uuid>), SessionError> {
     let nothing = session.with_db(|db| {
         bin_of(db).is_none_or(|bin| count_entries(bin) == 0 && bin.groups.is_empty())
     })?;
     if nothing {
-        return Ok(0);
+        return Ok((0, Vec::new()));
     }
     session.mutate(|db, now| {
+        let Some(bin) = bin_id(db) else {
+            return Ok((0, Vec::new()));
+        };
+        let removed = crate::fields::entry_ids_under(db, bin);
         let Some(bin) = bin_of(db) else {
-            return Ok(0);
+            return Ok((0, Vec::new()));
         };
         let count = count_entries(bin);
         let entries: Vec<Uuid> = bin.entries.iter().map(|e| e.uuid).collect();
@@ -661,7 +671,7 @@ pub fn empty_bin(session: &VaultSession) -> Result<u32, SessionError> {
         for id in groups {
             db.purge_group(id, now)?;
         }
-        Ok(count_u32(count))
+        Ok((count_u32(count), removed))
     })
 }
 
@@ -881,6 +891,12 @@ pub fn move_group(session: &VaultSession, id: Uuid, parent: Uuid) -> Result<(), 
 
 /// Moves a group (with its entries) to the recycle bin; the root and the bin cannot be deleted.
 pub fn delete_group(session: &VaultSession, id: Uuid) -> Result<(), SessionError> {
+    delete_group_removed(session, id).map(|_| ())
+}
+
+/// [`delete_group`], also returning the ids of the entries that went to the bin with it
+/// (collected inside the same mutation).
+pub fn delete_group_removed(session: &VaultSession, id: Uuid) -> Result<Vec<Uuid>, SessionError> {
     session.mutate(|db, now| {
         require_group(db, id)?;
         if id == db.root_id() || db.meta.recycle_bin_uuid == Some(id) {
@@ -888,8 +904,9 @@ pub fn delete_group(session: &VaultSession, id: Uuid) -> Result<(), SessionError
                 "the root group and the recycle bin cannot be deleted".into(),
             ));
         }
+        let removed = crate::fields::entry_ids_under(db, id);
         db.delete_group(id, now)?;
-        Ok(())
+        Ok(removed)
     })
 }
 

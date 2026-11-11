@@ -33,6 +33,17 @@ pub const GENERATOR_HISTORY_MARKER: &str = "MyPass.GeneratorHistory";
 /// The one definition of the recycle bin: `None` when no bin is configured, when its id is the
 /// root group (another client, corrupted meta) or when that group does not exist. Mirrors the
 /// kdbx layer, so `Database::is_in_recycle_bin`, deletes and the session's views agree.
+/// Every entry id in the subtree of `group` (the drafts to clear when the group goes away).
+pub fn entry_ids_under(db: &Database, group: Uuid) -> Vec<Uuid> {
+    let mut ids = Vec::new();
+    let mut stack: Vec<&Group> = db.find_group(group).into_iter().collect();
+    while let Some(g) = stack.pop() {
+        ids.extend(g.entries.iter().map(|e| e.uuid));
+        stack.extend(g.groups.iter());
+    }
+    ids
+}
+
 pub fn bin_id(db: &Database) -> Option<Uuid> {
     db.meta
         .recycle_bin_uuid

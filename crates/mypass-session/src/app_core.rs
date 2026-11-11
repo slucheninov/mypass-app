@@ -30,13 +30,11 @@ use crate::dto::{
     RulesSummary, Sidebar, TotpDto,
 };
 use crate::editing;
-use crate::fields::bin_id;
 use crate::generator_service;
 use crate::queries;
 use crate::scheduler::{lock, Scheduler, ThreadScheduler};
 use crate::session::{
-    GeneratorRulesError, LockReason, SaveState, SessionDeps, SessionError, SessionStatus,
-    VaultSession,
+    GeneratorRulesError, LockReason, SessionDeps, SessionError, SessionStatus, VaultSession,
 };
 use crate::settings::{Settings, SettingsError, SettingsPatch, SettingsStore};
 use crate::unlock_request::UnlockRequestState;
@@ -175,17 +173,6 @@ fn parse_id(id: &str) -> Result<Uuid, SessionError> {
     Uuid::parse_str(id).map_err(|_| SessionError::InvalidInput("malformed id".into()))
 }
 
-/// Every entry id in the subtree of `group` (the drafts to clear when the group goes away).
-fn entry_ids_under(db: &Database, group: Uuid) -> Vec<Uuid> {
-    let mut ids = Vec::new();
-    let mut stack: Vec<&mypass_kdbx::Group> = db.find_group(group).into_iter().collect();
-    while let Some(g) = stack.pop() {
-        ids.extend(g.entries.iter().map(|e| e.uuid));
-        stack.extend(g.groups.iter());
-    }
-    ids
-}
-
 /// The facade over the whole backend (cheap to clone; every clone is the same app).
 #[derive(Clone)]
 pub struct AppCore {
@@ -200,7 +187,9 @@ pub struct AppCore {
     paths: AppPaths,
     processes: Arc<dyn ProcessLookup>,
     /// Serialises the read-modify-write of the draft files (the store itself is unsynchronised).
-    drafts: Arc<Mutex<()>>,
+    /// Serialises draft work. Holds the id of the vault whose draft key was created in memory
+    /// but has not yet reached the disk (cleared only by a successful flush).
+    drafts: Arc<Mutex<Option<String>>>,
 }
 
 impl AppCore {
@@ -265,7 +254,7 @@ impl AppCore {
             scheduler,
             paths,
             processes: Arc::new(NoOtherProcesses),
-            drafts: Arc::new(Mutex::new(())),
+            drafts: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -319,6 +308,11 @@ impl AppCore {
     /// Runs `f` on the open database; the state is checked before `f` (so before ids are parsed).
     fn read<R>(&self, f: impl FnOnce(&Database) -> Result<R, SessionError>) -> Result<R, ApiError> {
         Ok(self.session.with_db(f)??)
+    }
+
+    /// The injected clock as the signed seconds the draft store takes.
+    fn now_i64(&self) -> i64 {
+        i64::try_from(self.now_secs()).unwrap_or(i64::MAX)
     }
 
     fn now_secs(&self) -> u64 {
@@ -377,11 +371,11 @@ impl AppCore {
         id: &str,
         edit: bool,
     ) -> Result<Option<OpenEntryEvent>, ApiError> {
-        if self.session.is_quitting() {
-            return Err(SessionError::Quitting.into());
-        }
         if !self.session.is_unlocked() {
             return Ok(None);
+        }
+        if self.session.is_quitting() {
+            return Err(SessionError::Quitting.into());
         }
         let entry = parse_id(id)?;
         self.read(|db| {
@@ -585,13 +579,8 @@ impl AppCore {
     /// Permanently removes everything in the recycle bin; returns how many entries went.
     pub fn entry_empty_bin(&self) -> Result<u32, ApiError> {
         self.writable()?;
-        let ids = self.session.with_db(|db| {
-            bin_id(db)
-                .map(|bin| entry_ids_under(db, bin))
-                .unwrap_or_default()
-        })?;
-        let count = editing::empty_bin(&self.session)?;
-        self.clear_drafts(&ids);
+        let (count, removed) = editing::empty_bin_removed(&self.session)?;
+        self.clear_drafts(&removed);
         Ok(count)
     }
 
@@ -681,8 +670,7 @@ impl AppCore {
     pub fn group_delete(&self, id: &str) -> Result<(), ApiError> {
         self.writable()?;
         let id = parse_id(id)?;
-        let affected = self.session.with_db(|db| entry_ids_under(db, id))?;
-        editing::delete_group(&self.session, id)?;
+        let affected = editing::delete_group_removed(&self.session, id)?;
         self.clear_drafts(&affected);
         Ok(())
     }
@@ -725,19 +713,32 @@ impl AppCore {
     pub fn draft_save(&self, entry_id: &str, notes: &str) -> Result<bool, ApiError> {
         self.writable()?;
         let entry = parse_id(entry_id)?;
-        let _serial = lock(&self.drafts);
+        self.read(|db| {
+            db.find_entry(entry)
+                .map(|_| ())
+                .ok_or(SessionError::NotFound)
+        })?;
+        let mut unpersisted = lock(&self.drafts);
         let (vault_id, existing) = self.draft_context()?;
         let key = match existing {
             Some(key) => key,
-            None => drafts::load_or_create_key(&self.session)?,
+            None => {
+                let key = drafts::load_or_create_key(&self.session)?;
+                *unpersisted = Some(vault_id.clone());
+                key
+            }
         };
-        // The key may exist only in memory: just created, or created by an earlier call whose
-        // write failed (the vault is then still unsaved). Never write a draft before it is on disk.
-        if self.session.status().save.state != SaveState::Idle && self.session.flush().is_err() {
-            return Ok(false);
+        // A key that exists only in memory (just created, or created by an earlier call whose
+        // write failed) must reach the disk before any draft is written under it. A key that is
+        // already on disk needs no flush, so drafts keep working while vault saves fail.
+        if unpersisted.as_deref() == Some(vault_id.as_str()) {
+            if self.session.flush().is_err() {
+                return Ok(false);
+            }
+            *unpersisted = None;
         }
         let store = self.draft_store(&vault_id, key)?;
-        let now = i64::try_from(self.now_secs()).unwrap_or(i64::MAX);
+        let now = self.now_i64();
         Ok(store.save(entry, notes, now))
     }
 
@@ -751,7 +752,7 @@ impl AppCore {
         let Some(key) = existing else {
             return Ok(Vec::new());
         };
-        let now = i64::try_from(self.now_secs()).unwrap_or(i64::MAX);
+        let now = self.now_i64();
         Ok(self.draft_store(&vault_id, key)?.versions(entry, now))
     }
 
@@ -842,11 +843,15 @@ impl AppCore {
         self.writable()?;
         let vault_id = self.vault_id()?;
         let bytes = self.backups.read(&vault_id, id)?;
-        self.session.restore_from_backup(&bytes)?;
-        let _serial = lock(&self.drafts);
-        // `clear_all` needs no key; the zero key only satisfies the constructor.
-        self.draft_store(&vault_id, [0u8; 32])?.clear_all();
-        Ok(())
+        let restored = self.session.restore_from_backup(&bytes);
+        // A reload failure after the write locks the session: the file already holds the
+        // restored content, so the drafts are dropped in that case too.
+        if restored.is_ok() || !self.session.is_unlocked() {
+            let _serial = lock(&self.drafts);
+            // `clear_all` needs no key; the zero key only satisfies the constructor.
+            self.draft_store(&vault_id, [0u8; 32])?.clear_all();
+        }
+        Ok(restored?)
     }
 
     // ---- CSV import ----
@@ -877,6 +882,7 @@ mod tests {
     use crate::dto::{AttachmentOp, EntryTypeDto, FieldRef, GenerateRequest};
     use crate::editing::new_model;
     use crate::scheduler::ManualScheduler;
+    use crate::session::SaveState;
     use crate::settings::{GeneratorOptionsDto, SettingsStore};
     use crate::testing::fast_database;
     use mypass_kdbx::test_util::FailingFileIo;
@@ -1349,6 +1355,9 @@ mod tests {
         f.core.cancel_quit();
         f.core.vault_lock().unwrap();
         assert_eq!(f.core.open_entry_request(&id, true).unwrap(), None);
+        // Locked wins over quitting.
+        f.core.begin_quit();
+        assert_eq!(f.core.open_entry_request(&id, true).unwrap(), None);
     }
 
     #[test]
@@ -1747,6 +1756,53 @@ mod tests {
     }
 
     #[test]
+    fn draft_save_for_an_unknown_entry_is_not_found_and_writes_nothing() {
+        let f = fx_open();
+        let stray = Uuid::new_v4().simple().to_string();
+        assert_eq!(code(f.core.draft_save(&stray, "text")), ErrorCode::NotFound);
+        assert_eq!(draft_files(&f), 0);
+        assert!(!has_draft_key(&f.path), "no key was created for a stray id");
+    }
+
+    #[test]
+    fn draft_save_keeps_working_while_vault_saves_fail_once_the_key_is_on_disk() {
+        let f = fx_open();
+        let io = Arc::new(FailingFileIo::new(Arc::new(PlainFileIo)));
+        f.core.session.set_file_io(io.clone());
+        let id = notes_entry(&f, "Diary", "saved");
+        assert!(f.core.draft_save(&id, "first").unwrap());
+        f.clock.advance(Duration::from_secs(5));
+        assert!(has_draft_key(&f.path), "the key is on disk");
+        // Saves now fail, and an edit is pending.
+        io.fail_write_atomic(std::io::ErrorKind::Other);
+        f.login("Pending", "x");
+        assert_ne!(f.core.session.status().save.state, SaveState::Idle);
+        assert!(f.core.draft_save(&id, "second").unwrap());
+        assert_eq!(f.core.draft_versions(&id).unwrap().len(), 2);
+        assert_eq!(draft_files(&f), 1, "one file per entry");
+    }
+
+    #[test]
+    fn key_created_while_saves_fail_is_flushed_once_the_io_recovers() {
+        let f = fx_open();
+        let io = Arc::new(FailingFileIo::new(Arc::new(PlainFileIo)));
+        f.core.session.set_file_io(io.clone());
+        let id = notes_entry(&f, "Diary", "saved");
+        f.clock.advance(crate::saving::AUTOSAVE_DEBOUNCE);
+        io.fail_write_atomic(std::io::ErrorKind::Other);
+        assert!(!f.core.draft_save(&id, "one").unwrap());
+        assert_eq!(draft_files(&f), 0);
+        io.heal();
+        assert!(f.core.draft_save(&id, "two").unwrap());
+        assert_eq!(draft_files(&f), 1);
+        assert!(has_draft_key(&f.path));
+        // The key is persisted now: a later failure does not stop drafts.
+        io.fail_write_atomic(std::io::ErrorKind::Other);
+        f.login("Pending", "x");
+        assert!(f.core.draft_save(&id, "three").unwrap());
+    }
+
+    #[test]
     fn notes_save_clears_drafts_for_that_entry() {
         let f = fx_open();
         let notes = notes_entry(&f, "Diary", "v1");
@@ -1758,7 +1814,11 @@ mod tests {
         f.core.entry_save(m).unwrap();
         assert!(f.core.draft_versions(&notes).unwrap().is_empty());
         assert_eq!(f.core.draft_versions(&other).unwrap().len(), 1);
-        // A login save leaves drafts alone (drafts exist for Notes entries only).
+        // A login save leaves other drafts alone.
+        let login = f.login("Mail", "pw");
+        let mut m = f.core.entry_edit_model(&login).unwrap();
+        m.password = "changed".into();
+        f.core.entry_save(m).unwrap();
         assert_eq!(draft_files(&f), 1);
     }
 
@@ -1819,6 +1879,23 @@ mod tests {
         let backup = f.core.backup_list().unwrap().items[0].id.clone();
         f.core.backup_restore(&backup).unwrap();
         assert_eq!(draft_files(&f), 0);
+        assert!(f.core.draft_versions(&id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn backup_restore_with_failing_reload_still_clears_drafts_and_locks() {
+        let (f, id) = fx_with_backup_and_draft();
+        let io = Arc::new(FailingFileIo::new(Arc::new(PlainFileIo)));
+        f.core.session.set_file_io(io.clone());
+        let backup = f.core.backup_list().unwrap().items[0].id.clone();
+        io.fail_read(std::io::ErrorKind::Other);
+        let result = f.core.backup_restore(&backup);
+        io.heal();
+        assert!(result.is_err());
+        // The write happened and the reload failed: drafts gone, session locked.
+        assert_eq!(draft_files(&f), 0);
+        assert!(!f.core.session.is_unlocked());
+        f.core.vault_unlock(pw("pw")).unwrap();
         assert!(f.core.draft_versions(&id).unwrap().is_empty());
     }
 

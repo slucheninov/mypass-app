@@ -37,7 +37,6 @@ struct World {
     paths: AppPaths,
     clock: Arc<ManualScheduler>,
     core: AppCore,
-    fake: FakePlatform,
     path: PathBuf,
 }
 
@@ -57,7 +56,7 @@ fn core_over(paths: &AppPaths) -> (AppCore, Arc<ManualScheduler>, FakePlatform) 
 fn world() -> World {
     let dir = tempfile::tempdir().unwrap();
     let paths = AppPaths::macos(dir.path());
-    let (core, clock, fake) = core_over(&paths);
+    let (core, clock, _fake) = core_over(&paths);
     let path = dir.path().join("vault.kdbx");
     core.session
         .create_vault_with(&path, pw("pw"), fast_database("Journey"))
@@ -67,7 +66,6 @@ fn world() -> World {
         paths,
         clock,
         core,
-        fake,
         path,
     }
 }
@@ -354,8 +352,7 @@ fn journey_backups_rotate_and_restore() {
 #[test]
 fn journey_vault_opens_in_stage1_oracle() {
     let w = world();
-    let id = login(&w.core, "Oracle entry", "oracle-pw");
-    let _ = id;
+    login(&w.core, "Oracle entry", "oracle-pw");
     w.clock.advance(SAVE);
     w.core.vault_lock().unwrap();
     let bytes = PlainFileIo.read(&w.path).unwrap();
@@ -370,5 +367,4 @@ fn journey_vault_opens_in_stage1_oracle() {
         .find(|e| e.get_title() == Some("Oracle entry"))
         .expect("the entry is in the oracle's view");
     assert_eq!(entry.get_password(), Some("oracle-pw"));
-    let _ = &w.fake;
 }

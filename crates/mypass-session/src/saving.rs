@@ -777,8 +777,8 @@ impl VaultSession {
     /// backup, the backup bytes are written atomically over the vault and the file is reloaded
     /// into the live database (`VaultChanged` is emitted). The session stays unlocked and clean.
     /// Refused while quitting and while locked. A reload that fails after the write (the disk
-    /// changed again, I/O) is returned as an error; the stamp is then stale, so the next
-    /// `check_external_change` merges what is on disk.
+    /// changed again, I/O) is returned as an error and the session is LOCKED (`Manual`): the live
+    /// database is the replaced content, and unlocking reads the restored file.
     pub fn restore_from_backup(&self, backup: &[u8]) -> Result<(), SessionError> {
         self.check_not_quitting()?;
         let password = self.with_db_and_password(|_, p| p.clone())?;
@@ -817,6 +817,7 @@ impl VaultSession {
             )
         };
         let now = self.now().0;
+        let written = std::sync::atomic::AtomicBool::new(false);
         let result = guard.run(|file| {
             if let Some(id) = &vault_id {
                 // `first_write_of_session`: always due, so the file being replaced is kept.
@@ -825,6 +826,7 @@ impl VaultSession {
                     .snapshot_before_save(id, file.path(), now, true);
             }
             self.0.io.write_atomic(file.path(), backup)?;
+            written.store(true, std::sync::atomic::Ordering::SeqCst);
             file.reload(&password)
         });
         let mut out = Outbox::default();
@@ -842,6 +844,12 @@ impl VaultSession {
             }
         };
         self.emit(out);
+        if r.is_err() && written.load(std::sync::atomic::Ordering::SeqCst) {
+            // The backup is on disk but the live database is still the old content: lock, so
+            // nothing can later merge the old database over the restored file. Unlocking reads
+            // the restored file.
+            self.lock(LockReason::Manual);
+        }
         r
     }
 
