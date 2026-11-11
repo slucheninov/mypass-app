@@ -260,8 +260,11 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `jsonptr` | 0.7.1 | MIT OR Apache-2.0 |
 | `keyboard-types` | 0.7.0 | MIT OR Apache-2.0 |
 | `keyboard-types` | 0.8.3 | MIT OR Apache-2.0 |
+| `libappindicator` | 0.9.0 | Apache-2.0 OR MIT |
+| `libappindicator-sys` | 0.9.0 | Apache-2.0 OR MIT |
 | `libc` | 0.2.191 | MIT OR Apache-2.0 |
 | `libdbus-sys` | 0.2.7 | Apache-2.0/MIT |
+| `libloading` | 0.7.4 | ISC |
 | `libredox` | 0.1.25 | MIT |
 | `linux-raw-sys` | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | `litemap` | 0.8.3 | Unicode-3.0 |
@@ -407,6 +410,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `syn` | 3.0.10 | MIT OR Apache-2.0 |
 | `sync_wrapper` | 1.0.2 | Apache-2.0 |
 | `synstructure` | 0.14.0 | MIT |
+| `sys-locale` | 0.3.2 | MIT OR Apache-2.0 |
 | `tao` | 0.37.2 | Apache-2.0 |
 | `tao-macros` | 0.1.4 | MIT OR Apache-2.0 |
 | `tauri` | 2.12.5 | Apache-2.0 OR MIT |
@@ -449,6 +453,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `tracing` | 0.1.44 | MIT |
 | `tracing-attributes` | 0.1.31 | MIT |
 | `tracing-core` | 0.1.36 | MIT |
+| `tray-icon` | 0.25.1 | MIT OR Apache-2.0 |
 | `try-lock` | 0.2.5 | MIT |
 | `typeid` | 1.0.3 | MIT OR Apache-2.0 |
 | `typenum` | 1.20.1 | MIT OR Apache-2.0 |
@@ -577,9 +582,6 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `jiff-tzdb` | 0.1.9 | Unlicense OR MIT |
 | `jiff-tzdb-platform` | 0.1.3 | Unlicense OR MIT |
 | `keepass` | 0.17.0 | MIT |
-| `libappindicator` | 0.9.0 | Apache-2.0 OR MIT |
-| `libappindicator-sys` | 0.9.0 | Apache-2.0 OR MIT |
-| `libloading` | 0.7.4 | ISC |
 | `num-traits` | 0.2.19 | MIT OR Apache-2.0 |
 | `objc2-io-surface` | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | `phf_codegen` | 0.13.1 | MIT |
@@ -611,7 +613,6 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `tauri-winres` | 0.3.7 | MIT |
 | `tinyvec` | 1.13.3 | Zlib OR Apache-2.0 OR MIT |
 | `toml` | 0.8.2 | MIT OR Apache-2.0 |
-| `tray-icon` | 0.25.1 | MIT OR Apache-2.0 |
 | `twofish` | 0.8.0 | MIT OR Apache-2.0 |
 | `unarray` | 0.1.4 | MIT OR Apache-2.0 |
 | `unsafe-libyaml` | 0.2.11 | MIT |

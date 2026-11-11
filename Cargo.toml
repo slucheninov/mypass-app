@@ -59,7 +59,7 @@ toml = "1.2.1"
 serde_yaml_ng = "0.10.0"
 
 # --- Declared now, first used from stage 2a (`=`-pinned) ---
-tauri = "=2.12.5"
+tauri = { version = "=2.12.5", features = ["tray-icon"] }
 tauri-build = "=2.7.4"
 tauri-plugin-single-instance = "=2.5.5"
 tauri-plugin-global-shortcut = "=2.4.1"
