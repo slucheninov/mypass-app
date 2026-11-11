@@ -80,6 +80,9 @@ pub trait QuitSteps {
     /// After Quit Anyway: keeps the unsaved edits as a recovery copy in the backup folder, within
     /// `timeout`. Best effort: the user consented to the loss if it fails.
     fn keep_unsaved(&self, timeout: Duration);
+    /// On the way out: clears our copied secret from the system clipboard if nobody copied
+    /// anything since. Best effort, never blocks the exit.
+    fn clear_clipboard(&self);
 }
 
 impl QuitSteps for AppCore {
@@ -106,6 +109,9 @@ impl QuitSteps for AppCore {
             let _ = rx.recv_timeout(timeout);
         }
     }
+    fn clear_clipboard(&self) {
+        self.clipboard.clear_now_if_ours();
+    }
 }
 
 /// The quit flow. `begin_quit` comes FIRST, so no edit can arrive after the decision; then the
@@ -113,14 +119,20 @@ impl QuitSteps for AppCore {
 /// the error text; `true` means Quit Anyway): Cancel re-opens the session and stays, Quit Anyway
 /// first tries to keep the unsaved edits as an `unsaved-*` recovery copy in the backup folder
 /// (best effort, the loss is consented to if even that fails) and exits with the gate still set.
+/// Every exit first clears our copied secret from the clipboard (best effort); a cancel leaves
+/// the clipboard and its scheduled clear alone.
 pub fn on_exit_requested(steps: &dyn QuitSteps, ask: &dyn Fn(&str) -> bool) -> ExitOutcome {
     use crate::shell::{quit_decision, QuitDecision};
     steps.begin_quit();
     match quit_decision(steps.flush(FLUSH_TIMEOUT)) {
-        QuitDecision::Proceed => ExitOutcome::Exit,
+        QuitDecision::Proceed => {
+            steps.clear_clipboard();
+            ExitOutcome::Exit
+        }
         QuitDecision::PromptUser { error } => {
             if ask(&error) {
                 steps.keep_unsaved(FLUSH_TIMEOUT);
+                steps.clear_clipboard();
                 ExitOutcome::Exit
             } else {
                 steps.cancel_quit();
@@ -182,6 +194,40 @@ impl ExitGate {
     }
 }
 
+/// Held by the quit worker for the whole flow. If the worker unwinds before it reported its
+/// outcome, dropping the guard re-opens the session and the gate (a cancelled quit), so a panic
+/// cannot leave the app refusing edits and quits for good.
+pub struct QuitWorkerGuard<'a> {
+    steps: &'a dyn QuitSteps,
+    gate: &'a ExitGate,
+    finished: bool,
+}
+
+impl<'a> QuitWorkerGuard<'a> {
+    pub fn new(steps: &'a dyn QuitSteps, gate: &'a ExitGate) -> Self {
+        Self {
+            steps,
+            gate,
+            finished: false,
+        }
+    }
+
+    /// Reports the outcome of the flow to the gate and disarms the guard.
+    pub fn finish(mut self, outcome: ExitOutcome) {
+        self.finished = true;
+        self.gate.finish(outcome);
+    }
+}
+
+impl Drop for QuitWorkerGuard<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.steps.cancel_quit();
+            self.gate.finish(ExitOutcome::Stay);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // External changes
 
@@ -211,12 +257,20 @@ impl ExternalWatcher {
         if !self.core.session.is_unlocked() {
             return;
         }
+        let result = self.core.session.check_external_change().map(|_| ());
+        self.record(result);
+    }
+
+    /// Reports a failed check once per distinct message and forgets it after a success.
+    fn record(&self, result: Result<(), SessionError>) {
         let mut last = self
             .last_error
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        match self.core.session.check_external_change() {
-            Ok(_) => *last = None,
+        match result {
+            Ok(()) => *last = None,
+            // An auto-lock between the unlocked check and the read: nothing to report.
+            Err(SessionError::Locked | SessionError::NoVault) => {}
             Err(error) => {
                 let message = error.to_string();
                 if last.as_deref() != Some(message.as_str()) {
@@ -504,6 +558,9 @@ mod tests {
         fn keep_unsaved(&self, _timeout: Duration) {
             self.log.borrow_mut().push("keep_unsaved");
         }
+        fn clear_clipboard(&self) {
+            self.log.borrow_mut().push("clear_clipboard");
+        }
     }
 
     #[test]
@@ -511,7 +568,10 @@ mod tests {
         let steps = Recorder::default();
         let outcome = on_exit_requested(&steps, &|_| panic!("a clean flush must not ask"));
         assert_eq!(outcome, ExitOutcome::Exit);
-        assert_eq!(*steps.log.borrow(), ["begin_quit", "flush"]);
+        assert_eq!(
+            *steps.log.borrow(),
+            ["begin_quit", "flush", "clear_clipboard"]
+        );
 
         let failing = Recorder {
             flush_fails: true,
@@ -539,7 +599,7 @@ mod tests {
         assert_eq!(on_exit_requested(&anyway, &|_| true), ExitOutcome::Exit);
         assert_eq!(
             *anyway.log.borrow(),
-            ["begin_quit", "flush", "keep_unsaved"]
+            ["begin_quit", "flush", "keep_unsaved", "clear_clipboard"]
         );
     }
 
@@ -636,6 +696,73 @@ mod tests {
     }
 
     #[test]
+    fn a_quit_worker_that_unwinds_re_opens_the_gate_and_the_session() {
+        let w = open_world();
+        let gate = ExitGate::default();
+        assert_eq!(gate.request(), ExitRequest::Start);
+        w.core.begin_quit();
+        drop(QuitWorkerGuard::new(&w.core, &gate));
+        assert!(!w.core.is_quitting());
+        assert_eq!(gate.request(), ExitRequest::Start, "the gate re-opened");
+    }
+
+    #[test]
+    fn a_finished_guard_leaves_the_outcome_alone() {
+        let w = open_world();
+        let gate = ExitGate::default();
+        assert_eq!(gate.request(), ExitRequest::Start);
+        w.core.begin_quit();
+        QuitWorkerGuard::new(&w.core, &gate).finish(ExitOutcome::Exit);
+        assert!(w.core.is_quitting(), "an exit keeps the session closed");
+        assert_eq!(gate.request(), ExitRequest::Allow);
+    }
+
+    // ---- clipboard on quit ----
+
+    #[test]
+    fn a_clean_quit_clears_the_clipboard_we_filled() {
+        let w = open_world();
+        w.core.clipboard.copy_secret("hunter2").unwrap();
+        assert_eq!(
+            on_exit_requested(&w.core, &|_| unreachable!()),
+            ExitOutcome::Exit
+        );
+        assert_eq!(w.fake.clipboard.contents(), None);
+    }
+
+    #[test]
+    fn a_value_the_user_copied_afterwards_survives_the_quit() {
+        let w = open_world();
+        w.core.clipboard.copy_secret("hunter2").unwrap();
+        w.fake.clipboard.user_copies("grocery list");
+        assert_eq!(
+            on_exit_requested(&w.core, &|_| unreachable!()),
+            ExitOutcome::Exit
+        );
+        assert_eq!(w.fake.clipboard.contents().as_deref(), Some("grocery list"));
+    }
+
+    #[test]
+    fn quit_anyway_clears_the_clipboard_and_cancel_leaves_it_with_its_timer() {
+        let w = dirty_world_with_failing_writes();
+        w.core.clipboard.copy_secret("hunter2").unwrap();
+        assert_eq!(on_exit_requested(&w.core, &|_| false), ExitOutcome::Stay);
+        assert_eq!(w.fake.clipboard.contents().as_deref(), Some("hunter2"));
+        // The scheduled clear is still armed: it fires on time.
+        w.clock.advance(Duration::from_secs(3600));
+        assert_eq!(
+            w.fake.clipboard.contents(),
+            None,
+            "the timer still cleared it"
+        );
+
+        let w = dirty_world_with_failing_writes();
+        w.core.clipboard.copy_secret("hunter2").unwrap();
+        assert_eq!(on_exit_requested(&w.core, &|_| true), ExitOutcome::Exit);
+        assert_eq!(w.fake.clipboard.contents(), None);
+    }
+
+    #[test]
     fn exit_with_clean_flush_exits_without_prompt() {
         let w = open_world();
         w.login("Saved by the final flush");
@@ -691,6 +818,17 @@ mod tests {
         assert_eq!(reports.len(), 1, "the same failure is not repeated");
         assert_eq!(reports[0].state, SaveState::Failed);
         assert!(reports[0].message.is_some());
+    }
+
+    #[test]
+    fn a_lock_racing_the_check_is_not_reported_as_a_failed_save() {
+        let w = open_world();
+        let (watcher, seen) = recording_watcher(&w);
+        watcher.record(Err(SessionError::Locked));
+        watcher.record(Err(SessionError::NoVault));
+        assert!(seen.lock().unwrap().is_empty());
+        watcher.record(Err(SessionError::Io("disk gone".into())));
+        assert_eq!(seen.lock().unwrap().len(), 1);
     }
 
     #[test]

@@ -22,9 +22,18 @@ pub fn settings_get(state: State<'_, AppState>) -> Result<Settings, ApiError> {
 #[tauri::command]
 #[specta::specta]
 pub fn shortcut_conflicts_take(
+    webview: tauri::Webview,
     gate: State<'_, std::sync::Arc<crate::hotkeys::ConflictGate>>,
 ) -> Vec<crate::events::ShortcutConflictEvent> {
+    if !serves_conflicts(webview.label()) {
+        return Vec::new();
+    }
     gate.take()
+}
+
+/// Only the main window is served the startup conflicts (the tray panel must not consume them).
+pub fn serves_conflicts(label: &str) -> bool {
+    label == super::app::MAIN_WINDOW
 }
 
 /// Applies `patch` and returns the new settings with the effects the change calls for.
@@ -90,6 +99,13 @@ pub fn settings_login_item_status(state: State<'_, AppState>) -> Result<LoginIte
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_the_main_window_is_served_the_startup_conflicts() {
+        assert!(super::serves_conflicts(crate::commands::app::MAIN_WINDOW));
+        assert!(!super::serves_conflicts(crate::tray::PANEL_WINDOW));
+        assert!(!super::serves_conflicts(""));
+    }
+
     use super::*;
     use crate::testing::world;
     use mypass_session::{Language, Theme};

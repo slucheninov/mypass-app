@@ -15,7 +15,7 @@ use crate::i18n;
 use crate::lifecycle::{
     attach_platform_events, current_tray_model, emit_save_state, emit_settings, lock_via_scheduler,
     on_exit_requested, start_external_poll, sync_login_item, ExitGate, ExitOutcome, ExitRequest,
-    ExternalWatcher, QuitPort, ShellTarget, TrayRefresher, EXTERNAL_POLL,
+    ExternalWatcher, QuitPort, QuitWorkerGuard, ShellTarget, TrayRefresher, EXTERNAL_POLL,
 };
 use crate::shell::{close_action, current_os, panel_position, show_main, CloseAction, PanelRect};
 use crate::state::{AppState, ShellState};
@@ -412,31 +412,29 @@ fn start_quit_flow<R: Runtime>(app: tauri::AppHandle<R>) {
         .name("mypass-quit".into())
         .spawn(move || {
             let app = worker_app;
-            let outcome = match (
+            let (Some(core), Some(port), Some(gate)) = (
                 app.try_state::<AppState>(),
                 app.try_state::<Arc<dyn QuitPort>>(),
-            ) {
-                (Some(core), Some(port)) => {
-                    let core = core.0.clone();
-                    let port = Arc::clone(&port);
-                    let language = core.settings.get().language;
-                    let ask = |error: &str| port.confirm_quit_anyway(language, error);
-                    let outcome = on_exit_requested(core.as_ref(), &ask);
-                    // The gate FIRST: `exit` posts `ExitRequested` to the main loop, and if that
-                    // were handled before the gate is confirmed it would read `AlreadyRunning`,
-                    // prevent the exit and nothing would exit again.
-                    if let Some(gate) = app.try_state::<ExitGate>() {
-                        gate.finish(outcome);
-                    }
-                    if outcome == ExitOutcome::Exit {
-                        port.exit();
-                    }
-                    return;
+                app.try_state::<ExitGate>(),
+            ) else {
+                if let Some(gate) = app.try_state::<ExitGate>() {
+                    gate.finish(ExitOutcome::Stay);
                 }
-                _ => ExitOutcome::Stay,
+                return;
             };
-            if let Some(gate) = app.try_state::<ExitGate>() {
-                gate.finish(outcome);
+            let core = core.0.clone();
+            let port = Arc::clone(&port);
+            // A panic below drops the guard, which re-opens the session and the gate.
+            let guard = QuitWorkerGuard::new(core.as_ref(), &gate);
+            let language = core.settings.get().language;
+            let ask = |error: &str| port.confirm_quit_anyway(language, error);
+            let outcome = on_exit_requested(core.as_ref(), &ask);
+            // The gate FIRST: `exit` posts `ExitRequested` to the main loop, and if that
+            // were handled before the gate is confirmed it would read `AlreadyRunning`,
+            // prevent the exit and nothing would exit again.
+            guard.finish(outcome);
+            if outcome == ExitOutcome::Exit {
+                port.exit();
             }
         });
     if spawned.is_err() {
@@ -454,6 +452,15 @@ pub struct TauriQuitPort(pub AppHandle);
 /// closed dialog or Esc, whatever an OS reports for those) means Cancel, the safe answer.
 pub fn quit_anyway_chosen(result: &MessageDialogResult, quit_label: &str) -> bool {
     matches!(result, MessageDialogResult::Custom(label) if label == quit_label)
+}
+
+/// The two buttons of the data-loss dialog as the plugin's (ok slot, cancel slot) labels. Quit
+/// Anyway takes the ok slot and Cancel the cancel slot on EVERY OS: the plugin rewrites a plain
+/// `Cancel` result (the dialog closed, Esc) into the cancel slot's label on all desktop
+/// platforms, so the cancel slot must hold Cancel for a closed dialog to mean Cancel. The price
+/// is that Quit Anyway is the first (Return) button.
+pub fn quit_dialog_buttons(quit_label: &str, cancel_label: &str) -> (String, String) {
+    (quit_label.to_owned(), cancel_label.to_owned())
 }
 
 impl QuitPort for TauriQuitPort {
@@ -474,10 +481,10 @@ impl QuitPort for TauriQuitPort {
             ))
             .title(i18n::t(language, "Quit MyPass", &[]))
             .kind(MessageDialogKind::Warning)
-            .buttons(MessageDialogButtons::OkCancelCustom(
-                quit_label.clone(),
-                i18n::t(language, "Cancel", &[]),
-            ))
+            .buttons({
+                let (ok, cancel) = quit_dialog_buttons(&quit_label, &i18n::t(language, "Cancel", &[]));
+                MessageDialogButtons::OkCancelCustom(ok, cancel)
+            })
             .blocking_show_with_result();
         quit_anyway_chosen(&result, &quit_label)
     }
@@ -518,12 +525,8 @@ mod tests {
                 .lock()
                 .ok()
                 .and_then(|app| app.as_ref().map(|a| a.state::<ExitGate>().request()));
-            assert_eq!(
-                seen,
-                Some(ExitRequest::Allow),
-                "the gate is confirmed before exit"
-            );
-            let _ = self.calls.send("exit".into());
+            // Reported to the test thread, which asserts: a wrong order fails with a message.
+            let _ = self.calls.send(format!("exit {seen:?}"));
         }
     }
 
@@ -582,7 +585,11 @@ mod tests {
         let w = open_world();
         w.login("Saved by the final flush");
         let rx = drive_exit_requested(&w, false);
-        assert_eq!(next(&rx), "exit", "no prompt on a clean flush");
+        assert_eq!(
+            next(&rx),
+            "exit Some(Allow)",
+            "no prompt on a clean flush, and the gate is confirmed before exit"
+        );
         assert!(w.core.is_quitting());
     }
 
@@ -602,8 +609,19 @@ mod tests {
         let w = dirty_world_with_failing_writes();
         let rx = drive_exit_requested(&w, true);
         assert!(next(&rx).starts_with("ask "));
-        assert_eq!(next(&rx), "exit");
+        assert_eq!(next(&rx), "exit Some(Allow)");
         assert!(w.core.is_quitting());
+    }
+
+    #[test]
+    fn the_dialog_puts_quit_anyway_in_the_ok_slot_and_cancel_in_the_cancel_slot() {
+        let (ok, cancel) = quit_dialog_buttons("Quit Anyway", "Cancel");
+        assert_eq!((ok.as_str(), cancel.as_str()), ("Quit Anyway", "Cancel"));
+        // Whatever the plugin rewrites a closed dialog to (the cancel slot), it is not Quit.
+        assert!(!quit_anyway_chosen(
+            &MessageDialogResult::Custom(cancel),
+            &ok
+        ));
     }
 
     #[test]

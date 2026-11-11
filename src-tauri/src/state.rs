@@ -11,20 +11,13 @@ use std::sync::Arc;
 pub struct AppState(pub Arc<AppCore>);
 
 /// Runs the effects `settings_update` computed (autostart, tray, hotkeys, theme, language).
-/// Task 17 installs the real runner; until then [`NoEffects`] drops them.
+/// The real runner is `lifecycle::ShellEffects`; tests use fakes.
 ///
 /// `run` is called OFF the main thread (on the blocking pool, while `settings_update` holds the
 /// shell's settings lock), so an implementation must hop to the main thread itself for tray,
 /// menu and window work (`AppHandle::run_on_main_thread`), and must not call `settings_update`.
 pub trait EffectRunner: Send + Sync {
     fn run(&self, effects: Vec<Effect>);
-}
-
-/// An [`EffectRunner`] that does nothing.
-pub struct NoEffects;
-
-impl EffectRunner for NoEffects {
-    fn run(&self, _effects: Vec<Effect>) {}
 }
 
 /// Everything besides the core that the commands need: the dialogs and what they granted, the
