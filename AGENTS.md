@@ -158,6 +158,10 @@ change is done.
   mutating call with `Quitting` while `lock` and `flush` keep working. The master password lives
   only in the session as a `SecretString`. Tests use `mypass_session::testing::fast_database`
   (Argon2id 8 MiB, 1 pass) so saves stay fast.
+- **Backups.** `mypass_session::backups::BackupManager` copies the on-disk vault bytes to
+  `<backups_dir>/<vault_id>/backup-<unix_secs>[-<n>].kdbx` before it is overwritten (first write of
+  a session always, then per `backupInterval`), keeps the newest `backupCount`, and never blocks a
+  save: a failure is recorded in `last-failure.json` and cleared by the next success.
 - **Platform seam.** Everything OS-specific goes through `mypass_platform::Platform` (trait objects,
   built by `mypass_platform::current`) and every on-disk location through `AppPaths`. Tests use
   `mypass_platform::testing::fake_platform()` under the `test-util` feature; no non-ignored test touches the

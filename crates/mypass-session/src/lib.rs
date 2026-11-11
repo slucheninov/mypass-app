@@ -3,6 +3,7 @@
 //! This crate has no Tauri dependency, so it is testable without a window server. Every timing
 //! rule runs through [`scheduler::Scheduler`]; tests drive it with [`scheduler::ManualScheduler`].
 
+pub mod backups;
 pub mod scheduler;
 pub mod session;
 pub mod settings;
