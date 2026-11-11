@@ -10,7 +10,7 @@
 
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
@@ -101,7 +101,12 @@ const PURGE_THRESHOLD: usize = 64;
 
 /// The production scheduler: one named worker thread waiting on a `Condvar` for the earliest due
 /// job of a binary heap. Jobs run on the worker, outside the lock. Dropping the last handle stops
-/// the worker (queued jobs are discarded).
+/// the worker (queued jobs are discarded). A panicking job is contained and the worker goes on.
+///
+/// Cancellation is checked when the job is popped, not while it runs: a `cancel` that lands
+/// between that check and the call still lets the job run once. Jobs must therefore re-check the
+/// session state they act on (for example, an auto-lock job checks that the session is still
+/// unlocked and still idle) instead of trusting that a cancelled timer never fires.
 pub struct ThreadScheduler {
     shared: Arc<ThreadShared>,
 }
@@ -210,7 +215,8 @@ struct ManualState {
 }
 
 /// The test scheduler: nothing happens until [`ManualScheduler::advance`], which runs every job
-/// that becomes due, inline and in order, moving both clocks to each job's due time first.
+/// that becomes due, inline and in order, moving both clocks to each job's due time first. A
+/// panicking job panics `advance` (test support only; production uses [`ThreadScheduler`]).
 pub struct ManualScheduler {
     state: Mutex<ManualState>,
 }
@@ -259,7 +265,13 @@ impl ManualScheduler {
                     }
                 }
             };
-            run_job(job);
+            // Unlike the production scheduler, a panic is NOT contained: an `assert!` inside a
+            // scheduled test job must fail the test. The job is already removed and both clocks
+            // already moved, and no lock is held here, so the queue stays consistent and a later
+            // `advance` still runs the remaining jobs. Only tests use `ManualScheduler`.
+            if let Err(panic) = catch_unwind(AssertUnwindSafe(job)) {
+                resume_unwind(panic);
+            }
         }
     }
 
@@ -463,5 +475,23 @@ mod tests {
             Box::new(move || tx.send(7).unwrap()),
         );
         assert_eq!(rx.recv_timeout(Duration::from_secs(2)), Ok(7));
+    }
+
+    #[test]
+    fn manual_scheduler_advance_propagates_a_job_panic() {
+        let s = ManualScheduler::new(start());
+        let (log, job) = recorder();
+        s.schedule(
+            Duration::from_secs(1),
+            Box::new(|| panic!("job assert failed")),
+        );
+        s.schedule(Duration::from_secs(2), job(2));
+        let r = std::panic::catch_unwind(AssertUnwindSafe(|| s.advance(Duration::from_secs(5))));
+        assert!(r.is_err(), "a failing assert in a job must fail the test");
+        // The queue is consistent: the panicking job is gone, the later one still runs.
+        assert_eq!(s.pending(), 1);
+        assert_eq!(s.wall_now(), start() + Duration::from_secs(1));
+        s.advance(Duration::from_secs(4));
+        assert_eq!(*log.lock().unwrap(), vec![2]);
     }
 }

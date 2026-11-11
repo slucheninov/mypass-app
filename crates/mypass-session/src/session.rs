@@ -747,6 +747,10 @@ impl VaultSession {
     }
 
     /// An in-memory change that does NOT mark the session dirty (access times).
+    ///
+    /// Unlike [`VaultSession::mutate`], which edits a clone and swaps it in only on `Ok`, the
+    /// closure runs on the LIVE database: there is no rollback, and a panic midway leaves a
+    /// half-applied change. It must be infallible and trivial (set a timestamp, bump a counter).
     pub fn touch<R>(
         &self,
         f: impl FnOnce(&mut Database, Timestamp) -> R,

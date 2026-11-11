@@ -149,16 +149,19 @@ change is done.
   code never sleeps for a timing rule.
 - **Settings.** `mypass_session::settings::Settings` is the one persisted settings struct (every
   field, struct-level `serde(default)`, one `Default` impl), stored atomically in
-  `<config_dir>/settings.json`; a corrupt file loads as defaults and is renamed `settings.json.bad`.
+  `<config_dir>/settings.json`; a field with a bad value falls back to its default alone (nested
+  objects field by field, unknown fields ignored), only a file that is not a JSON object loads as
+  defaults and is renamed `settings.json.bad`, and a file that cannot be read is never written over
+  (the store runs degraded on defaults).
   The schema is pinned by `crates/mypass-session/tests/snapshots/settings.default.json`.
 - **Vault session.** `mypass_session::session::VaultSession` owns the one open vault (`NoVault`,
   `Locked`, `Unlocked`). Edits go through `mutate`, which edits a clone and swaps it in only on
   `Ok` (rollback by construction); `lock` saves first and keeps the encrypted bytes when that save
   fails, and until the merge pipeline lands those edits are never dropped from memory while the app
   runs but are written only when the file on disk is unchanged (otherwise `flush` returns
-  `ChangedOnDisk` without writing); observers run after the session lock is released; `begin_quit` closes every opening and
-  mutating call with `Quitting` while `lock` and `flush` keep working. The master password lives
-  only in the session as a `SecretString`. Tests use `mypass_session::testing::fast_database`
+  `ChangedOnDisk` without writing); observers run after the session lock is released;
+  `begin_quit` closes every opening and mutating call with `Quitting` while `lock` and `flush`
+  keep working. The master password lives only in the session as a `SecretString`. Tests use `mypass_session::testing::fast_database`
   (Argon2id 8 MiB, 1 pass) so saves stay fast.
 - **Backups.** `mypass_session::backups::BackupManager` copies the on-disk vault bytes to
   `<backups_dir>/<vault_id>/backup-<unix_secs>[-<n>].kdbx` before it is overwritten (first write of

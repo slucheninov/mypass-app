@@ -3,7 +3,9 @@
 //! [`Settings`] holds EVERY persisted field of the app: later stages add no field elsewhere and
 //! never keep a second settings file. It carries a struct-level `#[serde(default)]`, so a file
 //! written by an older build (missing fields) loads with each missing field at its default, and
-//! unknown old fields (for example the dropped `trayClickAction`) are ignored. The schema is
+//! unknown old fields (for example the dropped `trayClickAction`) are ignored. Loading is also
+//! field-tolerant: one field with a bad value falls back to its default alone (see
+//! [`SettingsStore::load`]), and a file that cannot be read is never written over. The schema is
 //! pinned by `settings_schema_snapshot` against `tests/snapshots/settings.default.json`.
 
 use crate::scheduler::lock;
@@ -116,9 +118,10 @@ pub enum RequireAccountPasswordWindow {
     Never,
 }
 
-/// Generator defaults remembered between sessions.
+/// Generator defaults remembered between sessions (a partial object fills the rest from the
+/// defaults).
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct GeneratorOptionsDto {
     pub length: u32,
     pub lowercase: bool,
@@ -332,6 +335,8 @@ pub enum SettingsError {
 
 struct StoreInner {
     path: Option<PathBuf>,
+    /// The file existed but could not be read at load: it is never written over (see `load`).
+    degraded: bool,
     settings: Mutex<Settings>,
 }
 
@@ -349,37 +354,58 @@ impl std::fmt::Debug for SettingsStore {
 }
 
 impl SettingsStore {
-    /// Loads `path`. A missing file gives the defaults (nothing is written until the first
-    /// change). A file that does not parse gives the defaults and is renamed `<name>.bad` (once:
-    /// afterwards the file is gone, so the next load finds no file). Any other read failure gives
-    /// the defaults and leaves the file alone.
+    /// Loads `path`.
+    ///
+    /// - A missing file gives the defaults (nothing is written until the first change).
+    /// - Loading is field-tolerant: a field whose value does not deserialize (an unknown enum
+    ///   value, a wrong type) falls back to its default ALONE, nested objects (`generator`) field
+    ///   by field, and unknown fields are ignored, so one bad value never costs `vaultPath` or the
+    ///   recent vaults.
+    /// - Only a file that is not a JSON object at all gives the defaults and is renamed
+    ///   `<name>.bad` (once: afterwards the file is gone, so the next load finds no file).
+    /// - Any other read failure (permissions, a directory in the way, a transient I/O error)
+    ///   gives the defaults in memory and marks the store degraded: the file is left alone and
+    ///   never written over for the life of this store; every persist returns
+    ///   [`SettingsError::Io`] (changes still apply in memory), and the next start reads the file
+    ///   again. Chosen over retrying the read before the first write because a retry that
+    ///   succeeds would have to merge the file with the in-memory changes.
     pub fn load(path: PathBuf) -> Self {
-        let settings = match fs::read(&path) {
-            Ok(bytes) => match serde_json::from_slice::<Settings>(&bytes) {
-                Ok(mut s) => {
+        let (settings, degraded) = match fs::read(&path) {
+            Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+                Ok(serde_json::Value::Object(fields)) => {
+                    let mut s = tolerant_settings(fields);
                     s.normalize();
-                    s
+                    (s, false)
                 }
-                Err(_) => {
+                _ => {
                     let mut bad = path.clone().into_os_string();
                     bad.push(".bad");
                     // Best effort: if even the rename fails, the next save overwrites the file.
                     let _ = fs::rename(&path, PathBuf::from(bad));
-                    Settings::default()
+                    (Settings::default(), false)
                 }
             },
-            Err(_) => Settings::default(),
+            Err(e) if e.kind() == ErrorKind::NotFound => (Settings::default(), false),
+            Err(_) => (Settings::default(), true),
         };
         Self(Arc::new(StoreInner {
             path: Some(path),
+            degraded,
             settings: Mutex::new(settings),
         }))
+    }
+
+    /// `true` when the settings file existed but could not be read at load: the store runs on
+    /// defaults and refuses to write over that file (see [`SettingsStore::load`]).
+    pub fn is_degraded(&self) -> bool {
+        self.0.degraded
     }
 
     /// A store that never touches the disk (tests and previews).
     pub fn in_memory() -> Self {
         Self(Arc::new(StoreInner {
             path: None,
+            degraded: false,
             settings: Mutex::new(Settings::default()),
         }))
     }
@@ -428,6 +454,11 @@ impl SettingsStore {
             return Ok(());
         };
         let io = |e: String| SettingsError::Io(e);
+        if self.0.degraded {
+            return Err(io(
+                "the settings file could not be read at startup and is left untouched".into(),
+            ));
+        }
         let mut text = serde_json::to_vec_pretty(settings).map_err(|e| io(e.to_string()))?;
         text.push(b'\n');
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -439,6 +470,51 @@ impl SettingsStore {
         }
         mypass_kdbx::write_atomic(path, &text).map_err(|e| io(e.to_string()))
     }
+}
+
+/// Escapes one JSON Pointer segment (RFC 6901).
+fn pointer_segment(key: &str) -> String {
+    key.replace('~', "~0").replace('/', "~1")
+}
+
+/// Puts `value` at `pointer` of `root` (the defaults as JSON) and keeps it only when the whole
+/// object still deserializes as [`Settings`]; otherwise the default stays.
+fn try_set(root: &mut serde_json::Value, pointer: &str, value: serde_json::Value) {
+    let Some(slot) = root.pointer_mut(pointer) else {
+        return;
+    };
+    let previous = std::mem::replace(slot, value);
+    if serde_json::from_value::<Settings>(root.clone()).is_err() {
+        if let Some(slot) = root.pointer_mut(pointer) {
+            *slot = previous;
+        }
+    }
+}
+
+/// Builds [`Settings`] from a parsed file field by field: every known field that deserializes is
+/// taken, every other one keeps its default, nested objects are merged one level down, and
+/// unknown fields are ignored.
+fn tolerant_settings(fields: serde_json::Map<String, serde_json::Value>) -> Settings {
+    let Ok(mut root) = serde_json::to_value(Settings::default()) else {
+        return Settings::default();
+    };
+    for (key, value) in fields {
+        let pointer = format!("/{}", pointer_segment(&key));
+        match (root.pointer(&pointer), value) {
+            (None, _) => {}
+            (Some(serde_json::Value::Object(_)), serde_json::Value::Object(nested)) => {
+                for (sub, v) in nested {
+                    try_set(
+                        &mut root,
+                        &format!("{pointer}/{}", pointer_segment(&sub)),
+                        v,
+                    );
+                }
+            }
+            (Some(_), value) => try_set(&mut root, &pointer, value),
+        }
+    }
+    serde_json::from_value(root).unwrap_or_default()
 }
 
 fn checked_shortcut(value: String, field: &'static str) -> Result<String, SettingsError> {
@@ -907,5 +983,111 @@ mod tests {
             })
             .unwrap();
         assert_eq!(s.shortcut_lock, "");
+    }
+
+    fn load_text(text: &str) -> (tempfile::TempDir, SettingsStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, text).unwrap();
+        let store = SettingsStore::load(path);
+        (dir, store)
+    }
+
+    #[test]
+    fn one_bad_field_falls_back_alone_and_keeps_the_vault_path() {
+        let (dir, store) = load_text(
+            r#"{"language":"klingon","theme":"dark","backupCount":"many",
+                "vaultPath":"/v.kdbx","recentVaults":["/v.kdbx"]}"#,
+        );
+        let s = store.get();
+        assert_eq!(s.language, Language::System);
+        assert_eq!(s.backup_count, 10);
+        assert_eq!(s.theme, Theme::Dark);
+        assert_eq!(s.vault_path.as_deref(), Some("/v.kdbx"));
+        assert_eq!(s.recent_vaults, vec!["/v.kdbx".to_owned()]);
+        assert!(!dir.path().join("settings.json.bad").exists());
+        assert!(!store.is_degraded());
+    }
+
+    #[test]
+    fn partial_generator_keeps_other_fields_at_defaults() {
+        let (_dir, store) = load_text(r#"{"generator":{"length":30}}"#);
+        let g = store.get().generator;
+        assert_eq!(
+            g,
+            GeneratorOptionsDto {
+                length: 30,
+                ..GeneratorOptionsDto::default()
+            }
+        );
+        let (_dir, store) = load_text(r#"{"generator":{"length":"x","digits":false}}"#);
+        let g = store.get().generator;
+        assert_eq!(g.length, 20);
+        assert!(!g.digits);
+        assert!(g.symbols);
+    }
+
+    #[test]
+    fn newer_file_with_extra_fields_loads() {
+        let (dir, store) = load_text(
+            r#"{"futureField":1,"theme":"light","generator":{"length":12,"futureFlag":true},
+                "vaultPath":"/v.kdbx"}"#,
+        );
+        let s = store.get();
+        assert_eq!(s.theme, Theme::Light);
+        assert_eq!(s.generator.length, 12);
+        assert_eq!(s.vault_path.as_deref(), Some("/v.kdbx"));
+        assert!(!dir.path().join("settings.json.bad").exists());
+    }
+
+    #[test]
+    fn json_that_is_not_an_object_goes_to_bad() {
+        let (dir, store) = load_text("[1, 2]");
+        assert_eq!(store.get(), Settings::default());
+        assert!(dir.path().join("settings.json.bad").exists());
+        assert!(!dir.path().join("settings.json").exists());
+    }
+
+    #[test]
+    fn unreadable_path_is_never_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        // A directory where the file belongs: reading fails with something other than NotFound.
+        fs::create_dir(&path).unwrap();
+        let store = SettingsStore::load(path.clone());
+        assert!(store.is_degraded());
+        assert_eq!(store.get(), Settings::default());
+        let r = store.update(SettingsPatch {
+            theme: Some(Theme::Dark),
+            ..SettingsPatch::default()
+        });
+        assert!(matches!(r, Err(SettingsError::Io(_))), "{r:?}");
+        assert_eq!(store.get().theme, Theme::Dark);
+        assert!(path.is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_file_is_not_replaced_by_defaults() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let original = br#"{"vaultPath":"/real.kdbx"}"#;
+        fs::write(&path, original).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read(&path).is_ok() {
+            // Running as a user that ignores permissions: the failure cannot be produced here.
+            return;
+        }
+        let store = SettingsStore::load(path.clone());
+        assert!(store.is_degraded());
+        let r = store.update(SettingsPatch {
+            theme: Some(Theme::Dark),
+            ..SettingsPatch::default()
+        });
+        assert!(matches!(r, Err(SettingsError::Io(_))), "{r:?}");
+        store.remember_vault("/other.kdbx");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), original);
     }
 }
