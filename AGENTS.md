@@ -171,6 +171,12 @@ change is done.
   `<backups_dir>/<vault_id>/backup-<unix_secs>[-<n>].kdbx` before it is overwritten (first write of
   a session always, then per `backupInterval`), keeps the newest `backupCount`, and never blocks a
   save: a failure is recorded in `last-failure.json` and cleared by the next success.
+- **Auto-lock and clipboard clear.** `mypass_session::autolock::AutoLock` locks on the idle
+  timer, on sleep and screen lock (per settings) and, after `Wake`, when the wall-clock idle time
+  ran out; platform event sinks only hand events to the scheduler (`AutoLock::event_sink`),
+  because a sink must never block and `lock` waits for an in-flight save.
+  `mypass_session::clipboard_service::ClipboardService` always schedules the clear and clears
+  only through `clear_if_unchanged`, so a later copy by the user is never wiped.
 - **Platform seam.** Everything OS-specific goes through `mypass_platform::Platform` (trait objects,
   built by `mypass_platform::current`) and every on-disk location through `AppPaths`. Tests use
   `mypass_platform::testing::fake_platform()` under the `test-util` feature; no non-ignored test touches the
