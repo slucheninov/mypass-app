@@ -4,6 +4,7 @@
 //! explicit click), `entry_edit_model` (the editor, dropped by the UI on close, save and lock)
 //! and `entry_totp` (a display code).
 
+use super::{blocking, ensure_unlocked};
 use crate::files::FileGrants;
 use crate::state::{AppState, ShellState};
 use mypass_session::dto::{
@@ -84,16 +85,18 @@ pub fn entry_history(state: State<'_, AppState>, id: String) -> Result<Vec<Histo
 }
 
 /// Saves the model. An `AttachmentOp::Add` carries the token `attachment_pick` returned in its
-/// `path`; it is swapped for the real path here. While the vault is locked the model goes to the
-/// facade unchanged, which refuses it with `Locked` before reading anything.
+/// `path`; it is swapped for the real path here.
+///
+/// No webview string ever reaches the facade as a path: a locked session is refused here with
+/// `Locked`, and every `Add` is redeemed afterwards whatever the state is by then (an unlock
+/// between the check and the call cannot let a raw path through; an unknown token is
+/// `InvalidInput`).
 pub fn save(
     core: &mypass_session::AppCore,
     grants: &FileGrants,
     mut model: EntryEditModel,
 ) -> Result<String, ApiError> {
-    if !core.session.is_unlocked() {
-        return core.entry_save(model);
-    }
+    ensure_unlocked(core)?;
     let taken = grants.redeem(&mut model.attachment_ops)?;
     let saved = core.entry_save(model);
     if saved.is_err() {
@@ -105,18 +108,21 @@ pub fn save(
 
 #[tauri::command]
 #[specta::specta]
-pub fn entry_save(
+pub async fn entry_save(
     state: State<'_, AppState>,
     shell: State<'_, ShellState>,
     model: EntryEditModel,
 ) -> Result<String, ApiError> {
-    save(&state.0, &shell.grants, model)
+    let core = state.0.clone();
+    let grants = shell.grants.clone();
+    blocking(move || save(&core, &grants, model)).await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn entry_delete(state: State<'_, AppState>, id: String) -> Result<(), ApiError> {
-    state.0.entry_delete(&id)
+pub async fn entry_delete(state: State<'_, AppState>, id: String) -> Result<(), ApiError> {
+    let core = state.0.clone();
+    blocking(move || core.entry_delete(&id)).await
 }
 
 #[tauri::command]
@@ -131,14 +137,16 @@ pub fn entry_restore(
 
 #[tauri::command]
 #[specta::specta]
-pub fn entry_purge(state: State<'_, AppState>, id: String) -> Result<(), ApiError> {
-    state.0.entry_purge(&id)
+pub async fn entry_purge(state: State<'_, AppState>, id: String) -> Result<(), ApiError> {
+    let core = state.0.clone();
+    blocking(move || core.entry_purge(&id)).await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn entry_empty_bin(state: State<'_, AppState>) -> Result<u32, ApiError> {
-    state.0.entry_empty_bin()
+pub async fn entry_empty_bin(state: State<'_, AppState>) -> Result<u32, ApiError> {
+    let core = state.0.clone();
+    blocking(move || core.entry_empty_bin()).await
 }
 
 #[tauri::command]
@@ -274,6 +282,22 @@ mod tests {
         m.attachment_ops = vec![add("nope")];
         let err = save(&w.core, &grants, m).unwrap_err();
         assert!(matches!(err.code, ErrorCode::NoVault | ErrorCode::Locked));
+    }
+
+    #[test]
+    fn locked_session_with_a_real_path_never_reaches_the_facade_with_it() {
+        let w = open_world();
+        let grants = FileGrants::default();
+        let secret_file = w.file("private.txt", b"do not read me");
+        let model = model_with(&w, vec![add(secret_file.to_str().unwrap())]);
+        w.core.vault_lock().unwrap();
+        let err = save(&w.core, &grants, model.clone()).unwrap_err();
+        assert_eq!(err.code, ErrorCode::Locked);
+        // Once unlocked the same raw path is still no token: nothing was attached or saved.
+        w.core.vault_unlock(crate::testing::pw("pw")).unwrap();
+        let err = save(&w.core, &grants, model).unwrap_err();
+        assert_eq!(err.code, ErrorCode::InvalidInput);
+        assert!(w.core.entry_list(root_query(&w)).unwrap().is_empty());
     }
 
     fn root_query(w: &crate::testing::World) -> EntryQuery {

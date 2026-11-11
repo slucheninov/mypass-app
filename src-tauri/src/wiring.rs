@@ -11,8 +11,8 @@ use crate::shell::TauriWindowOps;
 use crate::state::{AppState, NoEffects, ShellState, SystemProcessLookup};
 use mypass_session::clipboard_service::ClearedSink;
 use mypass_session::session::SessionEvent;
-use mypass_session::{AppCore, AppPaths, SaveStatus, SessionStatus};
-use std::sync::Arc;
+use mypass_session::{AppCore, AppPaths, SaveStatus, SessionState, SessionStatus};
+use std::sync::{Arc, Mutex, PoisonError};
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
 
@@ -42,6 +42,37 @@ fn emit(handle: &AppHandle, out: Outgoing) {
     };
 }
 
+/// Forgets the file grants whenever the vault locks, closes or is switched, so a token minted
+/// for one session can never be redeemed in another (auto-lock and every other path through the
+/// session lock end here too).
+pub struct GrantsReset {
+    grants: FileGrants,
+    last_path: Mutex<Option<String>>,
+}
+
+impl GrantsReset {
+    pub fn new(grants: FileGrants) -> Self {
+        Self {
+            grants,
+            last_path: Mutex::new(None),
+        }
+    }
+
+    pub fn on_event(&self, event: &SessionEvent) {
+        let SessionEvent::StateChanged(status) = event else {
+            return;
+        };
+        let mut last = self
+            .last_path
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if status.state != SessionState::Unlocked || *last != status.vault_path {
+            self.grants.clear();
+        }
+        last.clone_from(&status.vault_path);
+    }
+}
+
 struct EmitCleared(AppHandle);
 
 impl ClearedSink for EmitCleared {
@@ -59,9 +90,12 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let mut core = AppCore::new(paths, platform)?;
     core.set_process_lookup(Arc::new(SystemProcessLookup));
 
+    let grants = FileGrants::default();
+    let reset = GrantsReset::new(grants.clone());
     let observer_handle = handle.clone();
     core.session
         .add_observer(Arc::new(move |event: &SessionEvent| {
+            reset.on_event(event);
             emit(&observer_handle, outgoing(event));
         }));
     core.clipboard
@@ -70,7 +104,7 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(AppState(Arc::new(core)));
     app.manage(ShellState {
         picker: Arc::new(TauriFilePicker(handle.clone())),
-        grants: FileGrants::default(),
+        grants,
         windows: Arc::new(TauriWindowOps(handle)),
         effects: Arc::new(NoEffects),
     });
@@ -80,6 +114,69 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn world_with_reset() -> (crate::testing::World, FileGrants) {
+        let w = crate::testing::world();
+        let grants = FileGrants::default();
+        let reset = GrantsReset::new(grants.clone());
+        w.core
+            .session
+            .add_observer(Arc::new(move |e: &SessionEvent| reset.on_event(e)));
+        (w, grants)
+    }
+
+    fn open(w: &crate::testing::World) {
+        w.core
+            .session
+            .create_vault_with(
+                &w.path,
+                crate::testing::pw("pw"),
+                mypass_session::testing::fast_database("T"),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn lock_forgets_tokens_and_the_remembered_csv() {
+        let (w, grants) = world_with_reset();
+        open(&w);
+        let file = w.file("a.txt", b"a");
+        let token = grants.grant_tokens(vec![file.clone()]).remove(0).token;
+        grants.set_csv(Some(file));
+        w.core.vault_lock().unwrap();
+        let mut ops = vec![mypass_session::dto::AttachmentOp::Add { path: token }];
+        assert!(
+            grants.redeem(&mut ops).is_err(),
+            "token rejected after lock"
+        );
+        w.core.vault_unlock(crate::testing::pw("pw")).unwrap();
+        // The CSV path did not survive the lock: a commit has nothing to import.
+        let err = crate::commands::import::commit(&w.core, &grants, &w.root()).unwrap_err();
+        assert_eq!(err.code, mypass_session::ErrorCode::InvalidInput);
+    }
+
+    #[test]
+    fn a_status_event_of_the_same_unlocked_vault_keeps_the_grants() {
+        let (w, grants) = world_with_reset();
+        open(&w);
+        let token = grants
+            .grant_tokens(vec![w.file("a.txt", b"a")])
+            .remove(0)
+            .token;
+        let reset = GrantsReset::new(grants.clone());
+        let status = w.core.session.status();
+        reset.on_event(&SessionEvent::StateChanged(status.clone()));
+        // Re-grant after the first event (the first sight of a path counts as a switch).
+        let token2 = grants
+            .grant_tokens(vec![w.file("b.txt", b"b")])
+            .remove(0)
+            .token;
+        reset.on_event(&SessionEvent::StateChanged(status));
+        let mut ops = vec![mypass_session::dto::AttachmentOp::Add { path: token2 }];
+        assert!(grants.redeem(&mut ops).is_ok());
+        let mut old = vec![mypass_session::dto::AttachmentOp::Add { path: token }];
+        assert!(grants.redeem(&mut old).is_err());
+    }
 
     #[test]
     fn session_events_map_one_to_one() {

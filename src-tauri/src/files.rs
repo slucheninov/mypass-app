@@ -80,10 +80,30 @@ pub struct FakeFilePicker {
     pub save: Mutex<Option<PathBuf>>,
     /// The file names `save_as` was asked to suggest.
     pub save_names: Mutex<Vec<String>>,
+    /// Every dialog opened, by name (`attachments`, `csv`, `save`).
+    pub dialogs: Mutex<Vec<&'static str>>,
+}
+
+impl FakeFilePicker {
+    fn opened(&self, which: &'static str) {
+        self.dialogs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(which);
+    }
+
+    /// How many dialogs were opened.
+    pub fn dialog_count(&self) -> usize {
+        self.dialogs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len()
+    }
 }
 
 impl FilePicker for FakeFilePicker {
     fn pick_attachments(&self) -> Vec<PathBuf> {
+        self.opened("attachments");
         self.attachments
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -91,6 +111,7 @@ impl FilePicker for FakeFilePicker {
     }
 
     fn pick_csv(&self) -> Option<PathBuf> {
+        self.opened("csv");
         self.csv
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -98,6 +119,7 @@ impl FilePicker for FakeFilePicker {
     }
 
     fn save_as(&self, file_name: &str) -> Option<PathBuf> {
+        self.opened("save");
         self.save_names
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -209,6 +231,11 @@ impl FileGrants {
                 g.tokens.pop_front();
             }
         });
+    }
+
+    /// Forgets every token and the remembered CSV file (the vault locked or was switched).
+    pub fn clear(&self) {
+        self.with(|g| *g = Grants::default());
     }
 
     /// Remembers the CSV file of the last preview (replacing an earlier one).

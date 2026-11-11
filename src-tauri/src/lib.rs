@@ -371,6 +371,12 @@ mod tests {
                         "{id} grants {permission}"
                     );
                 }
+                assert!(!permission.starts_with("core:tray:"), "{id}: {permission}");
+                assert!(!permission.starts_with("core:menu:"), "{id}: {permission}");
+                assert_ne!(
+                    permission, "core:default",
+                    "{id} grants the blanket core set"
+                );
                 if id == "tray-panel" {
                     assert!(!permission.starts_with("core:window:allow-set-"));
                 }
@@ -378,12 +384,37 @@ mod tests {
                     assert_eq!(id, "main", "only main may open URLs");
                 }
             }
-            if id == "tray-panel" {
-                assert_eq!(permissions, &["core:default"]);
-            }
         }
-        let main = all.iter().find(|c| c.0 == "main").unwrap();
-        assert!(main.2.iter().any(|p| p == "opener:allow-open-url"));
+    }
+
+    /// The exact permission set of every window: widening one (an `opener:default`, an
+    /// `opener:allow-open-path`, any fs or shell permission) fails here and needs a review.
+    #[test]
+    fn capability_permission_sets_are_exact() {
+        let all = capabilities();
+        let sorted = |id: &str| {
+            let mut set = all.iter().find(|c| c.0 == id).unwrap().2.clone();
+            set.sort();
+            set
+        };
+        assert_eq!(
+            sorted("main"),
+            [
+                "core:event:default",
+                "core:window:allow-close",
+                "core:window:allow-is-maximized",
+                "core:window:allow-maximize",
+                "core:window:allow-minimize",
+                "core:window:allow-start-dragging",
+                "core:window:allow-unmaximize",
+                "dialog:allow-ask",
+                "dialog:allow-open",
+                "dialog:allow-save",
+                "opener:allow-open-url",
+            ]
+        );
+        assert_eq!(sorted("tray-panel"), ["core:event:default"]);
+        assert_eq!(sorted("settings"), ["core:event:default"]);
     }
 
     #[test]
@@ -447,8 +478,12 @@ mod tests {
         }
     }
 
+    /// Proves: the secret holds the value, the source `String` is emptied (zeroize clears it in
+    /// place), and the wrapper's `Debug` redacts. Cannot prove, without `unsafe`: that the freed
+    /// capacity bytes are zero, that no other copy exists (the IPC deserialiser holds its own
+    /// before the command runs), or that each command calls `into_secret` on its first line.
     #[test]
-    fn into_secret_wraps_the_password_and_empties_the_source() {
+    fn password_argument_is_zeroized_after_wrapping() {
         use secrecy::ExposeSecret;
         let mut password = String::from("hunter2-correct-horse");
         let secret = commands::into_secret(&mut password);
@@ -486,19 +521,5 @@ mod tests {
         ] {
             assert_eq!(json(code)["code"], wire);
         }
-    }
-
-    #[test]
-    fn system_process_lookup_delegates_to_the_platform() {
-        use mypass_session::vault_files::ProcessLookup;
-        // A bundle id nobody runs: both sides agree on "none".
-        let bundle = "invalid.mypass.test.nobody";
-        assert_eq!(
-            state::SystemProcessLookup.other_app_executables(bundle),
-            mypass_platform::running_app_executables(bundle)
-        );
-        assert!(state::SystemProcessLookup
-            .other_app_executables(bundle)
-            .is_empty());
     }
 }

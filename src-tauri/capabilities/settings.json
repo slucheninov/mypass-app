@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "settings",
-  "description": "Permissions of the settings window (vault open and create dialogs). No fs, shell, http or clipboard access.",
+  "description": "Permissions of the settings window: events only (vault dialogs live in the main window).",
   "windows": ["settings"],
-  "permissions": ["core:default", "dialog:allow-open", "dialog:allow-save"]
+  "permissions": ["core:event:default"]
 }

@@ -1,5 +1,6 @@
 //! `group_*`.
 
+use super::blocking;
 use crate::state::AppState;
 use mypass_session::ApiError;
 use tauri::State;
@@ -40,6 +41,7 @@ pub fn group_move(
 
 #[tauri::command]
 #[specta::specta]
-pub fn group_delete(state: State<'_, AppState>, id: String) -> Result<(), ApiError> {
-    state.0.group_delete(&id)
+pub async fn group_delete(state: State<'_, AppState>, id: String) -> Result<(), ApiError> {
+    let core = state.0.clone();
+    blocking(move || core.group_delete(&id)).await
 }

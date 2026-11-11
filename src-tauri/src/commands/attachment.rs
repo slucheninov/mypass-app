@@ -9,10 +9,37 @@ use crate::state::{AppState, ShellState};
 use mypass_session::{ApiError, AppCore};
 use tauri::State;
 
+/// The file name offered to the save dialog: the attachment's name is vault content (a hostile
+/// vault may carry `..\\..\\x.bat`), so only its last component survives. Splits on both `/`
+/// and `\`, drops control characters, strips leading dots and a Windows drive prefix, and falls
+/// back to `attachment` when nothing is left.
+pub fn sanitize_file_name(name: &str) -> String {
+    let last = name.rsplit(['/', '\\']).next().unwrap_or_default();
+    let cleaned: String = last.chars().filter(|c| !c.is_control()).collect();
+    // A drive prefix survives the split only as `C:name` (the separator was the colon's
+    // neighbour); drop `X:` at the start.
+    let mut chars = cleaned.chars();
+    let without_drive = match (chars.next(), chars.next()) {
+        (Some(letter), Some(':')) if letter.is_ascii_alphabetic() => chars.as_str(),
+        _ => cleaned.as_str(),
+    };
+    let trimmed = without_drive.trim_start_matches('.').trim();
+    if trimmed.is_empty() {
+        "attachment".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
 /// Opens the attachment dialog and grants a token per chosen file. A cancelled dialog is an
-/// empty list.
-pub fn pick(picker: &dyn FilePicker, grants: &FileGrants) -> Vec<PickedFile> {
-    grants.grant_tokens(picker.pick_attachments())
+/// empty list. A locked session is refused before the dialog opens.
+pub fn pick(
+    core: &AppCore,
+    picker: &dyn FilePicker,
+    grants: &FileGrants,
+) -> Result<Vec<PickedFile>, ApiError> {
+    ensure_unlocked(core)?;
+    Ok(grants.grant_tokens(picker.pick_attachments()))
 }
 
 /// Opens the save dialog and writes the attachment there; `false` when the user cancelled.
@@ -23,7 +50,7 @@ pub fn export(
     name: &str,
 ) -> Result<bool, ApiError> {
     ensure_unlocked(core)?;
-    let Some(dest) = picker.save_as(name) else {
+    let Some(dest) = picker.save_as(&sanitize_file_name(name)) else {
         return Ok(false);
     };
     core.attachment_export(entry_id, name, &dest.to_string_lossy())?;
@@ -32,10 +59,14 @@ pub fn export(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn attachment_pick(shell: State<'_, ShellState>) -> Result<Vec<PickedFile>, ApiError> {
+pub async fn attachment_pick(
+    state: State<'_, AppState>,
+    shell: State<'_, ShellState>,
+) -> Result<Vec<PickedFile>, ApiError> {
+    let core = state.0.clone();
     let picker = shell.picker.clone();
     let grants = shell.grants.clone();
-    blocking(move || Ok(pick(picker.as_ref(), &grants))).await
+    blocking(move || pick(&core, picker.as_ref(), &grants)).await
 }
 
 #[tauri::command]
@@ -62,10 +93,53 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
+    fn sanitize_file_name_table() {
+        for (input, expected) in [
+            ("..\\..\\x.bat", "x.bat"),
+            ("/etc/passwd", "passwd"),
+            ("C:\\a\\b.txt", "b.txt"),
+            ("C:b.txt", "b.txt"),
+            ("..", "attachment"),
+            ("", "attachment"),
+            ("dir/", "attachment"),
+            (".hidden", "hidden"),
+            ("a\u{0}b\u{7}.txt", "ab.txt"),
+            ("plain.txt", "plain.txt"),
+            (
+                "caf\u{e9} \u{43f}\u{440}.pdf",
+                "caf\u{e9} \u{43f}\u{440}.pdf",
+            ),
+        ] {
+            assert_eq!(sanitize_file_name(input), expected, "input {input:?}");
+        }
+    }
+
+    #[test]
+    fn the_save_dialog_gets_the_sanitised_name() {
+        let w = open_world();
+        let id = entry_with_attachment(&w);
+        let picker = FakeFilePicker::default();
+        // The attachment is called in.txt; a hostile caller asks for another name: the dialog
+        // still only sees the safe last component (the facade then refuses the unknown name).
+        let _ = export(&w.core, &picker, &id, "..\\..\\evil.bat");
+        assert_eq!(*picker.save_names.lock().unwrap(), vec!["evil.bat"]);
+    }
+
+    #[test]
     fn cancelled_pick_returns_nothing_and_grants_nothing() {
+        let w = open_world();
         let picker = FakeFilePicker::default();
         let grants = FileGrants::default();
-        assert!(pick(&picker, &grants).is_empty());
+        assert!(pick(&w.core, &picker, &grants).unwrap().is_empty());
+    }
+
+    #[test]
+    fn pick_while_locked_opens_no_dialog() {
+        let w = world();
+        let picker = FakeFilePicker::default();
+        let err = pick(&w.core, &picker, &FileGrants::default()).unwrap_err();
+        assert!(matches!(err.code, ErrorCode::NoVault | ErrorCode::Locked));
+        assert_eq!(picker.dialog_count(), 0);
     }
 
     #[test]
@@ -78,7 +152,7 @@ mod tests {
             .unwrap()
             .push(w.file("report.pdf", b"12345"));
         let grants = FileGrants::default();
-        let picked = pick(&picker, &grants);
+        let picked = pick(&w.core, &picker, &grants).unwrap();
         assert_eq!(picked.len(), 1);
         assert_eq!(picked[0].name, "report.pdf");
         assert!((picked[0].size - 5.0).abs() < f64::EPSILON);

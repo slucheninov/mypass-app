@@ -7,8 +7,9 @@ use tauri::State;
 
 #[tauri::command]
 #[specta::specta]
-pub fn backup_list(state: State<'_, AppState>) -> Result<BackupStatus, ApiError> {
-    state.0.backup_list()
+pub async fn backup_list(state: State<'_, AppState>) -> Result<BackupStatus, ApiError> {
+    let core = state.0.clone();
+    blocking(move || core.backup_list()).await
 }
 
 #[tauri::command]

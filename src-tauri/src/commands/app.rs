@@ -15,8 +15,13 @@ pub const SETTINGS_WINDOW: &str = "settings";
 
 /// The facade's info with the version of THIS app (the facade reports its own crate's).
 pub fn info(core: &AppCore) -> AppInfo {
+    info_with_version(core, env!("CARGO_PKG_VERSION"))
+}
+
+/// [`info`] with the app version given (so a test can tell it from the facade's own).
+pub fn info_with_version(core: &AppCore, version: &str) -> AppInfo {
     AppInfo {
-        version: env!("CARGO_PKG_VERSION").to_owned(),
+        version: version.to_owned(),
         ..core.app_info()
     }
 }
@@ -109,14 +114,14 @@ mod tests {
     #[test]
     fn app_info_reports_the_app_version() {
         let w = world();
-        let info = info(&w.core);
-        assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
-        assert_ne!(
-            w.core.app_info().version,
-            "",
-            "the facade still reports its own"
-        );
-        assert_eq!(info.os, w.core.app_info().os);
+        let facade = w.core.app_info();
+        let info = info_with_version(&w.core, "9.9.9-sentinel");
+        assert_eq!(info.version, "9.9.9-sentinel");
+        assert_ne!(info.version, facade.version);
+        assert_eq!(info.os, facade.os);
+        assert_eq!(info.device_unlock_available, facade.device_unlock_available);
+        // The command uses this app's own package version.
+        assert_eq!(super::info(&w.core).version, env!("CARGO_PKG_VERSION"));
     }
 
     #[test]

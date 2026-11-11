@@ -51,8 +51,10 @@ pub async fn vault_unlock(
 
 #[tauri::command]
 #[specta::specta]
-pub fn vault_lock(state: State<'_, AppState>) -> Result<(), ApiError> {
-    state.0.vault_lock()
+pub async fn vault_lock(state: State<'_, AppState>) -> Result<(), ApiError> {
+    // Locking saves first (key derivation and a write), so never on the main thread.
+    let core = state.0.clone();
+    blocking(move || core.vault_lock()).await
 }
 
 /// The folders searched for `.kdbx` files: home, Documents, Desktop and Downloads (each once).
@@ -88,14 +90,16 @@ pub async fn vault_find_files(
 
 #[tauri::command]
 #[specta::specta]
-pub fn vault_recent(state: State<'_, AppState>) -> Result<Vec<RecentVaultDto>, ApiError> {
-    state.0.vault_recent()
+pub async fn vault_recent(state: State<'_, AppState>) -> Result<Vec<RecentVaultDto>, ApiError> {
+    let core = state.0.clone();
+    blocking(move || core.vault_recent()).await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn vault_forget(state: State<'_, AppState>, path: String) -> Result<(), ApiError> {
-    state.0.vault_forget(&path)
+pub async fn vault_forget(state: State<'_, AppState>, path: String) -> Result<(), ApiError> {
+    let core = state.0.clone();
+    blocking(move || core.vault_forget(&path)).await
 }
 
 #[tauri::command]

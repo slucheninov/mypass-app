@@ -1,5 +1,6 @@
 //! `import_*`: CSV import. The file is chosen in a native dialog opened from Rust and remembered
-//! in app state; the webview never names a path.
+//! in app state; the webview never names a path. A locked session is refused before any dialog
+//! opens.
 
 use super::{blocking, ensure_unlocked};
 use crate::files::{FileGrants, FilePicker};
@@ -16,6 +17,7 @@ pub fn preview(
     picker: &dyn FilePicker,
     grants: &FileGrants,
 ) -> Result<Option<CsvPreview>, ApiError> {
+    ensure_unlocked(core)?;
     let Some(path) = picker.pick_csv() else {
         return Ok(None);
     };
@@ -88,6 +90,15 @@ mod tests {
         assert!(preview(&w.core, &picker, &grants).unwrap().is_none());
         let err = commit(&w.core, &grants, &w.root()).unwrap_err();
         assert_eq!(err.code, ErrorCode::InvalidInput);
+    }
+
+    #[test]
+    fn preview_while_locked_opens_no_dialog() {
+        let w = world();
+        let picker = FakeFilePicker::default();
+        let err = preview(&w.core, &picker, &FileGrants::default()).unwrap_err();
+        assert!(matches!(err.code, ErrorCode::NoVault | ErrorCode::Locked));
+        assert_eq!(picker.dialog_count(), 0);
     }
 
     #[test]

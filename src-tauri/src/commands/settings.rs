@@ -1,5 +1,6 @@
 //! `settings_*`.
 
+use super::blocking;
 use crate::events::SettingsChanged;
 use crate::shell::{settings_effects, Effect};
 use crate::state::{AppState, ShellState};
@@ -24,13 +25,15 @@ pub fn update(core: &AppCore, patch: SettingsPatch) -> Result<(Settings, Vec<Eff
 
 #[tauri::command]
 #[specta::specta]
-pub fn settings_update(
+pub async fn settings_update(
     app: AppHandle,
     state: State<'_, AppState>,
     shell: State<'_, ShellState>,
     patch: SettingsPatch,
 ) -> Result<Settings, ApiError> {
-    let (new, effects) = update(&state.0, patch)?;
+    // The settings file is written atomically, so off the main thread.
+    let core = state.0.clone();
+    let (new, effects) = blocking(move || update(&core, patch)).await?;
     // Task 17's runner executes them; the default drops them.
     shell.effects.run(effects);
     // A window that is gone is not an error of the update.
