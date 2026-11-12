@@ -318,7 +318,7 @@
   </header>
 
   {#if items.length === 0}
-    {#if !entries.loading}
+    {#if entries.loaded}
       <div class="empty" data-testid="empty-state" data-scope={empty.scope} role="status">
         <p class="heading" data-part="heading">{empty.heading}</p>
         {#if empty.hint}<p class="hint">{empty.hint}</p>{/if}
@@ -345,7 +345,11 @@
           tabindex="-1"
           aria-selected={entry.id === selectedId}
           draggable="true"
-          onclick={() => select(entry.id)}
+          onclick={() => {
+            // The listbox keeps focus, so aria-activedescendant is announced for the clicked row.
+            listbox?.focus();
+            select(entry.id);
+          }}
           oncontextmenu={(e) => oncontextmenu(e, entry)}
           ondragstart={(e) => startDrag(e, "entry", entry.id)}
         >

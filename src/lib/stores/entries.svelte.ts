@@ -11,6 +11,8 @@ class EntriesStore {
   items = $state<EntrySummary[]>([]);
   sidebar = $state<Sidebar_Serialize | null>(null);
   loading = $state(false);
+  /** True once a list answer has been applied since the last `clear()`; an empty list before that is "not yet known". */
+  loaded = $state(false);
   /** What the search box shows right now; `query.search` is the debounced value in use. */
   searchText = $state("");
   #search = $state("");
@@ -78,7 +80,10 @@ class EntriesStore {
     this.loading = true;
     try {
       const rows = await api.entryList(this.query);
-      if (generation === this.#generation) this.items = rows;
+      if (generation === this.#generation) {
+        this.items = rows;
+        this.loaded = true;
+      }
     } catch (e) {
       this.#fail(e);
     } finally {
@@ -111,6 +116,7 @@ class EntriesStore {
     this.items = [];
     this.sidebar = null;
     this.loading = false;
+    this.loaded = false;
     this.searchText = "";
     this.#search = "";
     navigation.select(null);

@@ -62,11 +62,13 @@ const address = (city: string): AddressDto => ({
   email: "",
 });
 
-async function search(text: string) {
+/** Types into the search box and waits until the store has asked the backend for exactly that text. */
+async function search(fake: FakeBackend, text: string, clear = false) {
   const user = userEvent.setup();
-  await user.type(screen.getByRole("searchbox"), text);
-  // The store commits the text 150 ms after the last keystroke.
-  await waitFor(() => expect(navigation.scope).toBeTruthy());
+  const box = screen.getByRole("searchbox");
+  if (clear) await user.clear(box);
+  if (text !== "") await user.type(box, text);
+  await waitFor(() => expect((calls(fake, "entryList").at(-1)?.args.query as { search: string }).search).toBe(text));
 }
 
 describe("rows", () => {
@@ -152,8 +154,8 @@ describe("header", () => {
   });
 
   it("search_header_uses_matching_items_key", async () => {
-    await open();
-    await search("git");
+    const { fake } = await open();
+    await search(fake, "git");
     await waitFor(() => expect(screen.getByTestId("list-count").textContent).toBe("2 matching items"));
   });
 });
@@ -168,34 +170,37 @@ describe("search", () => {
     ]);
     await open(fake);
     expect(titles()).toContain("Alpha");
-    await search("needle");
+    await search(fake, "needle");
     await waitFor(() => expect(titles()).toEqual(["Alpha", "Beta"]));
   });
 
   it("search_matches_attachment_names_in_app_list", async () => {
-    await open(backend([{ id: "e-f", title: "Taxes", entryType: "files", attachments: [{ name: "return-2024.pdf", size: 9 }], modified: 1 }]));
-    await search("return-2024");
+    const fake = backend([{ id: "e-f", title: "Taxes", entryType: "files", attachments: [{ name: "return-2024.pdf", size: 9 }], modified: 1 }]);
+    await open(fake);
+    await search(fake, "return-2024");
     await waitFor(() => expect(titles()).toEqual(["Taxes"]));
   });
 
   it("search_matches_username_urls_and_group_name_but_never_the_password", async () => {
-    await open();
-    await search("gitlab.com");
+    const { fake } = await open();
+    await search(fake, "gitlab.com");
     await waitFor(() => expect(titles()).toEqual(["GitLab"]));
-    // The group name of a Work entry is searchable too.
-    await userEvent.setup().clear(screen.getByRole("searchbox"));
-    await search("Work");
+    await search(fake, "octo-lab", true);
     await waitFor(() => expect(titles()).toEqual(["GitLab"]));
-    await userEvent.setup().clear(screen.getByRole("searchbox"));
-    await search(FIXTURE_LOGIN_PASSWORD);
+    // Only the group name ("Personal") matches these: GitLab lives in Work and must drop out.
+    await search(fake, "Personal", true);
+    await waitFor(() => expect(titles()).toEqual(["GitHub", "Server notes", "Visa"]));
+    await search(fake, "Work", true);
+    await waitFor(() => expect(titles()).toEqual(["GitLab"]));
+    await search(fake, FIXTURE_LOGIN_PASSWORD, true);
     await waitFor(() => expect(options()).toHaveLength(0));
   });
 
   it("a_search_inside_a_group_covers_the_whole_vault_but_not_the_bin", async () => {
-    await open();
+    const { fake } = await open();
     navigation.setScope({ kind: "group", groupId: WORK_GROUP_ID });
     await waitFor(() => expect(titles()).toEqual(["GitLab"]));
-    await search("o");
+    await search(fake, "o");
     await waitFor(() => expect(titles()).toContain("GitHub"));
     expect(titles()).not.toContain("Old forum");
   });
@@ -203,7 +208,7 @@ describe("search", () => {
   it("typing_fast_refetches_once_after_the_pause", async () => {
     const { fake } = await open();
     const before = calls(fake, "entryList").length;
-    await search("git");
+    await search(fake, "git");
     await waitFor(() => expect(titles()).toEqual(["GitHub", "GitLab"]));
     const withText = calls(fake, "entryList")
       .slice(before)
@@ -326,7 +331,7 @@ describe("empty states", () => {
     navigation.setScope({ kind: "group", groupId: WORK_GROUP_ID });
     await waitFor(() => expect(screen.getByTestId("empty-state").getAttribute("data-scope")).toBe("group"));
     await record("group");
-    await search("zzz");
+    await search(fake, "zzz");
     await waitFor(() => expect(screen.getByTestId("empty-state").getAttribute("data-scope")).toBe("search"));
     await record("search");
     // One text per category, one for a group and one for a search, all different.
@@ -342,8 +347,8 @@ describe("empty states", () => {
   });
 
   it("empty_state_for_search_mentions_query_free_text", async () => {
-    await open();
-    await search("zzz-nothing");
+    const { fake } = await open();
+    await search(fake, "zzz-nothing");
     const state = await screen.findByTestId("empty-state");
     expect(state.textContent).toContain(t("No results"));
     expect(state.textContent).toContain("zzz-nothing");
@@ -517,5 +522,70 @@ describe("size and accessibility", () => {
     const { container } = await renderMainApp(fake);
     await screen.findByTestId("empty-state");
     await expectNoAxeViolations(container);
+  });
+});
+
+describe("edge cases", () => {
+  it("no_empty_state_before_the_first_list_answer", async () => {
+    const fake = backend();
+    const real = fake.handlers.entryList;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    fake.handlers.entryList = async (args) => {
+      await gate;
+      return real(args);
+    };
+    await renderMainApp(fake);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByTestId("empty-state")).toBeNull();
+    release();
+    await screen.findByRole("listbox");
+  });
+
+  it("clicking_a_row_puts_focus_on_the_listbox", async () => {
+    await open();
+    await userEvent.setup().click(optionNamed(/Visa/));
+    const listbox = screen.getByRole("listbox");
+    expect(document.activeElement).toBe(listbox);
+    expect(listbox.getAttribute("aria-activedescendant")).toBe(optionNamed(/Visa/).id);
+  });
+
+  it("keys_with_a_stale_selected_id_do_nothing", async () => {
+    const { fake } = await open();
+    const user = userEvent.setup();
+    await user.click(optionNamed(/Visa/));
+    await search(fake, "git");
+    await waitFor(() => expect(titles()).toEqual(["GitHub", "GitLab"]));
+    expect(navigation.selectedId).toBe("e-visa");
+    const listbox = screen.getByRole("listbox");
+    expect(listbox.hasAttribute("aria-activedescendant")).toBe(false);
+    listbox.focus();
+    await user.keyboard("{Enter}{Delete}{Control>}c{/Control}");
+    expect(calls(fake, "entryDelete")).toHaveLength(0);
+    expect(calls(fake, "entryCopy")).toHaveLength(0);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // Down starts from the top instead of throwing.
+    await user.keyboard("{ArrowDown}");
+    expect(navigation.selectedId).toBe("e-github");
+  });
+
+  it("move_to_is_disabled_for_rows_in_the_bin", async () => {
+    await open();
+    navigation.setScope({ kind: "category", category: "deleted" });
+    await fireEvent.contextMenu(await screen.findByRole("option", { name: /Old forum/ }));
+    expect(screen.getByRole("menuitem", { name: t("Move to…") }).getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("escape_on_the_purge_dialog_purges_nothing", async () => {
+    const { fake } = await open();
+    navigation.setScope({ kind: "category", category: "deleted" });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("option", { name: /Old forum/ }));
+    await user.keyboard("{Delete}");
+    await screen.findByRole("dialog");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(calls(fake, "entryPurge")).toHaveLength(0);
+    expect(optionNamed(/Old forum/)).toBeTruthy();
   });
 });
