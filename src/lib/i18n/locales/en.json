@@ -160,6 +160,7 @@
   "Delete Permanently…": "Delete Permanently…",
   "Delete group": "Delete group",
   "Delete permanently": "Delete permanently",
+  "Delete the group “{0}” and everything in it? This can’t be undone.": "Delete the group “{0}” and everything in it? This can’t be undone.",
   "Delete this group and move its items to Deleted?": "Delete this group and move its items to Deleted?",
   "Delete “%@”?": "Delete “{0}”?",
   "Deleted": "Deleted",

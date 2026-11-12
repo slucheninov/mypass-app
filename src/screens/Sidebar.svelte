@@ -333,10 +333,16 @@
 
 {#if confirming}
   <Modal open={true} title={t("Delete group")} onclose={() => (confirming = null)}>
-    <p class="confirm">{t("Delete this group and move its items to Deleted?")}</p>
+    <p class="confirm">
+      {sidebar?.recycleBinEnabled === false
+        ? t("Delete the group “{0}” and everything in it? This can’t be undone.", [confirming.name])
+        : t("Delete this group and move its items to Deleted?")}
+    </p>
     {#snippet footer()}
       <Button onclick={() => (confirming = null)}>{t("Cancel")}</Button>
-      <Button variant="danger" onclick={() => void deleteGroup()}>{t("Delete")}</Button>
+      <Button variant="danger" onclick={() => void deleteGroup()}
+        >{sidebar?.recycleBinEnabled === false ? t("Delete permanently") : t("Delete")}</Button
+      >
     {/snippet}
   </Modal>
 {/if}

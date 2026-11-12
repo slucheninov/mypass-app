@@ -160,6 +160,7 @@
   "Delete Permanently…": "Видалити назавжди…",
   "Delete group": "Видалити групу",
   "Delete permanently": "Видалити назавжди",
+  "Delete the group “{0}” and everything in it? This can’t be undone.": "Видалити групу «{0}» і весь її вміст? Цю дію не можна скасувати.",
   "Delete this group and move its items to Deleted?": "Видалити цю групу та перемістити її елементи до розділу «Видалено»?",
   "Delete “%@”?": "Видалити «{0}»?",
   "Deleted": "Видалено",

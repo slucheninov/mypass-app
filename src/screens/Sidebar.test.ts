@@ -282,6 +282,21 @@ describe("delete group", () => {
     expect(navigation.scope).toEqual({ kind: "category", category: "all" });
   });
 
+  it("delete_group_says_it_is_permanent_when_the_recycle_bin_is_disabled", async () => {
+    const { fake } = await renderMainApp({ session: "unlocked" }, (f) => {
+      f.state.recycleBinEnabled = false;
+    });
+    await screen.findByRole("treeitem", { name: /^Personal/ });
+    const user = userEvent.setup();
+    await fireEvent.contextMenu(row(/^Work/));
+    await user.click(await screen.findByRole("menuitem", { name: "Delete group" }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete group" });
+    expect(within(dialog).getByText(/Delete the group \u201cWork\u201d and everything in it\? This can\u2019t be undone\./)).toBeTruthy();
+    expect(within(dialog).queryByText(/move its items to Deleted/)).toBeNull();
+    await user.click(within(dialog).getByRole("button", { name: "Delete permanently" }));
+    await waitFor(() => expect(calls(fake, "groupDelete")).toHaveLength(1));
+  });
+
   it("cancelling_the_delete_confirmation_does_nothing", async () => {
     const { user, dialog, fake } = await askToDelete();
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
