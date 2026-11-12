@@ -72,6 +72,32 @@ pub fn app_open_entry(
     Ok(())
 }
 
+/// Shows and focuses the main window (the tray panel's Open MyPass). The same path as the tray
+/// menu, the hotkey and the second launch.
+pub fn show_main_window(windows: &dyn WindowOps) -> Result<(), ApiError> {
+    crate::shell::show_main(windows).map_err(super::internal)
+}
+
+/// Asks the runtime to exit. This only RAISES `ExitRequested`: the quit flow (`begin_quit`, the
+/// final flush, the data-loss prompt, `ExitGate`) decides whether the process really goes, exactly
+/// as for the tray menu's Quit, so nothing here can bypass it.
+pub fn request_quit<R: tauri::Runtime>(app: &AppHandle<R>) {
+    app.exit(0);
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn app_show_main(shell: State<'_, ShellState>) -> Result<(), ApiError> {
+    show_main_window(shell.windows.as_ref())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn app_quit(app: AppHandle) -> Result<(), ApiError> {
+    request_quit(&app);
+    Ok(())
+}
+
 /// Reveals the vault's backup folder in the file manager. Called from Rust, so the webview needs
 /// no opener capability for it.
 #[tauri::command]
@@ -149,6 +175,44 @@ mod tests {
                 ("focus".to_owned(), "main".to_owned())
             ]
         );
+    }
+
+    #[test]
+    fn show_main_window_shows_then_focuses_main() {
+        let windows = FakeWindowOps::default();
+        show_main_window(&windows).unwrap();
+        let calls: Vec<_> = windows
+            .calls()
+            .into_iter()
+            .map(|(op, label, _)| (op, label))
+            .collect();
+        assert_eq!(
+            calls,
+            vec![
+                ("show".to_owned(), "main".to_owned()),
+                ("focus".to_owned(), "main".to_owned())
+            ]
+        );
+    }
+
+    /// The mock runtime cannot raise `ExitRequested` from `exit` (its `request_exit` is
+    /// unimplemented), and the gate, the flow and `exit` are covered by the `shell_runtime`
+    /// smoke tests. What must hold here is that the panel's Quit has no other way out.
+    #[test]
+    fn app_quit_only_raises_exit_requested_and_never_exits_the_process_itself() {
+        let source = include_str!("app.rs");
+        let body = source
+            .split("pub fn request_quit")
+            .nth(1)
+            .and_then(|rest| rest.split("\n}\n").next())
+            .unwrap();
+        assert!(body.contains("app.exit(0)"));
+        for forbidden in ["process::exit", "exit_gate", "ExitGate", "finish("] {
+            assert!(
+                !body.contains(forbidden),
+                "{forbidden} would bypass the quit flow"
+            );
+        }
     }
 
     #[test]
