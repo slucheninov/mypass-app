@@ -29,6 +29,9 @@
   let requests = 0;
 
   const unlocked = $derived(session.status.state === "unlocked");
+  const noVault = $derived(session.status.state === "noVault");
+  // One key per unlocked stretch and vault: a save-state change replaces `status` but not this.
+  const vaultKey = $derived(unlocked ? (session.status.vaultPath ?? "") : null);
 
   async function loadRecents(): Promise<void> {
     const mine = ++requests;
@@ -43,8 +46,7 @@
 
   // Everything of one unlocked stretch is dropped on a lock; the next unlock starts at the list.
   $effect(() => {
-    if (unlocked) {
-      void session.status.vaultPath;
+    if (vaultKey !== null) {
       void loadRecents();
     } else {
       requests++;
@@ -55,7 +57,13 @@
 
   onMount(() => {
     // The panel is a long-lived hidden window: refresh when the vault changes and when it is shown.
-    const offHidden = onWindowHidden(() => (selectedId = null));
+    const offHidden = onWindowHidden(() => {
+      selectedId = null;
+      // A half-typed master password does not wait in a hidden window.
+      field?.take();
+      hasPassword = false;
+      error = null;
+    });
     const refresh = () => {
       if (unlocked && document.visibilityState !== "hidden") void loadRecents();
     };
@@ -105,7 +113,9 @@
 
 <main class="panel" data-testid="tray-panel">
   <div class="content">
-    {#if !unlocked}
+    {#if noVault}
+      <p class="empty">{t("No vault is open")}</p>
+    {:else if !unlocked}
       <form class="locked" onsubmit={submit}>
         <PasswordField bind:this={field} label={t("Master password")} focusOnMount oninput={(n) => (hasPassword = n > 0)} />
         {#if error}<p class="error" role="alert">{error}</p>{/if}

@@ -166,8 +166,9 @@ describe("import dialog", () => {
     expect(toasts.items).toHaveLength(0);
   });
 
-  it("a_failed_commit_keeps_the_dialog_open_with_the_localised_message", async () => {
+  it("a_failed_commit_keeps_the_dialog_open_and_offers_choosing_the_file_again", async () => {
     const { fake, onclose, user } = await openDialog();
+    // The backend spends the remembered file on every commit, so Import cannot be pressed again.
     fake.handlers.importCsvCommit = () => {
       throw apiError("invalidInput", "no CSV file was previewed");
     };
@@ -175,6 +176,27 @@ describe("import dialog", () => {
     await user.click(within(dialog).getByRole("button", { name: "Import" }));
     expect((await within(dialog).findByRole("alert")).textContent).toBe("Invalid input");
     expect(onclose).not.toHaveBeenCalled();
+    expect(within(dialog).queryByRole("button", { name: "Import" })).toBeNull();
+    expect(within(dialog).queryByText("7 items found")).toBeNull();
+    await user.click(within(dialog).getByRole("button", { name: "Choose a CSV file" }));
+    expect(await within(dialog).findByText("7 items found")).toBeTruthy();
+    expect(calls(fake, "importCsvPreview")).toHaveLength(2);
+  });
+
+  it("nested_groups_are_indented_with_non_breaking_spaces", async () => {
+    await openDialog();
+    const select = (await screen.findByRole("combobox", { name: "Import into" })) as HTMLSelectElement;
+    const labels = within(select).getAllByRole("option").map((o) => o.textContent ?? "");
+    expect(labels.some((l) => l.startsWith("\u00a0\u00a0\u00a0\u00a0"))).toBe(true);
+    expect(labels.every((l) => !l.startsWith(" "))).toBe(true);
+  });
+
+  it("a_long_skipped_list_is_capped_with_an_and_more_line", async () => {
+    const skipped = Array.from({ length: 100 }, (_, i) => ({ line: i + 2, reason: "fieldCountMismatch" as const }));
+    await openDialog({ total: 3, sampleTitles: ["A", "B", "C"], skipped });
+    const dialog = await ready();
+    expect(within(dialog).getAllByText(/^Row \d+:/)).toHaveLength(20);
+    expect(within(dialog).getByText("and 80 more")).toBeTruthy();
   });
 
   it("the_toolbar_import_csv_item_opens_the_dialog_in_the_main_window", async () => {

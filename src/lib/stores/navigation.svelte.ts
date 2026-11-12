@@ -61,6 +61,9 @@ class NavigationStore {
     this.pendingModel = null;
     this.editModel = model;
     this.presentation = model.id ? "edit" : "create";
+    // An editor that replaced another one (an open-entry request after Discard) leaves the list
+    // pointing at the entry it now edits.
+    if (model.id) this.selectedId = model.id;
   }
 
   /**

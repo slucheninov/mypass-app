@@ -744,6 +744,7 @@
   "a symbol": "a symbol",
   "a unicode character": "a unicode character",
   "an uppercase letter": "an uppercase letter",
+  "and %lld more": "and {0} more",
   "at least %lld characters": "{count, plural, one {at least # character} other {at least # characters}}",
   "at most %lld characters": "{count, plural, one {at most # character} other {at most # characters}}",
   "at most %lld repeated characters in a row": "{count, plural, one {at most # repeated character in a row} other {at most # repeated characters in a row}}",

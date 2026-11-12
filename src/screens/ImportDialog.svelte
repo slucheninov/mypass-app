@@ -24,6 +24,8 @@
   let busy = $state(false);
   let groupId = $state<string | null>(null);
   let closed = false;
+  /** Skipped rows listed before "and N more" (a malformed file can skip thousands). */
+  const SKIPPED_SHOWN = 20;
 
   const rootId = $derived(entries.sidebar?.rootGroupId ?? null);
   const options = $derived.by(() => {
@@ -93,7 +95,12 @@
       void entries.refresh();
       close();
     } catch (e) {
-      if (unchanged()) error = failureMessage(e);
+      if (unchanged()) {
+        // The backend spends the remembered file on every commit, also a failing one: another
+        // Import could only fail again, so the dialog goes back to choosing a file.
+        preview = null;
+        error = failureMessage(e);
+      }
     } finally {
       busy = false;
     }
@@ -121,7 +128,8 @@
       </ul>
       {#if preview.skipped.length > 0}
         <ul class="skipped">
-          {#each preview.skipped as row, index (index)}<li>{reason(row.line, row.reason)}</li>{/each}
+          {#each preview.skipped.slice(0, SKIPPED_SHOWN) as row, index (index)}<li>{reason(row.line, row.reason)}</li>{/each}
+          {#if preview.skipped.length > SKIPPED_SHOWN}<li>{t("and %lld more", preview.skipped.length - SKIPPED_SHOWN)}</li>{/if}
         </ul>
       {/if}
       <div class="group">

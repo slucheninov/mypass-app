@@ -79,6 +79,30 @@ describe("main window event bridge", () => {
     expect((screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toContain("changed");
   });
 
+  it("discarding_for_an_open_entry_event_opens_that_entry_and_selects_it", async () => {
+    const user = userEvent.setup();
+    const { fake } = await mainApp();
+    await fake.emit("openEntryEvent", { id: "e-github", edit: true });
+    await waitFor(() => expect(navigation.editModel?.id).toBe("e-github"));
+    await user.type(await screen.findByRole("textbox", { name: "Title" }), " changed");
+    await fake.emit("openEntryEvent", { id: "e-gitlab", edit: true });
+    const dialog = await screen.findByRole("dialog", { name: "Discard changes?" });
+    await user.click(within(dialog).getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(navigation.editModel?.id).toBe("e-gitlab"));
+    expect(navigation.selectedId).toBe("e-gitlab");
+  });
+
+  it("the_conflict_listener_is_registered_before_the_backlog_is_taken", async () => {
+    const fake = createFakeBackend({ session: "unlocked" });
+    // An event raised while the backlog is being taken is only seen by an already registered listener.
+    fake.handlers.shortcutConflictsTake = () => {
+      void fake.emit("shortcutConflictEvent", { kind: "show", shortcut: "Ctrl+K" });
+      return [];
+    };
+    await renderMainApp(fake);
+    await waitFor(() => expect(toasts.items.some((x) => x.text.includes("Ctrl+K"))).toBe(true));
+  });
+
   it("shortcut_conflicts_are_taken_once_after_the_listener_is_registered", async () => {
     const fake = createFakeBackend({ session: "unlocked" });
     fake.handlers.shortcutConflictsTake = () => [{ kind: "lock", shortcut: "Ctrl+L" }];

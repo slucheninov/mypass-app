@@ -50,6 +50,31 @@ describe("tray panel, locked", () => {
     await waitFor(() => expect(calls(fake, "appShowMain")).toHaveLength(1));
   });
 
+  it("tray_no_vault_shows_no_password_field", async () => {
+    const { fake } = await renderTrayPanel({ session: "noVault" });
+    expect(await screen.findByText("No vault is open")).toBeTruthy();
+    expect(screen.queryByLabelText("Master password")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Unlock" })).toBeNull();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Open MyPass" }));
+    await waitFor(() => expect(calls(fake, "appShowMain")).toHaveLength(1));
+  });
+
+  it("hiding_the_window_empties_a_half_typed_password", async () => {
+    await renderTrayPanel({ session: "locked" });
+    const user = userEvent.setup();
+    const field = (await screen.findByLabelText("Master password")) as HTMLInputElement;
+    await user.type(field, "half-typed");
+    expect((screen.getByRole("button", { name: "Unlock" }) as HTMLButtonElement).disabled).toBe(false);
+    Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+    try {
+      await waitFor(() => expect(field.value).toBe(""));
+      expect((screen.getByRole("button", { name: "Unlock" }) as HTMLButtonElement).disabled).toBe(true);
+    } finally {
+      Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+    }
+  });
+
   it("the_locked_panel_lists_no_entries", async () => {
     const { fake } = await renderTrayPanel({ session: "locked" });
     await screen.findByLabelText("Master password");
@@ -116,6 +141,29 @@ describe("tray panel, unlocked list", () => {
 });
 
 describe("tray panel, compact detail", () => {
+  it("a_save_state_change_does_not_refetch_the_recents", async () => {
+    const { fake } = await unlockedTray();
+    expect(calls(fake, "entryRecent")).toHaveLength(1);
+    await fake.emit("saveStateChanged", { state: "saving", message: null });
+    await fake.emit("saveStateChanged", { state: "idle", message: null });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(calls(fake, "entryRecent")).toHaveLength(1);
+  });
+
+  it("an_open_detail_refreshes_on_vault_changed_and_says_when_the_entry_is_gone", async () => {
+    const { fake, detail } = await openGithub();
+    await within(detail).findByText("octo");
+    const entry = fake.state.entries.find((e) => e.summary.id === "e-github")!;
+    entry.model.username = "renamed";
+    await fake.emit("vaultChanged", null);
+    expect(await within(detail).findByText("renamed")).toBeTruthy();
+    fake.state.entries.splice(fake.state.entries.indexOf(entry), 1);
+    await fake.emit("vaultChanged", null);
+    expect(await screen.findByText("Item not found")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy" })).toBeNull();
+  });
+
   it("tray_click_entry_shows_compact_detail_and_touches_access", async () => {
     const { fake, detail } = await openGithub();
     expect(calls(fake, "entryTouch")).toHaveLength(1);

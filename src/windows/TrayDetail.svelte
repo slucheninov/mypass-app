@@ -4,7 +4,8 @@
   // an explicit Reveal; the one revealed value is dropped on Back, on window hide and on lock.
   import { onMount } from "svelte";
   import { api, errorMessage } from "../lib/api";
-  import type { EntryDetailDto_Serialize } from "../lib/bindings";
+  import { events, type EntryDetailDto_Serialize } from "../lib/bindings";
+  import { quietly } from "../lib/unlisten";
   import { formatDate } from "../lib/i18n/format";
   import { t } from "../lib/i18n/index.svelte";
   import { lockGuard } from "../lib/lock-guard";
@@ -22,17 +23,44 @@
   // The first stored website: the one `entry_copy` of a `url` field copies.
   const website = $derived(detail?.url ?? detail?.urls[0] ?? "");
 
-  onMount(() => {
+  let requests = 0;
+
+  /** Loads (or reloads) the entry; a changed `modified` hides a revealed value, a vanished entry
+   *  replaces the fields with its failure text. */
+  async function load(): Promise<void> {
+    const mine = ++requests;
     const unchanged = lockGuard();
-    void api
-      .entryGet(id)
-      .then((loaded) => {
-        if (unchanged()) detail = loaded;
+    try {
+      const loaded = await api.entryGet(id);
+      if (mine !== requests || !unchanged()) return;
+      if (detail && detail.modified !== loaded.modified) password.hide();
+      detail = loaded;
+      failure = null;
+    } catch (e) {
+      if (mine !== requests || !unchanged()) return;
+      password.hide();
+      detail = null;
+      failure = errorMessage(e);
+    }
+  }
+
+  onMount(() => {
+    void load();
+    let off: (() => void) | null = null;
+    let gone = false;
+    void events.vaultChanged
+      .listen(() => void load())
+      .then((unlisten) => {
+        if (gone) quietly(unlisten);
+        else off = unlisten;
       })
-      .catch((e) => {
-        if (unchanged()) failure = errorMessage(e);
-      });
-    return () => password.hide();
+      .catch(() => {});
+    return () => {
+      gone = true;
+      requests++;
+      if (off) quietly(off);
+      password.hide();
+    };
   });
 
   const edit = () => toasts.guard(() => api.appOpenEntry(id, true));

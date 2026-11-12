@@ -744,6 +744,7 @@
   "a symbol": "символ",
   "a unicode character": "символ Unicode",
   "an uppercase letter": "велика літера",
+  "and %lld more": "і ще {0}",
   "at least %lld characters": "{count, plural, one {мінімум # символ} few {мінімум # символи} many {мінімум # символів} other {мінімум # символу}}",
   "at most %lld characters": "{count, plural, one {максимум # символ} few {максимум # символи} many {максимум # символів} other {максимум # символу}}",
   "at most %lld repeated characters in a row": "{count, plural, one {не більше # однакового символу поспіль} few {не більше # однакових символів поспіль} many {не більше # однакових символів поспіль} other {не більше # однакового символу поспіль}}",
