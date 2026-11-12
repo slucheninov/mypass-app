@@ -1,16 +1,17 @@
 // The final string audit: the guards that keep the catalogs and the source in step. Completeness
 // of every key in uk and ru and the placeholder sets are pinned by scripts/i18n-completeness.test.mjs
 // (plain Node); the checks here need the source scan of the UI.
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import en from "./lib/i18n/locales/en.json";
 import ru from "./lib/i18n/locales/ru.json";
 import uk from "./lib/i18n/locales/uk.json";
 import { sourceFiles } from "./test/sourceScan";
+import { UNTRANSLATED_TEXT_ALLOW_LIST, untranslatedFindings } from "./test/textScan";
 
 const catalogs = { en, uk, ru } as Record<string, Record<string, string>>;
 
+// Only `t("literal")` calls are seen. That is complete by construction: `every_t_call_takes_a_string_literal_key`
+// (i18n.test.ts) fails on any other first argument, so a key cannot reach `t()` through a variable.
 function usedKeys(): Set<string> {
   const keys = new Set<string>();
   const re = /\bt\(\s*(["'`])((?:\\.|(?!\1).)*)\1/g;
@@ -25,11 +26,16 @@ const SAME_IN_EVERY_LANGUAGE = new Set(["MyPass", "URL", "English"]);
 
 describe("string audit", () => {
   it("no_literal_user_text_survives_in_svelte_files", () => {
-    // The scan itself is `no_untranslated_text_nodes_in_svelte_files` (scaffold.test.ts); the audit
-    // requires that nothing is exempted from it.
-    const text = readFileSync(resolve(process.cwd(), "src/scaffold.test.ts"), "utf8");
-    expect(/const UNTRANSLATED_TEXT_ALLOW_LIST: string\[\] = \[\];/.test(text)).toBe(true);
-    expect(text).toContain("no_untranslated_text_nodes_in_svelte_files");
+    // The same scan as `no_untranslated_text_nodes_in_svelte_files`, run here with nothing exempted.
+    expect(UNTRANSLATED_TEXT_ALLOW_LIST).toEqual([]);
+    const files = sourceFiles(["svelte"]);
+    expect(files.length).toBeGreaterThan(30);
+    const bad: Record<string, string[]> = {};
+    for (const f of files) {
+      const found = untranslatedFindings(f.text);
+      if (found.length > 0) bad[f.path] = found;
+    }
+    expect(bad).toEqual({});
   });
 
   it("every_key_used_in_source_is_translated_in_uk_and_ru", () => {

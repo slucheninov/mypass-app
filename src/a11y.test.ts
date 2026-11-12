@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { expectNoAxeViolations } from "./test/axe";
 import { createFakeBackend, type FakeBackend } from "./test/fakeBackend";
+import { dragAndDrop } from "./test/dnd";
 import { makeEntry } from "./test/fixtures";
 import { renderMainApp } from "./test/mainApp";
 import { renderSettingsApp } from "./test/settingsApp";
@@ -151,7 +152,7 @@ describe("dialogs", () => {
 // Focus return: every dialog gives focus back to what opened it. Each scenario opens one modal
 // the way a user does and answers with the element that must hold focus once Escape closes it.
 // The set of files is discovered from the sources, so a new `<Modal` without a scenario fails here.
-type Scenario = (user: User) => Promise<{ dialog: string | RegExp; opener: HTMLElement }>;
+type Scenario = (user: User) => Promise<{ dialog: string | RegExp; opener: HTMLElement | (() => HTMLElement) }>;
 
 const click = (user: User, el: HTMLElement) => user.click(el);
 const menuTrigger = (name: string) => screen.getByRole("button", { name });
@@ -169,45 +170,45 @@ async function selectEntry(user: User, name: RegExp) {
 }
 
 const SCENARIOS: Record<string, Scenario> = {
-  "src/screens/Toolbar.svelte": async (user) => {
+  "src/screens/Toolbar.svelte#Password Generator…": async (user) => {
     await unlocked();
     return { dialog: "Password Generator…", opener: await chooseFromMenu(user, "New Entry", "Password Generator…") };
   },
-  "src/screens/GroupEditor.svelte": async (user) => {
+  "src/screens/GroupEditor.svelte#Edit group…|New Group": async (user) => {
     await unlocked();
     return { dialog: "New Group", opener: await chooseFromMenu(user, "New Entry", "New Group") };
   },
-  "src/screens/ImportDialog.svelte": async (user) => {
+  "src/screens/ImportDialog.svelte#Import CSV": async (user) => {
     await unlocked((f) => (f.state.csvPreview = { total: 1, sampleTitles: ["Acme"], skipped: [] }));
     return { dialog: "Import CSV", opener: await chooseFromMenu(user, "Import", "Import CSV…") };
   },
-  "src/screens/OpenVaultSheet.svelte": async (user) => {
+  "src/screens/OpenVaultSheet.svelte#Open vault": async (user) => {
     vi.mocked(open).mockResolvedValue("/vaults/B.kdbx");
     await renderMainApp({ session: "noVault" });
     const opener = await screen.findByRole("button", { name: "Open existing vault" });
     await click(user, opener);
     return { dialog: "Open vault", opener };
   },
-  "src/screens/OpenWarningDialog.svelte": async (user) => {
+  "src/screens/OpenWarningDialog.svelte#copy.title": async (user) => {
     vi.mocked(open).mockResolvedValue("/vaults/B.kdbx");
     await renderMainApp({ session: "noVault" }, (f) => (f.state.openWarnings = [{ kind: "icloud" }]));
     const opener = await screen.findByRole("button", { name: "Open existing vault" });
     await click(user, opener);
     return { dialog: /./, opener };
   },
-  "src/screens/CreateVault.svelte": async (user) => {
+  "src/screens/CreateVault.svelte#Create vault": async (user) => {
     await renderMainApp({ session: "noVault" });
     const opener = await screen.findByRole("button", { name: "Create vault" });
     await click(user, opener);
     return { dialog: "Create vault", opener };
   },
-  "src/screens/FindVaults.svelte": async (user) => {
+  "src/screens/FindVaults.svelte#Find vault files": async (user) => {
     await renderMainApp({ session: "noVault" });
     const opener = await screen.findByRole("button", { name: "Find vault files" });
     await click(user, opener);
     return { dialog: "Find vault files", opener };
   },
-  "src/screens/EntryEditor.svelte": async (user) => {
+  "src/screens/EntryEditor.svelte#Discard changes?": async (user) => {
     await unlocked();
     await selectEntry(user, /GitHub/);
     await user.click(within(pane()).getByRole("button", { name: "Edit" }));
@@ -216,7 +217,7 @@ const SCENARIOS: Record<string, Scenario> = {
     await click(user, opener);
     return { dialog: "Discard changes?", opener };
   },
-  "src/screens/editors/WebsitesSheet.svelte": async (user) => {
+  "src/screens/editors/WebsitesSheet.svelte#Websites": async (user) => {
     await unlocked();
     await selectEntry(user, /GitHub/);
     await user.click(within(pane()).getByRole("button", { name: "Edit" }));
@@ -224,7 +225,7 @@ const SCENARIOS: Record<string, Scenario> = {
     await click(user, opener);
     return { dialog: "Websites", opener };
   },
-  "src/screens/editors/NotesForm.svelte": async (user) => {
+  "src/screens/editors/NotesForm.svelte#Drafts": async (user) => {
     await unlocked((f) => (f.state.drafts["e-notes"] = [{ id: "d1", savedAt: 1_700_000_000_000, notes: "draft" }]));
     await selectEntry(user, /Server notes/);
     await user.click(within(pane()).getByRole("button", { name: "Edit" }));
@@ -232,7 +233,7 @@ const SCENARIOS: Record<string, Scenario> = {
     await click(user, opener);
     return { dialog: "Drafts", opener };
   },
-  "src/screens/History.svelte": async (user) => {
+  "src/screens/History.svelte#History": async (user) => {
     await unlocked((f) =>
       f.state.entries.push(makeEntry({ id: "e-r", title: "Router", modified: 5, history: [{ modified: 1, title: "R1", password: "x" }] })),
     );
@@ -241,7 +242,7 @@ const SCENARIOS: Record<string, Scenario> = {
     await click(user, opener);
     return { dialog: "History", opener };
   },
-  "src/screens/EntryDetail.svelte": async (user) => {
+  "src/screens/EntryDetail.svelte#Delete permanently": async (user) => {
     await unlocked();
     await user.click(screen.getByRole("treeitem", { name: /^Deleted/ }));
     await screen.findByRole("option", { name: /Old forum/ });
@@ -250,7 +251,7 @@ const SCENARIOS: Record<string, Scenario> = {
     await click(user, opener);
     return { dialog: "Delete permanently", opener };
   },
-  "src/screens/EntryList.svelte": async (user) => {
+  "src/screens/EntryList.svelte#Empty Deleted|Delete permanently": async (user) => {
     await unlocked();
     await user.click(screen.getByRole("treeitem", { name: /^Deleted/ }));
     await screen.findByRole("option", { name: /Old forum/ });
@@ -258,7 +259,7 @@ const SCENARIOS: Record<string, Scenario> = {
     await click(user, opener);
     return { dialog: "Empty Deleted", opener };
   },
-  "src/screens/GroupPicker.svelte": async (user) => {
+  "src/screens/GroupPicker.svelte#Move to Group": async (user) => {
     await unlocked();
     await selectEntry(user, /GitHub/);
     // The picker opens from the list's context menu; the listbox owns focus (active descendant).
@@ -267,13 +268,36 @@ const SCENARIOS: Record<string, Scenario> = {
     await user.click(await screen.findByRole("menuitem", { name: "Move to…" }));
     return { dialog: "Move to Group", opener };
   },
-  "src/screens/Sidebar.svelte": async (user) => {
+  "src/screens/Sidebar.svelte#Delete group": async (user) => {
     await unlocked();
     await fireEvent.contextMenu(screen.getByRole("treeitem", { name: /^Work/ }));
     await user.click(await screen.findByRole("menuitem", { name: "Delete group" }));
     return { dialog: "Delete group", opener: screen.getByRole("treeitem", { name: /^Work/ }) };
   },
-  "src/screens/LargeType.svelte": async (user) => {
+  "src/screens/History.svelte#Restore this version": async (user) => {
+    await unlocked((f) =>
+      f.state.entries.push(makeEntry({ id: "e-r", title: "Router", modified: 5, history: [{ modified: 1, title: "R1", password: "x" }] })),
+    );
+    await selectEntry(user, /Router/);
+    await user.click(await screen.findByRole("button", { name: /^View history/ }));
+    const history = await topDialog("History");
+    await user.click(await within(history).findByRole("option"));
+    await click(user, within(history).getByRole("button", { name: "Restore this version" }));
+    // The History list re-renders under the confirmation, so the button is looked up again.
+    return { dialog: "Restore this version", opener: () => within(history).getByRole("button", { name: "Restore this version" }) };
+  },
+  "src/screens/Sidebar.svelte#Delete permanently": async (user) => {
+    // With the recycle bin off, dropping an entry on Deleted asks before purging it.
+    await unlocked((f) => (f.state.recycleBinEnabled = false));
+    const row = screen.getByRole("option", { name: /GitHub/ });
+    await user.click(row);
+    const opener = screen.getByRole("listbox");
+    await dragAndDrop(row, screen.getByRole("treeitem", { name: /^Deleted/ }));
+    return { dialog: "Delete permanently", opener };
+  },
+  // The opener contract here is the row's Reveal/Hide button: the context menu was opened on the
+  // row and closes back to it, so that is where the dialog returns focus.
+  "src/screens/LargeType.svelte#Large Type": async (user) => {
     await unlocked();
     await selectEntry(user, /GitHub/);
     const row = within(pane()).getByRole("group", { name: "Password" });
@@ -282,7 +306,7 @@ const SCENARIOS: Record<string, Scenario> = {
     await user.click(await screen.findByRole("menuitem", { name: "Show Large Type" }));
     return { dialog: "Large Type", opener: within(row).getByRole("button", { name: /Hide|Reveal/ }) };
   },
-  "src/windows/settings/Vault.svelte": async (user) => {
+  "src/windows/settings/Vault.svelte#Restore this backup?": async (user) => {
     await renderSettingsApp(
       {},
       { pane: "Vault", prepare: (f) => (f.state.backups = [{ id: "backup-1700000000.kdbx", created: 1_700_000_000_000, size: 4096 }]) },
@@ -293,14 +317,51 @@ const SCENARIOS: Record<string, Scenario> = {
   },
 };
 
-describe("focus return", () => {
-  const modalFiles = sourceFiles(["svelte"])
-    .filter((f) => f.path !== "src/lib/ui/Modal.svelte" && /<Modal\b/.test(f.text))
-    .map((f) => f.path);
+/** The balanced `{...}` starting at `from` (string literals skipped). */
+function braced(src: string, from: number): number {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = from; i < src.length; i++) {
+    const c = src.charAt(i);
+    if (quote) {
+      if (c === "\\") i++;
+      else if (c === quote) quote = null;
+    } else if (c === '"' || c === "'" || c === "`") quote = c;
+    else if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) return i + 1;
+  }
+  return src.length;
+}
 
-  it("every_file_that_mounts_a_modal_has_a_focus_scenario", () => {
-    expect(modalFiles.filter((p) => !(p in SCENARIOS))).toEqual([]);
-    expect(Object.keys(SCENARIOS).filter((p) => !modalFiles.includes(p))).toEqual([]);
+/** `path#title` of every `<Modal` in the sources; a title built from `t("...")` calls lists them all, `|` apart. */
+function modalKeys(): string[] {
+  const keys: string[] = [];
+  for (const f of sourceFiles(["svelte"])) {
+    if (f.path === "src/lib/ui/Modal.svelte") continue;
+    for (const m of f.text.matchAll(/<Modal\b/g)) {
+      let i = m.index + 6;
+      let titleExpr = "";
+      while (i < f.text.length && f.text.charAt(i) !== ">") {
+        if (f.text.charAt(i) === "{") {
+          const end = braced(f.text, i);
+          if (f.text.slice(m.index, i).trimEnd().endsWith("title=")) titleExpr = f.text.slice(i + 1, end - 1);
+          i = end;
+        } else i++;
+      }
+      const literals = [...titleExpr.matchAll(/\bt\(\s*"([^"]*)"/g)].map((l) => l[1]);
+      keys.push(`${f.path}#${literals.length > 0 ? literals.join("|") : titleExpr.trim()}`);
+    }
+  }
+  return keys.sort();
+}
+
+describe("focus return", () => {
+  const modals = modalKeys();
+
+  it("every_modal_in_the_sources_has_a_focus_scenario_and_no_scenario_is_stale", () => {
+    expect(modals.length).toBeGreaterThan(15);
+    expect(modals.filter((k) => !(k in SCENARIOS))).toEqual([]);
+    expect(Object.keys(SCENARIOS).filter((k) => !modals.includes(k))).toEqual([]);
   });
 
   it.each(Object.keys(SCENARIOS))("focus_returns_to_trigger_after_modal_closes: %s", async (file) => {
@@ -309,8 +370,8 @@ describe("focus return", () => {
     const found = await topDialog(dialog);
     expect(found).toBeTruthy();
     await user.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(document.activeElement).toBe(opener);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: dialog })).toBeNull());
+    expect(document.activeElement).toBe(typeof opener === "function" ? opener() : opener);
   });
 });
 

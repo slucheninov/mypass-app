@@ -13,6 +13,7 @@ import {
   FIXTURE_LOGIN_PASSWORD,
   FIXTURE_MASTER_PASSWORD,
   WORK_GROUP_ID,
+  fixtureGroups,
   makeEntry,
   sessionStatus,
 } from "./test/fixtures";
@@ -148,7 +149,7 @@ describe("journeys", () => {
   });
 
   it("journey_language_switch_ru_updates_sidebar_labels", async () => {
-    const { fake, user } = await unlocked();
+    const { user } = await unlocked();
     render(SettingsApp);
     await user.selectOptions(await screen.findByRole("combobox", { name: "Language" }), "ru");
     const labels = ["All", "Favorites", "Codes", "Passkeys", "Addresses", "Cards", "Notes", "Files", "Security", "Deleted"];
@@ -241,14 +242,27 @@ describe("journeys", () => {
 
   it("journey_open_existing_vault_from_toolbar_locks_first", async () => {
     vi.mocked(open).mockResolvedValue("/vaults/B.kdbx");
-    const { fake, user } = await unlocked();
+    const fake = createFakeBackend({ session: "unlocked" });
+    fake.state.vaults["/vaults/B.kdbx"] = {
+      entries: [makeEntry({ id: "b-1", title: "Vault B login", modified: 1 })],
+      groups: fixtureGroups().filter((g) => g.isRecycleBin),
+    };
+    const { user } = await unlocked(fake);
     expect(fake.state.openWarnings).toEqual([]);
-    await menuItem(user, "Import", "Open Existing .kdbx…");
+    // Vault A: a search, a selection, an open editor with typed text.
+    const search = screen.getByRole("searchbox", { name: "Search" });
+    await user.type(search, "git");
+    await waitFor(() => expect(options()).toHaveLength(2));
+    await user.click(option(/GitHub/));
+    await user.click(await within(pane()).findByRole("button", { name: "Edit" }));
+    await user.type(await screen.findByLabelText("Notes"), "typed-in-vault-a");
+    await menuItem(user, "Import", "Open Existing .kdbx\u2026");
+    // The editor is dirty: the toolbar asks before it locks.
+    await user.click(await screen.findByRole("button", { name: "Discard" }));
     const sheet = await screen.findByRole("dialog", { name: "Open vault" });
     expect(session.status.state).toBe("locked");
     expect(body()).not.toContain("GitHub");
-    // Vault B is another file with other content; the fake swaps it in when the password is accepted.
-    fake.state.entries = [makeEntry({ id: "b-1", title: "Vault B login", modified: 1 })];
+    expect(body()).not.toContain("typed-in-vault-a");
     await user.type(within(sheet).getByLabelText("Master password"), FIXTURE_MASTER_PASSWORD);
     await user.click(within(sheet).getByRole("button", { name: "Open" }));
     await waitFor(() => expect(session.status.state).toBe("unlocked"));
@@ -256,6 +270,39 @@ describe("journeys", () => {
     await waitFor(() => expect(titles()).toEqual(["Vault B login"]));
     expect(body()).not.toContain("GitHub");
     expect(body()).not.toContain("GitLab");
+    expect(body()).not.toContain("typed-in-vault-a");
+    // Nothing of vault A's navigation survives into vault B.
+    expect(screen.queryByRole("heading", { name: "GitHub" })).toBeNull();
+    expect(navigation.selectedId).toBeNull();
+    expect(navigation.editModel).toBeNull();
+    expect((screen.getByRole("searchbox", { name: "Search" }) as HTMLInputElement).value).toBe("");
+    expect(entries.searchText).toBe("");
+  });
+
+  it("journey_vault_switch_without_a_lock_drops_everything_of_the_old_vault", async () => {
+    // The backend can swap the open vault without passing through `locked`; the window must not
+    // carry the old vault's selection, revealed secret or typed text across.
+    const fake = createFakeBackend({ session: "unlocked" });
+    fake.state.vaults["/vaults/B.kdbx"] = {
+      entries: [makeEntry({ id: "b-1", title: "Vault B login", modified: 1 })],
+      groups: fixtureGroups().filter((g) => g.isRecycleBin),
+    };
+    const { user } = await unlocked(fake);
+    await user.click(option(/GitHub/));
+    await reveal(user, "Password");
+    await waitFor(() => expect(body()).toContain(FIXTURE_LOGIN_PASSWORD));
+    await user.click(within(pane()).getByRole("button", { name: "Edit" }));
+    await user.type(await screen.findByLabelText("Notes"), "typed-in-vault-a");
+    await user.type(screen.getByRole("searchbox", { name: "Search" }), "git");
+    const switched = { ...fake.state.session, vaultPath: "/vaults/B.kdbx", vaultName: "B" };
+    fake.state.entries = structuredClone(fake.state.vaults["/vaults/B.kdbx"]!.entries);
+    fake.state.groups = structuredClone(fake.state.vaults["/vaults/B.kdbx"]!.groups);
+    await fake.emit("sessionChanged", switched);
+    await waitFor(() => expect(titles()).toEqual(["Vault B login"]));
+    expect(body()).not.toContain("typed-in-vault-a");
+    expect(body()).not.toContain(FIXTURE_LOGIN_PASSWORD);
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "GitHub" })).toBeNull();
   });
 
   it("journey_large_type_and_exclusive_reveal", async () => {

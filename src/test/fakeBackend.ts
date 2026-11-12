@@ -104,6 +104,8 @@ export interface FakeState {
   /** The group tree below the root (the recycle bin last); `group_*` commands edit it. */
   groups: GroupNode_Serialize[];
   masterPassword: string;
+  /** Vaults a test registers by path: `vault_open` of one loads its own content and password. */
+  vaults: Record<string, { entries: FixtureEntry[]; groups: GroupNode_Serialize[]; masterPassword?: string }>;
   /** What `vault_open_warnings` answers for every path (default none). */
   openWarnings: OpenWarning[];
   /** The recent-vaults list `vault_recent` returns; `vault_forget` and a successful open/create edit it. */
@@ -176,6 +178,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     entries: fixtureEntries(),
     groups: fixtureGroups(),
     masterPassword: FIXTURE_MASTER_PASSWORD,
+    vaults: {},
     openWarnings: [],
     recents: [],
     foundFiles: [],
@@ -826,8 +829,22 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       setSession({ ...state.session, state: "locked", lockReason: "manual" });
       return null;
     },
+    // Like Rust, opening loads THAT file: a registered path brings its own content and password,
+    // the path already open keeps its state, any other path is the default fixture vault.
     vaultOpen: ({ path, password }) => {
-      if (password !== state.masterPassword) throw apiError("wrongPassword");
+      const own = state.vaults[path];
+      if (own) {
+        if (password !== (own.masterPassword ?? state.masterPassword)) throw apiError("wrongPassword");
+        state.masterPassword = own.masterPassword ?? state.masterPassword;
+        state.entries = structuredClone(own.entries);
+        state.groups = structuredClone(own.groups);
+      } else {
+        if (password !== state.masterPassword) throw apiError("wrongPassword");
+        if (path !== state.session.vaultPath) {
+          state.entries = fixtureEntries();
+          state.groups = fixtureGroups();
+        }
+      }
       return openVault(path, fileNameOf(path).replace(/\.kdbx$/i, ""));
     },
     vaultOpenWarnings: () => structuredClone(state.openWarnings),

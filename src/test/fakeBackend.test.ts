@@ -6,7 +6,7 @@ import { createFakeBackend } from "./fakeBackend";
 import { BIN_GROUP_ID, WORK_GROUP_ID } from "./fixtures";
 import { renderWithBackend } from "./render";
 import MainApp from "../windows/MainApp.svelte";
-import { commands } from "../lib/bindings";
+import { commands, events } from "../lib/bindings";
 
 describe("fake backend", () => {
   it("fake_backend_covers_every_binding_command", () => {
@@ -40,6 +40,28 @@ describe("fake backend", () => {
     expect(table).not.toContain("NotImplementedInFake");
     expect(text).toContain("} satisfies Handlers;");
     expect(text).toMatch(/export type Handlers = \{ \[K in CommandName\]: Handler<K> \};/);
+  });
+
+  it("fake_backend_emits_only_events_that_bindings_define", () => {
+    const text = readFileSync(resolve(process.cwd(), "src/test/fakeBackend.ts"), "utf8");
+    const published = [...text.matchAll(/publish\("([a-zA-Z]+)"/g)].map((m) => m[1] as string);
+    expect(published.length).toBeGreaterThan(0);
+    for (const name of new Set(published)) expect(Object.keys(events), name).toContain(name);
+  });
+
+  it("vault_open_loads_the_state_of_the_path_it_opens", async () => {
+    const fake = createFakeBackend({ session: "unlocked" });
+    fake.state.vaults["/vaults/B.kdbx"] = { entries: [], groups: [], masterPassword: "b-secret" };
+    renderWithBackend(MainApp, {}, fake);
+    const wrong = await commands.vaultOpen("/vaults/B.kdbx", "correct horse battery");
+    expect(wrong).toMatchObject({ status: "error", error: { code: "wrongPassword" } });
+    expect(fake.state.entries.length).toBeGreaterThan(0);
+    expect(await commands.vaultOpen("/vaults/B.kdbx", "b-secret")).toMatchObject({ status: "ok" });
+    expect(fake.state.entries).toEqual([]);
+    // An unregistered path is the default fixture vault again, with its own password.
+    fake.state.masterPassword = "correct horse battery";
+    expect(await commands.vaultOpen("/vaults/other.kdbx", "correct horse battery")).toMatchObject({ status: "ok" });
+    expect(fake.state.entries.length).toBeGreaterThan(0);
   });
 
   it("fake_app_info_reports_device_unlock_flag_and_os", async () => {
