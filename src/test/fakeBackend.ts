@@ -811,6 +811,9 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     vaultCreate: ({ path, password, name }) => {
       if (state.existingFiles.includes(path)) throw apiError("alreadyExists");
       state.masterPassword = password;
+      // A new vault is empty: the fixture content belongs to the vault that was open before.
+      state.entries = [];
+      state.groups = fixtureGroups().filter((g) => g.isRecycleBin);
       return openVault(path, name);
     },
     vaultFindFiles: () => structuredClone(state.foundFiles),

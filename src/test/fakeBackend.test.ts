@@ -31,6 +31,17 @@ describe("fake backend", () => {
     for (const [name, wireName] of wire) expect(snake(name ?? ""), name).toBe(wireName);
   });
 
+  it("no_handler_throws_not_implemented_in_fake", () => {
+    // Every command has a real, stateful handler: `NotImplementedInFake` is only the dispatcher's
+    // answer for a wire name that is not a command at all.
+    const text = readFileSync(resolve(process.cwd(), "src/test/fakeBackend.ts"), "utf8");
+    const table = /const handlers = \{([\s\S]*?)\} satisfies Handlers;/.exec(text)?.[1] ?? "";
+    expect(table.length).toBeGreaterThan(1000);
+    expect(table).not.toContain("NotImplementedInFake");
+    expect(text).toContain("} satisfies Handlers;");
+    expect(text).toMatch(/export type Handlers = \{ \[K in CommandName\]: Handler<K> \};/);
+  });
+
   it("fake_app_info_reports_device_unlock_flag_and_os", async () => {
     const fake = createFakeBackend({ os: "windows", deviceUnlockAvailable: true });
     renderWithBackend(MainApp, {}, fake);
