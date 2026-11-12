@@ -215,6 +215,14 @@ mod tests {
         }
     }
 
+    /// The tray menu, the window close and the panel share `request_quit`: no second way in.
+    #[test]
+    fn the_tray_menu_and_window_close_quit_through_request_quit() {
+        let runtime = include_str!("../shell_runtime.rs");
+        assert!(!runtime.contains("app.exit(0)"));
+        assert!(runtime.matches("request_quit(app)").count() >= 2);
+    }
+
     #[test]
     fn open_entry_while_locked_touches_no_window_and_emits_nothing() {
         let w = world();
