@@ -11,6 +11,7 @@
   import { lockGuard } from "../lib/lock-guard";
   import { entries } from "../lib/stores/entries.svelte";
   import { navigation } from "../lib/stores/navigation.svelte";
+  import { webUrl } from "../lib/web-url";
   import { toasts } from "../lib/stores/toasts.svelte";
   import Avatar from "../lib/ui/Avatar.svelte";
   import Button from "../lib/ui/Button.svelte";
@@ -127,18 +128,13 @@
   const openWebsite = (id: string) =>
     guard(async () => {
       const raw = await api.entryReveal(id, { kind: "url" });
-      let url: URL | null = null;
-      try {
-        url = new URL(raw);
-      } catch {
-        url = null;
-      }
       // Only web pages are ever handed to the system; `javascript:`, `file:` and friends are not.
-      if (!url || (url.protocol !== "https:" && url.protocol !== "http:")) {
+      const url = webUrl(raw);
+      if (url === null) {
         toasts.push("error", t("Invalid input"));
         return;
       }
-      await openUrl(url.href);
+      await openUrl(url);
     });
 
   const toggleFavorite = (entry: EntrySummary) => guard(() => api.entrySetFavorite(entry.id, !entry.favorite));

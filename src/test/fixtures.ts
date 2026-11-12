@@ -3,13 +3,16 @@
 import type {
   AddressDto,
   AttachmentMeta,
+  CardEdit,
   Category,
   CategoryCount_Serialize,
+  CustomFieldEdit,
   EntryDetailDto_Serialize,
   EntryEditModel_Serialize,
   EntryQuery,
   EntrySummary,
   GroupNode_Serialize,
+  PasskeyMeta_Serialize,
   Scope,
   SecurityFlag,
   SessionStatus_Serialize,
@@ -19,6 +22,8 @@ import type {
 
 export const FIXTURE_MASTER_PASSWORD = "correct horse battery";
 export const FIXTURE_LOGIN_PASSWORD = "hunter2";
+export const FIXTURE_CARD_NUMBER = "4111111111111111";
+export const FIXTURE_CARD_CVV = "737";
 export const FIXTURE_VAULT_PATH = "/vaults/test.kdbx";
 
 export const ROOT_GROUP_ID = "group-root";
@@ -31,6 +36,9 @@ export interface FixtureEntry {
   summary: EntrySummary;
   model: EntryEditModel_Serialize;
   modified: number;
+  /** What `entry_get` reports besides the edit model. */
+  passkey: PasskeyMeta_Serialize | null;
+  historyCount: number;
 }
 
 export interface EntrySpec {
@@ -50,6 +58,10 @@ export interface EntrySpec {
   address?: AddressDto;
   attachments?: AttachmentMeta[];
   hasPasskey?: boolean;
+  card?: CardEdit;
+  customFields?: CustomFieldEdit[];
+  passkey?: PasskeyMeta_Serialize;
+  historyCount?: number;
   modified: number;
 }
 
@@ -60,6 +72,8 @@ export function makeEntry(spec: EntrySpec): FixtureEntry {
   const favorite = spec.favorite ?? false;
   return {
     modified: spec.modified,
+    passkey: spec.passkey ?? null,
+    historyCount: spec.historyCount ?? 0,
     summary: {
       id: spec.id,
       title: spec.title,
@@ -67,7 +81,7 @@ export function makeEntry(spec: EntrySpec): FixtureEntry {
       entryType,
       favorite,
       hasTotp: spec.hasTotp ?? false,
-      hasPasskey: spec.hasPasskey ?? false,
+      hasPasskey: (spec.hasPasskey ?? false) || spec.passkey !== undefined,
       attachmentCount: spec.attachments?.length ?? 0,
       modified: spec.modified,
       groupId,
@@ -83,12 +97,12 @@ export function makeEntry(spec: EntrySpec): FixtureEntry {
       username: spec.username ?? spec.subtitle ?? "",
       password: spec.password ?? "",
       urls: spec.urls ?? [],
-      uriMatchMode: "domain",
+      uriMatchMode: "registrable-domain",
       totp: "",
       notes: spec.notes ?? "",
       address: spec.address ?? null,
-      card: null,
-      customFields: [],
+      card: spec.card ?? null,
+      customFields: spec.customFields ?? [],
       attachments: spec.attachments ?? [],
       attachmentOps: [],
     },
@@ -117,7 +131,13 @@ export function fixtureEntries(): FixtureEntry[] {
       flags: ["weak"],
       modified: 1_700_000_200_000,
     }),
-    makeEntry({ id: "e-visa", title: "Visa", entryType: "card", modified: 1_700_000_100_000 }),
+    makeEntry({
+      id: "e-visa",
+      title: "Visa",
+      entryType: "card",
+      card: { holder: "Ann Visa", number: FIXTURE_CARD_NUMBER, expiry: "12/30", cvv: FIXTURE_CARD_CVV },
+      modified: 1_700_000_100_000,
+    }),
     makeEntry({ id: "e-notes", title: "Server notes", entryType: "notes", modified: 1_700_000_000_000 }),
     makeEntry({
       id: "e-old",
@@ -293,13 +313,21 @@ export function detailOf(e: FixtureEntry): EntryDetailDto_Serialize {
     hasPassword: model.password !== "",
     totpPeriod: summary.hasTotp ? 30 : null,
     totpDigits: summary.hasTotp ? 6 : null,
-    passkey: null,
-    address: null,
-    card: null,
+    passkey: e.passkey,
+    address: model.address,
+    card: model.card
+      ? {
+          holder: model.card.holder,
+          numberLast4: model.card.number.slice(-4),
+          expiry: model.card.expiry,
+          hasCvv: model.card.cvv !== "",
+        }
+      : null,
     hasNotes: model.notes !== "",
-    customFields: [],
-    attachments: [],
-    historyCount: 0,
+    // A protected field's value never travels in the detail.
+    customFields: model.customFields.map((f) => ({ key: f.key, protected: f.protected, value: f.protected ? null : f.value })),
+    attachments: structuredClone(model.attachments),
+    historyCount: e.historyCount,
     inRecycleBin: summary.inRecycleBin,
   };
 }

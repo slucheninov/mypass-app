@@ -100,4 +100,33 @@ describe("fake backend", () => {
     expect(await commands.groupDelete(bin)).toMatchObject({ status: "error", error: { code: "invalidInput" } });
     expect(await commands.groupMove(bin, "")).toMatchObject({ status: "error", error: { code: "invalidInput" } });
   });
+
+  it("fake_detail_commands_reveal_copy_totp_export_and_save_like_the_backend", async () => {
+    const fake = createFakeBackend({ session: "unlocked" });
+    renderWithBackend(MainApp, {}, fake);
+    const ok = (r: { status: string }) => r.status === "ok";
+    // Reveal and copy resolve every field kind; an unknown custom key is notFound.
+    expect(await commands.entryReveal("e-visa", { kind: "cardCvv" })).toEqual({ status: "ok", data: "737" });
+    expect(await commands.entryReveal("e-visa", { kind: "cardNumber" })).toEqual({ status: "ok", data: "4111111111111111" });
+    expect(await commands.entryReveal("e-github", { kind: "totp" })).toEqual({ status: "ok", data: "123456" });
+    expect(await commands.entryReveal("e-gitlab", { kind: "totp" })).toMatchObject({ status: "error", error: { code: "invalidInput" } });
+    expect(await commands.entryCopy("e-github", { kind: "custom", key: "nope" })).toMatchObject({ status: "error", error: { code: "notFound" } });
+    expect(ok(await commands.entryTotp("e-github"))).toBe(true);
+    // The detail never carries a protected value, a card number or a CVV.
+    const detail = await commands.entryGet("e-visa");
+    expect(JSON.stringify(detail)).not.toContain("4111111111111111");
+    expect(JSON.stringify(detail)).not.toContain("737");
+    // Save replaces the editable content; restore takes an entry out of the bin.
+    const model = fake.state.entries.find((e) => e.summary.id === "e-github")!.model;
+    expect(await commands.entrySave({ ...structuredClone(model), urls: ["https://b.test"] })).toEqual({ status: "ok", data: "e-github" });
+    expect(fake.state.entries.find((e) => e.summary.id === "e-github")!.model.urls).toEqual(["https://b.test"]);
+    expect(ok(await commands.entryRestore("e-old", null))).toBe(true);
+    expect(fake.state.entries.find((e) => e.summary.id === "e-old")!.summary.inRecycleBin).toBe(false);
+    // Export answers false when the (Rust-side) save dialog is cancelled.
+    fake.state.entries[0]!.model.attachments = [{ name: "a.txt", size: 1 }];
+    expect(await commands.attachmentExport("e-github", "a.txt")).toEqual({ status: "ok", data: true });
+    fake.state.exportCancelled = true;
+    expect(await commands.attachmentExport("e-github", "a.txt")).toEqual({ status: "ok", data: false });
+    expect(await commands.attachmentExport("e-github", "b.txt")).toMatchObject({ status: "error", error: { code: "notFound" } });
+  });
 });

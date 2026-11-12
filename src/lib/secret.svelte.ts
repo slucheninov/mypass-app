@@ -1,3 +1,4 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { session } from "./stores/session.svelte";
 
 /**
@@ -41,3 +42,91 @@ export function createRevealed(): {
     hide,
   };
 }
+
+export type Revealed = ReturnType<typeof createRevealed>;
+
+/**
+ * Calls `cb` when the window stops being visible: the document becomes hidden, or the Tauri
+ * window reports itself minimised after a resize (WKWebView does not always fire
+ * `visibilitychange` for a minimise). Returns the unsubscriber. Outside Tauri only the document
+ * event is available.
+ */
+export function onWindowHidden(cb: () => void): () => void {
+  let active = true;
+  let unlisten: (() => void) | null = null;
+  const onVisibility = () => {
+    if (document.visibilityState === "hidden") cb();
+  };
+  document.addEventListener("visibilitychange", onVisibility);
+  try {
+    const win = getCurrentWindow();
+    win
+      .onResized(async () => {
+        try {
+          if (active && (await win.isMinimized())) cb();
+        } catch {
+          // A refused or failed query: the document event still covers the common case.
+        }
+      })
+      .then((off) => {
+        if (active) unlisten = off;
+        else off();
+      })
+      .catch(() => undefined);
+  } catch {
+    // No Tauri window here (tests, a plain browser).
+  }
+  return () => {
+    active = false;
+    document.removeEventListener("visibilitychange", onVisibility);
+    unlisten?.();
+    unlisten = null;
+  };
+}
+
+/**
+ * Revealed values that exclude each other: revealing one member hides every other, so only one
+ * secret of a group is ever visible (notes and fields of one entry share a group). The window
+ * hiding or minimising hides all of them. `destroy()` (call it when the owner unmounts) hides
+ * everything and drops the window subscription.
+ */
+export function createRevealGroup(): {
+  create(): Revealed;
+  hideAll(): void;
+  destroy(): void;
+} {
+  const members = new Set<Revealed>();
+  let offWindow: (() => void) | null = null;
+
+  function hideAll() {
+    for (const member of members) member.hide();
+  }
+
+  return {
+    create() {
+      offWindow ??= onWindowHidden(hideAll);
+      const inner = createRevealed();
+      const member: Revealed = {
+        get value() {
+          return inner.value;
+        },
+        async reveal(load) {
+          for (const other of members) if (other !== member) other.hide();
+          await inner.reveal(load);
+        },
+        hide: inner.hide,
+      };
+      members.add(member);
+      return member;
+    },
+    hideAll,
+    destroy() {
+      hideAll();
+      members.clear();
+      offWindow?.();
+      offWindow = null;
+    },
+  };
+}
+
+export type RevealGroup = ReturnType<typeof createRevealGroup>;

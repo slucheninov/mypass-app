@@ -11,6 +11,7 @@ import type {
   ApiError,
   commands,
   events,
+  FieldRef,
   FoundVaultFileDto,
   GroupNode_Serialize,
   OpenWarning,
@@ -18,6 +19,7 @@ import type {
   SessionState,
   SessionStatus_Serialize,
   Settings_Serialize,
+  TotpDto,
 } from "../lib/bindings";
 import {
   BIN_GROUP_ID,
@@ -106,6 +108,12 @@ export interface FakeState {
   existingFiles: string[];
   /** The vault's `RecycleBinEnabled` flag, reported by `sidebar_get`; when false a delete purges. */
   recycleBinEnabled: boolean;
+  /** What `entry_totp` answers (and `entry_reveal`/`entry_copy` resolve a `totp` field to). */
+  totp: TotpDto;
+  /** Makes `attachment_export` answer `false`, like a cancelled save dialog. */
+  exportCancelled: boolean;
+  /** What the window plugin's `is_minimized` answers (only reachable after `mockWindows`). */
+  minimized: boolean;
 }
 
 export interface FakeBackend {
@@ -135,6 +143,9 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     foundFiles: [],
     existingFiles: [],
     recycleBinEnabled: true,
+    totp: { code: "123456", secondsRemaining: 12, period: 30 },
+    exportCancelled: false,
+    minimized: false,
   };
   // The real backend emits its events as a side effect of a command; so does the fake.
   const publish = (event: EventName, payload: unknown) => void emit(kebab(event), payload ?? null);
@@ -181,6 +192,32 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     }
   };
   const changed = () => publish("vaultChanged", null);
+  /** The value behind a field reference, as the backend would copy or reveal it. */
+  const secretOf = (entry: FixtureEntry, field: FieldRef): string => {
+    const { model } = entry;
+    switch (field.kind) {
+      case "password":
+        return model.password;
+      case "username":
+        return model.username;
+      case "url":
+        return model.urls[0] ?? "";
+      case "notesBody":
+        return model.notes;
+      case "cardNumber":
+        return model.card?.number ?? "";
+      case "cardCvv":
+        return model.card?.cvv ?? "";
+      case "totp":
+        if (!entry.summary.hasTotp) throw apiError("invalidInput");
+        return state.totp.code;
+      case "custom": {
+        const found = model.customFields.find((f) => f.key === field.key);
+        if (!found) throw apiError("notFound");
+        return found.value;
+      }
+    }
+  };
   let groupSeq = 0;
 
   const setSession = (next: SessionStatus_Serialize) => {
@@ -219,7 +256,12 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     appOpenSettings: () => null,
     appRecordActivity: () => null,
     appRevealBackups: notImplemented("appRevealBackups"),
-    attachmentExport: notImplemented("attachmentExport"),
+    // Like Rust: the save dialog opens there; `false` means the user cancelled it.
+    attachmentExport: ({ entryId, name }) => {
+      requireUnlocked();
+      if (!findEntry(entryId).model.attachments.some((a) => a.name === name)) throw apiError("notFound");
+      return !state.exportCancelled;
+    },
     attachmentPick: notImplemented("attachmentPick"),
     backupList: notImplemented("backupList"),
     backupRestore: notImplemented("backupRestore"),
@@ -229,10 +271,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     // The value goes to the (fake) clipboard inside Rust and never reaches the webview.
     entryCopy: ({ id, field }) => {
       requireUnlocked();
-      findEntry(id);
-      if (field.kind !== "password" && field.kind !== "username" && field.kind !== "url") {
-        throw new NotImplementedInFake(`entryCopy(${field.kind})`);
-      }
+      secretOf(findEntry(id), field);
       return null;
     },
     entryDelete: ({ id }) => {
@@ -284,7 +323,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         username: "",
         password: "",
         urls: [],
-        uriMatchMode: "domain",
+        uriMatchMode: "registrable-domain",
         totp: "",
         notes: "",
         address: null,
@@ -309,16 +348,32 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         .slice(0, limit)
         .map((e) => structuredClone(e.summary));
     },
-    entryRestore: notImplemented("entryRestore"),
+    // Back to the group it came from; the fake does not remember it, so Personal.
+    entryRestore: ({ id, groupId }) => {
+      requireUnlocked();
+      const found = findEntry(id);
+      const target = groupId ?? PERSONAL_GROUP_ID;
+      found.summary.groupId = target;
+      found.model.groupId = target;
+      found.summary.inRecycleBin = false;
+      changed();
+      return null;
+    },
     entryReveal: ({ id, field }) => {
       requireUnlocked();
-      const { model } = findEntry(id);
-      if (field.kind === "password") return model.password;
-      if (field.kind === "username") return model.username;
-      if (field.kind === "url") return model.urls[0] ?? "";
-      throw new NotImplementedInFake(`entryReveal(${field.kind})`);
+      return secretOf(findEntry(id), field);
     },
-    entrySave: notImplemented("entrySave"),
+    // Replaces the entry's editable content with the model, like `Database::save_entry`.
+    entrySave: ({ model }) => {
+      requireUnlocked();
+      const found = findEntry(model.id);
+      found.model = { ...structuredClone(model), attachmentOps: [] };
+      found.summary.title = model.title;
+      found.summary.favorite = model.favorite;
+      found.summary.subtitle = model.username;
+      changed();
+      return found.summary.id;
+    },
     entrySetFavorite: ({ id, favorite }) => {
       requireUnlocked();
       const found = findEntry(id);
@@ -327,7 +382,11 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       changed();
       return null;
     },
-    entryTotp: notImplemented("entryTotp"),
+    entryTotp: ({ id }) => {
+      requireUnlocked();
+      if (!findEntry(id).summary.hasTotp) throw apiError("invalidInput");
+      return { ...state.totp };
+    },
     entryTouch: notImplemented("entryTouch"),
     generatorCopy: notImplemented("generatorCopy"),
     generatorGenerate: notImplemented("generatorGenerate"),
@@ -430,7 +489,10 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     (Object.keys(handlers) as CommandName[]).map((name) => [snake(name), name]),
   );
   const calls: FakeCall[] = [];
-  const pluginHandlers: Record<string, (payload: unknown) => unknown> = { ...opts.plugins };
+  const pluginHandlers: Record<string, (payload: unknown) => unknown> = {
+    "plugin:window|is_minimized": () => state.minimized,
+    ...opts.plugins,
+  };
 
   return {
     handlers,
