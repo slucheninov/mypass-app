@@ -1,12 +1,35 @@
-import { i18n } from "./index.svelte";
+import { i18n, type Lang } from "./index.svelte";
+
+const dateFormats = new Map<string, Intl.DateTimeFormat>();
+const numberFormats = new Map<Lang, Intl.NumberFormat>();
+const wholeFormats = new Map<Lang, Intl.NumberFormat>();
+
+function dateFormat(lang: Lang, style: "date" | "datetime"): Intl.DateTimeFormat {
+  const id = `${lang}:${style}`;
+  let f = dateFormats.get(id);
+  if (!f) {
+    f = new Intl.DateTimeFormat(
+      lang,
+      style === "date" ? { dateStyle: "medium" } : { dateStyle: "medium", timeStyle: "short" },
+    );
+    dateFormats.set(id, f);
+  }
+  return f;
+}
+
+function numberFormat(lang: Lang, whole: boolean): Intl.NumberFormat {
+  const cache = whole ? wholeFormats : numberFormats;
+  let f = cache.get(lang);
+  if (!f) {
+    f = new Intl.NumberFormat(lang, { maximumFractionDigits: whole ? 0 : 1 });
+    cache.set(lang, f);
+  }
+  return f;
+}
 
 /** Formats a Unix-millisecond timestamp (the backend's unit) with `Intl` in the active UI language. */
 export function formatDate(ms: number, style: "date" | "datetime" = "date"): string {
-  const opts: Intl.DateTimeFormatOptions =
-    style === "date"
-      ? { dateStyle: "medium" }
-      : { dateStyle: "medium", timeStyle: "short" };
-  return new Intl.DateTimeFormat(i18n.lang, opts).format(new Date(ms));
+  return dateFormat(i18n.lang, style).format(new Date(ms));
 }
 
 const UNITS = ["B", "KB", "MB", "GB", "TB"];
@@ -19,6 +42,5 @@ export function formatBytes(n: number): string {
     value /= 1024;
     unit += 1;
   }
-  const num = new Intl.NumberFormat(i18n.lang, { maximumFractionDigits: unit === 0 ? 0 : 1 }).format(value);
-  return `${num} ${UNITS[unit]}`;
+  return `${numberFormat(i18n.lang, unit === 0).format(value)} ${UNITS[unit]}`;
 }
