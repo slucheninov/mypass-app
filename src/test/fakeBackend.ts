@@ -1,6 +1,6 @@
-// An in-memory stand-in for the Rust backend, installed with `mockIPC` (see render.ts). It is grown
-// task by task: a command no task has implemented yet throws `NotImplementedInFake(<name>)`, so a
-// test that needs one fails loudly instead of getting a silent default.
+// An in-memory stand-in for the Rust backend, installed with `mockIPC` (see render.ts). Every command
+// of bindings.ts has a handler; a wire name it does not know (an unknown command or plugin call)
+// throws `NotImplementedInFake(<name>)`, so a test never gets a silent default.
 //
 // The `handlers` object is typed against the generated `commands` of bindings.ts, so a command
 // added on the Rust side and missing here fails `pnpm check`; the key sets are also compared at
@@ -12,6 +12,7 @@ import type {
   AttachmentMeta,
   BackupFailure,
   BackupItem,
+  CsvPreview,
   commands,
   DraftVersionDto,
   events,
@@ -27,6 +28,7 @@ import type {
   SessionState,
   SessionStatus_Serialize,
   Settings_Serialize,
+  ShortcutConflictEvent,
   TotpDto,
 } from "../lib/bindings";
 import {
@@ -76,12 +78,6 @@ export class NotImplementedInFake extends Error {
 /** A handler that throws a backend failure: `throw apiError("locked")` inside a handler. */
 export function apiError(code: ApiError["code"], message = ""): ApiError {
   return { code, message };
-}
-
-function notImplemented<K extends CommandName>(command: K): Handler<K> {
-  return () => {
-    throw new NotImplementedInFake(command);
-  };
 }
 
 export interface FakeBackendOptions {
@@ -148,6 +144,14 @@ export interface FakeState {
   loginItemError: string | null;
   /** A failure the next `settings_update` throws (then it is cleared). */
   settingsFailure: ApiError["code"] | null;
+  /** What the next `import_csv_preview` shows, like the file chosen in the native dialog (`null` = cancelled). */
+  csvPreview: CsvPreview | null;
+  /** A failure the next `import_csv_preview` throws (then it is cleared), with the backend's English message. */
+  csvFailure: ApiError | null;
+  /** What the next `shortcut_conflicts_take` returns (and empties). */
+  shortcutConflicts: ShortcutConflictEvent[];
+  /** Ids `entry_touch` was called with, in order. */
+  touched: string[];
 }
 
 export interface FakeBackend {
@@ -192,7 +196,13 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     loginItem: "disabled",
     loginItemError: null,
     settingsFailure: null,
+    csvPreview: null,
+    csvFailure: null,
+    touched: [],
+    shortcutConflicts: [],
   };
+  /** Like the Rust grant: set by a successful preview, spent by the next commit. */
+  let csvRemembered: CsvPreview | null = null;
   // The real backend emits its events as a side effect of a command; so does the fake.
   const publish = (event: EventName, payload: unknown) => void emit(kebab(event), payload ?? null);
   const requireUnlocked = () => {
@@ -314,8 +324,18 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       os,
       deviceUnlockAvailable,
     }),
-    appOpenEntry: notImplemented("appOpenEntry"),
+    // Like Rust: a locked session or a missing entry does nothing; otherwise the main window shows
+    // and `OpenEntryEvent` goes out (the window calls are not modelled).
+    appOpenEntry: ({ id, edit }) => {
+      if (state.session.state !== "unlocked") return null;
+      if (!state.entries.some((e) => e.summary.id === id)) return null;
+      publish("openEntryEvent", { id, edit });
+      return null;
+    },
     appOpenSettings: () => null,
+    // Only the call log matters: the window and the quit flow live in Rust.
+    appQuit: () => null,
+    appShowMain: () => null,
     appRecordActivity: () => null,
     // Only the call log matters: the file manager opens on the Rust side.
     appRevealBackups: () => null,
@@ -593,7 +613,12 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       if (!findEntry(id).summary.hasTotp) throw apiError("invalidInput");
       return { ...state.totp };
     },
-    entryTouch: notImplemented("entryTouch"),
+    entryTouch: ({ id }) => {
+      requireUnlocked();
+      findEntry(id);
+      state.touched.push(id);
+      return null;
+    },
     // The value goes to the (fake) clipboard inside Rust; with a record URL the history is written first.
     generatorCopy: ({ value, recordUrl }) => {
       if (recordUrl !== null && recordUrl !== undefined) {
@@ -718,8 +743,35 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       changed();
       return null;
     },
-    importCsvCommit: notImplemented("importCsvCommit"),
-    importCsvPreview: notImplemented("importCsvPreview"),
+    // Like Rust: the file is chosen in a native dialog there; a failed preview forgets the earlier file.
+    importCsvPreview: () => {
+      requireUnlocked();
+      csvRemembered = null;
+      if (state.csvFailure) {
+        const failure = state.csvFailure;
+        state.csvFailure = null;
+        throw failure;
+      }
+      if (state.csvPreview === null) return null;
+      csvRemembered = structuredClone(state.csvPreview);
+      return structuredClone(state.csvPreview);
+    },
+    // The remembered file is spent by the commit; the fake writes one login per sample title (so a
+    // total beyond the five titles imports as many as the titles it knows).
+    importCsvCommit: ({ groupId }) => {
+      requireUnlocked();
+      const preview = csvRemembered;
+      csvRemembered = null;
+      if (!preview) throw apiError("invalidInput", "no CSV file was previewed");
+      if (groupId !== ROOT_GROUP_ID && !locate(groupId)) throw apiError("notFound");
+      for (const [index, title] of preview.sampleTitles.entries()) {
+        state.entries.push(
+          makeEntry({ id: `csv-${++entrySeq}-${index}`, title, groupId, modified: 1_700_000_000_000 + entrySeq }),
+        );
+      }
+      changed();
+      return { imported: preview.total, skipped: preview.skipped.length };
+    },
     platformKeyboardLayout: () => keyboardLayout,
     settingsGet: () => structuredClone(state.settings),
     settingsLoginItemStatus: () => state.loginItem,
@@ -750,7 +802,8 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       publish("settingsChanged", structuredClone(state.settings));
       return structuredClone(state.settings);
     },
-    shortcutConflictsTake: notImplemented("shortcutConflictsTake"),
+    // Take-once like the Rust list: what the hotkey layer could not register at startup.
+    shortcutConflictsTake: () => state.shortcutConflicts.splice(0),
     sidebarGet: () => {
       requireUnlocked();
       return fixtureSidebar(state.entries, state.groups, state.recycleBinEnabled);

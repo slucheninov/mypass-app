@@ -12,10 +12,12 @@ import { settings } from "./settings.svelte";
  * hooks are registered synchronously, only the `VaultChanged` subscription is awaited), so theme and
  * language are applied even if one part cannot start; a failing part is reported, the rest keeps running.
  * `entries: false` is for a window that shows no entries (settings): it keeps the lock hooks and the
- * activity reporter but never fetches the list or the sidebar.
+ * activity reporter but never fetches the list or the sidebar. `saveToast: false` (tray panel, settings)
+ * leaves the sticky "Saving failed" toast to the main window.
  */
-export async function startStores(opts: { entries?: boolean } = {}): Promise<() => void> {
+export async function startStores(opts: { entries?: boolean; saveToast?: boolean } = {}): Promise<() => void> {
   const withEntries = opts.entries ?? true;
+  session.saveToasts = opts.saveToast ?? true;
   navigation.start();
   const stopActivity = startActivityReporter();
   const results = await Promise.allSettled([

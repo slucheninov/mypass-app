@@ -38,7 +38,8 @@ describe("fake backend", () => {
       status: "ok",
       data: { version: expect.any(String), os: "windows", deviceUnlockAvailable: true },
     });
-    expect(fake.calls.map((c) => c.command)).toEqual(["appInfo"]);
+    // The main window's event bridge takes the startup hotkey conflicts when it mounts.
+    expect(fake.calls.map((c) => c.command)).toEqual(["appInfo", "shortcutConflictsTake"]);
   });
 
   it("platform_keyboard_layout_is_null_unless_configured", async () => {
@@ -50,7 +51,7 @@ describe("fake backend", () => {
 
   it("an unimplemented command fails loudly", async () => {
     renderWithBackend(MainApp, {}, createFakeBackend());
-    await expect(commands.shortcutConflictsTake()).rejects.toThrow("NotImplementedInFake(shortcutConflictsTake)");
+    await expect(invoke("plugin:never|called")).rejects.toThrow("NotImplementedInFake(plugin:never|called)");
   });
 
   it("the settings window commands: backups, login item status and clamped settings", async () => {

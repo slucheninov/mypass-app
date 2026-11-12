@@ -237,9 +237,20 @@ describe("startStores", () => {
     delete document.documentElement.dataset.theme;
   });
 
-  it("main_ts_skips_entries_only_for_the_settings_window", async () => {
+  it("main_ts_skips_entries_and_the_save_toast_for_the_settings_and_tray_windows", async () => {
     const { readFileSync } = await import("node:fs");
     const text = readFileSync("src/main.ts", "utf8");
-    expect(text).toContain('startStores({ entries: getCurrentWindow().label !== "settings" })');
+    const either = 'label !== "settings" && label !== "tray-panel"';
+    expect(text).toContain(`entries: ${either}`);
+    expect(text).toContain(`saveToast: ${either}`);
+  });
+
+  it("save_toast_false_keeps_the_failed_save_status_but_raises_no_toast", async () => {
+    const fake = createFakeBackend({ session: "unlocked" });
+    fake.install();
+    stop = await startStores({ saveToast: false });
+    await fake.emit("saveStateChanged", { state: "failed", message: "disk is full" });
+    await vi.waitFor(() => expect(session.status.save.state).toBe("failed"));
+    expect(toasts.items).toHaveLength(0);
   });
 });

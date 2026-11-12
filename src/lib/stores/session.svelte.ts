@@ -33,6 +33,9 @@ class SessionStore {
   #seq = 0;
   #subscribed: Promise<void> | null = null;
   #saveToast: number | null = null;
+  /** Whether a failing save raises the sticky toast. Only the main window shows it: the tray panel
+   *  and the settings window would repeat the same message (`startStores({ saveToast })`). */
+  saveToasts = true;
 
   /** Calls `cb` whenever the session state changes (including the first load). Returns the unsubscriber. */
   onChange(cb: Listener): () => void {
@@ -124,6 +127,7 @@ class SessionStore {
     this.#listeners.clear();
     if (this.#saveToast !== null) toasts.dismiss(this.#saveToast);
     this.#saveToast = null;
+    this.saveToasts = true;
     this.status = { ...INITIAL };
     this.loaded = false;
     this.lockEpoch = 0;
@@ -161,7 +165,7 @@ class SessionStore {
   /** One sticky toast while saving keeps failing; the backend text goes into the details only. */
   #syncSaveToast(save: SessionStatus_Serialize["save"]): void {
     if (save.state === "failed") {
-      if (this.#saveToast === null) {
+      if (this.saveToasts && this.#saveToast === null) {
         this.#saveToast = toasts.push("error", t("Saving failed. MyPass will retry."), {
           sticky: true,
           ...(save.message ? { detail: save.message } : {}),

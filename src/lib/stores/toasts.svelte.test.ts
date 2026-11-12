@@ -51,12 +51,12 @@ describe("toasts store", () => {
 
   it("pause_stops_expiry_and_resume_restarts_it", () => {
     const id = toasts.push("info", "Hover me");
-    vi.advanceTimersByTime(4000);
+    vi.advanceTimersByTime(3000);
     toasts.pause(id);
     vi.advanceTimersByTime(60_000);
     expect(toasts.items).toHaveLength(1);
     toasts.resume(id);
-    vi.advanceTimersByTime(4999);
+    vi.advanceTimersByTime(3999);
     expect(toasts.items).toHaveLength(1);
     vi.advanceTimersByTime(1);
     expect(toasts.items).toHaveLength(0);
