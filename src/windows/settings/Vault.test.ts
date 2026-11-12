@@ -89,6 +89,26 @@ describe("backups", () => {
     expect(within(rows[0]!).getByText(date)).toBeTruthy();
   });
 
+  it("the_backup_list_reloads_after_an_unlock_or_a_vault_switch_but_not_a_save_state_change", async () => {
+    const { fake } = await open({ session: "locked" });
+    await screen.findByRole("combobox", { name: "Backup interval" });
+    await waitFor(() => expect(calls(fake, "backupList").length).toBeGreaterThan(0));
+    const n = () => calls(fake, "backupList").length;
+    const start = n();
+    await fake.emit("saveStateChanged", { state: "pending", message: null });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(n()).toBe(start);
+    fake.state.backups = structuredClone(BACKUPS);
+    await fake.emit("sessionChanged", { ...fake.state.session, state: "unlocked", vaultPath: "/vaults/a.kdbx" });
+    await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(2));
+    const afterUnlock = n();
+    expect(afterUnlock).toBeGreaterThan(start);
+    fake.state.backups = [];
+    await fake.emit("sessionChanged", { ...fake.state.session, state: "unlocked", vaultPath: "/vaults/b.kdbx" });
+    await waitFor(() => expect(n()).toBeGreaterThan(afterUnlock));
+    await waitFor(() => expect(screen.queryAllByRole("listitem")).toHaveLength(0));
+  });
+
   it("backup_restore_requires_confirmation_then_calls_backup_restore", async () => {
     const user = userEvent.setup();
     const { fake } = await open({}, (f) => (f.state.backups = structuredClone(BACKUPS)));

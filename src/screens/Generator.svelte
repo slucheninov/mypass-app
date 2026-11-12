@@ -7,7 +7,7 @@
   // anything; copying with a website does (the backend writes the history first). The history
   // list is whatever the backend holds: only ids, hosts and dates are kept here, a password only
   // while revealed (one at a time, through the shared reveal group).
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
   import { api, errorMessage } from "../lib/api";
   import type { GeneratorHistoryItem, RulesSummary_Serialize } from "../lib/bindings";
   import { formatDate } from "../lib/i18n/format";
@@ -64,6 +64,8 @@
   let history = $state<GeneratorHistoryItem[] | null>(null);
 
   let ruleSeq = 0;
+  /** Our own settings writes still in flight. */
+  let writes = 0;
   let genSeq = 0;
   let historySeq = 0;
   const group = createRevealGroup();
@@ -127,12 +129,24 @@
   });
 
   // The remembered defaults may load or change (another window) after mount.
+  // Only the settings value is tracked. Nothing is adopted while the user is mid-edit (a half-typed
+  // length) or while one of our own writes is in flight (its echo may carry an older toggle), and
+  // an unchanged generator section is not re-applied.
   $effect(() => {
     const g = settings.value?.generator;
     if (!g) return;
-    length = g.length;
-    chosen = { lowercase: g.lowercase, uppercase: g.uppercase, digits: g.digits, symbols: g.symbols };
-    draft = null;
+    untrack(() => {
+      if (draft !== null || writes > 0) return;
+      const same =
+        length === g.length &&
+        chosen.lowercase === g.lowercase &&
+        chosen.uppercase === g.uppercase &&
+        chosen.digits === g.digits &&
+        chosen.symbols === g.symbols;
+      if (same) return;
+      length = g.length;
+      chosen = { lowercase: g.lowercase, uppercase: g.uppercase, digits: g.digits, symbols: g.symbols };
+    });
   });
 
   function clearSecrets() {
@@ -168,9 +182,11 @@
   });
 
   function persist() {
+    writes++;
     void settings
       .update({ generator: { length, lowercase: chosen.lowercase, uppercase: chosen.uppercase, digits: chosen.digits, symbols: chosen.symbols } })
-      .catch((e) => toasts.reportError(e));
+      .catch((e) => toasts.reportError(e))
+      .finally(() => writes--);
   }
 
   function setLength(next: number) {

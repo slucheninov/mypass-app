@@ -92,10 +92,15 @@
 
   const dash = "—";
 
-  onMount(() => {
+  // The list belongs to one unlocked stretch of one vault: unlocking from another window or
+  // switching vaults reloads it. A primitive key, so a save-state change does not.
+  const vaultKey = $derived(session.status.state === "unlocked" ? (session.status.vaultPath ?? "") : null);
+  $effect(() => {
+    void vaultKey;
     void loadBackups();
-    return () => count.flush();
   });
+
+  onMount(() => () => count.flush());
 </script>
 
 <section class="card" aria-label={t("Vault")}>

@@ -19,12 +19,13 @@ afterEach(() => {
 });
 
 /** The generator alone on a fake backend, with the settings store loaded like a running window. */
-async function mount(props: ComponentProps<typeof Generator> = {}, prepare?: (fake: FakeBackend) => void) {
+async function mount(props: ComponentProps<typeof Generator> = {}, prepare?: (fake: FakeBackend) => void, listen = false) {
   const fake = createFakeBackend({ session: "unlocked" });
   prepare?.(fake);
   fake.install();
   await session.start();
-  await settings.load();
+  if (listen) await settings.start();
+  else await settings.load();
   const utils = render(Generator, { props });
   return { ...utils, fake };
 }
@@ -375,6 +376,29 @@ describe("review fixes", () => {
     await user.click(screen.getByRole("button", { name: "Generate" }));
     await waitFor(() => expect(calls(fake, "generatorGenerate")).toHaveLength(1));
     expect(calls(fake, "generatorGenerate")[0]!.args.req.options.length).toBe(12);
+  });
+
+  it("an_unrelated_settings_change_keeps_a_half_typed_length", async () => {
+    const user = userEvent.setup();
+    const { fake } = await mount({}, undefined, true);
+    await user.clear(field());
+    await user.type(field(), "1");
+    expect(field().value).toBe("1");
+    fake.state.settings = { ...fake.state.settings, theme: "dark" };
+    await fake.emit("settingsChanged", structuredClone(fake.state.settings));
+    await waitFor(() => expect(settings.value?.theme).toBe("dark"));
+    expect(field().value).toBe("1");
+  });
+
+  it("a_remote_generator_change_is_adopted_when_nothing_is_being_edited", async () => {
+    const { fake } = await mount({}, undefined, true);
+    fake.state.settings = {
+      ...fake.state.settings,
+      generator: { length: 33, lowercase: true, uppercase: true, digits: true, symbols: false },
+    };
+    await fake.emit("settingsChanged", structuredClone(fake.state.settings));
+    await waitFor(() => expect(field().value).toBe("33"));
+    expect(screen.getByRole("switch", { name: "Symbols" }).getAttribute("aria-checked")).toBe("false");
   });
 
   it("length_field_clamps_out_of_range_values_on_blur_and_enter", async () => {
