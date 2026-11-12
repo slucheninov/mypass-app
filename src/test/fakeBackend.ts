@@ -9,12 +9,15 @@ import { emit } from "@tauri-apps/api/event";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type {
   ApiError,
+  AttachmentMeta,
   commands,
+  DraftVersionDto,
   events,
   FieldRef,
   FoundVaultFileDto,
   GroupNode_Serialize,
   OpenWarning,
+  PickedFile,
   RecentVaultDto,
   SessionState,
   SessionStatus_Serialize,
@@ -28,6 +31,7 @@ import {
   ROOT_GROUP_ID,
   defaultSettings,
   detailOf,
+  makeEntry,
   fixtureEntries,
   fixtureGroups,
   fixtureSidebar,
@@ -114,6 +118,14 @@ export interface FakeState {
   exportCancelled: boolean;
   /** What the window plugin's `is_minimized` answers (only reachable after `mockWindows`). */
   minimized: boolean;
+  /** What the next `attachment_pick` answers, like the files chosen in the native dialog (empty = cancelled). */
+  pickResult: PickedFile[];
+  /** A failure the next `entry_save` throws (then it is cleared), e.g. `invalidInput`. */
+  saveFailure: ApiError["code"] | null;
+  /** Saved note versions per entry id, newest last. */
+  drafts: Record<string, DraftVersionDto[]>;
+  /** Like a draft key that cannot be created: `draft_save` answers `false` and stores nothing. */
+  draftsAvailable: boolean;
 }
 
 export interface FakeBackend {
@@ -146,6 +158,10 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     totp: { code: "123456", secondsRemaining: 12, period: 30 },
     exportCancelled: false,
     minimized: false,
+    pickResult: [],
+    saveFailure: null,
+    drafts: {},
+    draftsAvailable: true,
   };
   // The real backend emits its events as a side effect of a command; so does the fake.
   const publish = (event: EventName, payload: unknown) => void emit(kebab(event), payload ?? null);
@@ -219,6 +235,9 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     }
   };
   let groupSeq = 0;
+  let entrySeq = 0;
+  /** Tokens `attachment_pick` handed out; `entry_save` swaps each for its file and spends it. */
+  const pickedFiles = new Map<string, PickedFile>();
 
   const setSession = (next: SessionStatus_Serialize) => {
     state.session = next;
@@ -262,12 +281,35 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       if (!findEntry(entryId).model.attachments.some((a) => a.name === name)) throw apiError("notFound");
       return !state.exportCancelled;
     },
-    attachmentPick: notImplemented("attachmentPick"),
+    // Like Rust: the native dialog opens there; the webview only gets single-use tokens back.
+    attachmentPick: () => {
+      requireUnlocked();
+      const picked = structuredClone(state.pickResult);
+      state.pickResult = [];
+      for (const file of picked) pickedFiles.set(file.token, file);
+      return picked;
+    },
     backupList: notImplemented("backupList"),
     backupRestore: notImplemented("backupRestore"),
-    draftClear: notImplemented("draftClear"),
-    draftSave: notImplemented("draftSave"),
-    draftVersions: notImplemented("draftVersions"),
+    draftClear: ({ entryId }) => {
+      requireUnlocked();
+      delete state.drafts[entryId];
+      return null;
+    },
+    // `false` is "no draft key": nothing is stored and the editor works without drafts.
+    draftSave: ({ entryId, notes }) => {
+      requireUnlocked();
+      if (!state.draftsAvailable) return false;
+      const list = (state.drafts[entryId] ??= []);
+      list.push({ id: `draft-${list.length + 1}-${entryId}`, savedAt: Date.now(), notes });
+      if (list.length > 10) list.shift();
+      return true;
+    },
+    // Newest first, like the backend.
+    draftVersions: ({ entryId }) => {
+      requireUnlocked();
+      return structuredClone(state.drafts[entryId] ?? []).reverse();
+    },
     // The value goes to the (fake) clipboard inside Rust and never reaches the webview.
     entryCopy: ({ id, field }) => {
       requireUnlocked();
@@ -314,6 +356,22 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     },
     entryNewModel: ({ entryType, groupId }) => {
       requireUnlocked();
+      const blankAddress = {
+        label: "Home",
+        fullName: "",
+        givenName: "",
+        familyName: "",
+        organization: "",
+        addressLine1: "",
+        addressLine2: "",
+        city: "",
+        region: "",
+        postalCode: "",
+        countryCode: "",
+        countryName: "",
+        phone: "",
+        email: "",
+      };
       return {
         id: null,
         entryType,
@@ -326,8 +384,8 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         uriMatchMode: "registrable-domain",
         totp: "",
         notes: "",
-        address: null,
-        card: null,
+        address: entryType === "address" ? blankAddress : null,
+        card: entryType === "card" ? { holder: "", number: "", expiry: "", cvv: "" } : null,
         customFields: [],
         attachments: [],
         attachmentOps: [],
@@ -363,16 +421,61 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       requireUnlocked();
       return secretOf(findEntry(id), field);
     },
-    // Replaces the entry's editable content with the model, like `Database::save_entry`.
+    // Creates (no id) or replaces the entry like `Database::save_entry`: the title is trimmed (an
+    // address with none takes its label), attachment ops are applied in order with the real limits
+    // (8 files, 5 MB each), and a token is spent when it is swapped for its file.
     entrySave: ({ model }) => {
       requireUnlocked();
-      const found = findEntry(model.id);
-      found.model = { ...structuredClone(model), attachmentOps: [] };
-      found.summary.title = model.title;
-      found.summary.favorite = model.favorite;
-      found.summary.subtitle = model.username;
+      if (state.saveFailure) {
+        const code = state.saveFailure;
+        state.saveFailure = null;
+        throw apiError(code);
+      }
+      let attachments: AttachmentMeta[] = structuredClone(model.attachments);
+      for (const op of model.attachmentOps) {
+        if (op.kind === "remove") {
+          attachments = attachments.filter((a) => a.name !== op.name);
+          continue;
+        }
+        const file = pickedFiles.get(op.path);
+        if (!file) throw apiError("invalidInput");
+        if ((file.size ?? 0) > 5 * 1024 * 1024) throw apiError("limitExceeded");
+        attachments.push({ name: file.name, size: file.size });
+      }
+      if (attachments.length > 8) throw apiError("limitExceeded");
+      for (const op of model.attachmentOps) if (op.kind === "add") pickedFiles.delete(op.path);
+      const title =
+        model.entryType === "address" && model.title.trim() === "" ? (model.address?.label ?? "") : model.title.trim();
+      const saved = { ...structuredClone(model), title, attachments, attachmentOps: [] };
+      const found = model.id ? findEntry(model.id) : null;
+      if (found) {
+        found.model = saved;
+        found.summary.title = title;
+        found.summary.favorite = model.favorite;
+        found.summary.subtitle = model.username;
+        found.summary.groupId = model.groupId;
+        found.summary.attachmentCount = attachments.length;
+        found.summary.hasTotp = model.totp !== "";
+        found.modified += 1;
+        found.summary.modified = found.modified;
+        changed();
+        return found.summary.id;
+      }
+      const created = makeEntry({
+        id: `e-new-${++entrySeq}`,
+        title,
+        entryType: model.entryType,
+        groupId: model.groupId,
+        favorite: model.favorite,
+        hasTotp: model.totp !== "",
+        modified: Date.now(),
+      });
+      created.model = { ...saved, id: created.summary.id };
+      created.summary.subtitle = model.username;
+      created.summary.attachmentCount = attachments.length;
+      state.entries.push(created);
       changed();
-      return found.summary.id;
+      return created.summary.id;
     },
     entrySetFavorite: ({ id, favorite }) => {
       requireUnlocked();

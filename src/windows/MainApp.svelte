@@ -7,6 +7,7 @@
   import OpenVaultSheet from "../screens/OpenVaultSheet.svelte";
   import { navigation } from "../lib/stores/navigation.svelte";
   import EntryDetail from "../screens/EntryDetail.svelte";
+  import EntryEditor from "../screens/EntryEditor.svelte";
   import EntryList from "../screens/EntryList.svelte";
   import Shell from "../screens/Shell.svelte";
   import Unlock from "../screens/Unlock.svelte";
@@ -20,8 +21,11 @@
         <Shell>
           {#snippet list()}<EntryList />{/snippet}
           {#snippet detail()}
-            <!-- Keyed by id: every revealed value and dialog of a pane dies with its selection. -->
-            {#if navigation.selectedId !== null}
+            {#if navigation.presentation !== "browse" && navigation.editModel}
+              <!-- One editor per model; selecting another row or scope leaves it open. -->
+              {#key navigation.editModel}<EntryEditor bind:model={navigation.editModel} />{/key}
+            {:else if navigation.selectedId !== null}
+              <!-- Keyed by id: every revealed value and dialog of a pane dies with its selection. -->
               {#key navigation.selectedId}<EntryDetail id={navigation.selectedId} />{/key}
             {/if}
           {/snippet}

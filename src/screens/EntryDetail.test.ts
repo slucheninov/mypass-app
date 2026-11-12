@@ -681,7 +681,7 @@ describe("change website", () => {
   it("the_match_mode_is_part_of_the_change", async () => {
     const fake = backend();
     const dialog = await openSheet(fake);
-    await userEvent.setup().selectOptions(within(dialog).getByRole("combobox", { name: "Match" }), "exact");
+    await userEvent.setup().selectOptions(within(dialog).getByRole("combobox", { name: "Match mode" }), "exact");
     await userEvent.setup().click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(calls(fake, "entrySave")).toHaveLength(1));
     expect(calls(fake, "entrySave")[0]!.args.model.uriMatchMode).toBe("exact");
