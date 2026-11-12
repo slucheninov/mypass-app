@@ -1,6 +1,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { mount, type Component } from "svelte";
 import "./app.css";
+import { setLanguage } from "./lib/i18n/index.svelte";
 import MainApp from "./windows/MainApp.svelte";
 import SettingsApp from "./windows/SettingsApp.svelte";
 import TrayPanel from "./windows/TrayPanel.svelte";
@@ -18,8 +19,10 @@ function rootFor(label: string): Component {
   }
 }
 
-// The empty shell paints first; the i18n and settings bootstrap (added by later tasks) is awaited
-// after this mount, never before it.
+// The language starts from the system setting; the persisted setting is applied after mount by the
+// settings bootstrap (a later task), which never delays the first paint.
+setLanguage("system");
+
 const target = document.getElementById("app");
 if (target) {
   mount(rootFor(getCurrentWindow().label), { target });
