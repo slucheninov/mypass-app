@@ -10,6 +10,7 @@ pub mod files;
 pub mod hotkeys;
 pub mod i18n;
 pub mod lifecycle;
+pub mod navigation;
 pub mod shell;
 pub mod shell_runtime;
 pub mod state;
@@ -119,7 +120,8 @@ pub fn export_bindings(path: &Path) -> Result<(), String> {
 /// Build and run the application.
 pub fn run() -> tauri::Result<()> {
     let builder = specta_builder();
-    let tauri_builder = tauri::Builder::default();
+    // Every webview may navigate only within the app origin (see `navigation`).
+    let tauri_builder = tauri::Builder::default().plugin(navigation::guard());
     // The single-instance plugin must be the first one registered; there is no autostart plugin
     // (launch at login goes through the platform seam).
     #[cfg(desktop)]
