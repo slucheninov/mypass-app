@@ -4,6 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.mypass.app",
   "build": {
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build",
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420"
   },
@@ -14,8 +16,8 @@
         "title": "MyPass",
         "width": 1080,
         "height": 720,
-        "minWidth": 760,
-        "minHeight": 480,
+        "minWidth": 820,
+        "minHeight": 520,
         "visible": false
       },
       {

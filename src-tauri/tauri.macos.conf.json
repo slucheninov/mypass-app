@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "MyPass",
+        "width": 1080,
+        "height": 720,
+        "minWidth": 820,
+        "minHeight": 520,
+        "visible": false,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": {
+          "x": 16,
+          "y": 20
+        }
+      },
+      {
+        "label": "tray-panel",
+        "title": "MyPass",
+        "width": 320,
+        "height": 440,
+        "decorations": false,
+        "visible": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false
+      }
+    ]
+  }
+}

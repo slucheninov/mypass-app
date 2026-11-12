@@ -86,6 +86,7 @@ fn ci_aggregator_needs_every_job() {
             "i18n",
             "lint",
             "test",
+            "ui",
             "windows-integration"
         ],
         "`ci.needs` must be exactly the parallel jobs of the workflow"
@@ -212,8 +213,10 @@ fn ci_cargo_jobs_use_rust_cache() {
             let first_cargo = steps.iter().position(|s| {
                 run_text(s).lines().any(|l| {
                     l.trim_start().starts_with("cargo ")
-                            // `--only js` runs Node suites only and never invokes cargo.
-                            || (l.contains("scripts/test.sh") && !l.contains("--only js"))
+                            // `--only js` and `--only ui` run Node suites only and never invoke cargo.
+                            || (l.contains("scripts/test.sh")
+                                && !l.contains("--only js")
+                                && !l.contains("--only ui"))
                 })
             });
             let Some(first_cargo) = first_cargo else {
@@ -590,4 +593,77 @@ fn ci_i18n_job_runs_the_js_part_with_node_from_nvmrc() {
     );
     // The i18n job must be a hard requirement of the aggregator, never a tolerated skip.
     assert!(!GATED_JOBS.contains(&"i18n"));
+}
+
+#[test]
+fn ci_ui_job_runs_the_ui_part_with_pnpm_from_package_manager() {
+    let doc = workflow(".github/workflows/ci.yml");
+    let ui = job(&doc, "ui");
+    assert_eq!(
+        ui.get("runs-on").and_then(Value::as_str),
+        Some("ubuntu-latest")
+    );
+    // pnpm: the pinned action, with the exact version `packageManager` declares.
+    let pnpm = steps(ui)
+        .into_iter()
+        .find(|s| {
+            s.get("uses")
+                .and_then(Value::as_str)
+                .is_some_and(|u| u.starts_with("pnpm/action-setup@"))
+        })
+        .expect("job `ui` must install pnpm through pnpm/action-setup");
+    let package_json: serde_json::Value =
+        serde_json::from_str(&repo_guards::read("package.json")).expect("package.json parses");
+    let package_manager = package_json
+        .get("packageManager")
+        .and_then(serde_json::Value::as_str)
+        .expect("package.json packageManager");
+    assert_eq!(
+        pnpm.get("with")
+            .and_then(|w| w.get("version"))
+            .and_then(Value::as_str)
+            .map(|v| format!("pnpm@{v}")),
+        Some(package_manager.to_owned()),
+        "pnpm/action-setup `version` must equal package.json `packageManager`"
+    );
+    // Node from .nvmrc, with the pnpm store cached.
+    let node = steps(ui)
+        .into_iter()
+        .find(|s| {
+            s.get("uses")
+                .and_then(Value::as_str)
+                .is_some_and(|u| u.starts_with("actions/setup-node@"))
+        })
+        .expect("job `ui` must set up Node through actions/setup-node");
+    let with = node.get("with").expect("setup-node `with`");
+    assert_eq!(
+        with.get("node-version-file").and_then(Value::as_str),
+        Some(".nvmrc")
+    );
+    assert_eq!(with.get("cache").and_then(Value::as_str), Some("pnpm"));
+    // pnpm must be on PATH before setup-node's pnpm cache step looks for it.
+    let position = |prefix: &str| {
+        steps(ui).iter().position(|s| {
+            s.get("uses")
+                .and_then(Value::as_str)
+                .is_some_and(|u| u.starts_with(prefix))
+        })
+    };
+    assert!(
+        position("pnpm/action-setup@") < position("actions/setup-node@"),
+        "pnpm/action-setup must run before actions/setup-node"
+    );
+    // The single entry point, in CI mode, for the ui part only.
+    let runs: Vec<String> = steps(ui).iter().map(|s| run_text(s)).collect();
+    let step = runs
+        .iter()
+        .find(|r| r.contains("scripts/test.sh"))
+        .expect("job `ui` must run scripts/test.sh");
+    assert!(
+        step.contains("--ci") && step.contains("--only ui"),
+        "expected `scripts/test.sh --ci --only ui`, found `{step}`"
+    );
+    // The ui job is a hard requirement of the aggregator, never a tolerated skip.
+    assert!(!GATED_JOBS.contains(&"ui"));
+    assert!(needs_of(job(&doc, "ci")).contains(&"ui".to_owned()));
 }

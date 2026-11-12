@@ -39,7 +39,9 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `crates/` | The Rust crates listed above |
 | `src-tauri/` | The Tauri app shell (`mypass-app`): `tauri.conf.json`, capabilities, placeholder icons (replaced in stage 5) |
 | `src/lib/bindings.ts` | Generated TypeScript bindings of the Tauri commands; never edited by hand |
-| `package.json`, `.nvmrc` | Node and pnpm pins only until stage 2b adds the UI toolchain |
+| `package.json`, `pnpm-lock.yaml`, `.nvmrc` | Node and pnpm pins, the exact-pinned npm dependencies and the scripts `dev`, `build`, `check`, `test`, `tauri`; the lockfile is committed |
+| `index.html`, `vite.config.ts`, `svelte.config.js`, `tsconfig.json`, `vitest.setup.ts` | The Svelte 5 (runes) + Vite + Vitest toolchain of the UI |
+| `src/` | The UI: `main.ts` picks the root for the window label (`windows/`), `test/` holds the fake backend and the render helper, `scaffold.test.ts` holds the static source guards |
 | `scripts/test.sh` | The single local and CI test entry point |
 | `scripts/convert-xcstrings.mjs` | One-time converter of the old app's String Catalogs; its output (`src/lib/i18n/locales/{en,uk,ru}.json`, `src-tauri/resources/macos/*.lproj/InfoPlist.strings`) is then the hand-edited source of truth |
 | `.github/` | Workflows (`ci.yml`, `codeql.yml`), Dependabot config, issue forms, pull request template |
@@ -65,8 +67,20 @@ cargo clippy --workspace --all-targets -- -D warnings
 bash scripts/test.sh [--ci] [--only rust|ui|js] [--no-js]   # the full suite
 ```
 
+UI commands (Node from `.nvmrc`, pnpm from `packageManager`):
+
+```bash
+pnpm install --frozen-lockfile   # never edit pnpm-lock.yaml by hand
+pnpm tauri dev                   # the app with hot reload (starts `pnpm dev` through tauri.conf.json)
+pnpm check                       # svelte-check, warnings are errors
+pnpm test                        # Vitest (jsdom), including the static source guards
+pnpm build                       # production bundle into dist/
+```
+
 - `scripts/test.sh` is the one entry point for humans, agents and CI (`--ci` is the CI mode, see
   `BUILD.md` for every flag).
+- The `ui` part runs `pnpm install --frozen-lockfile`, `pnpm check`, `pnpm test` and `pnpm build`;
+  `--ci` makes a missing node or pnpm a failure, a local run without them prints `ui: NOT RUN`.
 - The `js` part runs `node --test scripts/` (the i18n converter and catalog tests; plain Node, nothing
   to install) and, from stage 3, the extension suites. `--no-js` is only for a local machine without
   `node`, and it prints that the JavaScript suites were NOT run. It is never a way to report a change as tested when that change touches `extension/`.
@@ -96,10 +110,13 @@ jobs are independent and run in parallel, so the wall-clock time is the slowest 
 - `i18n` runs on Ubuntu with Node from `.nvmrc` (`actions/setup-node`): `bash scripts/test.sh --ci
   --only js`, i.e. `node --test scripts/` (the xcstrings converter and the catalog completeness
   tests; built-in runner, no dependencies, no package install). It always runs and must be `success`.
+- `ui` runs on Ubuntu with pnpm (`pnpm/action-setup`, `version` equal to `packageManager`) and Node from
+  `.nvmrc` with the pnpm cache: `bash scripts/test.sh --ci --only ui`. It has no rust-cache (it never
+  runs cargo), always runs and must be `success`.
 - `windows-integration` is a disabled skeleton for stage 6: it runs only when the repository variable
   `MYPASS_WINDOWS_INTEGRATION_TESTS` is `true`, otherwise it is skipped.
 - `ci` is the aggregator and the required status check. It needs every other job (`changes`, `lint`,
-  `test`, `i18n`, `windows-integration`, `crosscompat`); a gated job may be `skipped`, every other result
+  `test`, `i18n`, `ui`, `windows-integration`, `crosscompat`); a gated job may be `skipped`, every other result
   (`lint` and `test` included) must be `success`. A job added later must be wired into it
   (pinned by `ci_aggregator_needs_every_job`).
 - `.github/workflows/codeql.yml` is a separate workflow (push to `main`, weekly, manual; never on pull
@@ -366,7 +383,7 @@ Pinned by `cyrillic_only_in_allowed_files`.
 ## Commits and pull requests
 
 Conventional Commits with a lowercase imperative subject and no trailing period, for example
-`feat(kdbx): read the outer header`. Scopes: `core`, `kdbx`, `ci`, `docs`, `repo` (later stages add
+`feat(kdbx): read the outer header`. Scopes: `core`, `kdbx`, `ci`, `docs`, `repo`, `ui`, `i18n` (later stages add
 `bridge`, `platform`, `host`, `app`, `extension`). No AI-attribution footers and no co-author
 trailers on commits or pull request text. A dependency version bump is its own `chore(deps)` commit.
 

@@ -11,8 +11,8 @@ You need [rustup](https://rustup.rs). The toolchain is pinned in `rust-toolchain
 `rustfmt` and `clippy`) and rustup installs it on first use. `bash` is needed for
 `scripts/test.sh`. Node.js (the version in `.nvmrc`) is needed for the `js` part of `scripts/test.sh`, which runs the
 i18n converter and catalog tests with the built-in `node --test` runner (no packages to install);
-`cargo test --workspace` itself needs no Node. pnpm is needed only once the UI has tests (stage 2b);
-until then `scripts/test.sh` says `ui: NOT RUN`.
+`cargo test --workspace` itself needs no Node. pnpm (the version in `packageManager` of `package.json`) is needed for the `ui` part and for working on
+the frontend; without it `scripts/test.sh` says `ui: NOT RUN`, and `--ci` fails instead.
 
 On Windows, run `cargo` commands from PowerShell and `scripts/*.sh` from Git Bash.
 
@@ -33,6 +33,10 @@ On Windows, run `cargo` commands from PowerShell and `scripts/*.sh` from Git Bas
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
+pnpm install --frozen-lockfile   # once, and after a dependency change
+pnpm check                       # svelte-check (warnings are errors)
+pnpm build                       # production bundle into dist/
+pnpm tauri dev                   # run the app with hot reload
 ```
 
 ## Test
@@ -40,6 +44,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 ```bash
 bash scripts/test.sh [--ci] [--only rust|ui|js] [--no-js]   # the full suite
 cargo test --workspace                                        # Rust tests only
+pnpm test                                                     # UI tests only (Vitest, jsdom)
 cargo test -p mypass-app export_bindings_regenerate -- --ignored   # regenerate src/lib/bindings.ts
 cargo test --workspace -- --ignored                           # includes the 50 MiB round trip
 cargo test -p <crate> <filter>                                # one crate, one filter
@@ -52,6 +57,7 @@ cargo run -p mypass-kdbx --example write_crosscompat -- <out.kdbx>   # synthetic
   failures in the later ones.
 - `--ci` runs cargo with `--locked`, requires every tool of every part that exists and rejects
   `--no-js`.
+- The `ui` part runs `pnpm install --frozen-lockfile`, `pnpm check`, `pnpm test` and `pnpm build`.
 - The `js` part runs `node --test scripts/`: `convert-xcstrings.test.mjs` (the converter) and
   `i18n-completeness.test.mjs` (the committed catalogs: every key in `uk` and `ru`, matching
   placeholders, plural `other` branches, InfoPlist strings). `npm run i18n:test` is the same command.
@@ -66,7 +72,7 @@ cargo run -p mypass-kdbx --example write_crosscompat -- <out.kdbx>   # synthetic
 - Argon2 at 64 MiB x 3 passes takes minutes at opt-level 0, so dependencies are built at opt-level 3
   in the dev and test profiles (`[profile.dev.package."*"]`, `[profile.test.package."*"]`).
 - CI runs `lint` (clippy on macOS and Windows, format check on macOS), `test` (macOS and Windows),
-  `i18n` (the `js` part on Ubuntu), `crosscompat` and a disabled Windows integration skeleton as
+  `i18n` (the `js` part on Ubuntu), `ui` (the `ui` part on Ubuntu: frozen pnpm install, check, tests, build), `crosscompat` and a disabled Windows integration skeleton as
   parallel jobs, joined by the `ci`
   aggregator.
 - The `crosscompat` CI job (Rust writes and Python reads, then the reverse) uses `pykeepass`. The
