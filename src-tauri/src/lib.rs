@@ -198,6 +198,17 @@ mod tests {
             !without_ipc.contains("http://") && !without_ipc.contains("https://"),
             "CSP names a remote origin: {csp}"
         );
+        // `devCsp` is the production policy plus exactly the Vite HMR websocket (the dev server
+        // origin itself is `'self'`); it never ships, but it must not drift into a wider policy.
+        let dev_csp = conf["app"]["security"]["devCsp"].as_str().unwrap();
+        assert_eq!(
+            dev_csp,
+            csp.replace(
+                "connect-src ipc: http://ipc.localhost",
+                "connect-src ipc: http://ipc.localhost ws://localhost:1420"
+            ),
+            "devCsp must be csp plus the Vite websocket only"
+        );
         let windows = conf["app"]["windows"].as_array().unwrap();
         let labels: Vec<_> = windows
             .iter()

@@ -734,7 +734,7 @@ and `pnpm-lock.yaml`; refresh the lists with `pnpm licenses list --prod` when a 
 licence offers alternatives, MyPass selects MIT or Apache-2.0; in particular the MPL-2.0 alternative
 of DOMPurify is not selected.
 
-### Shipped in the frontend bundle (`dependencies`)
+### Shipped in the frontend bundle once imported (`dependencies`)
 
 | Package | Version | Licence |
 |---|---|---|

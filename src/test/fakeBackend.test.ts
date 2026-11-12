@@ -17,6 +17,17 @@ describe("fake backend", () => {
     expect(names.length).toBeGreaterThan(0);
     expect(Object.keys(createFakeBackend().handlers).sort()).toEqual(names);
     expect(Object.keys(commands).sort()).toEqual(names);
+    // The fake derives the wire name with `snake()`; it must equal the string the binding invokes.
+    const wire = new Map(
+      block
+        .split(/^\t(?=[a-zA-Z0-9]+: )/m)
+        .map((chunk) => /^([a-zA-Z0-9]+): [\s\S]*?__TAURI_INVOKE(?:<.*?>)?\("([a-z0-9_]+)"/.exec(chunk))
+        .filter((m) => m !== null)
+        .map((m) => [m[1], m[2]] as const),
+    );
+    expect(wire.size).toBe(names.length);
+    const snake = (n: string) => n.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+    for (const [name, wireName] of wire) expect(snake(name ?? ""), name).toBe(wireName);
   });
 
   it("fake_app_info_reports_device_unlock_flag_and_os", async () => {

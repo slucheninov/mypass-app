@@ -128,6 +128,32 @@ describe("html_directive_only_in_markdown_view", () => {
   });
 });
 
+describe("no_other_html_sinks", () => {
+  it("innerHTML, outerHTML and insertAdjacentHTML never appear", () => {
+    const bad = offenders(sourceFiles(SOURCE_EXTS), (f) => /\b(innerHTML|outerHTML|insertAdjacentHTML)\b/.test(f.text));
+    expect(bad).toEqual([]);
+  });
+});
+
+describe("no_secret_sinks", () => {
+  it("web storage and the document title are not used", () => {
+    // The future preferences module may be added to this allow-list when it lands.
+    const bad = offenders(
+      sourceFiles(SOURCE_EXTS),
+      (f) => /\b(localStorage|sessionStorage)\b/.test(f.text) || /document\.title\s*=/.test(f.text),
+    );
+    expect(bad).toEqual([]);
+  });
+
+  it("console is used only by the i18n dev warning", () => {
+    const bad = offenders(
+      sourceFiles(SOURCE_EXTS),
+      (f) => /\bconsole\./.test(f.text) && f.path !== "src/lib/i18n/index.svelte.ts",
+    );
+    expect(bad).toEqual([]);
+  });
+});
+
 describe("no_eval_or_function_constructor", () => {
   it("neither eval( nor new Function( appears", () => {
     const bad = offenders(

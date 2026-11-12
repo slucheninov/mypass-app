@@ -175,9 +175,21 @@ describe("catalog scan", () => {
     for (const f of sourceFiles(["ts", "svelte"])) {
       for (const m of f.text.matchAll(re)) {
         const key = (m[2] ?? "").replace(/\\(["'`\\])/g, "$1");
-        if (!(key in en)) missing.push(`${f.path}: ${key}`);
+        if (!Object.hasOwn(en, key)) missing.push(`${f.path}: ${key}`);
       }
     }
     expect(missing, `keys missing from en.json:\n${missing.join("\n")}`).toEqual([]);
+  });
+
+  it("every_t_call_takes_a_string_literal_key", () => {
+    // `t(variable)` would slip past the catalog scan above. Method calls (`.t(`) are not ours.
+    const re = /(?<![.\w$])(?<!function )t\(\s*([^\s)])/g;
+    const dynamic: string[] = [];
+    for (const f of sourceFiles(["ts", "svelte"])) {
+      for (const m of f.text.matchAll(re)) {
+        if (!["'", '"', "`"].includes(m[1] ?? "")) dynamic.push(`${f.path}: ${m[0]}`);
+      }
+    }
+    expect(dynamic, `t() needs a literal key:\n${dynamic.join("\n")}`).toEqual([]);
   });
 });

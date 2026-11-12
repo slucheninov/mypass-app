@@ -25,6 +25,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `repo-guards` | implemented | Test-only (`publish = false`, never shipped): guard tests for the workspace, CI, docs and scripts |
 | `mypass-platform` | in progress (stage 2a) | OS glue behind traits (system events, secure clipboard, secret stores, device unlock, native host registrar, launch at login, keyboard layout) and `AppPaths`; fakes behind the `test-util` feature, `Unsupported` fallbacks where a platform body has not landed |
 | `mypass-session` | in progress (stage 2a) | Vault session, settings, scheduling and the `AppCore` command facade; no Tauri dependency |
+| `src/` (Svelte UI) | in progress (stage 2b) | The webview UI: typed API wrapper, stores, i18n, design kit; screens follow |
 | `src-tauri` (package `mypass-app`, lib `mypass_app_lib`) | in progress (stage 2a) | The Tauri 2 app shell: the typed commands and events (`tauri-specta`), capabilities, native file dialogs, plugins, tray, global hotkeys, single instance, quit flow, native-side i18n; a workspace member listed explicitly |
 | `mypass-bridge` | planned | Browser bridge protocol and loopback server |
 | `mypass-host` | planned | Native messaging host binary |
@@ -39,6 +40,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `crates/` | The Rust crates listed above |
 | `src-tauri/` | The Tauri app shell (`mypass-app`): `tauri.conf.json`, capabilities, placeholder icons (replaced in stage 5) |
 | `src/lib/bindings.ts` | Generated TypeScript bindings of the Tauri commands; never edited by hand |
+| `pnpm-workspace.yaml` | pnpm settings: `allowBuilds: esbuild: false` (esbuild's postinstall is not needed, the platform binary comes as an optional dependency) |
 | `package.json`, `pnpm-lock.yaml`, `.nvmrc` | Node and pnpm pins, the exact-pinned npm dependencies and the scripts `dev`, `build`, `check`, `test`, `tauri`; the lockfile is committed |
 | `index.html`, `vite.config.ts`, `svelte.config.js`, `tsconfig.json`, `vitest.setup.ts` | The Svelte 5 (runes) + Vite + Vitest toolchain of the UI |
 | `src/` | The UI: `main.ts` picks the root for the window label (`windows/`), `test/` holds the fake backend and the render helper, `scaffold.test.ts` holds the static source guards |
@@ -155,7 +157,9 @@ change is done.
   `bindings_are_up_to_date` fails when it drifts). `src-tauri/tests/commands.snap` lists every
   command, sorted, one per line; a stage that adds or removes a command regenerates it with
   `cargo test -p mypass-app command_snapshot_regenerate -- --ignored` in the same commit
-  (`command_snapshot_matches` fails otherwise).
+  (`command_snapshot_matches` fails otherwise). A command added or removed also needs a handler in
+  `src/test/fakeBackend.ts` and an entry in `src/lib/api.ts`, otherwise `pnpm check` and
+  `fake_backend_covers_every_binding_command` fail the `ui` job.
 - **Node-free Rust build.** `src-tauri/build.rs` creates a placeholder `dist/index.html` when `dist/`
   is absent, so `cargo test --workspace` never needs Node. `dist/` is git-ignored.
 - **Windows manifest.** `src-tauri/build.rs` embeds `src-tauri/windows-app-manifest.xml`
@@ -385,7 +389,9 @@ Pinned by `cyrillic_only_in_allowed_files`.
 Conventional Commits with a lowercase imperative subject and no trailing period, for example
 `feat(kdbx): read the outer header`. Scopes: `core`, `kdbx`, `ci`, `docs`, `repo`, `ui`, `i18n` (later stages add
 `bridge`, `platform`, `host`, `app`, `extension`). No AI-attribution footers and no co-author
-trailers on commits or pull request text. A dependency version bump is its own `chore(deps)` commit.
+trailers on commits or pull request text. A dependency version bump is its own `chore(deps)` commit. Dependabot covers cargo and GitHub
+Actions only: the npm pins in `package.json` are bumped by hand, and the `@tauri-apps/*` packages
+move together with the Rust `tauri` family (the CLI rejects mismatched minors).
 
 ## Rust rules
 
