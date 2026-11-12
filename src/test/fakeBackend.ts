@@ -7,7 +7,17 @@
 // run time (fakeBackend.test.ts). There are no command counts anywhere.
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC } from "@tauri-apps/api/mocks";
-import type { ApiError, commands, events } from "../lib/bindings";
+import type { ApiError, commands, events, SessionState, SessionStatus_Serialize, Settings_Serialize } from "../lib/bindings";
+import {
+  FIXTURE_MASTER_PASSWORD,
+  defaultSettings,
+  detailOf,
+  fixtureEntries,
+  fixtureSidebar,
+  listEntries,
+  sessionStatus,
+  type FixtureEntry,
+} from "./fixtures";
 
 type Commands = typeof commands;
 export type CommandName = keyof Commands;
@@ -52,6 +62,8 @@ export interface FakeBackendOptions {
   deviceUnlockAvailable?: boolean;
   /** The short layout code `platform_keyboard_layout` reports; `null` means unsupported. */
   keyboardLayout?: string | null;
+  /** The session state the fake starts in (default `locked`). */
+  session?: SessionState;
   /** Opt-in handlers for plugin calls by wire name, e.g. `"plugin:opener|open_url"`. */
   plugins?: Record<string, (payload: unknown) => unknown>;
 }
@@ -61,8 +73,17 @@ export interface FakeCall {
   args: Args;
 }
 
+/** The mutable in-memory vault behind the implemented handlers. */
+export interface FakeState {
+  session: SessionStatus_Serialize;
+  settings: Settings_Serialize;
+  entries: FixtureEntry[];
+  masterPassword: string;
+}
+
 export interface FakeBackend {
   handlers: Handlers;
+  state: FakeState;
   /** Every command the webview invoked, in order. */
   calls: FakeCall[];
   /** Installs this backend as the IPC of the current test (called by `renderWithBackend`). */
@@ -76,6 +97,27 @@ const kebab = (name: string) => name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase(
 
 export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
   const { os = "macos", deviceUnlockAvailable = false, keyboardLayout = null } = opts;
+  const state: FakeState = {
+    session: sessionStatus(opts.session ?? "locked"),
+    settings: defaultSettings(),
+    entries: fixtureEntries(),
+    masterPassword: FIXTURE_MASTER_PASSWORD,
+  };
+  // The real backend emits its events as a side effect of a command; so does the fake.
+  const publish = (event: EventName, payload: unknown) => void emit(kebab(event), payload ?? null);
+  const requireUnlocked = () => {
+    if (state.session.state !== "unlocked") throw apiError("locked");
+  };
+  const findEntry = (id: string) => {
+    const found = state.entries.find((e) => e.summary.id === id);
+    if (!found) throw apiError("notFound");
+    return found;
+  };
+  const setSession = (next: SessionStatus_Serialize) => {
+    state.session = next;
+    publish("sessionChanged", structuredClone(next));
+    return structuredClone(next);
+  };
 
   const handlers = {
     appInfo: () => ({
@@ -85,7 +127,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     }),
     appOpenEntry: notImplemented("appOpenEntry"),
     appOpenSettings: notImplemented("appOpenSettings"),
-    appRecordActivity: notImplemented("appRecordActivity"),
+    appRecordActivity: () => null,
     appRevealBackups: notImplemented("appRevealBackups"),
     attachmentExport: notImplemented("attachmentExport"),
     attachmentPick: notImplemented("attachmentPick"),
@@ -96,18 +138,33 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     draftVersions: notImplemented("draftVersions"),
     entryCopy: notImplemented("entryCopy"),
     entryDelete: notImplemented("entryDelete"),
-    entryEditModel: notImplemented("entryEditModel"),
+    entryEditModel: ({ id }) => {
+      requireUnlocked();
+      return structuredClone(findEntry(id).model);
+    },
     entryEmptyBin: notImplemented("entryEmptyBin"),
-    entryGet: notImplemented("entryGet"),
+    entryGet: ({ id }) => {
+      requireUnlocked();
+      return detailOf(findEntry(id));
+    },
     entryHistory: notImplemented("entryHistory"),
     entryHistoryRestore: notImplemented("entryHistoryRestore"),
-    entryList: notImplemented("entryList"),
+    entryList: ({ query }) => {
+      requireUnlocked();
+      return listEntries(state.entries, query);
+    },
     entryMove: notImplemented("entryMove"),
     entryNewModel: notImplemented("entryNewModel"),
     entryPurge: notImplemented("entryPurge"),
     entryRecent: notImplemented("entryRecent"),
     entryRestore: notImplemented("entryRestore"),
-    entryReveal: notImplemented("entryReveal"),
+    entryReveal: ({ id, field }) => {
+      requireUnlocked();
+      const { model } = findEntry(id);
+      if (field.kind === "password") return model.password;
+      if (field.kind === "username") return model.username;
+      throw new NotImplementedInFake(`entryReveal(${field.kind})`);
+    },
     entrySave: notImplemented("entrySave"),
     entrySetFavorite: notImplemented("entrySetFavorite"),
     entryTotp: notImplemented("entryTotp"),
@@ -126,20 +183,34 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     importCsvCommit: notImplemented("importCsvCommit"),
     importCsvPreview: notImplemented("importCsvPreview"),
     platformKeyboardLayout: () => keyboardLayout,
-    settingsGet: notImplemented("settingsGet"),
+    settingsGet: () => structuredClone(state.settings),
     settingsLoginItemStatus: notImplemented("settingsLoginItemStatus"),
-    settingsUpdate: notImplemented("settingsUpdate"),
+    settingsUpdate: ({ patch }) => {
+      const defined = Object.entries(patch as Record<string, unknown>).filter(([, v]) => v !== null && v !== undefined);
+      state.settings = { ...state.settings, ...Object.fromEntries(defined) };
+      publish("settingsChanged", structuredClone(state.settings));
+      return structuredClone(state.settings);
+    },
     shortcutConflictsTake: notImplemented("shortcutConflictsTake"),
-    sidebarGet: notImplemented("sidebarGet"),
+    sidebarGet: () => {
+      requireUnlocked();
+      return fixtureSidebar(state.entries);
+    },
     vaultCreate: notImplemented("vaultCreate"),
     vaultFindFiles: notImplemented("vaultFindFiles"),
     vaultForget: notImplemented("vaultForget"),
-    vaultLock: notImplemented("vaultLock"),
+    vaultLock: () => {
+      setSession({ ...state.session, state: "locked", lockReason: "manual" });
+      return null;
+    },
     vaultOpen: notImplemented("vaultOpen"),
     vaultOpenWarnings: notImplemented("vaultOpenWarnings"),
     vaultRecent: notImplemented("vaultRecent"),
-    vaultStatus: notImplemented("vaultStatus"),
-    vaultUnlock: notImplemented("vaultUnlock"),
+    vaultStatus: () => structuredClone(state.session),
+    vaultUnlock: ({ password }) => {
+      if (password !== state.masterPassword) throw apiError("wrongPassword");
+      return setSession({ ...state.session, state: "unlocked", lockReason: null });
+    },
   } satisfies Handlers;
 
   const byWireName = new Map<string, CommandName>(
@@ -150,6 +221,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
 
   return {
     handlers,
+    state,
     calls,
     install() {
       mockIPC(
