@@ -31,4 +31,5 @@ zeroize.workspace = true
 [dev-dependencies]
 mypass-kdbx = { path = "../mypass-kdbx", features = ["test-util"] }
 mypass-platform = { path = "../mypass-platform", features = ["test-util"] }
+keepass.workspace = true
 tempfile.workspace = true

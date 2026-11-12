@@ -14,6 +14,7 @@ use crate::fields::is_valid_user_target;
 use crate::session::{SessionError, VaultSession};
 use mypass_core::entry_ext::EntryExt;
 use mypass_kdbx::Entry;
+use std::path::Path;
 use uuid::Uuid;
 use zeroize::Zeroize;
 
@@ -55,6 +56,25 @@ impl Drop for ImportedLogin {
     fn drop(&mut self) {
         self.password.zeroize();
     }
+}
+
+/// Reads the CSV file at `path`, at most [`MAX_CSV_BYTES`]: a larger file is `LimitExceeded`
+/// after `MAX_CSV_BYTES + 1` bytes, never read to its end. A missing file is `NotFound`.
+pub fn read_csv_file(path: &Path) -> Result<Vec<u8>, SessionError> {
+    use std::io::Read;
+    let io_error = |e: std::io::Error| match e.kind() {
+        std::io::ErrorKind::NotFound => SessionError::NotFound,
+        _ => SessionError::Io(e.to_string()),
+    };
+    let file = std::fs::File::open(path).map_err(io_error)?;
+    let mut bytes = Vec::new();
+    file.take(MAX_CSV_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(io_error)?;
+    if bytes.len() > MAX_CSV_BYTES {
+        return Err(SessionError::LimitExceeded("the file is too large".into()));
+    }
+    Ok(bytes)
 }
 
 /// The rows that were read and the rows that were skipped (with the reason and line).
@@ -372,6 +392,24 @@ mod tests {
     use secrecy::SecretString;
     use std::sync::Arc;
     use std::time::{Duration, Instant, UNIX_EPOCH};
+
+    #[test]
+    fn read_csv_file_is_bounded_and_maps_a_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let ok = dir.path().join("ok.csv");
+        std::fs::write(&ok, b"title,password\n").unwrap();
+        assert_eq!(read_csv_file(&ok).unwrap(), b"title,password\n");
+        let big = dir.path().join("big.csv");
+        std::fs::write(&big, vec![b'a'; MAX_CSV_BYTES + 1]).unwrap();
+        assert!(matches!(
+            read_csv_file(&big),
+            Err(SessionError::LimitExceeded(_))
+        ));
+        assert_eq!(
+            read_csv_file(&dir.path().join("none.csv")),
+            Err(SessionError::NotFound)
+        );
+    }
 
     fn parse(text: &str) -> CsvParse {
         parse_csv(text.as_bytes()).unwrap()

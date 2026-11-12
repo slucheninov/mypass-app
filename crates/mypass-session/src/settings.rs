@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 /// Auto-lock after this much inactivity.
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Serialize, Deserialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum IdleTimeout {
     Immediately,
@@ -50,7 +50,7 @@ impl IdleTimeout {
 }
 
 /// Minimum time between two backup snapshots of the same vault.
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Serialize, Deserialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum BackupInterval {
     #[default]
@@ -72,7 +72,7 @@ impl BackupInterval {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Serialize, Deserialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum Theme {
     #[default]
@@ -81,7 +81,7 @@ pub enum Theme {
     Dark,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Serialize, Deserialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum Language {
     #[default]
@@ -94,7 +94,7 @@ pub enum Language {
 /// How long a device unlock (Touch ID / account password) stays allowed after a master-password
 /// unlock. Names mirror the old `UnlockWindowPolicy`; the seconds table and the policy are
 /// stage 5.
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Serialize, Deserialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum UnlockWithDeviceWindow {
     OneHour,
@@ -106,7 +106,7 @@ pub enum UnlockWithDeviceWindow {
 }
 
 /// How often the master password is required again regardless of device unlock (stage 5).
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Serialize, Deserialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum RequireAccountPasswordWindow {
     OneDay,
@@ -152,7 +152,7 @@ pub const CLIPBOARD_CLEAR_SECONDS: std::ops::RangeInclusive<u32> = 10..=120;
 pub const MAX_RECENT_VAULTS: usize = 8;
 
 /// Every persisted setting. Exactly one `Default` impl; there is no tray-click-action setting.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Debug)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub language: Language,
@@ -268,7 +268,7 @@ where
 /// [`SettingsStore::remember_vault`] / [`SettingsStore::forget_vault`]). `None` leaves a field
 /// untouched; `vault_path` and `secondary_folder` use `Some(None)` (JSON `null`) to clear;
 /// `generator` replaces the whole options object.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Debug, Default)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SettingsPatch {
     #[serde(skip_serializing_if = "Option::is_none")]

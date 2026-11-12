@@ -3,6 +3,7 @@
 //! This crate has no Tauri dependency, so it is testable without a window server. Every timing
 //! rule runs through [`scheduler::Scheduler`]; tests drive it with [`scheduler::ManualScheduler`].
 
+pub mod app_core;
 pub mod autolock;
 pub mod backups;
 pub mod clipboard_service;
@@ -20,6 +21,17 @@ pub mod settings;
 pub mod shortcut;
 pub mod unlock_request;
 pub mod vault_files;
+
+pub use app_core::{ApiError, AppCore, AppPaths, ErrorCode, Platform};
+pub use backups::{BackupFailure, BackupItem, BackupStatus};
+pub use drafts::DraftVersionDto;
+pub use dto::*;
+pub use session::{LockReason, SaveState, SaveStatus, SessionState, SessionStatus};
+pub use settings::{
+    BackupInterval, GeneratorOptionsDto, IdleTimeout, Language, RequireAccountPasswordWindow,
+    Settings, SettingsPatch, Theme, UnlockWithDeviceWindow,
+};
+pub use vault_files::VaultFileStatus;
 
 /// Test support shared by this crate's tests and by later crates' tests. Not part of the app.
 #[doc(hidden)]

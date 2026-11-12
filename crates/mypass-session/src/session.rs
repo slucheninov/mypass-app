@@ -35,7 +35,7 @@ use std::time::UNIX_EPOCH;
 use subtle::ConstantTimeEq;
 
 /// Lifecycle state shown by the UI.
-#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Serialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub enum SessionState {
     NoVault,
@@ -44,7 +44,7 @@ pub enum SessionState {
 }
 
 /// Why the session was locked.
-#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Serialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub enum LockReason {
     Manual,
@@ -56,7 +56,7 @@ pub enum LockReason {
 }
 
 /// Where the unsaved-changes pipeline stands.
-#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Serialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub enum SaveState {
     Idle,
@@ -66,7 +66,7 @@ pub enum SaveState {
 }
 
 /// Save state plus the last failure message (no secret content, file-system wording only).
-#[derive(Serialize, Clone, PartialEq, Eq, Debug)]
+#[derive(Serialize, specta::Type, Clone, PartialEq, Eq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveStatus {
     pub state: SaveState,
@@ -102,7 +102,7 @@ impl SaveStatus {
 }
 
 /// Snapshot of the session for the UI (the `SessionChanged` event payload and `vault_status`).
-#[derive(Serialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, specta::Type, Clone, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionStatus {
     pub state: SessionState,
@@ -437,6 +437,12 @@ impl VaultSession {
         }))
     }
 
+    /// The backup manager this session snapshots through (a clone shares its failure record, so
+    /// the backups pane reports the failures of the session's own snapshots).
+    pub fn backups(&self) -> BackupManager {
+        self.0.backups.clone()
+    }
+
     /// Registers an observer for every later event.
     pub fn add_observer(&self, o: Observer) {
         self.0
@@ -509,7 +515,7 @@ impl VaultSession {
         }
     }
 
-    fn check_not_quitting(&self) -> Result<(), SessionError> {
+    pub(crate) fn check_not_quitting(&self) -> Result<(), SessionError> {
         if lock(&self.0.inner).quitting {
             Err(SessionError::Quitting)
         } else {

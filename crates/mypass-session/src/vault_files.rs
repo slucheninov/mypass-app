@@ -45,6 +45,24 @@ pub fn file_status(path: Option<&Path>) -> VaultFileStatus {
     }
 }
 
+/// The recent-vaults list as the picker shows it: the file name and whether the file still
+/// exists (one `metadata` call each; never reads a vault).
+pub fn recent_vaults(paths: &[String]) -> Vec<RecentVaultDto> {
+    paths
+        .iter()
+        .map(|p| {
+            let path = Path::new(p);
+            RecentVaultDto {
+                path: p.clone(),
+                file_name: path
+                    .file_name()
+                    .map_or_else(|| p.clone(), |n| n.to_string_lossy().into_owned()),
+                exists: std::fs::metadata(path).is_ok_and(|m| m.is_file()),
+            }
+        })
+        .collect()
+}
+
 // ---- discovery ----
 
 /// Bounds of one scan.
@@ -286,6 +304,25 @@ pub fn open_warnings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recent_vaults_report_file_name_and_existence() {
+        let dir = tempfile::tempdir().unwrap();
+        let present = dir.path().join("a.kdbx");
+        std::fs::write(&present, b"x").unwrap();
+        let missing = dir.path().join("gone.kdbx");
+        let list = recent_vaults(&[
+            present.to_string_lossy().into_owned(),
+            missing.to_string_lossy().into_owned(),
+            dir.path().to_string_lossy().into_owned(),
+        ]);
+        assert_eq!(list.len(), 3);
+        assert_eq!(list[0].file_name, "a.kdbx");
+        assert!(list[0].exists);
+        assert_eq!(list[1].file_name, "gone.kdbx");
+        assert!(!list[1].exists);
+        assert!(!list[2].exists, "a directory is not a vault file");
+    }
 
     #[test]
     fn file_status_reports_each_case() {

@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// One backup file.
-#[derive(Serialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, specta::Type, Clone, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupItem {
     /// The file name, e.g. `backup-1700000000.kdbx`.
@@ -48,7 +48,7 @@ pub struct BackupItem {
 }
 
 /// The last snapshot failure of a vault.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupFailure {
     pub message: String,
@@ -57,7 +57,7 @@ pub struct BackupFailure {
 }
 
 /// What the backups pane shows.
-#[derive(Serialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, specta::Type, Clone, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupStatus {
     /// Newest first.

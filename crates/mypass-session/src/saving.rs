@@ -769,6 +769,90 @@ impl VaultSession {
         Ok(path)
     }
 
+    /// Replaces the vault with the backup `backup` (the bytes of a backup file).
+    ///
+    /// Order: the bytes must open with the CURRENT master password (`InvalidInput` otherwise)
+    /// BEFORE anything is written, so a refusal leaves the file, the live database and the backup
+    /// folder untouched; then the current edits are flushed, the current file is snapshotted as a
+    /// backup, the backup bytes are written atomically over the vault and the file is reloaded
+    /// into the live database (`VaultChanged` is emitted). The session stays unlocked and clean.
+    /// Refused while quitting and while locked. A reload that fails after the write (the disk
+    /// changed again, I/O) is returned as an error and the session is LOCKED (`Manual`): the live
+    /// database is the replaced content, and unlocking reads the restored file.
+    pub fn restore_from_backup(&self, backup: &[u8]) -> Result<(), SessionError> {
+        self.check_not_quitting()?;
+        let password = self.with_db_and_password(|_, p| p.clone())?;
+        match Database::open(backup, &password) {
+            Ok(_) => {}
+            Err(KdbxError::WrongPassword) => {
+                return Err(SessionError::InvalidInput(
+                    "backup does not open with the current master password".into(),
+                ))
+            }
+            Err(e) => return Err(e.into()),
+        }
+        self.flush()?;
+        let (mut guard, vault_id) = {
+            let mut inner = self.wait_idle(lock(&self.0.inner));
+            if inner.quitting {
+                return Err(SessionError::Quitting);
+            }
+            if inner.db.is_none() {
+                return Err(inner.not_unlocked());
+            }
+            if inner.is_dirty() {
+                // Edits landed after the flush above; never throw them away unsaved.
+                return Err(SessionError::InvalidInput(
+                    "the vault changed while restoring; try again".into(),
+                ));
+            }
+            let Some(file) = inner.file.take() else {
+                return Err(file_unavailable());
+            };
+            inner.cancel_save_job();
+            let vault_id = inner.vault_id.clone();
+            (
+                InFlight::begin(self, &mut inner, file, Slot::File),
+                vault_id,
+            )
+        };
+        let now = self.now().0;
+        let written = std::sync::atomic::AtomicBool::new(false);
+        let result = guard.run(|file| {
+            if let Some(id) = &vault_id {
+                // `first_write_of_session`: always due, so the file being replaced is kept.
+                self.0
+                    .backups
+                    .snapshot_before_save(id, file.path(), now, true);
+            }
+            self.0.io.write_atomic(file.path(), backup)?;
+            written.store(true, std::sync::atomic::Ordering::SeqCst);
+            file.reload(&password)
+        });
+        let mut out = Outbox::default();
+        let r = {
+            let mut inner = guard.finish();
+            match result {
+                None => Err(file_unavailable()),
+                Some(Err(e)) => Err(e.into()),
+                Some(Ok(db)) => {
+                    self.apply_remote(&mut inner, &db, &mut out);
+                    // The restored content is on disk: nothing is pending.
+                    out.save(inner.set_save(SaveStatus::idle()));
+                    Ok(())
+                }
+            }
+        };
+        self.emit(out);
+        if r.is_err() && written.load(std::sync::atomic::Ordering::SeqCst) {
+            // The backup is on disk but the live database is still the old content: lock, so
+            // nothing can later merge the old database over the restored file. Unlocking reads
+            // the restored file.
+            self.lock(LockReason::Manual);
+        }
+        r
+    }
+
     /// Checks whether the vault changed on disk and, if so, applies the remote content to the
     /// session (called on window focus and every 30 s while unlocked; see the module docs for
     /// the rules). A reload that fails with `WrongPassword` (the password was changed elsewhere)
@@ -1982,5 +2066,92 @@ mod tests {
         assert!(!f.has_pending_bytes());
         assert_eq!(f.disk(), v(&["A", "first"]));
         assert_eq!(f.backups(), 1);
+    }
+
+    /// The vault file as it is now, encrypted with `password`, holding one entry per title.
+    fn vault_bytes(titles: &[&str], password: &str) -> Vec<u8> {
+        let mut db = fast_database("Test Vault");
+        let root = db.root_id();
+        for t in titles {
+            let mut e = Entry::new(Timestamp(T0 - 10));
+            e.set_field("Title", t, false);
+            db.add_entry(root, e, Timestamp(T0 - 10)).unwrap();
+        }
+        db.save(&pw(password)).unwrap()
+    }
+
+    #[test]
+    fn restore_from_backup_replaces_the_database_and_snapshots_the_current_file() {
+        let f = setup();
+        f.add("unsaved").unwrap();
+        let log = record(&f.session);
+        let before = fs::read(&f.path).unwrap();
+        f.session
+            .restore_from_backup(&vault_bytes(&["old"], "pw"))
+            .unwrap();
+        assert_eq!(f.titles(), v(&["old"]));
+        assert_eq!(f.disk(), v(&["old"]));
+        assert_eq!(f.state(), SaveState::Idle);
+        assert_eq!(f.gens().0, f.gens().1, "nothing is pending");
+        assert!(log.lock().unwrap().contains(&SessionEvent::VaultChanged));
+        // The flushed state (the file being replaced) was kept as a backup first.
+        let id = f.session.vault_id().unwrap();
+        let backups = f.session.backups();
+        let kept: Vec<Vec<u8>> = backups
+            .list(&id)
+            .iter()
+            .map(|b| backups.read(&id, &b.id).unwrap())
+            .collect();
+        assert_eq!(
+            kept.len(),
+            2,
+            "the open-time snapshot and the pre-restore one"
+        );
+        assert!(kept.iter().any(|bytes| {
+            Database::open(bytes, &pw("pw"))
+                .map(|d| titles(&d) == v(&["first", "unsaved"]))
+                .unwrap_or(false)
+        }));
+        assert_ne!(fs::read(&f.path).unwrap(), before);
+    }
+
+    #[test]
+    fn restore_from_backup_with_another_password_touches_nothing() {
+        let f = setup();
+        f.add("A").unwrap();
+        f.clock.advance(AUTOSAVE_DEBOUNCE);
+        let file = fs::read(&f.path).unwrap();
+        let live = f.session.with_db(Clone::clone).unwrap();
+        let backups_before = f.backups();
+        assert_eq!(
+            f.session.restore_from_backup(&vault_bytes(&["x"], "other")),
+            Err(SessionError::InvalidInput(
+                "backup does not open with the current master password".into()
+            ))
+        );
+        assert_eq!(fs::read(&f.path).unwrap(), file);
+        assert_eq!(f.session.with_db(Clone::clone).unwrap(), live);
+        assert_eq!(f.backups(), backups_before);
+        assert_eq!(
+            f.session.restore_from_backup(b"not a vault"),
+            Err(SessionError::Corrupt("not a KDBX file".into())),
+        );
+    }
+
+    #[test]
+    fn restore_from_backup_is_refused_while_locked_and_while_quitting() {
+        let f = setup();
+        let bytes = vault_bytes(&["x"], "pw");
+        f.session.begin_quit();
+        assert_eq!(
+            f.session.restore_from_backup(&bytes),
+            Err(SessionError::Quitting)
+        );
+        f.session.cancel_quit();
+        f.session.lock(LockReason::Manual);
+        assert_eq!(
+            f.session.restore_from_backup(&bytes),
+            Err(SessionError::Locked)
+        );
     }
 }
