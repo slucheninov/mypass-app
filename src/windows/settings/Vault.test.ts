@@ -48,9 +48,9 @@ describe("backups", () => {
   });
 
   it("backup_count_stepper_clamps_1_50_and_debounces_updates", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
     const { fake } = await open();
     const input = (await screen.findByRole("spinbutton", { name: "Keep" })) as HTMLInputElement;
+    vi.useFakeTimers();
     expect(input.value).toBe("10");
     for (let i = 0; i < 10; i += 1) await fireEvent.keyDown(input, { key: "ArrowUp" });
     expect(input.value).toBe("20");
