@@ -17,7 +17,7 @@ import Button from "./Button.svelte";
 import ContextMenu from "./ContextMenu.svelte";
 import FieldRow from "./FieldRow.svelte";
 import Icon from "./Icon.svelte";
-import { ICON_NAMES } from "./icons";
+import { ICON_NAMES, ICON_PATHS } from "./icons";
 import Segmented from "./Segmented.svelte";
 import Select from "./Select.svelte";
 import SplitPane from "./SplitPane.svelte";
@@ -365,7 +365,8 @@ describe("SplitPane", () => {
 
 describe("Icon", () => {
   it("icon_names_all_render_svg", () => {
-    expect(ICON_NAMES.length).toBe(28);
+    expect(ICON_NAMES.length).toBe(Object.keys(ICON_PATHS).length);
+    expect(ICON_PATHS.warning).not.toBe(ICON_PATHS.security);
     for (const name of ICON_NAMES) {
       const { container, unmount } = render(Icon, { props: { name } });
       const svg = container.querySelector("svg");
