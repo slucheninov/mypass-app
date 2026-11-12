@@ -856,6 +856,8 @@ export type Sidebar_Deserialize = {
 	categories: CategoryCount_Deserialize[],
 	rootGroupId: string,
 	groups: GroupNode_Deserialize[],
+	/**  The vault's `RecycleBinEnabled` flag: when false a delete is permanent. */
+	recycleBinEnabled: boolean,
 };
 
 /**
@@ -866,6 +868,8 @@ export type Sidebar_Serialize = {
 	categories: CategoryCount_Serialize[],
 	rootGroupId: string,
 	groups: GroupNode_Serialize[],
+	/**  The vault's `RecycleBinEnabled` flag: when false a delete is permanent. */
+	recycleBinEnabled: boolean,
 };
 
 /**

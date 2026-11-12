@@ -131,6 +131,8 @@ pub struct Sidebar {
     pub categories: Vec<CategoryCount>,
     pub root_group_id: String,
     pub groups: Vec<GroupNode>,
+    /// The vault's `RecycleBinEnabled` flag: when false a delete is permanent.
+    pub recycle_bin_enabled: bool,
 }
 
 #[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq, Debug, Default)]

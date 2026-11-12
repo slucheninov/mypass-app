@@ -453,6 +453,7 @@ pub fn sidebar(db: &Database) -> Sidebar {
         categories,
         root_group_id: db.root_id().simple().to_string(),
         groups,
+        recycle_bin_enabled: db.meta.recycle_bin_enabled,
     }
 }
 
@@ -772,6 +773,15 @@ mod tests {
         };
         assert_eq!(count(Category::Deleted), Some(0));
         assert!(sb.groups.iter().all(|g| !g.is_recycle_bin));
+    }
+
+    #[test]
+    fn sidebar_reports_whether_the_recycle_bin_is_enabled() {
+        let mut s = sample_database();
+        s.db.meta.recycle_bin_enabled = true;
+        assert!(sidebar(&s.db).recycle_bin_enabled);
+        s.db.meta.recycle_bin_enabled = false;
+        assert!(!sidebar(&s.db).recycle_bin_enabled);
     }
 
     #[test]
