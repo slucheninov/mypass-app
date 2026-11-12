@@ -23,9 +23,9 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `mypass-kdbx` | implemented | KDBX4 engine: format pipeline, model, database API, vault file, `FileIo` seam |
 | `mypass-core` | implemented | Everything that consumes the model: TOTP, generator and password rules, Public Suffix List, entry matcher, merge engine |
 | `repo-guards` | implemented | Test-only (`publish = false`, never shipped): guard tests for the workspace, CI, docs and scripts |
-| `mypass-platform` | in progress (stage 2a) | OS glue behind traits (system events, secure clipboard, secret stores, device unlock, native host registrar, launch at login, keyboard layout) and `AppPaths`; fakes behind the `test-util` feature, `Unsupported` fallbacks where a platform body has not landed |
-| `mypass-session` | in progress (stage 2a) | Vault session, settings, scheduling and the `AppCore` command facade; no Tauri dependency |
-| `src-tauri` (package `mypass-app`, lib `mypass_app_lib`) | in progress (stage 2a) | The Tauri 2 app shell: the typed commands and events (`tauri-specta`), capabilities, native file dialogs, plugins, tray, global hotkeys, single instance, quit flow, native-side i18n; a workspace member listed explicitly |
+| `mypass-platform` | macOS bodies for events, clipboard and keyboard layout; Keychain, device unlock, host registrar and launch at login in stages 3 and 5; Windows in stage 6 | OS glue behind traits (system events, secure clipboard, secret stores, device unlock, native host registrar, launch at login, keyboard layout) and `AppPaths`; fakes behind the `test-util` feature, `Unsupported` fallbacks where a platform body has not landed |
+| `mypass-session` | implemented | Vault session, settings, scheduling and the `AppCore` command facade; no Tauri dependency |
+| `src-tauri` (package `mypass-app`, lib `mypass_app_lib`) | implemented | The Tauri 2 app shell: the typed commands and events (`tauri-specta`), capabilities, native file dialogs, plugins, tray, global hotkeys, single instance, quit flow, native-side i18n; a workspace member listed explicitly |
 | `mypass-bridge` | planned | Browser bridge protocol and loopback server |
 | `mypass-host` | planned | Native messaging host binary |
 | `extension/` | planned | The Chromium extension (JavaScript, with its own Node test suites) |
@@ -51,7 +51,8 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 
 Stage 1 (the Rust core: KDBX4 engine, TOTP, generator, Public Suffix List, matcher, merge, atomic
 vault file) is implemented.
-Stage 2a (the app backend behind the glass: `mypass-platform`, `mypass-session`, the Tauri shell) is in progress; the command layer, events, capabilities and the shell integration (tray, hotkeys, single instance, quit flow) have landed.
+Stage 2a (the app backend behind the glass: `mypass-platform` macOS bodies, `mypass-session`, the Tauri shell with commands, events, capabilities, tray, hotkeys, single instance and the quit flow) is implemented; its open follow-ups are in `docs/implementation/ROADMAP.md`.
+Stage 2b (the Svelte UI) is next.
 Later stages (rest of the app backend, UI, extension bridge, passkeys, macOS release, Windows) are listed in `docs/implementation/ROADMAP.md`.
 
 ## Build, run, test
