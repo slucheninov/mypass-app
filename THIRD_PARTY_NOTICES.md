@@ -749,7 +749,16 @@ of DOMPurify is not selected.
 | `marked` | 18.1.1 | MIT |
 
 The Svelte runtime (`svelte` 5.57.3, MIT, a development dependency because the compiler runs at
-build time) is also copied into the bundle by the compiled components.
+build time) is also copied into the bundle by the compiled components, together with the two
+runtime dependencies it imports from `svelte/internal`:
+
+| Package | Version | Licence |
+|---|---|---|
+| `clsx` (via `svelte`) | 2.1.1 | MIT |
+| `esm-env` (via `svelte`) | 1.2.2 | MIT |
+
+The other entries of Svelte's `dependencies` (`acorn`, `esrap`, `magic-string`, `devalue`, and so on)
+belong to the compiler or to server-side rendering and are not in the bundle.
 `@types/trusted-types` 2.0.7 (MIT) is a type-only dependency of DOMPurify and is not bundled.
 
 `intl-messageformat` is under the New BSD licence, which requires its notice to be reproduced with

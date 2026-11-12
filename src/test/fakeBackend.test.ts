@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { invoke } from "@tauri-apps/api/core";
 import { describe, expect, it } from "vitest";
 import { createFakeBackend } from "./fakeBackend";
 import { renderWithBackend } from "./render";
@@ -38,6 +39,24 @@ describe("fake backend", () => {
   it("an unimplemented command fails loudly", async () => {
     renderWithBackend(MainApp, {}, createFakeBackend());
     await expect(commands.vaultStatus()).rejects.toThrow("NotImplementedInFake(vaultStatus)");
+  });
+
+  it("an unknown command or an unhandled plugin call throws and names itself", async () => {
+    renderWithBackend(MainApp, {}, createFakeBackend());
+    await expect(invoke("no_such_command")).rejects.toThrow("NotImplementedInFake(unknown command no_such_command)");
+    await expect(invoke("plugin:opener|open_url")).rejects.toThrow(
+      "NotImplementedInFake(plugin:opener|open_url)",
+    );
+  });
+
+  it("a plugin call works when the test opts in", async () => {
+    const seen: unknown[] = [];
+    const fake = createFakeBackend({
+      plugins: { "plugin:opener|open_url": (p) => (seen.push(p), null) },
+    });
+    renderWithBackend(MainApp, {}, fake);
+    await invoke("plugin:opener|open_url", { url: "u" });
+    expect(seen).toEqual([{ url: "u" }]);
   });
 
   it("emit reaches listeners registered through the generated events", async () => {

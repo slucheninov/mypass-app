@@ -73,6 +73,25 @@ describe("no_direct_invoke_outside_bindings", () => {
   });
 });
 
+describe("invoke scanner", () => {
+  const flags = (text: string) => /\binvoke\s*\(/.test(text) || text.includes("@tauri-apps/api/core");
+
+  it("flags an invoke import and a bare invoke call", () => {
+    expect(flags('import { invoke } from "@tauri-apps/api/core";')).toBe(true);
+    expect(flags('const x = await invoke("app_info");')).toBe(true);
+    expect(flags("await commands.appInfo();")).toBe(false);
+  });
+
+  it("exempts bindings.ts and src/test/ from the scan", () => {
+    // bindings.ts really contains the import, so the exemption is what keeps the guard green.
+    const bindings = readFileSync(resolve(process.cwd(), "src/lib/bindings.ts"), "utf8");
+    expect(flags(bindings)).toBe(true);
+    const scanned = sourceFiles(["ts", "svelte"]).map((f) => f.path);
+    expect(scanned).not.toContain("src/lib/bindings.ts");
+    expect(scanned.some((p) => p.startsWith("src/test/"))).toBe(false);
+  });
+});
+
 describe("no_remote_urls_in_sources", () => {
   const ALLOWED = [
     "https://github.com/slucheninov/mypass-app",
@@ -188,13 +207,22 @@ function scanMarkup(markup: string): { texts: string[]; tags: string[] } {
   return { texts, tags };
 }
 
-const LITERAL_ATTR_RE = /\b(aria-label|title|placeholder)\s*=\s*(?:"[^"{]*[^"]*"|'[^']*')/g;
+// The negative look-behind anchors the name: `data-title="..."` or `x:title="..."` is not `title`.
+const LITERAL_ATTR_RE = /(?<![\w:.-])(aria-label|title|placeholder|alt)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+
+/** A quoted value that is exactly one `{expression}` is translated text, not a literal. */
+function isSingleExpression(value: string): boolean {
+  const v = value.trim();
+  return v.startsWith("{") && skipBraces(v, 0) === v.length;
+}
 
 function untranslatedFindings(svelte: string): string[] {
   const { texts, tags } = scanMarkup(markupOf(svelte));
   const found = texts.filter((t) => /\p{L}/u.test(t)).map((t) => `text: ${t}`);
   for (const tag of tags) {
-    for (const m of tag.matchAll(LITERAL_ATTR_RE)) found.push(`attribute: ${m[0]}`);
+    for (const m of tag.matchAll(LITERAL_ATTR_RE)) {
+      if (!isSingleExpression(m[2] ?? m[3] ?? "")) found.push(`attribute: ${m[0]}`);
+    }
   }
   return found;
 }
@@ -219,6 +247,18 @@ describe("no_untranslated_text_nodes_in_svelte_files", () => {
       'attribute: placeholder="Search"',
     ]);
     expect(untranslatedFindings('<a title="Go">{x}</a>')).toEqual(['attribute: title="Go"']);
+    expect(untranslatedFindings('<img alt="Logo" />')).toEqual(['attribute: alt="Logo"']);
+    expect(untranslatedFindings('<b aria-label="Close {x}">{y}</b>')).toEqual([
+      'attribute: aria-label="Close {x}"',
+    ]);
+    expect(untranslatedFindings('<b title="{a} and {b}">{y}</b>')).toEqual([
+      'attribute: title="{a} and {b}"',
+    ]);
+    // A quoted attribute that is exactly one expression is fine; data-* names are not guarded.
+    expect(untranslatedFindings(`<b aria-label="{t('x')}" alt='{t("y")}'>{z}</b>`)).toEqual([]);
+    expect(
+      untranslatedFindings('<b data-title="x" data-placeholder="y" x:title="z" class="title">{z}</b>'),
+    ).toEqual([]);
     // Expressions, blocks, arrow functions inside tags and script/style are not literal text.
     const ok =
       "<script>let a = 1 > 0 ? 'text' : 'more';</script>" +

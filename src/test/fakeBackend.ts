@@ -52,6 +52,8 @@ export interface FakeBackendOptions {
   deviceUnlockAvailable?: boolean;
   /** The short layout code `platform_keyboard_layout` reports; `null` means unsupported. */
   keyboardLayout?: string | null;
+  /** Opt-in handlers for plugin calls by wire name, e.g. `"plugin:opener|open_url"`. */
+  plugins?: Record<string, (payload: unknown) => unknown>;
 }
 
 export interface FakeCall {
@@ -144,6 +146,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     (Object.keys(handlers) as CommandName[]).map((name) => [snake(name), name]),
   );
   const calls: FakeCall[] = [];
+  const pluginHandlers: Record<string, (payload: unknown) => unknown> = { ...opts.plugins };
 
   return {
     handlers,
@@ -152,7 +155,17 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       mockIPC(
         async (cmd, payload) => {
           const name = byWireName.get(cmd);
-          if (!name) return undefined; // plugin and window calls of the runtime itself
+          if (!name) {
+            // Calls of the runtime itself (event plumbing is mocked by `shouldMockEvents`) are the
+            // only ones that may pass; everything else names itself so a test never gets a silent
+            // `undefined` for a command or plugin the fake does not know.
+            if (cmd.startsWith("plugin:")) {
+              const plugin = pluginHandlers[cmd];
+              if (plugin) return plugin(payload);
+              throw new NotImplementedInFake(cmd);
+            }
+            throw new NotImplementedInFake(`unknown command ${cmd}`);
+          }
           const args = (payload ?? {}) as Args;
           calls.push({ command: name, args });
           return (handlers[name] as Handler<CommandName>)(args);
