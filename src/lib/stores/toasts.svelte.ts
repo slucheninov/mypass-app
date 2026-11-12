@@ -7,7 +7,7 @@ export interface Toast {
   kind: ToastKind;
   /** Already translated. */
   text: string;
-  /** English diagnostics shown in a collapsible; only ever set from `errorDetail`. */
+  /** English diagnostics shown in a collapsible; set from `errorDetail` or from the save status message (both backend English, secret-free by contract). */
   detail?: string;
   sticky: boolean;
 }

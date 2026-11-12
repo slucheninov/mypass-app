@@ -3,7 +3,7 @@ import { events, type Language, type SettingsPatch_Deserialize, type Settings_Se
 import { setLanguage } from "../i18n/index.svelte";
 
 /** Applies the theme setting: `system` leaves the attribute off so `prefers-color-scheme` decides. */
-export function applyTheme(theme: "system" | "light" | "dark"): void {
+export function applyTheme(theme: Theme): void {
   const root = document.documentElement;
   if (theme === "system") delete root.dataset.theme;
   else root.dataset.theme = theme;

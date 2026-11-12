@@ -347,6 +347,7 @@
   "No recognized competing extensions were enabled at the last check.": "No recognized competing extensions were enabled at the last check.",
   "No report received in this app session. Open this browser’s MyPass extension and choose Check this browser.": "No report received in this app session. Open this browser’s MyPass extension and choose Check this browser.",
   "No vault data found.": "No vault data found.",
+  "No vault is open": "No vault is open",
   "No vault file selected. Choose an existing .kdbx file or create a new one.": "No vault file selected. Choose an existing .kdbx file or create a new one.",
   "None": "None",
   "None yet": "None yet",

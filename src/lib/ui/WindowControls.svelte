@@ -2,8 +2,9 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount } from "svelte";
   import { t } from "../i18n/index.svelte";
+  import type { Os } from "../platform.svelte";
 
-  let { os }: { os: "macos" | "windows" | "linux" } = $props();
+  let { os }: { os: Os } = $props();
 
   let maximized = $state(false);
 

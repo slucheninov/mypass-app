@@ -21,8 +21,8 @@ function rootFor(label: string): Component {
   }
 }
 
-// The language starts from the system setting; the persisted setting is applied after mount by the
-// settings bootstrap (a later task), which never delays the first paint.
+// The language starts from the system setting; the persisted setting is applied after mount by
+// `settings.start()` inside `startStores`, which never delays the first paint.
 setLanguage("system");
 
 const target = document.getElementById("app");

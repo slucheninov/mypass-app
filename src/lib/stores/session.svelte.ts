@@ -101,12 +101,23 @@ class SessionStore {
 
   #apply(next: SessionStatus_Serialize): void {
     const prev = this.status.state;
+    const prevPath = this.status.vaultPath;
     this.status = next;
     this.loaded = true;
     this.#syncSaveToast(next.save);
-    if (prev === next.state) return;
+    // The backend switches vaults without passing through `locked`: opening or creating another
+    // vault while unlocked is `unlocked -> unlocked` with a different path. Everything that belongs
+    // to the old vault (edit model, selection, scope, revealed values, in-flight fetches) must be
+    // forgotten exactly as on a lock, and the new vault loaded afterwards.
+    const switched = prev === "unlocked" && next.state === "unlocked" && next.vaultPath !== prevPath;
+    if (prev === next.state && !switched) return;
     // Bump first, so a listener that reads the epoch already sees the lock.
     if (prev === "unlocked") this.lockEpoch++;
+    if (switched) {
+      for (const cb of [...this.#listeners]) cb("locked", prev);
+      for (const cb of [...this.#listeners]) cb(next.state, "locked");
+      return;
+    }
     for (const cb of [...this.#listeners]) cb(next.state, prev);
   }
 

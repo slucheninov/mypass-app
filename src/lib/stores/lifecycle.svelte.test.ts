@@ -6,6 +6,7 @@ import { entries } from "./entries.svelte";
 import { startStores } from "./index";
 import { navigation } from "./navigation.svelte";
 import { session } from "./session.svelte";
+import { createRevealed } from "../secret.svelte";
 import { settings } from "./settings.svelte";
 import { toasts } from "./toasts.svelte";
 
@@ -71,6 +72,57 @@ describe("sidebar staleness", () => {
     await refreshing;
     expect(entries.items).toEqual([]);
     expect(entries.loading).toBe(false);
+  });
+});
+
+describe("vault switch while unlocked", () => {
+  const switchedTo = (path: string) => ({ ...sessionStatus("unlocked"), vaultPath: path, vaultName: "Other" });
+
+  it("switching_vaults_forgets_navigation_edit_state_and_revealed_values", async () => {
+    const fake = await bootUnlocked();
+    navigation.setScope({ kind: "category", category: "favorites" });
+    navigation.select("e-github");
+    navigation.openEditor({ id: "e-github", title: "A" } as never);
+    const revealed = createRevealed();
+    await revealed.reveal(async () => "vault-a-secret");
+    expect(revealed.value).toBe("vault-a-secret");
+    const epoch = session.lockEpoch;
+    fake.calls.length = 0;
+    await fake.emit("sessionChanged", switchedTo("/vaults/b.kdbx"));
+    await vi.waitFor(() => expect(session.status.vaultPath).toBe("/vaults/b.kdbx"));
+    expect(session.status.state).toBe("unlocked");
+    expect(navigation.editModel).toBeNull();
+    expect(navigation.presentation).toBe("browse");
+    expect(navigation.selectedId).toBeNull();
+    expect(navigation.scope).toEqual({ kind: "category", category: "all" });
+    expect(revealed.value).toBeNull();
+    expect(session.lockEpoch).toBe(epoch + 1);
+    await vi.waitFor(() => expect(count(fake, "entryList")).toBeGreaterThan(0));
+    expect(count(fake, "sidebarGet")).toBeGreaterThan(0);
+  });
+
+  it("a_fetch_begun_for_the_old_vault_is_discarded_after_the_switch", async () => {
+    const fake = await bootUnlocked();
+    let release: ((rows: EntrySummary[]) => void) | undefined;
+    fake.handlers.entryList = () => new Promise((resolve) => (release = resolve));
+    const refreshing = entries.refreshList();
+    await vi.waitFor(() => expect(release).toBeDefined());
+    fake.handlers.entryList = () => Promise.resolve([]);
+    await fake.emit("sessionChanged", switchedTo("/vaults/b.kdbx"));
+    await vi.waitFor(() => expect(session.status.vaultPath).toBe("/vaults/b.kdbx"));
+    release?.([fake.state.entries[0]!.summary]);
+    await refreshing;
+    await new Promise((r) => setTimeout(r, 20));
+    expect(entries.items).toEqual([]);
+  });
+
+  it("the_same_path_again_is_not_a_switch", async () => {
+    await bootUnlocked();
+    const epoch = session.lockEpoch;
+    navigation.select("e-github");
+    await session.init();
+    expect(session.lockEpoch).toBe(epoch);
+    expect(navigation.selectedId).toBe("e-github");
   });
 });
 
@@ -168,6 +220,20 @@ describe("startStores", () => {
     stop = await startStores();
     expect(document.documentElement.dataset.theme).toBe("dark");
     expect(toasts.items).toHaveLength(1);
+    delete document.documentElement.dataset.theme;
+  });
+
+  it("a_failing_entries_listener_does_not_stop_settings_and_session", async () => {
+    const fake = createFakeBackend({ session: "locked" });
+    fake.state.settings.theme = "dark";
+    fake.install();
+    const { events } = await import("../bindings");
+    const spy = vi.spyOn(events.vaultChanged, "listen").mockRejectedValue(new Error("listen failed"));
+    stop = await startStores();
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(session.loaded).toBe(true);
+    expect(toasts.items).toHaveLength(1);
+    spy.mockRestore();
     delete document.documentElement.dataset.theme;
   });
 

@@ -33,7 +33,7 @@ function isApiError(e: unknown): e is ApiError {
 
 const MESSAGES: Record<ErrorCode, () => string> = {
   locked: () => t("Vault is locked"),
-  noVault: () => t("Vault not found"),
+  noVault: () => t("No vault is open"),
   wrongPassword: () => t("Wrong master password"),
   alreadyExists: () => t("A vault file already exists there"),
   notFound: () => t("Item not found"),

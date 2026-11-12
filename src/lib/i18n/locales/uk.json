@@ -347,6 +347,7 @@
   "No recognized competing extensions were enabled at the last check.": "Під час останньої перевірки не виявлено розпізнаних конкуруючих розширень.",
   "No report received in this app session. Open this browser’s MyPass extension and choose Check this browser.": "У цьому сеансі програми звіт не отримано. Відкрийте розширення MyPass у цьому браузері та виберіть «Check this browser».",
   "No vault data found.": "Дані сховища не знайдено.",
+  "No vault is open": "Сховище не відкрито",
   "No vault file selected. Choose an existing .kdbx file or create a new one.": "Файл сховища не вибрано. Виберіть наявний файл .kdbx або створіть нове сховище.",
   "None": "Немає",
   "None yet": "Поки немає",
