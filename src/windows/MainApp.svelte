@@ -15,11 +15,14 @@
 
   // The history modal belongs to the selected entry of one unlocked stretch: another selection, a
   // lock, or an editor opening (a restore must never land under unsaved edits) closes it.
+  // It also belongs to the vault it was opened in: the path is captured with the id.
   let historyId = $state<string | null>(null);
+  let historyVault: string | null = null;
   $effect(() => {
     if (
       historyId !== null &&
       (session.status.state !== "unlocked" ||
+        session.status.vaultPath !== historyVault ||
         navigation.selectedId !== historyId ||
         (navigation.presentation !== "browse" && navigation.editModel !== null))
     ) {
@@ -41,7 +44,10 @@
               {#key navigation.editModel}<EntryEditor bind:model={navigation.editModel} />{/key}
             {:else if navigation.selectedId !== null}
               <!-- Keyed by id: every revealed value and dialog of a pane dies with its selection. -->
-              {#key navigation.selectedId}<EntryDetail id={navigation.selectedId} onopenhistory={(id) => (historyId = id)} />{/key}
+              {#key navigation.selectedId}<EntryDetail id={navigation.selectedId} onopenhistory={(id) => {
+                historyVault = session.status.vaultPath;
+                historyId = id;
+              }} />{/key}
             {/if}
           {/snippet}
         </Shell>

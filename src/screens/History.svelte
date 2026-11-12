@@ -63,7 +63,10 @@
   const changed = (item: HistoryItem): string =>
     [...new Set(item.changedFields.map(fieldLabel))].join(", ");
   const when = (item: HistoryItem): string =>
-    item.modified === null ? item.title : formatDate(item.modified, "datetime");
+    item.modified === null ? t("Unknown date") : formatDate(item.modified, "datetime");
+
+  /** A version is the same revision across a reload when its date and title match; its `index` is not stable. */
+  const sameVersion = (a: HistoryItem, b: HistoryItem) => a.modified === b.modified && a.title === b.title;
 
   async function load() {
     const mine = ++generation;
@@ -71,8 +74,14 @@
     try {
       const next = await api.entryHistory(entryId);
       if (mine !== generation || !unchanged()) return;
+      // Keep the chosen row and the open confirmation on the same version, not on the same index:
+      // a sync or merge may have added or dropped a version meanwhile.
+      const selected = items?.[active] ?? null;
+      const asked = confirming;
       items = next;
-      active = Math.min(active, Math.max(0, next.length - 1));
+      const at = selected ? next.findIndex((v) => sameVersion(v, selected)) : -1;
+      active = at >= 0 ? at : 0;
+      confirming = asked ? (next.find((v) => sameVersion(v, asked)) ?? null) : null;
     } catch (e) {
       if (mine !== generation || !unchanged()) return;
       toasts.reportError(e);

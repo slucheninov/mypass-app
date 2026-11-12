@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { invoke } from "@tauri-apps/api/core";
 import { describe, expect, it } from "vitest";
 import { createFakeBackend } from "./fakeBackend";
+import { BIN_GROUP_ID, WORK_GROUP_ID } from "./fixtures";
 import { renderWithBackend } from "./render";
 import MainApp from "../windows/MainApp.svelte";
 import { commands } from "../lib/bindings";
@@ -120,6 +121,14 @@ describe("fake backend", () => {
     const model = fake.state.entries.find((e) => e.summary.id === "e-github")!.model;
     expect(await commands.entrySave({ ...structuredClone(model), urls: ["https://b.test"] })).toEqual({ status: "ok", data: "e-github" });
     expect(fake.state.entries.find((e) => e.summary.id === "e-github")!.model.urls).toEqual(["https://b.test"]);
+    // Like `save_entry`: saving an entry with another group moves it, out of the bin too.
+    const old = fake.state.entries.find((e) => e.summary.id === "e-old")!;
+    expect(old.summary.inRecycleBin).toBe(true);
+    expect(await commands.entrySave({ ...structuredClone(old.model), groupId: WORK_GROUP_ID })).toEqual({ status: "ok", data: "e-old" });
+    expect(old.summary.inRecycleBin).toBe(false);
+    old.summary.inRecycleBin = true;
+    old.summary.groupId = BIN_GROUP_ID;
+    old.model.groupId = BIN_GROUP_ID;
     expect(ok(await commands.entryRestore("e-old", null))).toBe(true);
     expect(fake.state.entries.find((e) => e.summary.id === "e-old")!.summary.inRecycleBin).toBe(false);
     // Export answers false when the (Rust-side) save dialog is cancelled.

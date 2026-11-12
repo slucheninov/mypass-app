@@ -497,6 +497,8 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         found.summary.favorite = model.favorite;
         found.summary.subtitle = model.username;
         found.summary.groupId = model.groupId;
+        // Like `save_entry`: a save into another group moves the entry, out of the bin too.
+        found.summary.inRecycleBin = locate(model.groupId)?.node.isRecycleBin ?? false;
         found.summary.attachmentCount = attachments.length;
         found.summary.hasTotp = model.totp !== "";
         found.modified += 1;

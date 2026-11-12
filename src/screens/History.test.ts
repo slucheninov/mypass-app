@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { formatDate } from "../lib/i18n/format";
 import ru from "../lib/i18n/locales/ru.json";
 import { setLanguage } from "../lib/i18n/index.svelte";
+import { session } from "../lib/stores/session.svelte";
 import { navigation } from "../lib/stores/navigation.svelte";
 import { expectNoAxeViolations } from "../test/axe";
 import { apiError, createFakeBackend, type FakeBackend } from "../test/fakeBackend";
@@ -52,6 +53,12 @@ async function openHistory(fake: FakeBackend, id = "e-router", link_name: string
 }
 
 const options = (dialog: HTMLElement) => within(dialog).getAllByRole("option");
+
+async function pickRow(dialog: HTMLElement, at: number) {
+  await userEvent.setup().click(options(dialog)[at]!);
+  return userEvent.setup().click(within(dialog).getByRole("button", { name: "Restore this version" }));
+}
+
 
 describe("history list", () => {
   it("history_lists_versions_newest_first_with_localised_dates", async () => {
@@ -119,14 +126,31 @@ describe("history list", () => {
     const dialog = await openHistory(backend());
     await expectNoAxeViolations(dialog);
   });
+
+  it("history_with_the_restore_confirmation_stacked_passes_axe", async () => {
+    const dialog = await openHistory(backend());
+    await userEvent.setup().click(within(dialog).getByRole("button", { name: "Restore this version" }));
+    const confirm = await screen.findByRole("dialog", { name: "Restore this version" });
+    await expectNoAxeViolations(confirm);
+    await expectNoAxeViolations(document.body);
+  });
+
+  it("a_version_without_a_date_says_so_instead_of_repeating_its_title", async () => {
+    const fake = backend();
+    fake.handlers.entryHistory = () => [
+      { index: 0, modified: null, title: "Router (undated)", changedFields: ["Title"] },
+    ];
+    const dialog = await openHistory(fake);
+    const row = options(dialog)[0]!;
+    expect(row.textContent).toContain("Unknown date");
+    expect(row.textContent?.split("Router (undated)").length).toBe(2);
+    await userEvent.setup().click(within(dialog).getByRole("button", { name: "Restore this version" }));
+    const confirm = await screen.findByRole("dialog", { name: "Restore this version" });
+    expect(confirm.textContent).toContain("Restore the version from Unknown date?");
+  });
 });
 
 describe("restore a version", () => {
-  async function pickRow(dialog: HTMLElement, at: number) {
-    await userEvent.setup().click(options(dialog)[at]!);
-    return userEvent.setup().click(within(dialog).getByRole("button", { name: "Restore this version" }));
-  }
-
   it("restore_asks_confirmation_then_calls_entry_history_restore_with_index", async () => {
     const fake = backend();
     const dialog = await openHistory(fake);
@@ -234,6 +258,44 @@ describe("lifetime", () => {
     expect(calls(fake, "entryHistoryRestore")).toHaveLength(0);
   });
 
+  it("a_reload_while_the_confirmation_is_open_keeps_the_chosen_version_not_the_index", async () => {
+    const fake = backend();
+    const dialog = await openHistory(fake);
+    // Choose the second row (T - 2 days), index 1 now.
+    await pickRow(dialog, 1);
+    const confirm = await screen.findByRole("dialog", { name: "Restore this version" });
+    // A sync adds a newer version: the chosen one moves to index 2.
+    fake.state.entries
+      .find((e) => e.summary.id === "e-router")!
+      .history.push({ modified: T - 1000, model: structuredClone(fake.state.entries[0]!.model) });
+    await fake.emit("vaultChanged", null);
+    await waitFor(() => expect(options(dialog)).toHaveLength(4));
+    await userEvent.setup().click(within(confirm).getByRole("button", { name: "Restore" }));
+    await waitFor(() => expect(calls(fake, "entryHistoryRestore")).toHaveLength(1));
+    expect(calls(fake, "entryHistoryRestore")[0]!.args).toEqual({ id: "e-router", index: 2 });
+  });
+
+  it("a_reload_that_removes_the_chosen_version_drops_the_confirmation", async () => {
+    const fake = backend();
+    const dialog = await openHistory(fake);
+    await pickRow(dialog, 2);
+    await screen.findByRole("dialog", { name: "Restore this version" });
+    fake.state.entries.find((e) => e.summary.id === "e-router")!.history.shift();
+    await fake.emit("vaultChanged", null);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Restore this version" })).toBeNull());
+    expect(calls(fake, "entryHistoryRestore")).toHaveLength(0);
+  });
+
+  it("switching_vaults_closes_history_and_a_same_id_selection_does_not_reopen_it", async () => {
+    const fake = backend();
+    await openHistory(fake);
+    await fake.emit("sessionChanged", { ...sessionStatus("unlocked"), vaultPath: "/vaults/b.kdbx", vaultName: "Other" });
+    await waitFor(() => expect(session.status.vaultPath).toBe("/vaults/b.kdbx"));
+    // Same id is selected again in the new vault (ids can collide across copies of a vault).
+    navigation.select("e-router");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "History" })).toBeNull());
+  });
+
   it("the_history_list_refreshes_when_the_vault_changes", async () => {
     const fake = backend();
     const dialog = await openHistory(fake);
@@ -245,7 +307,7 @@ describe("lifetime", () => {
 });
 
 describe("recycle bin restore", () => {
-  it("restore_from_bin_defaults_to_original_group_and_offers_group_picker", async () => {
+  it("restore_from_bin_passes_null_so_the_backend_restores_to_the_root", async () => {
     const fake = backend([]);
     await select(fake, "e-old");
     const pane = await screen.findByRole("region", { name: "Details" });
@@ -268,6 +330,21 @@ describe("recycle bin restore", () => {
     await waitFor(() => expect(calls(fake, "entryRestore")).toHaveLength(1));
     expect(calls(fake, "entryRestore")[0]!.args).toEqual({ id: "e-old", groupId: "group-work" });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("the_restore_to_group_picker_passes_axe_from_the_detail_pane_and_from_the_list", async () => {
+    const fake = backend([]);
+    await select(fake, "e-old");
+    const pane = await screen.findByRole("region", { name: "Details" });
+    await within(pane).findByRole("heading", { name: "Old forum" });
+    await userEvent.setup().click(within(pane).getByRole("button", { name: "Restore to…" }));
+    await expectNoAxeViolations(await screen.findByRole("dialog", { name: "Choose a group" }));
+    await userEvent.setup().keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    navigation.setScope({ kind: "category", category: "deleted" });
+    await fireEvent.contextMenu(await screen.findByRole("option", { name: /Old forum/ }));
+    await userEvent.setup().click(screen.getByRole("menuitem", { name: "Restore to…" }));
+    await expectNoAxeViolations(await screen.findByRole("dialog", { name: "Choose a group" }));
   });
 
   it("the_list_context_menu_restores_a_bin_entry_and_offers_restore_to", async () => {
