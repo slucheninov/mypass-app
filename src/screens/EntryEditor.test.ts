@@ -367,3 +367,45 @@ describe("editor lifecycle", () => {
     await expectNoAxeViolations(container);
   });
 });
+
+describe("list actions on the entry open in the editor", () => {
+  async function editing(): Promise<ReturnType<typeof backendWith>> {
+    const fake = backendWith([{ id: "e-bank", title: "Bank", password: "pw", modified: 1 }]);
+    await openEdit(fake, "e-bank");
+    return fake;
+  }
+  const row = () => within(screen.getByRole("listbox")).getByRole("option", { name: /Bank/ });
+
+  it("move_restore_and_delete_are_disabled_in_the_menu_for_the_edited_entry", async () => {
+    const fake = await editing();
+    await fireEvent.contextMenu(row());
+    for (const name of ["Move to…", "Delete"]) {
+      expect(screen.getByRole("menuitem", { name }).getAttribute("aria-disabled"), name).toBe("true");
+    }
+    // Another entry's menu is unaffected.
+    await fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    await fireEvent.contextMenu(within(screen.getByRole("listbox")).getByRole("option", { name: /GitHub/ }));
+    expect(screen.getByRole("menuitem", { name: "Delete" }).getAttribute("aria-disabled")).toBeNull();
+    expect(calls(fake, "entryDelete")).toHaveLength(0);
+  });
+
+  it("the_delete_key_and_dragging_do_nothing_for_the_edited_entry", async () => {
+    const fake = await editing();
+    const bank = row();
+    expect(bank.getAttribute("draggable")).toBe("false");
+    (screen.getByRole("listbox") as HTMLElement).focus();
+    await user().click(bank);
+    await user().keyboard("{Delete}");
+    expect(calls(fake, "entryDelete")).toHaveLength(0);
+    expect(screen.queryByRole("dialog", { name: /Delete/ })).toBeNull();
+    expect(navigation.editModel?.id).toBe("e-bank");
+  });
+
+  it("after_the_editor_closes_the_entry_can_be_deleted_again", async () => {
+    const fake = await editing();
+    await user().click(screen.getByRole("button", { name: "Cancel" }));
+    await fireEvent.contextMenu(row());
+    await user().click(screen.getByRole("menuitem", { name: "Delete" }));
+    await waitFor(() => expect(calls(fake, "entryDelete")).toHaveLength(1));
+  });
+});

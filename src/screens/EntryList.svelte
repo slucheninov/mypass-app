@@ -138,6 +138,13 @@
       await openUrl(url);
     });
 
+  /**
+   * The entry the editor has open. Deleting, moving or restoring it from the list would be undone
+   * by the editor's Save (the backend moves an entry to the editor's group, which brings a
+   * binned one back), so the list refuses those actions until the editor closes.
+   */
+  const isBeingEdited = (id: string) => navigation.editModel?.id === id;
+
   const toggleFavorite = (entry: EntrySummary) => guard(() => api.entrySetFavorite(entry.id, !entry.favorite));
 
   /** Where the selection goes when `id` leaves the list: the row below, else the row above. */
@@ -161,6 +168,7 @@
    * already in the bin, or a vault whose bin is disabled) asks first.
    */
   function requestDelete(entry: EntrySummary) {
+    if (isBeingEdited(entry.id)) return;
     if (entry.inRecycleBin || !binEnabled) confirming = { kind: "purge", id: entry.id };
     else void remove(entry, false);
   }
@@ -252,6 +260,7 @@
     const entry = menu ? byId(menu.id) : undefined;
     if (!entry) return [];
     const login = entry.entryType === "login";
+    const edited = isBeingEdited(entry.id);
     return [
       { id: "username", label: t("Copy username"), icon: "copy", disabled: !login },
       { id: "password", label: t("Copy password"), icon: "copy", disabled: !login },
@@ -261,17 +270,18 @@
       // A bin entry is brought back with Restore, not moved.
       ...(entry.inRecycleBin
         ? [
-            { id: "restore", label: t("Restore"), icon: "undo" as const },
-            { id: "restore-to", label: t("Restore to…"), icon: "folder" as const },
+            { id: "restore", label: t("Restore"), icon: "undo" as const, disabled: edited },
+            { id: "restore-to", label: t("Restore to…"), icon: "folder" as const, disabled: edited },
           ]
         : []),
-      { id: "move", label: t("Move to…"), icon: "folder", disabled: entry.inRecycleBin },
+      { id: "move", label: t("Move to…"), icon: "folder", disabled: entry.inRecycleBin || edited },
       { id: "sep-2", label: "", separator: true },
       {
         id: "delete",
         label: entry.inRecycleBin || !binEnabled ? t("Delete permanently") : t("Delete"),
         icon: "trash",
         danger: true,
+        disabled: edited,
       },
     ];
   });
@@ -367,7 +377,7 @@
           id={rowId(entry.id)}
           tabindex="-1"
           aria-selected={entry.id === selectedId}
-          draggable={!entry.inRecycleBin}
+          draggable={!entry.inRecycleBin && !isBeingEdited(entry.id)}
           onclick={() => {
             // The listbox keeps focus, so aria-activedescendant is announced for the clicked row.
             listbox?.focus();
