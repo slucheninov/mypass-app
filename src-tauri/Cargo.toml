@@ -24,7 +24,12 @@ tauri.workspace = true
 tauri-specta.workspace = true
 specta.workspace = true
 specta-typescript.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+secrecy.workspace = true
+zeroize.workspace = true
+uuid.workspace = true
+sys-locale.workspace = true
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance.workspace = true
@@ -33,7 +38,10 @@ tauri-plugin-dialog.workspace = true
 tauri-plugin-opener.workspace = true
 
 [dev-dependencies]
+tauri = { workspace = true, features = ["test"] }
 tempfile.workspace = true
+mypass-platform = { path = "../crates/mypass-platform", features = ["test-util"] }
+mypass-kdbx = { path = "../crates/mypass-kdbx", features = ["test-util"] }
 
 [lints]
 workspace = true

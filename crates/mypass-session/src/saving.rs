@@ -722,6 +722,21 @@ impl VaultSession {
         self.keep_unsaved_copy().map(|_| ())
     }
 
+    /// The quit path after the user chose to quit although the final save failed: locks (which
+    /// keeps the encrypted bytes of the unsaved edits when they cannot be written) and writes
+    /// them as an `unsaved-*` copy into the vault's backup folder. `Ok(None)` when nothing was
+    /// unsaved; an `Err` means no copy could be written (the caller exits anyway: the user
+    /// consented). Works while quitting.
+    pub fn keep_unsaved_for_quit(&self) -> Result<Option<PathBuf>, SessionError> {
+        self.lock(LockReason::Quit);
+        let kept = lock(&self.0.inner).pending_bytes.is_some();
+        if kept {
+            self.keep_unsaved_copy().map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Writes the kept edits to `<backups>/<vault_id>/unsaved-<secs>[-<n>].kdbx` and lets them
     /// go from memory. Returns the copy's path.
     ///

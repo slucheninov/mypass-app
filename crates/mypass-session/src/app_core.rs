@@ -417,11 +417,13 @@ impl AppCore {
         password: SecretString,
     ) -> Result<SessionStatus, ApiError> {
         self.session.open_vault(Path::new(path), password)?;
+        self.purge_expired_drafts();
         Ok(self.session.status())
     }
 
     pub fn vault_unlock(&self, password: SecretString) -> Result<SessionStatus, ApiError> {
         self.session.unlock(password)?;
+        self.purge_expired_drafts();
         Ok(self.session.status())
     }
 
@@ -687,6 +689,17 @@ impl AppCore {
     fn draft_store(&self, vault_id: &str, key: [u8; 32]) -> Result<DraftStore, ApiError> {
         let id = VaultId::new(vault_id)?;
         Ok(DraftStore::new(self.paths.drafts_dir(&id), vault_id, key))
+    }
+
+    /// Drops drafts past their time to live; runs after a successful open or unlock. Best effort
+    /// (it never fails the caller); with no draft key there are no drafts.
+    fn purge_expired_drafts(&self) {
+        let _serial = lock(&self.drafts);
+        if let Ok((vault_id, Some(key))) = self.draft_context() {
+            if let Ok(store) = self.draft_store(&vault_id, key) {
+                store.purge_expired(self.now_i64());
+            }
+        }
     }
 
     /// Best effort and never fails the caller: the mutation it follows already succeeded. With no
@@ -1753,6 +1766,23 @@ mod tests {
         assert_eq!(draft_files(&f), 1);
         // Open the file from disk independently: the key is there.
         assert!(has_draft_key(&f.path));
+    }
+
+    #[test]
+    fn unlock_purges_expired_drafts_but_keeps_fresh_ones() {
+        let f = fx_open();
+        let id = notes_entry(&f, "Diary", "saved");
+        assert!(f.core.draft_save(&id, "draft").unwrap());
+        // A quick lock and unlock: the draft is fresh and stays.
+        f.core.vault_lock().unwrap();
+        f.core.vault_unlock(pw("pw")).unwrap();
+        assert_eq!(draft_files(&f), 1);
+        // Past the TTL while locked: the next unlock drops it.
+        f.core.vault_lock().unwrap();
+        f.clock
+            .advance(drafts::DRAFT_TTL + Duration::from_secs(3600));
+        f.core.vault_unlock(pw("pw")).unwrap();
+        assert_eq!(draft_files(&f), 0);
     }
 
     #[test]

@@ -307,6 +307,9 @@ pub struct SettingsPatch {
     pub unlock_with_device_window: Option<UnlockWithDeviceWindow>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub require_account_password_window: Option<RequireAccountPasswordWindow>,
+    // On the wire a field is missing (untouched), `null` (clear) or a value; the TypeScript type
+    // is the same as for a plain `Option`, `deserialize_with` only tells missing from `null`.
+    #[specta(type = Option<String>)]
     #[serde(
         deserialize_with = "double_option",
         skip_serializing_if = "Option::is_none"
@@ -314,6 +317,9 @@ pub struct SettingsPatch {
     pub secondary_folder: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub update_check_enabled: Option<bool>,
+    // On the wire a field is missing (untouched), `null` (clear) or a value; the TypeScript type
+    // is the same as for a plain `Option`, `deserialize_with` only tells missing from `null`.
+    #[specta(type = Option<String>)]
     #[serde(
         deserialize_with = "double_option",
         skip_serializing_if = "Option::is_none"

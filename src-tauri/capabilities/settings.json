@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "settings",
+  "description": "Permissions of the settings window: events, and the open and save dialogs that pick the vault path and the secondary folder. No fs, shell, http or clipboard access.",
+  "windows": ["settings"],
+  "permissions": ["core:event:default", "dialog:allow-open", "dialog:allow-save"]
+}
