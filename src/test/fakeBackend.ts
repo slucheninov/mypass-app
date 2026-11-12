@@ -12,6 +12,7 @@ import type {
   commands,
   events,
   FoundVaultFileDto,
+  GroupNode_Serialize,
   OpenWarning,
   RecentVaultDto,
   SessionState,
@@ -19,10 +20,14 @@ import type {
   Settings_Serialize,
 } from "../lib/bindings";
 import {
+  BIN_GROUP_ID,
   FIXTURE_MASTER_PASSWORD,
+  PERSONAL_GROUP_ID,
+  ROOT_GROUP_ID,
   defaultSettings,
   detailOf,
   fixtureEntries,
+  fixtureGroups,
   fixtureSidebar,
   listEntries,
   sessionStatus,
@@ -88,6 +93,8 @@ export interface FakeState {
   session: SessionStatus_Serialize;
   settings: Settings_Serialize;
   entries: FixtureEntry[];
+  /** The group tree below the root (the recycle bin last); `group_*` commands edit it. */
+  groups: GroupNode_Serialize[];
   masterPassword: string;
   /** What `vault_open_warnings` answers for every path (default none). */
   openWarnings: OpenWarning[];
@@ -119,6 +126,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     session: sessionStatus(opts.session ?? "locked"),
     settings: defaultSettings(),
     entries: fixtureEntries(),
+    groups: fixtureGroups(),
     masterPassword: FIXTURE_MASTER_PASSWORD,
     openWarnings: [],
     recents: [],
@@ -135,6 +143,35 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     if (!found) throw apiError("notFound");
     return found;
   };
+  // Group tree helpers (independent of the app's own, so a client bug cannot hide behind them).
+  const locate = (id: string, nodes: GroupNode_Serialize[] = state.groups): { node: GroupNode_Serialize; siblings: GroupNode_Serialize[] } | null => {
+    for (const node of nodes) {
+      if (node.id === id) return { node, siblings: nodes };
+      const inside = locate(id, node.children);
+      if (inside) return inside;
+    }
+    return null;
+  };
+  const subtreeIds = (node: GroupNode_Serialize): string[] => [node.id, ...node.children.flatMap(subtreeIds)];
+  /** The list a new child of `parentId` goes into; the top level keeps the recycle bin last. */
+  const childrenOf = (parentId: string | null): GroupNode_Serialize[] => {
+    if (parentId === null || parentId === ROOT_GROUP_ID) return state.groups;
+    const parent = locate(parentId);
+    if (!parent) throw apiError("notFound");
+    return parent.node.children;
+  };
+  const place = (list: GroupNode_Serialize[], node: GroupNode_Serialize) => {
+    const bin = list.findIndex((g) => g.isRecycleBin);
+    list.splice(bin === -1 ? list.length : bin, 0, node);
+  };
+  const sendToBin = (entry: FixtureEntry) => {
+    entry.summary.groupId = BIN_GROUP_ID;
+    entry.model.groupId = BIN_GROUP_ID;
+    entry.summary.inRecycleBin = true;
+  };
+  const changed = () => publish("vaultChanged", null);
+  let groupSeq = 0;
+
   const setSession = (next: SessionStatus_Serialize) => {
     state.session = next;
     publish("sessionChanged", structuredClone(next));
@@ -168,7 +205,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       deviceUnlockAvailable,
     }),
     appOpenEntry: notImplemented("appOpenEntry"),
-    appOpenSettings: notImplemented("appOpenSettings"),
+    appOpenSettings: () => null,
     appRecordActivity: () => null,
     appRevealBackups: notImplemented("appRevealBackups"),
     attachmentExport: notImplemented("attachmentExport"),
@@ -179,7 +216,12 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     draftSave: notImplemented("draftSave"),
     draftVersions: notImplemented("draftVersions"),
     entryCopy: notImplemented("entryCopy"),
-    entryDelete: notImplemented("entryDelete"),
+    entryDelete: ({ id }) => {
+      requireUnlocked();
+      sendToBin(findEntry(id));
+      changed();
+      return null;
+    },
     entryEditModel: ({ id }) => {
       requireUnlocked();
       return structuredClone(findEntry(id).model);
@@ -195,8 +237,37 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       requireUnlocked();
       return listEntries(state.entries, query);
     },
-    entryMove: notImplemented("entryMove"),
-    entryNewModel: notImplemented("entryNewModel"),
+    entryMove: ({ id, groupId }) => {
+      requireUnlocked();
+      const found = findEntry(id);
+      if (groupId !== ROOT_GROUP_ID && !locate(groupId)) throw apiError("notFound");
+      found.summary.groupId = groupId;
+      found.model.groupId = groupId;
+      found.summary.inRecycleBin = locate(groupId)?.node.isRecycleBin ?? false;
+      changed();
+      return null;
+    },
+    entryNewModel: ({ entryType, groupId }) => {
+      requireUnlocked();
+      return {
+        id: null,
+        entryType,
+        groupId: groupId ?? PERSONAL_GROUP_ID,
+        title: "",
+        favorite: false,
+        username: "",
+        password: "",
+        urls: [],
+        uriMatchMode: "domain",
+        totp: "",
+        notes: "",
+        address: null,
+        card: null,
+        customFields: [],
+        attachments: [],
+        attachmentOps: [],
+      };
+    },
     entryPurge: notImplemented("entryPurge"),
     entryRecent: notImplemented("entryRecent"),
     entryRestore: notImplemented("entryRestore"),
@@ -218,10 +289,45 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     generatorHistoryList: notImplemented("generatorHistoryList"),
     generatorHistoryReveal: notImplemented("generatorHistoryReveal"),
     generatorRulesSummary: notImplemented("generatorRulesSummary"),
-    groupCreate: notImplemented("groupCreate"),
-    groupDelete: notImplemented("groupDelete"),
-    groupMove: notImplemented("groupMove"),
-    groupUpdate: notImplemented("groupUpdate"),
+    groupCreate: ({ parentId, name, emoji }) => {
+      requireUnlocked();
+      const id = `group-new-${++groupSeq}`;
+      place(childrenOf(parentId), { id, name, emoji, count: 0, isRecycleBin: false, children: [] });
+      changed();
+      return id;
+    },
+    groupDelete: ({ id }) => {
+      requireUnlocked();
+      const found = locate(id);
+      if (!found || found.node.isRecycleBin) throw apiError("notFound");
+      // Like the backend: the group's items are moved to the recycle bin, then the group goes.
+      const gone = subtreeIds(found.node);
+      for (const e of state.entries) if (gone.includes(e.summary.groupId)) sendToBin(e);
+      found.siblings.splice(found.siblings.indexOf(found.node), 1);
+      changed();
+      return null;
+    },
+    groupMove: ({ id, parentId }) => {
+      requireUnlocked();
+      const found = locate(id);
+      if (!found || found.node.isRecycleBin) throw apiError("notFound");
+      // A group cannot go into itself or into its own subtree.
+      if (subtreeIds(found.node).includes(parentId)) throw apiError("invalidInput");
+      const target = childrenOf(parentId);
+      found.siblings.splice(found.siblings.indexOf(found.node), 1);
+      place(target, found.node);
+      changed();
+      return null;
+    },
+    groupUpdate: ({ id, name, emoji }) => {
+      requireUnlocked();
+      const found = locate(id);
+      if (!found) throw apiError("notFound");
+      found.node.name = name;
+      found.node.emoji = emoji;
+      changed();
+      return null;
+    },
     importCsvCommit: notImplemented("importCsvCommit"),
     importCsvPreview: notImplemented("importCsvPreview"),
     platformKeyboardLayout: () => keyboardLayout,
@@ -239,7 +345,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     shortcutConflictsTake: notImplemented("shortcutConflictsTake"),
     sidebarGet: () => {
       requireUnlocked();
-      return fixtureSidebar(state.entries);
+      return fixtureSidebar(state.entries, state.groups);
     },
     vaultCreate: ({ path, password, name }) => {
       if (state.existingFiles.includes(path)) throw apiError("alreadyExists");

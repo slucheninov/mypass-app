@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick, type Snippet } from "svelte";
   import MenuList from "./MenuList.svelte";
-  import type { MenuItem } from "./menu";
+  import { fitInViewport, type MenuItem } from "./menu";
 
   let {
     items,
@@ -54,7 +54,7 @@
     {@render trigger()}
   </button>
   {#if open}
-    <div class="popup">
+    <div class="popup" use:fitInViewport>
       <MenuList
         {items}
         onselect={(id) => {

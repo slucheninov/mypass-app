@@ -23,6 +23,7 @@ export const ROOT_GROUP_ID = "group-root";
 export const PERSONAL_GROUP_ID = "group-personal";
 export const WORK_GROUP_ID = "group-work";
 export const BIN_GROUP_ID = "group-bin";
+export const BANKING_GROUP_ID = "group-banking";
 
 export interface FixtureEntry {
   summary: EntrySummary;
@@ -177,25 +178,41 @@ const CATEGORIES: Category[] = [
   "deleted",
 ];
 
-export function fixtureSidebar(entries: FixtureEntry[]): Sidebar_Serialize {
+/** The group tree below the root: Personal (with a nested Banking), Work, and the recycle bin last. Counts are filled by `fixtureSidebar`. */
+export function fixtureGroups(): GroupNode_Serialize[] {
+  const group = (
+    id: string,
+    name: string,
+    emoji: string | null,
+    children: GroupNode_Serialize[] = [],
+    isRecycleBin = false,
+  ): GroupNode_Serialize => ({ id, name, emoji, count: 0, isRecycleBin, children });
+  return [
+    group(PERSONAL_GROUP_ID, "Personal", null, [group(BANKING_GROUP_ID, "Banking", "\u{1F3E6}")]),
+    group(WORK_GROUP_ID, "Work", "\u{1F4BC}"),
+    group(BIN_GROUP_ID, "Bin", null, [], true),
+  ];
+}
+
+/** A copy of the tree with every `count` set to the entries in that group's whole subtree. */
+function counted(nodes: GroupNode_Serialize[], summaries: EntrySummary[]): { nodes: GroupNode_Serialize[]; total: number } {
+  let total = 0;
+  const out = nodes.map((node) => {
+    const inner = counted(node.children, summaries);
+    const own = summaries.filter((e) => e.groupId === node.id).length;
+    total += own + inner.total;
+    return { ...node, count: own + inner.total, children: inner.nodes };
+  });
+  return { nodes: out, total };
+}
+
+export function fixtureSidebar(entries: FixtureEntry[], groups: GroupNode_Serialize[] = fixtureGroups()): Sidebar_Serialize {
   const summaries = entries.map((e) => e.summary);
   const categories: CategoryCount_Serialize[] = CATEGORIES.map((category) => ({
     category,
     count: category === "security" ? null : summaries.filter((e) => inScope(e, { kind: "category", category })).length,
   }));
-  const group = (id: string, name: string, isRecycleBin = false): GroupNode_Serialize => ({
-    id,
-    name,
-    emoji: null,
-    count: summaries.filter((e) => e.groupId === id).length,
-    isRecycleBin,
-    children: [],
-  });
-  return {
-    categories,
-    rootGroupId: ROOT_GROUP_ID,
-    groups: [group(PERSONAL_GROUP_ID, "Personal"), group(WORK_GROUP_ID, "Work"), group(BIN_GROUP_ID, "Bin", true)],
-  };
+  return { categories, rootGroupId: ROOT_GROUP_ID, groups: counted(groups, summaries).nodes };
 }
 
 export function detailOf(e: FixtureEntry): EntryDetailDto_Serialize {

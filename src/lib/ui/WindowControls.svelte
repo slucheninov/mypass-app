@@ -70,6 +70,7 @@
 <style>
   .inset {
     flex: none;
+    order: -1; /* the shell puts the controls last in the DOM; the inset belongs on the left */
     height: 100%;
   }
   .bar {

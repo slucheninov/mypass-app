@@ -58,6 +58,9 @@
 
 <div class="menu" role="menu" tabindex="-1" bind:this={list} {onkeydown}>
   {#each items as item (item.id)}
+    {#if item.separator}
+      <div class="rule" role="separator"></div>
+    {:else}
     <button
       type="button"
       role="menuitem"
@@ -70,6 +73,7 @@
       <span class="icon">{#if item.icon}<Icon name={item.icon} />{/if}</span>
       <span class="text">{item.label}</span>
     </button>
+    {/if}
   {/each}
 </div>
 
@@ -101,6 +105,11 @@
   }
   button[aria-disabled="true"] {
     opacity: 0.4;
+  }
+  .rule {
+    height: 1px;
+    margin: 4px 8px;
+    background: var(--separator);
   }
   .danger {
     color: var(--danger);

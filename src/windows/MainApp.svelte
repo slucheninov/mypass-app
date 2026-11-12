@@ -1,17 +1,18 @@
 <script lang="ts">
   // The main window. Until the first session answer arrives nothing is drawn (no flash of the
-  // unlock screen for an already open vault). The vault shell replaces the placeholder in Task 6.
+  // unlock screen for an already open vault).
   import { session } from "../lib/stores/session.svelte";
   import ToastHost from "../lib/ui/ToastHost.svelte";
   import OpenGuardHost from "../screens/OpenGuardHost.svelte";
   import OpenVaultSheet from "../screens/OpenVaultSheet.svelte";
+  import Shell from "../screens/Shell.svelte";
   import Unlock from "../screens/Unlock.svelte";
 </script>
 
 <main data-testid="main-app">
   {#if session.loaded}
     {#if session.status.state === "unlocked"}
-      <div data-testid="vault-shell"></div>
+      <Shell />
     {:else}
       <Unlock />
     {/if}
