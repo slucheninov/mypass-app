@@ -32,8 +32,8 @@ describe("language", () => {
 
 describe("clipboard", () => {
   it("clipboard_stepper_clamps_10_120_step_5", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
     const { fake } = await renderSettingsApp();
+    vi.useFakeTimers();
     const input = stepper("Clear clipboard after");
     expect(input.value).toBe("30");
     expect(input.getAttribute("aria-valuetext")).toBe("30 s");
@@ -51,8 +51,8 @@ describe("clipboard", () => {
   });
 
   it("ten rapid Up presses from 30 send one update after 300 ms", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
     const { fake } = await renderSettingsApp();
+    vi.useFakeTimers();
     const input = stepper("Clear clipboard after");
     for (let i = 0; i < 10; i += 1) await fireEvent.keyDown(input, { key: "ArrowUp" });
     expect(input.value).toBe("80");
@@ -64,19 +64,20 @@ describe("clipboard", () => {
   });
 
   it("a rejected write reverts the stepper and shows an error", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
     const { fake } = await renderSettingsApp();
+    vi.useFakeTimers();
     fake.state.settingsFailure = "internal";
     const input = stepper("Clear clipboard after");
     await fireEvent.keyDown(input, { key: "ArrowUp" });
     await vi.advanceTimersByTimeAsync(400);
-    await screen.findByRole("alert");
-    await waitFor(() => expect(input.value).toBe("30"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(screen.getByRole("alert")).toBeTruthy();
+    expect(input.value).toBe("30");
   });
 
   it("a pending change is sent when the pane closes before the timer fires", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
     const { fake } = await renderSettingsApp();
+    vi.useFakeTimers();
     await fireEvent.keyDown(stepper("Clear clipboard after"), { key: "ArrowUp" });
     await fireEvent.click(screen.getByRole("tab", { name: "Vault" }));
     await vi.advanceTimersByTimeAsync(0);
