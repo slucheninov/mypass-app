@@ -21,10 +21,12 @@
 
   // The CSV import dialog belongs to one unlocked stretch; it closes itself on a lock.
   let importing = $state(false);
+  // One primitive per unlocked stretch and vault: a save-state change replaces `session.status`
+  // (a new object) but leaves this value alone, so it must not close the dialog.
+  const importScope = $derived(session.status.state === "unlocked" ? (session.status.vaultPath ?? "") : null);
   $effect(() => {
     // A lock or a vault switch destroys the dialog; the flag must not survive to open it again.
-    void session.status.state;
-    void session.status.vaultPath;
+    void importScope;
     importing = false;
   });
 

@@ -212,6 +212,39 @@ describe("import dialog", () => {
     expect(toasts.items.map((x) => x.text)).toEqual(["1 item imported"]);
   });
 
+  async function openFromToolbar() {
+    const fake = createFakeBackend({ session: "unlocked" });
+    fake.state.csvPreview = { total: 1, sampleTitles: ["Solo"], skipped: [] };
+    const user = userEvent.setup();
+    await renderMainApp(fake);
+    await user.click(await screen.findByRole("button", { name: "Import" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Import CSV\u2026" }));
+    await screen.findByRole("dialog", { name: "Import CSV" });
+    return fake;
+  }
+
+  it("a_save_state_change_keeps_the_import_dialog_open", async () => {
+    const fake = await openFromToolbar();
+    for (const state of ["pending", "saving", "failed", "idle"] as const) {
+      await fake.emit("saveStateChanged", { state, message: state === "failed" ? "disk full" : null });
+    }
+    // Let any effect re-run settle before looking.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByRole("dialog", { name: "Import CSV" })).not.toBeNull();
+  });
+
+  it("a_lock_closes_the_import_dialog", async () => {
+    const fake = await openFromToolbar();
+    await fake.emit("sessionChanged", { ...fake.state.session, state: "locked", lockReason: "manual" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Import CSV" })).toBeNull());
+  });
+
+  it("a_vault_switch_closes_the_import_dialog", async () => {
+    const fake = await openFromToolbar();
+    await fake.emit("sessionChanged", { ...fake.state.session, vaultPath: "/vaults/other.kdbx" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Import CSV" })).toBeNull());
+  });
+
   it("import_passes_axe", async () => {
     await openDialog();
     const dialog = await screen.findByRole("dialog");
