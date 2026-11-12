@@ -101,6 +101,18 @@ describe("SettingsApp", () => {
     expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Vault" }));
   });
 
+  it("Home and End jump to the first and last pane and the panel is focusable", async () => {
+    await renderSettingsApp();
+    const general = screen.getByRole("tab", { name: "General" });
+    general.focus();
+    await fireEvent.keyDown(general, { key: "End" });
+    expect(screen.getByRole("tab", { name: "About" }).getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "About" }));
+    await fireEvent.keyDown(screen.getByRole("tab", { name: "About" }), { key: "Home" });
+    expect(screen.getByRole("tab", { name: "General" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tabpanel").getAttribute("tabindex")).toBe("0");
+  });
+
   it("settings_pass_axe", async () => {
     const user = userEvent.setup();
     const { container } = await renderSettingsApp({ deviceUnlockAvailable: true }, {

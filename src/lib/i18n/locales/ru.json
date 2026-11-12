@@ -623,6 +623,8 @@
   "That location has no vault yet. MyPass will move the vault from its current location there.": "В этом расположении ещё нет хранилища. MyPass переместит туда хранилище из текущего расположения.",
   "That password is short. Longer is safer.": "Этот пароль короткий. Чем длиннее, тем надёжнее.",
   "That shortcut is already in use": "Это сочетание уже используется",
+  "That shortcut is reserved by the system": "Это сочетание зарезервировано системой",
+  "That shortcut needs Command, Ctrl or Alt with a key": "Для этого сочетания нужны Command, Ctrl или Alt вместе с клавишей",
   "The backup could not be restored and the vault file may be damaged. Restore the newest backup in the list, which was made just before this attempt.": "Не удалось восстановить резервную копию, и файл хранилища может быть повреждён. Восстановите самую новую резервную копию из списка, созданную непосредственно перед этой попыткой.",
   "The backup could not be restored: %@": "Не удалось восстановить резервную копию: {0}",
   "The backup does not open with your current master password": "Резервная копия не открывается текущим мастер-паролем",

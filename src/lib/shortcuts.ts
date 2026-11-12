@@ -44,32 +44,68 @@ function keyOfCode(code: string): string | null {
   return Object.hasOwn(NAMED_KEYS, code) ? (NAMED_KEYS[code] ?? null) : null;
 }
 
+/** Why a key press with a valid key was not recorded. */
+export type ShortcutRefusal = "modifiers" | "reserved";
+
+export type ShortcutRecording = { shortcut: string } | { refused: ShortcutRefusal } | null;
+
+// Combinations the system owns. Registering one globally would hijack it in every other app
+// (Ctrl+Q on Windows quits editors) or silently never fire (the OS consumes it first). Spelled
+// in the canonical form, so one set serves the recorder and a test per entry.
+const RESERVED_EVERYWHERE = new Set(["CommandOrControl+Q", "CommandOrControl+W", "CommandOrControl+Tab"]);
+const RESERVED_MACOS = new Set(["CommandOrControl+Space"]); // Spotlight
+const RESERVED_OTHER = new Set(["Alt+F4", "Alt+Tab", "CommandOrControl+Alt+Delete"]);
+
+function isReserved(canonical: string, os: Os | null): boolean {
+  if (RESERVED_EVERYWHERE.has(canonical)) return true;
+  return os === "macos" ? RESERVED_MACOS.has(canonical) : RESERVED_OTHER.has(canonical);
+}
+
+// Deliberate exception to "nothing is chosen by OS name" (the plan's Global Constraints list the
+// window controls and the Finder/Explorer label): Cmd and Ctrl are different physical modifiers
+// whose canonical spelling is the same, and the glyphs differ, so the recorder and the formatter
+// must know the OS. Nothing else in the UI branches on it for shortcuts.
+
 /**
- * The canonical shortcut for a `keydown`, or `null` when it is not a usable shortcut: a bare key, a
- * modifier-only press, a key the backend cannot parse, or (on macOS) a Control press, which has no
- * canonical spelling because the backend reads `ctrl` as Cmd. The key comes from `code`, the
- * physical key, so a Cyrillic layout records the same shortcut as a Latin one.
+ * Classifies a `keydown`: a canonical shortcut, a refusal (a valid key with a modifier set that
+ * cannot be used, so the UI can say why), or `null` for nothing to say (a bare key, a modifier-only
+ * press, a key the backend cannot parse). The key comes from `code`, the physical key, so a
+ * Cyrillic layout records the same shortcut as a Latin one.
  */
-export function shortcutFromEvent(e: KeyboardEvent, os: Os | null): string | null {
+export function recordShortcut(e: KeyboardEvent, os: Os | null): ShortcutRecording {
   const key = keyOfCode(e.code);
   if (key === null) return null;
   const mac = os === "macos";
-  if (mac && e.ctrlKey) return null;
+  // macOS Control has no canonical spelling: the backend reads `ctrl` as Cmd, so recording it
+  // would register the wrong key.
+  if (mac && e.ctrlKey) return { refused: "modifiers" };
   const parts: string[] = [];
   if (mac ? e.metaKey : e.ctrlKey) parts.push("CommandOrControl");
   if (e.altKey) parts.push("Alt");
   if (e.shiftKey) parts.push("Shift");
   if (!mac && e.metaKey) parts.push("Super");
-  // A shortcut needs a real modifier: Shift alone is not enough.
-  if (!parts.some((p) => p !== "Shift")) return null;
-  return [...parts, key].join("+");
+  if (parts.length === 0) return null;
+  // Shift+letter-only is refused deliberately, although the backend's `parse_shortcut` accepts it
+  // (a hand-edited settings file may hold one): a global Shift+letter would steal every capital
+  // letter typed in any app. A shortcut needs a real modifier besides Shift.
+  if (!parts.some((p) => p !== "Shift")) return { refused: "modifiers" };
+  const canonical = [...parts, key].join("+");
+  if (isReserved(canonical, os)) return { refused: "reserved" };
+  return { shortcut: canonical };
 }
 
+/** The canonical shortcut for a `keydown`, or `null` when it is not a usable one (see `recordShortcut`). */
+export function shortcutFromEvent(e: KeyboardEvent, os: Os | null): string | null {
+  const r = recordShortcut(e, os);
+  return r !== null && "shortcut" in r ? r.shortcut : null;
+}
+
+// Super is Cmd on macOS (the global-shortcut plugin treats it so); Control has no spelling there.
 const MAC_SYMBOLS: Record<string, string> = {
   CommandOrControl: "⌘",
   Alt: "⌥",
   Shift: "⇧",
-  Super: "⌃",
+  Super: "⌘",
 };
 
 function modifierName(part: string, os: Os | null): string {

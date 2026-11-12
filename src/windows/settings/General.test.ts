@@ -142,6 +142,25 @@ describe("hotkeys", () => {
     expect(patches(fake)).toEqual([]);
   });
 
+  it("a refused combination says why instead of being swallowed silently", async () => {
+    const { fake } = await renderSettingsApp({ os: "macos" });
+    const recorder = within(showRow()).getByRole("button", { name: /Show hotkey/ });
+    recorder.focus();
+    // Control on macOS has no canonical spelling; Shift alone is not a real modifier.
+    await fireEvent.keyDown(recorder, { code: "KeyK", key: "k", ctrlKey: true });
+    await within(showRow()).findByText("That shortcut needs Command, Ctrl or Alt with a key");
+    await fireEvent.keyDown(recorder, { code: "KeyK", key: "K", shiftKey: true });
+    expect(within(showRow()).queryByText("That shortcut is reserved by the system")).toBeNull();
+    // A reserved system combination gets its own message.
+    await fireEvent.keyDown(recorder, { code: "KeyQ", key: "q", metaKey: true });
+    await within(showRow()).findByText("That shortcut is reserved by the system");
+    expect(patches(fake)).toEqual([]);
+    // The next accepted shortcut clears the hint.
+    await fireEvent.keyDown(recorder, { code: "KeyK", key: "k", metaKey: true, altKey: true });
+    await waitFor(() => expect(within(showRow()).queryByText("That shortcut is reserved by the system")).toBeNull());
+    expect(patches(fake)).toEqual([{ shortcutShow: "CommandOrControl+Alt+K" }]);
+  });
+
   it("hotkey_clear_sends_empty_string", async () => {
     const user = userEvent.setup();
     const { fake } = await renderSettingsApp();

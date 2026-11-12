@@ -623,6 +623,8 @@
   "That location has no vault yet. MyPass will move the vault from its current location there.": "That location has no vault yet. MyPass will move the vault from its current location there.",
   "That password is short. Longer is safer.": "That password is short. Longer is safer.",
   "That shortcut is already in use": "That shortcut is already in use",
+  "That shortcut is reserved by the system": "That shortcut is reserved by the system",
+  "That shortcut needs Command, Ctrl or Alt with a key": "That shortcut needs Command, Ctrl or Alt with a key",
   "The backup could not be restored and the vault file may be damaged. Restore the newest backup in the list, which was made just before this attempt.": "The backup could not be restored and the vault file may be damaged. Restore the newest backup in the list, which was made just before this attempt.",
   "The backup could not be restored: %@": "The backup could not be restored: {0}",
   "The backup does not open with your current master password": "The backup does not open with your current master password",

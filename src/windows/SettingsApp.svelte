@@ -50,9 +50,10 @@
 
   async function onkeydown(event: KeyboardEvent, index: number) {
     const delta = event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 : event.key === "ArrowUp" || event.key === "ArrowLeft" ? -1 : 0;
-    if (delta === 0) return;
+    const edge = event.key === "Home" ? 0 : event.key === "End" ? PANES.length - 1 : null;
+    if (delta === 0 && edge === null) return;
     event.preventDefault();
-    const next = PANES[(index + delta + PANES.length) % PANES.length];
+    const next = edge !== null ? PANES[edge] : PANES[(index + delta + PANES.length) % PANES.length];
     if (!next) return;
     choose(next);
     await tick();
@@ -79,7 +80,8 @@
       {/each}
     </div>
   </nav>
-  <div class="content" role="tabpanel" id="settings-panel" aria-labelledby="settings-tab-{current}">
+  <!-- Focusable: a pane may open on text only (Browser, About), and the panel must stay reachable. -->
+  <div class="content" role="tabpanel" tabindex="0" id="settings-panel" aria-labelledby="settings-tab-{current}">
     <h1>{label(current)}</h1>
     {#if settings.value}
       {#if current === "General"}
