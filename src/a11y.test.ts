@@ -359,6 +359,8 @@ describe("focus return", () => {
   const modals = modalKeys();
 
   it("every_modal_in_the_sources_has_a_focus_scenario_and_no_scenario_is_stale", () => {
+    // Two modals with the same title in one file would share one scenario unnoticed.
+    expect(new Set(modals).size).toBe(modals.length);
     expect(modals.length).toBeGreaterThan(15);
     expect(modals.filter((k) => !(k in SCENARIOS))).toEqual([]);
     expect(Object.keys(SCENARIOS).filter((k) => !modals.includes(k))).toEqual([]);

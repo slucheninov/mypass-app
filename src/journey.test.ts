@@ -297,12 +297,17 @@ describe("journeys", () => {
     const switched = { ...fake.state.session, vaultPath: "/vaults/B.kdbx", vaultName: "B" };
     fake.state.entries = structuredClone(fake.state.vaults["/vaults/B.kdbx"]!.entries);
     fake.state.groups = structuredClone(fake.state.vaults["/vaults/B.kdbx"]!.groups);
+    fake.state.session = switched;
     await fake.emit("sessionChanged", switched);
     await waitFor(() => expect(titles()).toEqual(["Vault B login"]));
     expect(body()).not.toContain("typed-in-vault-a");
     expect(body()).not.toContain(FIXTURE_LOGIN_PASSWORD);
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "GitHub" })).toBeNull();
+    expect(navigation.selectedId).toBeNull();
+    expect(navigation.editModel).toBeNull();
+    expect((screen.getByRole("searchbox", { name: "Search" }) as HTMLInputElement).value).toBe("");
+    expect(entries.searchText).toBe("");
   });
 
   it("journey_large_type_and_exclusive_reveal", async () => {

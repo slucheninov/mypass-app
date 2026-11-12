@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { invoke } from "@tauri-apps/api/core";
 import { describe, expect, it } from "vitest";
 import { createFakeBackend } from "./fakeBackend";
-import { BIN_GROUP_ID, WORK_GROUP_ID } from "./fixtures";
+import { BIN_GROUP_ID, FIXTURE_MASTER_PASSWORD, WORK_GROUP_ID } from "./fixtures";
 import { renderWithBackend } from "./render";
 import MainApp from "../windows/MainApp.svelte";
 import { commands, events } from "../lib/bindings";
@@ -58,10 +58,30 @@ describe("fake backend", () => {
     expect(fake.state.entries.length).toBeGreaterThan(0);
     expect(await commands.vaultOpen("/vaults/B.kdbx", "b-secret")).toMatchObject({ status: "ok" });
     expect(fake.state.entries).toEqual([]);
-    // An unregistered path is the default fixture vault again, with its own password.
-    fake.state.masterPassword = "correct horse battery";
-    expect(await commands.vaultOpen("/vaults/other.kdbx", "correct horse battery")).toMatchObject({ status: "ok" });
+    // An unregistered path is the default fixture vault again, with the fixture password; the
+    // previously open vault's password (b-secret) is not accepted for it.
+    const refused = await commands.vaultOpen("/vaults/other.kdbx", "b-secret");
+    expect(refused).toMatchObject({ status: "error", error: { code: "wrongPassword" } });
+    expect(fake.state.entries).toEqual([]);
+    expect(await commands.vaultOpen("/vaults/other.kdbx", FIXTURE_MASTER_PASSWORD)).toMatchObject({ status: "ok" });
     expect(fake.state.entries.length).toBeGreaterThan(0);
+  });
+
+  it("vault_open_writes_the_old_vault_back_and_keeps_the_open_one", async () => {
+    const fake = createFakeBackend({ session: "unlocked" });
+    fake.state.vaults["/vaults/B.kdbx"] = { entries: [], groups: [], masterPassword: "b-secret" };
+    renderWithBackend(MainApp, {}, fake);
+    const a = fake.state.session.vaultPath as string;
+    fake.state.entries = fake.state.entries.slice(0, 1);
+    await commands.vaultOpen("/vaults/B.kdbx", "b-secret");
+    expect(fake.state.vaults[a]?.entries).toHaveLength(1);
+    // Back to A: its edited state returns, and its own password applies.
+    await commands.vaultOpen(a, FIXTURE_MASTER_PASSWORD);
+    expect(fake.state.entries).toHaveLength(1);
+    // Reopening the path that is already open (even if registered) keeps the live state.
+    fake.state.entries = [];
+    await commands.vaultOpen(a, FIXTURE_MASTER_PASSWORD);
+    expect(fake.state.entries).toEqual([]);
   });
 
   it("fake_app_info_reports_device_unlock_flag_and_os", async () => {

@@ -829,23 +829,31 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       setSession({ ...state.session, state: "locked", lockReason: "manual" });
       return null;
     },
-    // Like Rust, opening loads THAT file: a registered path brings its own content and password,
-    // the path already open keeps its state, any other path is the default fixture vault.
+    // Like Rust, opening loads THAT file: the path already open keeps its state (its own password
+    // applies), a registered path brings its own content and password, and any other path is the
+    // default fixture vault with the fixture password. The password is always checked against the
+    // vault being opened, never the previous one; a refused open changes nothing. Leaving a vault
+    // writes its current state back, so reopening it later finds its edits.
     vaultOpen: ({ path, password }) => {
-      const own = state.vaults[path];
-      if (own) {
-        if (password !== (own.masterPassword ?? state.masterPassword)) throw apiError("wrongPassword");
-        state.masterPassword = own.masterPassword ?? state.masterPassword;
-        state.entries = structuredClone(own.entries);
-        state.groups = structuredClone(own.groups);
-      } else {
+      const name = fileNameOf(path).replace(/\.kdbx$/i, "");
+      if (path === state.session.vaultPath) {
         if (password !== state.masterPassword) throw apiError("wrongPassword");
-        if (path !== state.session.vaultPath) {
-          state.entries = fixtureEntries();
-          state.groups = fixtureGroups();
-        }
+        return openVault(path, name);
       }
-      return openVault(path, fileNameOf(path).replace(/\.kdbx$/i, ""));
+      const own = state.vaults[path];
+      const expected = own?.masterPassword ?? FIXTURE_MASTER_PASSWORD;
+      if (password !== expected) throw apiError("wrongPassword");
+      if (state.session.vaultPath) {
+        state.vaults[state.session.vaultPath] = {
+          entries: structuredClone(state.entries),
+          groups: structuredClone(state.groups),
+          masterPassword: state.masterPassword,
+        };
+      }
+      state.masterPassword = expected;
+      state.entries = own ? structuredClone(own.entries) : fixtureEntries();
+      state.groups = own ? structuredClone(own.groups) : fixtureGroups();
+      return openVault(path, name);
     },
     vaultOpenWarnings: () => structuredClone(state.openWarnings),
     vaultRecent: () => structuredClone(state.recents),
