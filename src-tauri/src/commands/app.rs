@@ -215,12 +215,87 @@ mod tests {
         }
     }
 
-    /// The tray menu, the window close and the panel share `request_quit`: no second way in.
+    /// Every `.exit(` call in the shell, comments and test modules aside: the guard is a source
+    /// scan, not a behavioural test, on purpose. Which call site reaches which quit path is wiring
+    /// between the tray and window callbacks and the Tauri runtime, and the mock runtime cannot
+    /// raise `ExitRequested` (its `request_exit` is unimplemented), so no plain decision function
+    /// sees it. The decisions themselves (`close_action`, the tray menu ids) have table tests; this
+    /// pins the wiring around them.
+    fn exit_call_sites() -> Vec<(String, usize, String)> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        walk(&root, &mut files);
+        let mut found = Vec::new();
+        for file in files {
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            let live = text.split("#[cfg(test)]").next().unwrap_or_default();
+            for (n, line) in live.lines().enumerate() {
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                if line.contains(".exit(") {
+                    let name = file
+                        .strip_prefix(&root)
+                        .unwrap_or(&file)
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    found.push((name, n + 1, line.trim().to_owned()));
+                }
+            }
+        }
+        found
+    }
+
+    /// Only three places may call `.exit(`: `request_quit` (raises `ExitRequested`), the
+    /// `ExitPort::exit` call of the quit worker after a confirmed decision, and the
+    /// `TauriQuitPort` that implements it. Any other spelling (`handle.exit(0)`) is a way around
+    /// the flush-and-confirm flow.
     #[test]
-    fn the_tray_menu_and_window_close_quit_through_request_quit() {
+    fn nothing_but_request_quit_and_the_quit_port_calls_exit() {
+        let mut sites: Vec<(String, String)> = exit_call_sites()
+            .into_iter()
+            .map(|(file, _, line)| (file, line))
+            .collect();
+        sites.sort();
+        assert_eq!(
+            sites,
+            vec![
+                ("commands/app.rs".to_owned(), "app.exit(0);".to_owned()),
+                ("shell_runtime.rs".to_owned(), "port.exit();".to_owned()),
+                ("shell_runtime.rs".to_owned(), "self.0.exit(0);".to_owned()),
+            ]
+        );
+    }
+
+    /// The tray menu's Quit and the window close's `QuitApp` arms both quit through `request_quit`.
+    #[test]
+    fn the_tray_quit_and_close_quit_arms_call_request_quit() {
         let runtime = include_str!("../shell_runtime.rs");
-        assert!(!runtime.contains("app.exit(0)"));
-        assert!(runtime.matches("request_quit(app)").count() >= 2);
+        for arm in ["TrayAction::Quit =>", "CloseAction::QuitApp =>"] {
+            let line = runtime
+                .lines()
+                .find(|l| l.contains(arm))
+                .unwrap_or_else(|| panic!("no `{arm}` arm in shell_runtime.rs"));
+            assert!(
+                line.contains("request_quit(app)"),
+                "`{arm}` must quit through request_quit: {line}"
+            );
+        }
     }
 
     #[test]
