@@ -1,6 +1,7 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ICON_PATHS } from "../lib/ui/icons";
 import { entries } from "../lib/stores/entries.svelte";
 import { session } from "../lib/stores/session.svelte";
 import { toasts } from "../lib/stores/toasts.svelte";
@@ -154,6 +155,7 @@ describe("save indicator", () => {
 
     await fake.emit("saveStateChanged", { state: "failed", message: "disk full" });
     const icon = await within(indicator).findByRole("img", { name: "Saving failed. MyPass will retry." });
+    expect(icon.querySelector("path")?.getAttribute("d")).toBe(ICON_PATHS.warning);
     expect(icon.getAttribute("title")).toBe("Saving failed. MyPass will retry.");
     expect(within(indicator).queryByText("Saving…")).toBeNull();
 

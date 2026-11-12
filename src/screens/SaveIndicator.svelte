@@ -12,7 +12,7 @@
     <span class="pending">{t("Saving…")}</span>
   {:else if state === "failed"}
     <span class="failed" role="img" aria-label={t("Saving failed. MyPass will retry.")} title={t("Saving failed. MyPass will retry.")}>
-      <Icon name="security" />
+      <Icon name="warning" />
     </span>
   {/if}
 </span>

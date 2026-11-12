@@ -43,7 +43,7 @@
   <div class="form">
     <label class="field">
       <span>{t("Group name")}</span>
-      <input type="text" bind:value={name} autocomplete="off" onkeydown={(e) => e.key === "Enter" && void save(e)} />
+      <input type="text" bind:value={name} autocomplete="off" onkeydown={(e) => e.key === "Enter" && !e.isComposing && void save(e)} />
     </label>
     <div class="field">
       <span>{t("Icon")}</span>

@@ -25,19 +25,24 @@
   // Where the menu is drawn: the requested point, moved inside the viewport once it is measured.
   let left = $state<number | null>(null);
   let top = $state<number | null>(null);
+  // Hidden until measured and placed, so it is never painted at the unclamped point.
+  let placed = $state(false);
   // Read while the component is being created: the list focuses its first item when it mounts,
   // which is before this component's own `onMount` runs.
   const returnTo: HTMLElement | null =
     untrack(() => opener) ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
 
-  onMount(() => {
+  function place() {
     const rect = holder?.getBoundingClientRect();
     if (rect) {
       const at = clampToViewport(x, y, rect.width, rect.height, window.innerWidth, window.innerHeight);
       left = at.x;
       top = at.y;
     }
-  });
+    placed = true;
+  }
+
+  onMount(place);
 
   function outside(event: Event) {
     if (holder && event.target instanceof Node && !holder.contains(event.target)) onclose();
@@ -50,9 +55,9 @@
   }
 </script>
 
-<svelte:window onpointerdown={outside} onblur={onclose} />
+<svelte:window onpointerdown={outside} onblur={onclose} onresize={place} />
 
-<div class="context" style="left: {left ?? x}px; top: {top ?? y}px" bind:this={holder}>
+<div class="context" style="left: {left ?? x}px; top: {top ?? y}px; visibility: {placed ? 'visible' : 'hidden'}" bind:this={holder}>
   <MenuList
     {items}
     onselect={(id) => {

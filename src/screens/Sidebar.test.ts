@@ -368,3 +368,46 @@ describe("drag and drop", () => {
     expect(dt.getData("application/x-mypass-group")).toBe(WORK_GROUP_ID);
   });
 });
+
+describe("review fixes", () => {
+  it("roving_tab_stop_survives_the_focused_row_disappearing", async () => {
+    const user = userEvent.setup();
+    await openVault();
+    await user.click(row(/Work/));
+    await fireEvent.contextMenu(row(/Work/));
+    await user.click(await screen.findByRole("menuitem", { name: "Delete group" }));
+    await user.click(within(await screen.findByRole("dialog", { name: "Delete group" })).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(screen.queryByRole("treeitem", { name: /Work/ })).toBeNull());
+    const stops = screen.getAllByRole("treeitem").filter((el) => el.tabIndex === 0);
+    expect(stops).toHaveLength(1);
+  });
+
+  it("a_group_is_not_a_drop_target_over_itself_or_its_descendants", async () => {
+    const { FakeDataTransfer } = await import("../test/dnd");
+    await openVault();
+    const dataTransfer = new FakeDataTransfer();
+    await fireEvent.dragStart(row(/^Personal/), { dataTransfer });
+    // fireEvent returns false when the handler called preventDefault (a drop is allowed).
+    expect(await fireEvent.dragOver(row(/Banking/), { dataTransfer })).toBe(true);
+    expect(await fireEvent.dragOver(row(/^Personal/), { dataTransfer })).toBe(true);
+    expect(await fireEvent.dragOver(row(/Work/), { dataTransfer })).toBe(false);
+    await fireEvent.dragEnd(row(/^Personal/), { dataTransfer });
+    expect(await fireEvent.dragOver(row(/Banking/), { dataTransfer })).toBe(false);
+  });
+
+  it("left_moves_to_the_parent_and_right_to_the_first_child", async () => {
+    const user = userEvent.setup();
+    await openVault();
+    row(/Banking/).focus();
+    await user.keyboard("{ArrowLeft}");
+    expect(document.activeElement).toBe(row(/^Personal/));
+    await user.keyboard("{ArrowRight}");
+    expect(document.activeElement).toBe(row(/Banking/));
+  });
+
+  it("the_categories_label_is_used_once", async () => {
+    await openVault();
+    expect(screen.getAllByLabelText("Categories")).toHaveLength(1);
+    expect(screen.getByRole("tree", { name: "Sidebar" })).toBeTruthy();
+  });
+});

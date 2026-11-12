@@ -365,7 +365,7 @@ describe("SplitPane", () => {
 
 describe("Icon", () => {
   it("icon_names_all_render_svg", () => {
-    expect(ICON_NAMES.length).toBe(27);
+    expect(ICON_NAMES.length).toBe(28);
     for (const name of ICON_NAMES) {
       const { container, unmount } = render(Icon, { props: { name } });
       const svg = container.querySelector("svg");
@@ -502,6 +502,24 @@ describe("menu placement and focus", () => {
       await waitFor(() => expect(holder.style.left).toBe(`${window.innerWidth - 204}px`));
       expect(holder.style.top).toBe(`${window.innerHeight - 104}px`);
     } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("context_menu_is_visible_only_once_placed_and_follows_a_resize", async () => {
+    let rect = rectOf(200, 100);
+    const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(() => rect);
+    const width = window.innerWidth;
+    try {
+      render(ContextMenu, { props: { items: [{ id: "a", label: "Alpha" }], onselect: vi.fn(), onclose: vi.fn(), x: 500, y: 10 } });
+      const holder = screen.getByRole("menu").parentElement as HTMLElement;
+      expect(holder.style.visibility).toBe("visible");
+      expect(holder.style.left).toBe("500px");
+      Object.defineProperty(window, "innerWidth", { value: 400, configurable: true });
+      await fireEvent(window, new Event("resize"));
+      await waitFor(() => expect(holder.style.left).toBe("196px"));
+    } finally {
+      Object.defineProperty(window, "innerWidth", { value: width, configurable: true });
       spy.mockRestore();
     }
   });

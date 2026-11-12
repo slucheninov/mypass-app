@@ -62,6 +62,12 @@ describe("group editor", () => {
     await waitFor(() => expect(calls(fake, "groupUpdate")[0]?.args.name).toBe("Personals"));
   });
 
+  it("enter_during_ime_composition_does_not_save", async () => {
+    const { dialog, fake } = await openEditor(/^Personal/);
+    await fireEvent.keyDown(within(dialog).getByLabelText("Group name"), { key: "Enter", isComposing: true });
+    expect(calls(fake, "groupUpdate")).toHaveLength(0);
+  });
+
   it("cancel_closes_without_a_call", async () => {
     const { user, dialog, fake } = await openEditor(/^Personal/);
     await user.type(within(dialog).getByLabelText("Group name"), "x");

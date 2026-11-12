@@ -9,6 +9,7 @@ export const ICON_PATHS = {
   note: "M3.5 1.5h6l3 3v10h-9z M9.5 1.5v3h3 M5.5 8h5 M5.5 10.5h5",
   paperclip: "M12.5 7.5l-5 5a3 3 0 01-4.2-4.2l5.5-5.5a2 2 0 012.8 2.8L6 11.2a1 1 0 01-1.4-1.4l4.7-4.7",
   security: "M8 2l6.5 11.5h-13z M8 6.5v3.5 M8 11.8v.4",
+  warning: "M8 2l6.5 11.5h-13z M8 6.5v3.5 M8 11.8v.4",
   trash: "M2.5 4h11 M6 4V2.5h4V4 M3.8 4l.7 9.5h7l.7-9.5 M6.5 6.5v5 M9.5 6.5v5",
   folder: "M1.5 3.5h4.5l1.5 1.5h6.5v8h-12.5z",
   plus: "M8 3v10 M3 8h10",

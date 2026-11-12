@@ -3,8 +3,12 @@
 // wrapped: storage can be missing, blocked or full (private windows, previews), and the UI must
 // render the same without it.
 
+// Only layout keys may be stored: a vault id, a title or any vault data can never be put here.
+const ALLOWED_PREFIX = "layout.";
+
 /** The stored string for `key`, or `null` when absent or storage is unavailable. */
 export function readPref(key: string): string | null {
+  if (!key.startsWith(ALLOWED_PREFIX)) return null;
   try {
     return window.localStorage.getItem(key);
   } catch {
@@ -14,6 +18,7 @@ export function readPref(key: string): string | null {
 
 /** Stores `value` under `key`; a failure is ignored (the preference is a convenience). */
 export function writePref(key: string, value: string): void {
+  if (!key.startsWith(ALLOWED_PREFIX)) return;
   try {
     window.localStorage.setItem(key, value);
   } catch {

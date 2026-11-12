@@ -76,7 +76,14 @@
 
   // Roving tabindex: the focused row, else the selected one, else the first.
   let focusKey = $state<string | null>(null);
-  const tabKey = $derived(focusKey ?? keyOf(scope));
+  // A key only counts while its row exists (a refresh or a delete can remove the focused row);
+  // otherwise the selected row, else the first row, is the tab stop.
+  const keys = $derived(new Set([...CATEGORIES.map((c) => `cat:${c.category}`), ...rows.map((r) => `grp:${r.node.id}`)]));
+  const tabKey = $derived.by(() => {
+    if (focusKey !== null && keys.has(focusKey)) return focusKey;
+    const selected = keyOf(scope);
+    return keys.has(selected) ? selected : "cat:all";
+  });
 
   function choose(next: Scope) {
     navigation.setScope(next);
@@ -137,6 +144,11 @@
   // ---- drag and drop --------------------------------------------------------------------------
 
   let dropKey = $state<string | null>(null);
+  // The group being dragged: `dragover` hides the data, so it is remembered from `dragstart` to
+  // refuse (no highlight, no drop cursor) itself and its own descendants.
+  let draggingGroup: string | null = null;
+  const blocked = (targetId: string) =>
+    draggingGroup !== null && sidebar !== null && isSelfOrDescendant(sidebar.groups, draggingGroup, targetId);
 
   async function run(action: () => Promise<unknown>) {
     try {
@@ -158,6 +170,7 @@
   async function dropOnGroup(event: DragEvent, targetId: string) {
     event.preventDefault();
     dropKey = null;
+    draggingGroup = null;
     const dragged = readDrag(event);
     if (!dragged) return;
     if (dragged.kind === "entry") {
@@ -182,15 +195,18 @@
   };
 </script>
 
-<nav class="sidebar" aria-label={t("Categories")}>
+<div class="sidebar">
   <!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
   <div
     class="tree"
     role="tree"
-    aria-label={t("Categories")}
+    aria-label={t("Sidebar")}
     tabindex="-1"
     use:treeNav={{ toggle }}
     onfocusin={(e) => (focusKey = (e.target as HTMLElement).closest<HTMLElement>("[data-key]")?.dataset.key ?? null)}
+    onfocusout={(e) => {
+      if (!(e.relatedTarget instanceof Node) || !e.currentTarget.contains(e.relatedTarget)) focusKey = null;
+    }}
   >
     <div role="group" aria-label={t("Categories")}>
       {#each CATEGORIES as { category, icon } (category)}
@@ -251,8 +267,12 @@
           onclick={() => choose({ kind: "group", groupId: node.id })}
           oncontextmenu={(e) => openMenu(e, node)}
           onkeydown={(e) => menuFromKeyboard(e, node)}
-          ondragstart={(e) => startDrag(e, "group", node.id)}
-          ondragover={(e) => over(e, key, () => true)}
+          ondragstart={(e) => {
+            draggingGroup = node.id;
+            startDrag(e, "group", node.id);
+          }}
+          ondragend={() => (draggingGroup = null)}
+          ondragover={(e) => over(e, key, (kind) => kind === "entry" || !blocked(node.id))}
           ondragleave={() => leave(key)}
           ondrop={(e) => void dropOnGroup(e, node.id)}
         >
@@ -277,7 +297,7 @@
       {/each}
     </div>
   </div>
-</nav>
+</div>
 
 {#if menu}
   <ContextMenu
