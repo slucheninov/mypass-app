@@ -10,6 +10,11 @@ import { toasts } from "../lib/stores/toasts.svelte";
  */
 export async function copyField(entryId: string, field: FieldRef): Promise<void> {
   await api.entryCopy(entryId, field);
+  announceCopied();
+}
+
+/** The "Copied" toast with the clipboard-clear delay; it never carries the copied value. */
+export function announceCopied(): void {
   const seconds = settings.value?.clipboardClearSeconds;
   toasts.push("success", seconds ? t("Copied. The clipboard clears in %lld s.", seconds) : t("Copied."));
 }

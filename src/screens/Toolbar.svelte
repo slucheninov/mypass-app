@@ -12,6 +12,9 @@
   import IconButton from "../lib/ui/IconButton.svelte";
   import Menu from "../lib/ui/Menu.svelte";
   import type { MenuItem } from "../lib/ui/menu";
+  import Modal from "../lib/ui/Modal.svelte";
+  import Button from "../lib/ui/Button.svelte";
+  import Generator from "./Generator.svelte";
   import SaveIndicator from "./SaveIndicator.svelte";
 
   let {
@@ -25,6 +28,7 @@
   } = $props();
 
   let search: HTMLInputElement | undefined = $state();
+  let generatorOpen = $state(false);
 
   const newItems = $derived<MenuItem[]>([
     { id: "login", label: t("New Login") },
@@ -34,6 +38,8 @@
     { id: "files", label: t("New Files item") },
     { id: "sep", label: "", separator: true },
     { id: "group", label: t("New Group") },
+    { id: "sep2", label: "", separator: true },
+    { id: "generator", label: t("Password Generator…") },
   ]);
   const importItems = $derived<MenuItem[]>([
     { id: "csv", label: t("Import CSV…") },
@@ -48,6 +54,10 @@
   async function createItem(id: string) {
     if (id === "group") {
       onnewgroup(currentGroup());
+      return;
+    }
+    if (id === "generator") {
+      generatorOpen = true;
       return;
     }
     const unchanged = lockGuard();
@@ -102,6 +112,14 @@
   <IconButton icon="lock" label={t("Lock")} onclick={() => void lock()} />
   <IconButton icon="gear" label={t("Settings")} onclick={() => void openSettings()} />
 </div>
+
+<!-- Mounted only while open: closing (or a lock, which unmounts the shell) drops the generated value. -->
+<Modal open={generatorOpen} title={t("Password Generator…")} onclose={() => (generatorOpen = false)}>
+  {#if generatorOpen}<Generator />{/if}
+  {#snippet footer()}
+    <Button onclick={() => (generatorOpen = false)}>{t("Close")}</Button>
+  {/snippet}
+</Modal>
 
 <style>
   .toolbar {

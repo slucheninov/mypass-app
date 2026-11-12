@@ -15,10 +15,12 @@ import type {
   events,
   FieldRef,
   FoundVaultFileDto,
+  GeneratorHistoryItem,
   GroupNode_Serialize,
   OpenWarning,
   PickedFile,
   RecentVaultDto,
+  RulesSummary_Serialize,
   SessionState,
   SessionStatus_Serialize,
   Settings_Serialize,
@@ -127,6 +129,10 @@ export interface FakeState {
   drafts: Record<string, DraftVersionDto[]>;
   /** Like a draft key that cannot be created: `draft_save` answers `false` and stores nothing. */
   draftsAvailable: boolean;
+  /** Site rules by canonical host (lower case, no scheme, path or `www.`); `generator_rules_summary` and `generator_generate` read them. */
+  generatorRules: Record<string, RulesSummary_Serialize>;
+  /** The generator history, oldest first; a row keeps its password here like the vault's hidden group does. */
+  generatorHistory: (GeneratorHistoryItem & { password: string })[];
 }
 
 export interface FakeBackend {
@@ -163,6 +169,8 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     saveFailure: null,
     drafts: {},
     draftsAvailable: true,
+    generatorRules: {},
+    generatorHistory: [],
   };
   // The real backend emits its events as a side effect of a command; so does the fake.
   const publish = (event: EventName, payload: unknown) => void emit(kebab(event), payload ?? null);
@@ -236,6 +244,19 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     }
   };
   let groupSeq = 0;
+  let generatedSeq = 0;
+  let historySeq = 0;
+  /** The host a rules lookup keys on: what the user typed or pasted, reduced to its lower-case host. */
+  const canonicalHost = (raw: string) =>
+    raw.trim().toLowerCase().replace(/^[a-z][a-z0-9+.-]*:\/\//, "").replace(/[/?#].*$/, "").replace(/^www\./, "");
+  const rulesOf = (host: string | null | undefined): RulesSummary_Serialize | null =>
+    host ? (state.generatorRules[canonicalHost(host)] ?? null) : null;
+  const recordHistory = (value: string, url: string) => {
+    const title = canonicalHost(url) || url;
+    state.generatorHistory.push({ id: `gen-${++historySeq}`, url, title, created: 1_700_000_000_000 + historySeq * 1000, password: value });
+    if (state.generatorHistory.length > 30) state.generatorHistory.shift();
+    changed();
+  };
   let entrySeq = 0;
   /** Tokens `attachment_pick` handed out; `entry_save` swaps each for its file and spends it. */
   const pickedFiles = new Map<string, PickedFile>();
@@ -536,13 +557,88 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       return { ...state.totp };
     },
     entryTouch: notImplemented("entryTouch"),
-    generatorCopy: notImplemented("generatorCopy"),
-    generatorGenerate: notImplemented("generatorGenerate"),
-    generatorHistoryCopy: notImplemented("generatorHistoryCopy"),
-    generatorHistoryDelete: notImplemented("generatorHistoryDelete"),
-    generatorHistoryList: notImplemented("generatorHistoryList"),
-    generatorHistoryReveal: notImplemented("generatorHistoryReveal"),
-    generatorRulesSummary: notImplemented("generatorRulesSummary"),
+    // The value goes to the (fake) clipboard inside Rust; with a record URL the history is written first.
+    generatorCopy: ({ value, recordUrl }) => {
+      if (recordUrl !== null && recordUrl !== undefined) {
+        requireUnlocked();
+        recordHistory(value, recordUrl);
+      }
+      return null;
+    },
+    // Mirrors `resolve_options`: the length is clamped to the site bounds, forced classes switch on,
+    // excluded ones off; no class is `generatorNoClass`, every class excluded `generatorUnsatisfiable`.
+    // The value is deterministic (no RNG): it cycles the enabled classes so each one appears.
+    generatorGenerate: ({ req }) => {
+      const { options, host, recordUrl } = req as {
+        options: { length?: number; lowercase?: boolean; uppercase?: boolean; digits?: boolean; symbols?: boolean };
+        host?: string | null;
+        recordUrl?: string | null;
+      };
+      const rules = rulesOf(host);
+      const length = options.length ?? 20;
+      if (length < 8 || length > 64) throw apiError("invalidInput");
+      const pick = (name: "lowercase" | "uppercase" | "digits" | "symbols") => {
+        const own = options[name] ?? true;
+        return rules ? rules.forcedOn.includes(name) || (own && !rules.excluded.includes(name)) : own;
+      };
+      const asked = [options.lowercase ?? true, options.uppercase ?? true, options.digits ?? true, options.symbols ?? true];
+      if (!asked.some(Boolean) && !(rules && rules.forcedOn.length > 0)) throw apiError("generatorNoClass");
+      let effectiveLength = length;
+      if (rules?.minLength != null) effectiveLength = Math.max(effectiveLength, rules.minLength);
+      if (rules?.maxLength != null) effectiveLength = Math.min(effectiveLength, rules.maxLength);
+      const effective = {
+        length: effectiveLength,
+        lowercase: pick("lowercase"),
+        uppercase: pick("uppercase"),
+        digits: pick("digits"),
+        symbols: pick("symbols"),
+      };
+      const pools = [
+        effective.lowercase ? "abcdefghijkmnopqrstuvwxyz" : "",
+        effective.uppercase ? "ABCDEFGHJKLMNPQRSTUVWXYZ" : "",
+        effective.digits ? "23456789" : "",
+        effective.symbols ? "!#$%&*+=?@" : "",
+      ].filter((p) => p !== "");
+      if (pools.length === 0) throw apiError("generatorUnsatisfiable");
+      if (recordUrl !== null && recordUrl !== undefined) requireUnlocked();
+      const seq = ++generatedSeq;
+      let value = "";
+      for (let i = 0; i < effectiveLength; i++) {
+        const pool = pools[i % pools.length]!;
+        value += pool[(i * 7 + seq) % pool.length];
+      }
+      let historyId: string | null = null;
+      if (recordUrl !== null && recordUrl !== undefined) {
+        recordHistory(value, recordUrl);
+        historyId = state.generatorHistory[state.generatorHistory.length - 1]!.id;
+      }
+      return { value, effective, rules: structuredClone(rules), historyId };
+    },
+    generatorHistoryCopy: ({ id }) => {
+      requireUnlocked();
+      if (!state.generatorHistory.some((h) => h.id === id)) throw apiError("notFound");
+      return null;
+    },
+    generatorHistoryDelete: ({ id }) => {
+      requireUnlocked();
+      const at = state.generatorHistory.findIndex((h) => h.id === id);
+      if (at === -1) throw apiError("notFound");
+      state.generatorHistory.splice(at, 1);
+      changed();
+      return null;
+    },
+    // Newest first, without the password.
+    generatorHistoryList: () => {
+      requireUnlocked();
+      return state.generatorHistory.map(({ password: _password, ...item }) => item).reverse();
+    },
+    generatorHistoryReveal: ({ id }) => {
+      requireUnlocked();
+      const found = state.generatorHistory.find((h) => h.id === id);
+      if (!found) throw apiError("notFound");
+      return found.password;
+    },
+    generatorRulesSummary: ({ host }) => structuredClone(rulesOf(host)),
     groupCreate: ({ parentId, name, emoji }) => {
       requireUnlocked();
       const id = `group-new-${++groupSeq}`;
