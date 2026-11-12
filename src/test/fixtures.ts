@@ -262,13 +262,17 @@ function counted(nodes: GroupNode_Serialize[], summaries: EntrySummary[]): { nod
   return { nodes: out, total };
 }
 
-export function fixtureSidebar(entries: FixtureEntry[], groups: GroupNode_Serialize[] = fixtureGroups()): Sidebar_Serialize {
+export function fixtureSidebar(
+  entries: FixtureEntry[],
+  groups: GroupNode_Serialize[] = fixtureGroups(),
+  recycleBinEnabled = true,
+): Sidebar_Serialize {
   const summaries = entries.map((e) => e.summary);
   const categories: CategoryCount_Serialize[] = CATEGORIES.map((category) => ({
     category,
     count: category === "security" ? null : summaries.filter((e) => inScope(e, { kind: "category", category })).length,
   }));
-  return { categories, rootGroupId: ROOT_GROUP_ID, groups: counted(groups, summaries).nodes };
+  return { categories, rootGroupId: ROOT_GROUP_ID, groups: counted(groups, summaries).nodes, recycleBinEnabled };
 }
 
 export function detailOf(e: FixtureEntry): EntryDetailDto_Serialize {

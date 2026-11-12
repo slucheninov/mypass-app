@@ -354,6 +354,39 @@ describe("drag and drop", () => {
     await waitFor(() => expect(entries.sidebar?.categories.find((c) => c.category === "deleted")?.count).toBe(2));
   });
 
+  it("dropping_a_bin_entry_on_deleted_purges_nothing", async () => {
+    const { fake } = await openVault();
+    // Bin rows are only ever listed (and so dragged) in Deleted.
+    navigation.setScope({ kind: "category", category: "deleted" });
+    await waitFor(() => expect(entries.items.map((e) => e.id)).toContain("e-old"));
+    const before = entries.sidebar?.categories.find((c) => c.category === "deleted")?.count;
+    await dropPayload(row(/^Deleted/), ENTRY_MIME, "e-old");
+    expect(calls(fake, "entryDelete")).toHaveLength(0);
+    expect(calls(fake, "entryPurge")).toHaveLength(0);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(fake.state.entries.some((e) => e.summary.id === "e-old")).toBe(true);
+    expect(entries.sidebar?.categories.find((c) => c.category === "deleted")?.count).toBe(before);
+  });
+
+  it("drop_on_deleted_asks_before_purging_when_the_recycle_bin_is_disabled", async () => {
+    const { fake } = await renderMainApp({ session: "unlocked" }, (f) => {
+      f.state.recycleBinEnabled = false;
+    });
+    await screen.findByRole("treeitem", { name: /^Personal/ });
+    const user = userEvent.setup();
+    await dropPayload(row(/^Deleted/), ENTRY_MIME, "e-github");
+    const dialog = await screen.findByRole("dialog");
+    expect(calls(fake, "entryDelete")).toHaveLength(0);
+    expect(calls(fake, "entryPurge")).toHaveLength(0);
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(calls(fake, "entryPurge")).toHaveLength(0);
+    expect(fake.state.entries.some((e) => e.summary.id === "e-github")).toBe(true);
+    await dropPayload(row(/^Deleted/), ENTRY_MIME, "e-github");
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete permanently" }));
+    await waitFor(() => expect(calls(fake, "entryPurge")[0]?.args).toEqual({ id: "e-github" }));
+    await waitFor(() => expect(fake.state.entries.some((e) => e.summary.id === "e-github")).toBe(false));
+  });
+
   it("dropping_a_group_on_deleted_does_nothing", async () => {
     const { fake } = await openVault();
     await dragAndDrop(row(/Work/), row(/^Deleted/));

@@ -13,9 +13,12 @@
 <main data-testid="main-app">
   {#if session.loaded}
     {#if session.status.state === "unlocked"}
-      <Shell>
-        {#snippet list()}<EntryList />{/snippet}
-      </Shell>
+      <!-- Keyed by vault: a switch while unlocked drops every piece of component-local state. -->
+      {#key session.status.vaultPath}
+        <Shell>
+          {#snippet list()}<EntryList />{/snippet}
+        </Shell>
+      {/key}
     {:else}
       <Unlock />
     {/if}

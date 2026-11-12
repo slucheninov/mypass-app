@@ -5,6 +5,12 @@ import { afterEach } from "vitest";
 // process-global, so reset it here and a test never sees the previous test's fake backend.
 afterEach(() => {
   clearMocks();
+  // Layout preferences live in localStorage; one test's widths must not reach the next.
+  try {
+    window.localStorage.clear();
+  } catch {
+    // A test that made storage unavailable restores it itself.
+  }
 });
 
 // Node 26 ships its own `localStorage` global, which shadows jsdom's and is `undefined` without a

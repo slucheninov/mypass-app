@@ -8,6 +8,7 @@
   import type { EntrySummary, FieldRef, SecurityFlag, SortKey } from "../lib/bindings";
   import { startDrag } from "../lib/dnd";
   import { t } from "../lib/i18n/index.svelte";
+  import { lockGuard } from "../lib/lock-guard";
   import { entries } from "../lib/stores/entries.svelte";
   import { navigation } from "../lib/stores/navigation.svelte";
   import { toasts } from "../lib/stores/toasts.svelte";
@@ -112,13 +113,9 @@
 
   // ---- actions ----
 
-  async function guard(work: () => Promise<unknown>) {
-    try {
-      await work();
-    } catch (e) {
-      toasts.reportError(e);
-    }
-  }
+  /** Until the sidebar answers the bin is assumed to work (the common case). */
+  const binEnabled = $derived(entries.sidebar?.recycleBinEnabled ?? true);
+  const guard = (work: () => Promise<unknown>) => toasts.guard(work);
 
   const copy = (id: string, field: FieldRef) =>
     guard(async () => {
@@ -155,14 +152,19 @@
   const remove = (entry: EntrySummary, permanent: boolean) =>
     guard(async () => {
       const next = neighbourOf(entry.id);
+      const unchanged = lockGuard();
       if (permanent) await api.entryPurge(entry.id);
       else await api.entryDelete(entry.id);
-      if (navigation.selectedId === entry.id) select(next);
+      // After a lock the selection is already cleared; a stale one must not outlive it.
+      if (unchanged() && navigation.selectedId === entry.id) select(next);
     });
 
-  /** Delete key and menu: the bin takes a live entry at once, a bin entry asks first. */
+  /**
+   * Delete key and menu: an enabled bin takes a live entry at once; anything permanent (an entry
+   * already in the bin, or a vault whose bin is disabled) asks first.
+   */
   function requestDelete(entry: EntrySummary) {
-    if (entry.inRecycleBin) confirming = { kind: "purge", id: entry.id };
+    if (entry.inRecycleBin || !binEnabled) confirming = { kind: "purge", id: entry.id };
     else void remove(entry, false);
   }
 
@@ -264,7 +266,7 @@
       { id: "sep-2", label: "", separator: true },
       {
         id: "delete",
-        label: entry.inRecycleBin ? t("Delete permanently") : t("Delete"),
+        label: entry.inRecycleBin || !binEnabled ? t("Delete permanently") : t("Delete"),
         icon: "trash",
         danger: true,
       },
@@ -344,7 +346,7 @@
           id={rowId(entry.id)}
           tabindex="-1"
           aria-selected={entry.id === selectedId}
-          draggable="true"
+          draggable={!entry.inRecycleBin}
           onclick={() => {
             // The listbox keeps focus, so aria-activedescendant is announced for the clicked row.
             listbox?.focus();

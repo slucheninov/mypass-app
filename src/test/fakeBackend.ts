@@ -104,6 +104,8 @@ export interface FakeState {
   foundFiles: FoundVaultFileDto[];
   /** Paths `vault_create` refuses with `alreadyExists`. */
   existingFiles: string[];
+  /** The vault's `RecycleBinEnabled` flag, reported by `sidebar_get`; when false a delete purges. */
+  recycleBinEnabled: boolean;
 }
 
 export interface FakeBackend {
@@ -132,6 +134,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     recents: [],
     foundFiles: [],
     existingFiles: [],
+    recycleBinEnabled: true,
   };
   // The real backend emits its events as a side effect of a command; so does the fake.
   const publish = (event: EventName, payload: unknown) => void emit(kebab(event), payload ?? null);
@@ -168,6 +171,14 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     entry.summary.groupId = BIN_GROUP_ID;
     entry.model.groupId = BIN_GROUP_ID;
     entry.summary.inRecycleBin = true;
+  };
+  /** Like `Database::delete_entry`: purges when the bin is disabled or the entry is already in it. */
+  const deleteLikeBackend = (entry: FixtureEntry) => {
+    if (!state.recycleBinEnabled || entry.summary.inRecycleBin) {
+      state.entries.splice(state.entries.indexOf(entry), 1);
+    } else {
+      sendToBin(entry);
+    }
   };
   const changed = () => publish("vaultChanged", null);
   let groupSeq = 0;
@@ -226,7 +237,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     },
     entryDelete: ({ id }) => {
       requireUnlocked();
-      sendToBin(findEntry(id));
+      deleteLikeBackend(findEntry(id));
       changed();
       return null;
     },
@@ -335,10 +346,12 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     groupDelete: ({ id }) => {
       requireUnlocked();
       const found = locate(id);
-      if (!found || found.node.isRecycleBin) throw apiError("notFound");
+      if (!found) throw apiError("notFound");
+      // Like `delete_group_removed`: the bin itself is not a group that can be deleted.
+      if (found.node.isRecycleBin) throw apiError("invalidInput");
       // Like the backend: the group's items are moved to the recycle bin, then the group goes.
       const gone = subtreeIds(found.node);
-      for (const e of state.entries) if (gone.includes(e.summary.groupId)) sendToBin(e);
+      for (const e of [...state.entries]) if (gone.includes(e.summary.groupId)) deleteLikeBackend(e);
       found.siblings.splice(found.siblings.indexOf(found.node), 1);
       changed();
       return null;
@@ -346,7 +359,8 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     groupMove: ({ id, parentId }) => {
       requireUnlocked();
       const found = locate(id);
-      if (!found || found.node.isRecycleBin) throw apiError("notFound");
+      if (!found) throw apiError("notFound");
+      if (found.node.isRecycleBin) throw apiError("invalidInput");
       // A group cannot go into itself or into its own subtree.
       if (subtreeIds(found.node).includes(parentId)) throw apiError("invalidInput");
       const target = childrenOf(parentId);
@@ -381,7 +395,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     shortcutConflictsTake: notImplemented("shortcutConflictsTake"),
     sidebarGet: () => {
       requireUnlocked();
-      return fixtureSidebar(state.entries, state.groups);
+      return fixtureSidebar(state.entries, state.groups, state.recycleBinEnabled);
     },
     vaultCreate: ({ path, password, name }) => {
       if (state.existingFiles.includes(path)) throw apiError("alreadyExists");

@@ -99,6 +99,8 @@
   // The menu closes before `onselect` runs, so the group it was opened for is kept apart from `menu`.
   let menuGroup: GroupNode_Serialize | null = null;
   let confirming = $state<GroupNode_Serialize | null>(null);
+  // The entry dropped on Deleted in a vault whose recycle bin is disabled, waiting for its confirmation.
+  let purging = $state<string | null>(null);
 
   function openMenu(event: MouseEvent, group: GroupNode_Serialize) {
     event.preventDefault();
@@ -150,13 +152,7 @@
   const blocked = (targetId: string) =>
     draggingGroup !== null && sidebar !== null && isSelfOrDescendant(sidebar.groups, draggingGroup, targetId);
 
-  async function run(action: () => Promise<unknown>) {
-    try {
-      await action();
-    } catch (e) {
-      toasts.reportError(e);
-    }
-  }
+  const run = (action: () => Promise<unknown>) => toasts.guard(action);
 
   function over(event: DragEvent, key: string, accepts: (kind: "entry" | "group") => boolean) {
     const kind = dragKind(event);
@@ -182,12 +178,23 @@
     await run(() => api.groupMove(dragged.id, targetId));
   }
 
-  /** An entry dropped on Deleted goes to the recycle bin. */
+  /** An entry dropped on Deleted goes to the recycle bin (or, with the bin disabled, is purged after a confirmation). */
   async function dropOnDeleted(event: DragEvent) {
     event.preventDefault();
     dropKey = null;
     const dragged = readDrag(event);
-    if (dragged?.kind === "entry") await run(() => api.entryDelete(dragged.id));
+    if (dragged?.kind !== "entry") return;
+    // An entry already in the bin would be purged by the backend: it leaves through Restore only.
+    if (entries.items.find((e) => e.id === dragged.id)?.inRecycleBin) return;
+    // A vault without a working bin would purge the entry: that is asked for first.
+    if (sidebar?.recycleBinEnabled === false) purging = dragged.id;
+    else await run(() => api.entryDelete(dragged.id));
+  }
+
+  async function purgeDropped() {
+    const id = purging;
+    purging = null;
+    if (id !== null) await run(() => api.entryPurge(id));
   }
 
   const leave = (key: string) => {
@@ -312,6 +319,16 @@
     onselect={onmenu}
     onclose={() => (menu = null)}
   />
+{/if}
+
+{#if purging !== null}
+  <Modal open={true} title={t("Delete permanently")} onclose={() => (purging = null)}>
+    <p class="confirm">{t("This entry will be permanently deleted. This cannot be undone.")}</p>
+    {#snippet footer()}
+      <Button onclick={() => (purging = null)}>{t("Cancel")}</Button>
+      <Button variant="danger" onclick={() => void purgeDropped()}>{t("Delete permanently")}</Button>
+    {/snippet}
+  </Modal>
 {/if}
 
 {#if confirming}

@@ -16,6 +16,7 @@ import {
   WORK_GROUP_ID,
   fixtureSidebar,
   makeEntry,
+  sessionStatus,
   type EntrySpec,
 } from "../test/fixtures";
 import { calls, renderMainApp } from "../test/mainApp";
@@ -587,5 +588,65 @@ describe("edge cases", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(calls(fake, "entryPurge")).toHaveLength(0);
     expect(optionNamed(/Old forum/)).toBeTruthy();
+  });
+});
+
+describe("permanent deletes and bin rows", () => {
+  it("bin_rows_are_not_draggable", async () => {
+    await open();
+    navigation.setScope({ kind: "category", category: "deleted" });
+    expect((await screen.findByRole("option", { name: /Old forum/ })).getAttribute("draggable")).toBe("false");
+    navigation.setScope({ kind: "category", category: "all" });
+    await waitFor(() => expect(optionNamed(/GitHub/).getAttribute("draggable")).toBe("true"));
+  });
+
+  it("delete_key_confirms_first_when_the_recycle_bin_is_disabled", async () => {
+    const fake = backend();
+    fake.state.recycleBinEnabled = false;
+    await open(fake);
+    const user = userEvent.setup();
+    await user.click(optionNamed(/GitLab/));
+    await user.keyboard("{Delete}");
+    const dialog = await screen.findByRole("dialog");
+    expect(calls(fake, "entryDelete")).toHaveLength(0);
+    expect(calls(fake, "entryPurge")).toHaveLength(0);
+    await user.click(within(dialog).getByRole("button", { name: t("Cancel") }));
+    expect(calls(fake, "entryPurge")).toHaveLength(0);
+    expect(titles()).toContain("GitLab");
+    await user.keyboard("{Delete}");
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: t("Delete permanently") }));
+    await waitFor(() => expect(calls(fake, "entryPurge")[0]?.args).toEqual({ id: "e-gitlab" }));
+    await waitFor(() => expect(titles()).not.toContain("GitLab"));
+  });
+
+  it("the_context_menu_says_permanent_when_the_recycle_bin_is_disabled", async () => {
+    const fake = backend();
+    fake.state.recycleBinEnabled = false;
+    await open(fake);
+    await fireEvent.contextMenu(optionNamed(/GitHub/));
+    expect(screen.queryByRole("menuitem", { name: t("Delete") })).toBeNull();
+    expect(screen.getByRole("menuitem", { name: t("Delete permanently") })).toBeTruthy();
+  });
+
+  it("delete_key_stays_unconfirmed_when_the_recycle_bin_is_enabled", async () => {
+    const { fake } = await open();
+    const user = userEvent.setup();
+    await user.click(optionNamed(/GitLab/));
+    await user.keyboard("{Delete}");
+    await waitFor(() => expect(calls(fake, "entryDelete")).toHaveLength(1));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("vault switch while unlocked", () => {
+  it("a_switch_closes_the_empty_deleted_dialog_and_empties_nothing", async () => {
+    const { fake } = await open();
+    navigation.setScope({ kind: "category", category: "deleted" });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: t("Empty Deleted") }));
+    await screen.findByRole("dialog");
+    await fake.emit("sessionChanged", { ...sessionStatus("unlocked"), vaultPath: "/vaults/b.kdbx", vaultName: "Other" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(calls(fake, "entryEmptyBin")).toHaveLength(0);
   });
 });

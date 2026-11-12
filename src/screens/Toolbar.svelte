@@ -3,8 +3,10 @@
   import type { EntryTypeDto } from "../lib/bindings";
   import { t } from "../lib/i18n/index.svelte";
   import { openVaultFromDialog } from "../lib/open-flow";
+  import { lockGuard } from "../lib/lock-guard";
   import { entries } from "../lib/stores/entries.svelte";
   import { navigation } from "../lib/stores/navigation.svelte";
+  import { session } from "../lib/stores/session.svelte";
   import { toasts } from "../lib/stores/toasts.svelte";
   import Icon from "../lib/ui/Icon.svelte";
   import IconButton from "../lib/ui/IconButton.svelte";
@@ -48,11 +50,12 @@
       onnewgroup(currentGroup());
       return;
     }
-    try {
-      navigation.openEditor(await api.entryNewModel(id as EntryTypeDto, currentGroup()));
-    } catch (e) {
-      toasts.reportError(e);
-    }
+    const unchanged = lockGuard();
+    await toasts.guard(async () => {
+      const model = await api.entryNewModel(id as EntryTypeDto, currentGroup());
+      // A lock that landed meanwhile must not leave an editor behind for the next unlock.
+      if (unchanged()) navigation.openEditor(model);
+    });
   }
 
   function importItem(id: string) {
@@ -61,19 +64,11 @@
   }
 
   async function lock() {
-    try {
-      await api.vaultLock();
-    } catch (e) {
-      toasts.reportError(e);
-    }
+    await toasts.guard(() => session.lock());
   }
 
   async function openSettings() {
-    try {
-      await api.appOpenSettings();
-    } catch (e) {
-      toasts.reportError(e);
-    }
+    await toasts.guard(() => api.appOpenSettings());
   }
 
   function onkeydown(event: KeyboardEvent) {
