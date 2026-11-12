@@ -34,6 +34,16 @@ describe("FindVaults", () => {
     expect(calls(fake, "vaultOpen")[0]?.args).toEqual({ path: "/vaults/home/Home.kdbx", password: FIXTURE_MASTER_PASSWORD });
   });
 
+  it("a_double_click_on_a_result_asks_the_guard_once", async () => {
+    const user = userEvent.setup();
+    const { fake } = await renderMainApp({ session: "noVault" }, (f) => (f.state.foundFiles = structuredClone(FOUND)));
+    await user.click(await screen.findByRole("button", { name: "Find vault files" }));
+    const finder = await screen.findByRole("dialog", { name: "Find vault files" });
+    await user.dblClick(await within(finder).findByRole("button", { name: /Home\.kdbx/ }));
+    await screen.findByRole("dialog", { name: "Open vault" });
+    expect(calls(fake, "vaultOpenWarnings")).toHaveLength(1);
+  });
+
   it("find_files_shows_a_spinner_while_searching", async () => {
     const user = userEvent.setup();
     let release: (v: typeof FOUND) => void = () => {};

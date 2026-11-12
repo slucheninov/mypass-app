@@ -35,12 +35,18 @@
   const canUnlock = $derived(hasPassword && !busy && kind !== "missing");
   const others = $derived(recents.filter((r) => r.path !== status.vaultPath));
 
+  let recentsRequest = 0;
+
   async function loadRecents(): Promise<void> {
+    const mine = ++recentsRequest;
+    let list: RecentVaultDto[] = [];
     try {
-      recents = await api.vaultRecent();
+      list = await api.vaultRecent();
     } catch {
-      recents = [];
+      // An unreadable list is shown as empty.
     }
+    // An older answer never overwrites a newer one.
+    if (mine === recentsRequest) recents = list;
   }
 
   $effect(() => {

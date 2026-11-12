@@ -25,16 +25,31 @@
 
   const refresh = () => void throttle.run(() => void read());
 
+  // The OS switches the layout after the key event, so a read inside the handler would still see
+  // the old one. A key that can switch it schedules one delayed read instead; it is not subject to
+  // the throttle (that only limits the immediate reads), and only one is pending at a time.
+  const SWITCH_DELAY_MS = 120;
+
   $effect(() => {
+    let pending: ReturnType<typeof setTimeout> | null = null;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key.length !== 1 || event.ctrlKey || event.metaKey) refresh();
+      if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) return;
+      refresh();
+      if (pending !== null) return;
+      pending = setTimeout(() => {
+        pending = null;
+        void read();
+      }, SWITCH_DELAY_MS);
     };
     refresh();
     window.addEventListener("focus", refresh);
     window.addEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKey);
     return () => {
       window.removeEventListener("focus", refresh);
       window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKey);
+      if (pending !== null) clearTimeout(pending);
     };
   });
 </script>

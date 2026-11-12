@@ -33,8 +33,16 @@
     };
   });
 
+  let choosing = false;
+
   async function choose(path: string): Promise<void> {
-    if (await openVaultAtPath(path)) onclose();
+    if (choosing) return;
+    choosing = true;
+    try {
+      if (await openVaultAtPath(path)) onclose();
+    } finally {
+      choosing = false;
+    }
   }
 </script>
 

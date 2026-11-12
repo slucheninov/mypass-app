@@ -1,7 +1,7 @@
 <script lang="ts">
   // New vault: name, master password and its confirmation. The location is chosen last, with the
   // native save dialog, and goes through the open guard before `vault_create` is called.
-  import { errorMessage } from "../lib/api";
+  import { ApiFailure, errorMessage } from "../lib/api";
   import { t } from "../lib/i18n/index.svelte";
   import { confirmOpen } from "../lib/open-guard";
   import { pickSavePath } from "../lib/open-flow";
@@ -43,13 +43,18 @@
     try {
       const path = await pickSavePath();
       if (path === null || !(await confirmOpen(path))) return;
-      const secret = password.take();
-      confirm.clear();
-      await session.create(path, secret, name.trim() || fileNameOf(path).replace(/\.kdbx$/i, ""));
+      // Left in the field until the backend answers, so a path problem does not cost a retype.
+      await session.create(path, first, name.trim() || fileNameOf(path).replace(/\.kdbx$/i, ""));
+      password?.clear();
+      confirm?.clear();
       onclose();
     } catch (e) {
-      password.clear();
-      confirm.clear();
+      // A path or I/O problem says nothing against the password: keep it, so only the
+      // location has to change.
+      if (!(e instanceof ApiFailure && (e.code === "alreadyExists" || e.code === "io"))) {
+        password?.clear();
+        confirm?.clear();
+      }
       error = errorMessage(e);
     } finally {
       busy = false;

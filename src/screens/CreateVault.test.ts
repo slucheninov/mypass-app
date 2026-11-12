@@ -2,6 +2,7 @@ import { screen, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { expectNoAxeViolations } from "../test/axe";
+import { apiError } from "../test/fakeBackend";
 import { calls, renderMainApp } from "../test/mainApp";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
@@ -77,8 +78,21 @@ describe("CreateVault", () => {
     await fill("Family", "longenough1", "longenough1");
     await submit();
     expect(await within(dialog).findByText("A vault file already exists there")).toBeTruthy();
-    // The passwords are not kept in the form after the attempt.
+    // The password was fine: only the location has to change, so it stays typed.
+    expect((within(dialog).getByLabelText("Master password") as HTMLInputElement).value).toBe("longenough1");
+  });
+
+  it("create_failure_other_than_path_or_io_clears_the_passwords", async () => {
+    const { fill, submit, dialog } = await openForm((f) => {
+      f.handlers.vaultCreate = () => {
+        throw apiError("corrupt");
+      };
+    });
+    await fill("Family", "longenough1", "longenough1");
+    await submit();
+    await within(dialog).findByText("The vault file looks damaged");
     expect((within(dialog).getByLabelText("Master password") as HTMLInputElement).value).toBe("");
+    expect((within(dialog).getByLabelText("Confirm password") as HTMLInputElement).value).toBe("");
   });
 
   it("weak_password_hint_below_eight_chars_does_not_block", async () => {

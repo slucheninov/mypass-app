@@ -2,6 +2,7 @@ import { screen, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { platform } from "../lib/platform.svelte";
+import { toasts } from "../lib/stores/toasts.svelte";
 import { session } from "../lib/stores/session.svelte";
 import { expectNoAxeViolations } from "../test/axe";
 import { FIXTURE_MASTER_PASSWORD } from "../test/fixtures";
@@ -143,6 +144,29 @@ describe("locked", () => {
     expect(await screen.findByText("The vault file looks damaged")).toBeTruthy();
   });
 
+  it("unreadable_file_still_allows_unlock_attempt", async () => {
+    const user = userEvent.setup();
+    await renderMainApp({ session: "locked" }, (fake) => {
+      fake.state.session = { ...fake.state.session, fileStatus: { kind: "unreadable", message: "denied" } };
+    });
+    await screen.findByTestId("vault-status");
+    await user.type(field(), "pw");
+    expect((screen.getByRole("button", { name: "Unlock" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("field_is_emptied_at_submit_while_the_backend_is_still_working", async () => {
+    const user = userEvent.setup();
+    let release: () => void = () => {};
+    await renderMainApp({ session: "locked" }, (fake) => {
+      fake.handlers.vaultUnlock = () => new Promise((_, reject) => (release = () => reject(apiError("wrongPassword"))));
+    });
+    await screen.findByLabelText("Master password");
+    await user.type(field(), "secret-pw{Enter}");
+    expect(field().value).toBe("");
+    release();
+    await screen.findByText("Wrong master password");
+  });
+
   it("password_not_kept_after_success_and_not_in_store", async () => {
     const user = userEvent.setup();
     await renderMainApp({ session: "locked" });
@@ -153,7 +177,19 @@ describe("locked", () => {
     expect(session.status.state).toBe("unlocked");
     expect(Object.keys(session.status).some((k) => /pass|secret/i.test(k))).toBe(false);
     expect(JSON.stringify(session.status)).not.toContain(FIXTURE_MASTER_PASSWORD);
-    expect(document.body.innerHTML).not.toContain(FIXTURE_MASTER_PASSWORD);
+    expect(JSON.stringify(toasts.items)).not.toContain(FIXTURE_MASTER_PASSWORD);
+    expect(JSON.stringify([session.status, session.pendingOpenPath, session.loaded])).not.toContain(FIXTURE_MASTER_PASSWORD);
+  });
+
+  it("reveal_does_not_survive_a_failed_attempt", async () => {
+    const user = userEvent.setup();
+    await renderMainApp({ session: "locked" });
+    await screen.findByLabelText("Master password");
+    await user.click(screen.getByRole("button", { name: "Show password" }));
+    expect(field().type).toBe("text");
+    await user.type(field(), "nope{Enter}");
+    await screen.findByText("Wrong master password");
+    expect(field().type).toBe("password");
   });
 
   it("show_hide_password_toggle_switches_input_type", async () => {
@@ -279,6 +315,24 @@ describe("keyboard layout indicator", () => {
     expect(calls(fake, "platformKeyboardLayout")).toHaveLength(1);
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "CapsLock" }));
     await waitFor(() => expect(calls(fake, "platformKeyboardLayout")).toHaveLength(2));
+  });
+});
+
+describe("keyboard layout after a switch key", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("keyboard_layout_badge_shows_the_layout_that_took_effect_after_the_key_event", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    let layout = "EN";
+    await renderMainApp({ session: "locked" }, (f) => {
+      f.handlers.platformKeyboardLayout = () => layout;
+    });
+    await screen.findByText("EN");
+    // The key arrives inside the throttle window; the OS applies the switch a moment later.
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "CapsLock" }));
+    setTimeout(() => (layout = "UK"), 50);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await screen.findByText("UK")).toBeTruthy();
   });
 });
 

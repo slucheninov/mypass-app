@@ -46,6 +46,8 @@
   export function take(): string {
     const value = peek();
     clear();
+    // A reveal never survives an attempt: the next one is typed hidden again.
+    shown = false;
     return value;
   }
 </script>
