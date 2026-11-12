@@ -148,7 +148,8 @@ describe("save indicator", () => {
     const { fake } = await unlocked();
     const indicator = screen.getByTestId("save-indicator");
     expect(indicator.textContent?.trim()).toBe("");
-    expect(screen.queryByRole("img")).toBeNull();
+    // The entry list rows carry their own badges, so only the indicator is looked at.
+    expect(within(indicator).queryByRole("img")).toBeNull();
 
     await fake.emit("saveStateChanged", { state: "pending", message: null });
     await waitFor(() => expect(within(indicator).getByText("Saving…")).toBeTruthy());

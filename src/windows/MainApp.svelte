@@ -5,6 +5,7 @@
   import ToastHost from "../lib/ui/ToastHost.svelte";
   import OpenGuardHost from "../screens/OpenGuardHost.svelte";
   import OpenVaultSheet from "../screens/OpenVaultSheet.svelte";
+  import EntryList from "../screens/EntryList.svelte";
   import Shell from "../screens/Shell.svelte";
   import Unlock from "../screens/Unlock.svelte";
 </script>
@@ -12,7 +13,9 @@
 <main data-testid="main-app">
   {#if session.loaded}
     {#if session.status.state === "unlocked"}
-      <Shell />
+      <Shell>
+        {#snippet list()}<EntryList />{/snippet}
+      </Shell>
     {:else}
       <Unlock />
     {/if}

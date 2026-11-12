@@ -215,7 +215,15 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     draftClear: notImplemented("draftClear"),
     draftSave: notImplemented("draftSave"),
     draftVersions: notImplemented("draftVersions"),
-    entryCopy: notImplemented("entryCopy"),
+    // The value goes to the (fake) clipboard inside Rust and never reaches the webview.
+    entryCopy: ({ id, field }) => {
+      requireUnlocked();
+      findEntry(id);
+      if (field.kind !== "password" && field.kind !== "username" && field.kind !== "url") {
+        throw new NotImplementedInFake(`entryCopy(${field.kind})`);
+      }
+      return null;
+    },
     entryDelete: ({ id }) => {
       requireUnlocked();
       sendToBin(findEntry(id));
@@ -226,7 +234,14 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       requireUnlocked();
       return structuredClone(findEntry(id).model);
     },
-    entryEmptyBin: notImplemented("entryEmptyBin"),
+    entryEmptyBin: () => {
+      requireUnlocked();
+      const before = state.entries.length;
+      state.entries = state.entries.filter((e) => !e.summary.inRecycleBin);
+      const count = before - state.entries.length;
+      if (count > 0) changed();
+      return count;
+    },
     entryGet: ({ id }) => {
       requireUnlocked();
       return detailOf(findEntry(id));
@@ -235,7 +250,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     entryHistoryRestore: notImplemented("entryHistoryRestore"),
     entryList: ({ query }) => {
       requireUnlocked();
-      return listEntries(state.entries, query);
+      return listEntries(state.entries, query, state.groups);
     },
     entryMove: ({ id, groupId }) => {
       requireUnlocked();
@@ -268,18 +283,39 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         attachmentOps: [],
       };
     },
-    entryPurge: notImplemented("entryPurge"),
-    entryRecent: notImplemented("entryRecent"),
+    entryPurge: ({ id }) => {
+      requireUnlocked();
+      state.entries.splice(state.entries.indexOf(findEntry(id)), 1);
+      changed();
+      return null;
+    },
+    // The fixture has no access times, so "recently used" is "recently modified".
+    entryRecent: ({ limit }) => {
+      requireUnlocked();
+      return state.entries
+        .filter((e) => !e.summary.inRecycleBin)
+        .sort((a, b) => b.modified - a.modified)
+        .slice(0, limit)
+        .map((e) => structuredClone(e.summary));
+    },
     entryRestore: notImplemented("entryRestore"),
     entryReveal: ({ id, field }) => {
       requireUnlocked();
       const { model } = findEntry(id);
       if (field.kind === "password") return model.password;
       if (field.kind === "username") return model.username;
+      if (field.kind === "url") return model.urls[0] ?? "";
       throw new NotImplementedInFake(`entryReveal(${field.kind})`);
     },
     entrySave: notImplemented("entrySave"),
-    entrySetFavorite: notImplemented("entrySetFavorite"),
+    entrySetFavorite: ({ id, favorite }) => {
+      requireUnlocked();
+      const found = findEntry(id);
+      found.summary.favorite = favorite;
+      found.model.favorite = favorite;
+      changed();
+      return null;
+    },
     entryTotp: notImplemented("entryTotp"),
     entryTouch: notImplemented("entryTouch"),
     generatorCopy: notImplemented("generatorCopy"),

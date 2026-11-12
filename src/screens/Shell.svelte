@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
+  import { t } from "../lib/i18n/index.svelte";
   import { platform } from "../lib/platform.svelte";
   import { readPref, writePref } from "../lib/prefs";
   import SplitPane from "../lib/ui/SplitPane.svelte";
@@ -67,7 +68,8 @@
         <div class="list">{@render list?.()}</div>
       {/snippet}
       {#snippet third()}
-        <div class="detail">{@render detail?.()}</div>
+        <!-- Programmatic focus target for the entry list's Enter key (`[data-pane="detail"]`). -->
+        <div class="detail" role="region" aria-label={t("Details")} tabindex="-1" data-pane="detail">{@render detail?.()}</div>
       {/snippet}
     </SplitPane>
   </div>
@@ -107,5 +109,8 @@
   }
   .detail {
     background: var(--bg);
+  }
+  .detail:focus {
+    outline: none;
   }
 </style>
