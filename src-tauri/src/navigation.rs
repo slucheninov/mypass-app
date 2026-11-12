@@ -34,7 +34,9 @@ pub fn navigation_allowed(url: &Url, dev_url: Option<&Url>) -> bool {
 pub fn guard<R: Runtime>() -> TauriPlugin<R> {
     Builder::<R>::new("mypass-navigation-guard")
         .on_navigation(|webview, url| {
-            let dev_url = if cfg!(debug_assertions) {
+            // Tauri serves the dev URL exactly when `is_dev` holds (no `custom-protocol`),
+            // independent of the build profile.
+            let dev_url = if tauri::is_dev() {
                 webview.app_handle().config().build.dev_url.clone()
             } else {
                 None
