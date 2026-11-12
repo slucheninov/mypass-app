@@ -49,7 +49,7 @@ describe("fake backend", () => {
 
   it("an unimplemented command fails loudly", async () => {
     renderWithBackend(MainApp, {}, createFakeBackend());
-    await expect(commands.vaultFindFiles()).rejects.toThrow("NotImplementedInFake(vaultFindFiles)");
+    await expect(commands.backupList()).rejects.toThrow("NotImplementedInFake(backupList)");
   });
 
   it("an unknown command or an unhandled plugin call throws and names itself", async () => {

@@ -7,7 +7,17 @@
 // run time (fakeBackend.test.ts). There are no command counts anywhere.
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC } from "@tauri-apps/api/mocks";
-import type { ApiError, commands, events, SessionState, SessionStatus_Serialize, Settings_Serialize } from "../lib/bindings";
+import type {
+  ApiError,
+  commands,
+  events,
+  FoundVaultFileDto,
+  OpenWarning,
+  RecentVaultDto,
+  SessionState,
+  SessionStatus_Serialize,
+  Settings_Serialize,
+} from "../lib/bindings";
 import {
   FIXTURE_MASTER_PASSWORD,
   defaultSettings,
@@ -79,6 +89,14 @@ export interface FakeState {
   settings: Settings_Serialize;
   entries: FixtureEntry[];
   masterPassword: string;
+  /** What `vault_open_warnings` answers for every path (default none). */
+  openWarnings: OpenWarning[];
+  /** The recent-vaults list `vault_recent` returns; `vault_forget` and a successful open/create edit it. */
+  recents: RecentVaultDto[];
+  /** What `vault_find_files` returns (default none). */
+  foundFiles: FoundVaultFileDto[];
+  /** Paths `vault_create` refuses with `alreadyExists`. */
+  existingFiles: string[];
 }
 
 export interface FakeBackend {
@@ -102,6 +120,10 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     settings: defaultSettings(),
     entries: fixtureEntries(),
     masterPassword: FIXTURE_MASTER_PASSWORD,
+    openWarnings: [],
+    recents: [],
+    foundFiles: [],
+    existingFiles: [],
   };
   // The real backend emits its events as a side effect of a command; so does the fake.
   const publish = (event: EventName, payload: unknown) => void emit(kebab(event), payload ?? null);
@@ -117,6 +139,26 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     state.session = next;
     publish("sessionChanged", structuredClone(next));
     return structuredClone(next);
+  };
+
+  const fileNameOf = (path: string) => path.split(/[\\/]/).pop() ?? path;
+  const rememberRecent = (path: string) => {
+    state.recents = [
+      { path, fileName: fileNameOf(path), exists: true },
+      ...state.recents.filter((r) => r.path !== path),
+    ];
+  };
+  // Opening or creating a vault unlocks it straight away, like the real backend.
+  const openVault = (path: string, name: string) => {
+    rememberRecent(path);
+    return setSession({
+      state: "unlocked",
+      vaultPath: path,
+      vaultName: name,
+      lockReason: null,
+      fileStatus: { kind: "connected", size: 4096, modified: 1_700_000_000_000 },
+      save: { state: "idle", message: null },
+    });
   };
 
   const handlers = {
@@ -199,17 +241,27 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       requireUnlocked();
       return fixtureSidebar(state.entries);
     },
-    vaultCreate: notImplemented("vaultCreate"),
-    vaultFindFiles: notImplemented("vaultFindFiles"),
-    vaultForget: notImplemented("vaultForget"),
+    vaultCreate: ({ path, password, name }) => {
+      if (state.existingFiles.includes(path)) throw apiError("alreadyExists");
+      state.masterPassword = password;
+      return openVault(path, name);
+    },
+    vaultFindFiles: () => structuredClone(state.foundFiles),
+    vaultForget: ({ path }) => {
+      state.recents = state.recents.filter((r) => r.path !== path);
+      return null;
+    },
     vaultLock: () => {
       if (state.session.state === "noVault") return null;
       setSession({ ...state.session, state: "locked", lockReason: "manual" });
       return null;
     },
-    vaultOpen: notImplemented("vaultOpen"),
-    vaultOpenWarnings: notImplemented("vaultOpenWarnings"),
-    vaultRecent: notImplemented("vaultRecent"),
+    vaultOpen: ({ path, password }) => {
+      if (password !== state.masterPassword) throw apiError("wrongPassword");
+      return openVault(path, fileNameOf(path).replace(/\.kdbx$/i, ""));
+    },
+    vaultOpenWarnings: () => structuredClone(state.openWarnings),
+    vaultRecent: () => structuredClone(state.recents),
     vaultStatus: () => structuredClone(state.session),
     vaultUnlock: ({ password }) => {
       if (state.session.state === "noVault") throw apiError("noVault");
