@@ -93,18 +93,20 @@
 
   // Another editor was requested over this dirty one: ask before it replaces this model.
   $effect(() => {
-    if (navigation.pendingModel) confirming = true;
+    if (navigation.pendingModel || navigation.leavePending) confirming = true;
   });
 
   function keepEditing() {
     confirming = false;
     navigation.pendingModel = null;
+    navigation.answerLeave(false);
   }
 
   function discard() {
     confirming = false;
     const next = navigation.pendingModel;
-    if (next) navigation.openEditor(next);
+    if (navigation.leavePending) navigation.answerLeave(true);
+    else if (next) navigation.openEditor(next);
     else close();
   }
 

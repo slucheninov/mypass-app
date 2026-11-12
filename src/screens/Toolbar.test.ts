@@ -5,7 +5,9 @@ import { ICON_PATHS } from "../lib/ui/icons";
 import { entries } from "../lib/stores/entries.svelte";
 import { session } from "../lib/stores/session.svelte";
 import { toasts } from "../lib/stores/toasts.svelte";
-import { FIXTURE_MASTER_PASSWORD } from "../test/fixtures";
+import { navigation } from "../lib/stores/navigation.svelte";
+import { api } from "../lib/api";
+import { FIXTURE_MASTER_PASSWORD, sessionStatus } from "../test/fixtures";
 import { apiError } from "../test/fakeBackend";
 import { calls, renderMainApp } from "../test/mainApp";
 
@@ -140,6 +142,95 @@ describe("lock and settings", () => {
     const { fake } = await unlocked();
     await user.click(screen.getByRole("button", { name: "Settings" }));
     await waitFor(() => expect(calls(fake, "appOpenSettings")).toHaveLength(1));
+  });
+});
+
+describe("a dirty editor and the user-initiated paths that drop it", () => {
+  async function dirtyEditor() {
+    const user = userEvent.setup();
+    const app = await unlocked();
+    navigation.openEditor(await api.entryNewModel("login", null));
+    await user.type(await screen.findByRole("textbox", { name: "Title" }), "unsaved");
+    return { user, ...app };
+  }
+
+  it("lock_over_a_dirty_editor_asks_first_and_keep_editing_aborts", async () => {
+    const { user, fake } = await dirtyEditor();
+    await user.click(screen.getByRole("button", { name: "Lock" }));
+    const dialog = await screen.findByRole("dialog", { name: "Discard changes?" });
+    expect(calls(fake, "vaultLock")).toHaveLength(0);
+    await user.click(within(dialog).getByRole("button", { name: "Keep editing" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(calls(fake, "vaultLock")).toHaveLength(0);
+    expect(session.status.state).toBe("unlocked");
+    expect((screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toBe("unsaved");
+    expect(navigation.editModel).not.toBeNull();
+  });
+
+  it("lock_over_a_dirty_editor_locks_after_discard", async () => {
+    const { user, fake } = await dirtyEditor();
+    await user.click(screen.getByRole("button", { name: "Lock" }));
+    const dialog = await screen.findByRole("dialog", { name: "Discard changes?" });
+    await user.click(within(dialog).getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(calls(fake, "vaultLock")).toHaveLength(1));
+    await waitFor(() => expect(session.status.state).toBe("locked"));
+    expect(navigation.editModel).toBeNull();
+  });
+
+  it("lock_over_a_clean_editor_does_not_ask", async () => {
+    const user = userEvent.setup();
+    const { fake } = await unlocked();
+    navigation.openEditor(await api.entryNewModel("login", null));
+    await screen.findByRole("textbox", { name: "Title" });
+    await user.click(screen.getByRole("button", { name: "Lock" }));
+    await waitFor(() => expect(calls(fake, "vaultLock")).toHaveLength(1));
+    expect(screen.queryByRole("dialog", { name: "Discard changes?" })).toBeNull();
+  });
+
+  it("open_existing_over_a_dirty_editor_asks_before_any_dialog_and_keep_editing_aborts", async () => {
+    vi.mocked(open).mockResolvedValue("/vaults/Other.kdbx");
+    const { user, fake } = await dirtyEditor();
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Open Existing .kdbx…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Discard changes?" });
+    expect(open).not.toHaveBeenCalled();
+    expect(calls(fake, "vaultOpenWarnings")).toHaveLength(0);
+    await user.click(within(dialog).getByRole("button", { name: "Keep editing" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(open).not.toHaveBeenCalled();
+    expect(calls(fake, "vaultLock")).toHaveLength(0);
+    expect(navigation.editModel).not.toBeNull();
+  });
+
+  it("open_existing_over_a_dirty_editor_continues_after_discard", async () => {
+    vi.mocked(open).mockResolvedValue("/vaults/Other.kdbx");
+    const { user, fake } = await dirtyEditor();
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Open Existing .kdbx…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Discard changes?" });
+    await user.click(within(dialog).getByRole("button", { name: "Discard" }));
+    expect(await screen.findByRole("dialog", { name: "Open vault" })).toBeTruthy();
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(calls(fake, "vaultLock")).toHaveLength(1);
+  });
+
+  it("background_locks_never_prompt_and_drop_the_dirty_editor", async () => {
+    const { fake } = await dirtyEditor();
+    // Idle, sleep, screen-lock, hotkey and tray locks all reach the window as this event.
+    await fake.emit("sessionChanged", sessionStatus("locked"));
+    await waitFor(() => expect(session.status.state).toBe("locked"));
+    expect(screen.queryByRole("dialog", { name: "Discard changes?" })).toBeNull();
+    expect(navigation.editModel).toBeNull();
+  });
+
+  it("a_background_lock_while_the_prompt_is_open_closes_it_and_aborts_the_action", async () => {
+    const { user, fake } = await dirtyEditor();
+    await user.click(screen.getByRole("button", { name: "Lock" }));
+    await screen.findByRole("dialog", { name: "Discard changes?" });
+    await fake.emit("sessionChanged", sessionStatus("locked"));
+    await waitFor(() => expect(session.status.state).toBe("locked"));
+    expect(screen.queryByRole("dialog", { name: "Discard changes?" })).toBeNull();
+    expect(calls(fake, "vaultLock")).toHaveLength(0);
   });
 });
 
