@@ -43,11 +43,11 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `pnpm-workspace.yaml` | pnpm settings: `allowBuilds: esbuild: false` (esbuild's postinstall is not needed, the platform binary comes as an optional dependency) |
 | `package.json`, `pnpm-lock.yaml`, `.nvmrc` | Node and pnpm pins, the exact-pinned npm dependencies and the scripts `dev`, `build`, `check`, `test`, `tauri`; the lockfile is committed |
 | `index.html`, `vite.config.ts`, `svelte.config.js`, `tsconfig.json`, `vitest.setup.ts` | The Svelte 5 (runes) + Vite + Vitest toolchain of the UI |
-| `src/` | The UI: `main.ts` picks the root for the window label (`windows/`), `lib/` the API wrapper, stores and i18n, `screens/` the screens and editors, `test/` holds the fake backend and the render helper, `scaffold.test.ts` holds the static source guards |
+| `src/` | The UI: `main.ts` picks the root for the window label (`windows/`), `lib/` the API wrapper, stores and i18n, `screens/` the screens and editors, `test/` holds the fake backend (type-checked against the bindings), the render helper and the shared source scan `textScan.ts`, `scaffold.test.ts` holds the static source guards, `journey.test.ts`, `a11y.test.ts` and `i18n.audit.test.ts` the journey, accessibility and string-audit suites |
 | `scripts/test.sh` | The single local and CI test entry point |
 | `scripts/convert-xcstrings.mjs` | One-time converter of the old app's String Catalogs; its output (`src/lib/i18n/locales/{en,uk,ru}.json`, `src-tauri/resources/macos/*.lproj/InfoPlist.strings`) is then the hand-edited source of truth |
 | `.github/` | Workflows (`ci.yml`, `codeql.yml`), Dependabot config, issue forms, pull request template |
-| `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts) |
+| `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts) and the Stage 2b UI walk-through |
 | `docs/implementation/ROADMAP.md` | The only tracked document under `docs/`: unfinished work |
 | `LICENSE`, `THIRD_PARTY_NOTICES.md` | Apache-2.0 and the notices for vendored data and linked crates |
 
@@ -230,6 +230,10 @@ change is done.
   worker because it blocks on a dialog: `ExitRequested` is always prevented and a confirmed exit
   calls `exit` again through `ExitGate`. The effect runner is called off the main thread under the
   settings gate and never takes it.
+- **UI.** The Svelte UI talks only through the generated `src/lib/bindings.ts`; tests run on a fake backend
+  (`src/test/fakeBackend.ts`) that is type-checked against those bindings. Secrets held by stores are
+  cleared on close, save and lock, and the single `{@html}` site renders sanitised markdown. Closing the
+  app with a changed, unsaved editor drops those changes without a prompt (open item in the roadmap).
 - **Signing.** The stable team `W645B93PPQ` arrives in stage 5. Never sign ad-hoc: it breaks the
   Keychain access that guards the unlock key.
 

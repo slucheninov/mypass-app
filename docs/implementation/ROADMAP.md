@@ -34,6 +34,8 @@ Last updated: 2026-11-13
 
 ## Stage 2b UI follow-ups
 
+- [ ] Decide whether quitting with unsaved editor changes should ask first (needs a dirty signal from
+  the main webview to the quit flow).
 - [ ] Manual: walk the Stage 2b checklist in `RUN.md` on a copy of the owner's vault (unlock, shell,
   editors, history and bin, generator, settings, CSV import, tray panel, quit flow, themes, languages).
 - [ ] Restore from the bin to the original group: the UI restores to the root today because the backend
@@ -96,12 +98,6 @@ Last updated: 2026-11-13
   vector icon) submitted and merged.
 - [ ] Google shows "MyPass" for newly created passkeys. Manual check; depends on Google ingesting
   the registry.
-- [ ] Per-vault backup folders. All vaults share one `backups/` folder today, so after a location
-  change the Backups list can show, and restore, backups of a different vault. Use a folder per vault
-  identity and migrate the existing flat backups.
-- [ ] Note drafts after a restore. Drafts are keyed by vault path, so drafts written after the
-  restored backup can be offered once the restored vault is unlocked. Decide whether to discard or
-  flag them.
 - [ ] Apply background sync merges locally. The merged result of a background sync is discarded, so
   entries another device added reach the remote but only appear locally at the next unlock. Apply and
   publish the merged result without replacing newer local edits made while the sync ran.
