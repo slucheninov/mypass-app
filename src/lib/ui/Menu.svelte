@@ -12,7 +12,7 @@
     items: MenuItem[];
     onselect: (id: string) => void;
     trigger: Snippet;
-    /** Accessible name of the trigger button, already translated. */
+    /** Accessible name of the trigger button, already translated; required when the trigger has no text. */
     label?: string;
   } = $props();
 

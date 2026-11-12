@@ -12,6 +12,8 @@
   const uid = $props.id();
   const titleId = `modal-title-${uid}`;
   let dialog: HTMLElement | undefined = $state();
+  // A drag that starts inside the dialog and ends on the backdrop must not close it.
+  let pressedOnBackdrop = false;
 
   const FOCUSABLE =
     'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -66,8 +68,10 @@
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div
     class="backdrop"
+    onpointerdown={(e) => (pressedOnBackdrop = e.target === e.currentTarget)}
     onclick={(e) => {
-      if (e.target === e.currentTarget) onclose();
+      if (pressedOnBackdrop && e.target === e.currentTarget) onclose();
+      pressedOnBackdrop = false;
     }}
   >
     <div

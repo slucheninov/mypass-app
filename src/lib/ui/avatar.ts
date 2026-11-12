@@ -1,15 +1,15 @@
-/** Ten fixed colours; white text on each stays readable. */
+/** Ten fixed colours; each keeps at least 4.5:1 contrast with white text (pinned by a test). */
 export const AVATAR_PALETTE = [
-  "#d9534f",
-  "#e07b39",
-  "#b58a00",
-  "#4f9d3a",
-  "#1f9d8a",
+  "#c0392b",
+  "#b4531a",
+  "#8a6700",
+  "#2f7d1f",
+  "#177a6b",
   "#2f6feb",
-  "#6a5acd",
-  "#a54fb8",
-  "#d6457f",
-  "#6b7280",
+  "#5b4bc4",
+  "#9b3fae",
+  "#c2336f",
+  "#5b6270",
 ] as const;
 
 /** First character uppercased when it is a letter, `#` otherwise (also for empty text). */

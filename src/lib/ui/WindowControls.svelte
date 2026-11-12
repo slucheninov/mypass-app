@@ -23,6 +23,8 @@
     }
   }
 
+  // Snapping, a double-click on the bar or a keyboard shortcut change the state without a click
+  // here, so the label follows every window resize.
   onMount(() => {
     if (os !== "macos") void refresh();
   });
@@ -33,6 +35,8 @@
     await refresh();
   }
 </script>
+
+<svelte:window onresize={() => (os !== "macos" ? void refresh() : undefined)} />
 
 {#if os === "macos"}
   <!-- Native traffic lights sit on the left; this spacer keeps toolbar content clear of them. -->
@@ -83,7 +87,7 @@
     background: var(--hover);
   }
   .close:hover {
-    background: #e81123;
-    color: #ffffff;
+    background: var(--danger-hover);
+    color: var(--danger-hover-text);
   }
 </style>

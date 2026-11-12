@@ -10,10 +10,10 @@
     children: Snippet;
   } & Omit<HTMLButtonAttributes, "onclick" | "children" | "type" | "disabled">;
 
-  let { variant = "secondary", disabled = false, type = "button", onclick, children, ...rest }: Props = $props();
+  let { variant = "secondary", disabled = false, type = "button", onclick, children, class: className = "", ...rest }: Props = $props();
 </script>
 
-<button class="btn {variant}" {type} {disabled} {onclick} {...rest}>
+<button {...rest} class="btn {variant} {className}" {type} {disabled} {onclick}>
   {@render children()}
 </button>
 

@@ -34,10 +34,6 @@
     return [a, Math.max(min[1], Math.min(b + delta, Math.max(min[1], room)))];
   }
 
-  function emit(next: [number, number]) {
-    onresize(next);
-  }
-
   function down(index: 0 | 1, event: PointerEvent) {
     drag = { index, startX: event.clientX, startWidths: [widths[0], widths[1]] };
     event.preventDefault();
@@ -45,7 +41,7 @@
 
   function move(event: PointerEvent) {
     if (!drag) return;
-    emit(clamp(drag.index, drag.startWidths, event.clientX - drag.startX));
+    onresize(clamp(drag.index, drag.startWidths, event.clientX - drag.startX));
   }
 
   function up() {
@@ -56,7 +52,7 @@
     const delta = event.key === "ArrowLeft" ? -KEY_STEP : event.key === "ArrowRight" ? KEY_STEP : 0;
     if (delta === 0) return;
     event.preventDefault();
-    emit(clamp(index, [widths[0], widths[1]], delta));
+    onresize(clamp(index, [widths[0], widths[1]], delta));
   }
 </script>
 

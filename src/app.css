@@ -7,6 +7,8 @@
   --accent: #2f6feb;
   --accent-text: #ffffff;
   --danger: #c8312b;
+  --danger-hover: #e81123;
+  --danger-hover-text: #ffffff;
   --bg: #ffffff;
   --sidebar-bg: #f5f5f7;
   --list-bg: #fbfbfc;
@@ -26,6 +28,7 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
     --accent: #4c8dff;
+    --accent-text: #0b1220;
     --danger: #ff6b63;
     --bg: #1e1e20;
     --sidebar-bg: #252528;
@@ -45,6 +48,7 @@
 
 :root[data-theme="dark"] {
   --accent: #4c8dff;
+  --accent-text: #0b1220;
   --danger: #ff6b63;
   --bg: #1e1e20;
   --sidebar-bg: #252528;
@@ -105,4 +109,13 @@ textarea {
 }
 :focus:not(:focus-visible) {
   outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
 }

@@ -9,7 +9,8 @@ import ModalHarness from "../../test/ModalHarness.svelte";
 import { textSnippet } from "../../test/snippets";
 import { renderWithBackend } from "../../test/render";
 import { mockWindows } from "@tauri-apps/api/mocks";
-import { avatarColor, avatarLetter } from "./avatar";
+import { contrast } from "../../test/contrast";
+import { AVATAR_PALETTE, avatarColor, avatarLetter } from "./avatar";
 import Avatar from "./Avatar.svelte";
 import Button from "./Button.svelte";
 import ContextMenu from "./ContextMenu.svelte";
@@ -380,5 +381,100 @@ describe("accessibility", () => {
     mockWindows("main");
     const { container } = renderWithBackend(KitHarness);
     await expectNoAxeViolations(container.ownerDocument.body);
+  });
+});
+
+describe("interactions", () => {
+  it("avatar_palette_keeps_white_text_readable", () => {
+    expect(AVATAR_PALETTE).toHaveLength(10);
+    for (const colour of AVATAR_PALETTE) expect(contrast("#ffffff", colour), colour).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("menu_closes_on_outside_pointer_press", async () => {
+    const user = userEvent.setup();
+    render(MenuHarness, { props: { onselect: vi.fn() } });
+    await user.click(screen.getByRole("button", { name: "Actions" }));
+    await screen.findByRole("menu");
+    await user.click(document.body);
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+  });
+
+  it("context_menu_closes_on_outside_press_and_window_blur", async () => {
+    const user = userEvent.setup();
+    const onclose = vi.fn();
+    render(ContextMenu, { props: { items: [{ id: "a", label: "Alpha" }], onselect: vi.fn(), onclose, x: 0, y: 0 } });
+    await user.click(document.body);
+    expect(onclose).toHaveBeenCalledTimes(1);
+    await fireEvent.blur(window);
+    expect(onclose).toHaveBeenCalledTimes(2);
+  });
+
+  it("modal_backdrop_click_closes_but_a_drag_ending_there_does_not", async () => {
+    const user = userEvent.setup();
+    const onclose = vi.fn();
+    render(ModalHarness, { props: { onclose } });
+    await user.click(screen.getByRole("button", { name: "opener" }));
+    const dialog = await screen.findByRole("dialog");
+    const backdrop = dialog.parentElement as HTMLElement;
+    await fireEvent.pointerDown(dialog);
+    await fireEvent.click(backdrop);
+    expect(onclose).not.toHaveBeenCalled();
+    await user.click(backdrop);
+    expect(onclose).toHaveBeenCalledTimes(1);
+  });
+
+  it("stepper_home_and_end_jump_to_the_limits", async () => {
+    const user = userEvent.setup();
+    const onchange = vi.fn();
+    render(Stepper, { props: { value: 50, min: 10, max: 120, step: 5, label: "Seconds", onchange } });
+    screen.getByRole("spinbutton").focus();
+    await user.keyboard("{End}");
+    expect(onchange).toHaveBeenLastCalledWith(120);
+    await user.keyboard("{Home}");
+    expect(onchange).toHaveBeenLastCalledWith(10);
+  });
+
+  it("split_pane_arrow_right_and_second_handle_keyboard", async () => {
+    const proto = HTMLElement.prototype;
+    const desc = Object.getOwnPropertyDescriptor(proto, "clientWidth");
+    Object.defineProperty(proto, "clientWidth", { configurable: true, get: () => 1000 });
+    try {
+      const onresize = vi.fn();
+      render(SplitPane, {
+        props: {
+          widths: [200, 300], min: [160, 240, 320], onresize,
+          first: textSnippet("one"), second: textSnippet("two"), third: textSnippet("three"),
+        },
+      });
+      const [h1, h2] = screen.getAllByRole("separator");
+      if (!h1 || !h2) throw new Error("separators missing");
+      await fireEvent.keyDown(h1, { key: "ArrowRight" });
+      expect(onresize).toHaveBeenLastCalledWith([216, 300]);
+      await fireEvent.keyDown(h2, { key: "ArrowRight" });
+      expect(onresize).toHaveBeenLastCalledWith([200, 316]);
+      await fireEvent.keyDown(h2, { key: "ArrowLeft" });
+      expect(onresize).toHaveBeenLastCalledWith([200, 284]);
+    } finally {
+      if (desc) Object.defineProperty(proto, "clientWidth", desc);
+      else delete (proto as unknown as Record<string, unknown>).clientWidth;
+    }
+  });
+
+  it("window_controls_label_follows_window_resize", async () => {
+    mockWindows("main");
+    let maximized = false;
+    const fake = createFakeBackend({ plugins: { "plugin:window|is_maximized": () => maximized } });
+    renderWithBackend(WindowControls, { os: "windows" }, fake);
+    expect(await screen.findByRole("button", { name: "Maximize" })).toBeTruthy();
+    maximized = true; // e.g. snapped by the OS
+    await fireEvent(window, new Event("resize"));
+    expect(await screen.findByRole("button", { name: "Restore" })).toBeTruthy();
+  });
+
+  it("button_keeps_variant_style_when_the_caller_passes_a_class", () => {
+    render(Button, { props: { variant: "primary", class: "extra", children: textSnippet("Go") } });
+    const cls = screen.getByRole("button", { name: "Go" }).className;
+    expect(cls).toContain("primary");
+    expect(cls).toContain("extra");
   });
 });

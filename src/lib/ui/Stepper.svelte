@@ -20,10 +20,6 @@
   } = $props();
 
   let input: HTMLInputElement | undefined = $state();
-  let shown = $state("");
-  $effect(() => {
-    shown = String(value);
-  });
 
   /** Rounds to `min + k * step` and keeps the result inside `[min, max]` on that grid. */
   function normalise(v: number): number {
@@ -33,16 +29,14 @@
   }
 
   function send(next: number) {
-    shown = String(next);
-    if (input) input.value = shown;
+    if (input) input.value = String(next);
     if (next !== value) onchange(next);
   }
 
   function commit() {
     const parsed = Number((input?.value ?? "").trim());
     if (!Number.isFinite(parsed) || (input?.value ?? "").trim() === "") {
-      shown = String(value);
-      if (input) input.value = shown;
+      if (input) input.value = String(value);
       return;
     }
     send(normalise(parsed));
@@ -93,7 +87,8 @@
     aria-valuemin={min}
     aria-valuemax={max}
     aria-valuenow={value}
-    value={shown}
+    value={String(value)}
+    aria-valuetext={unit ? `${value} ${unit}` : undefined}
     onchange={commit}
     {onkeydown}
   />
