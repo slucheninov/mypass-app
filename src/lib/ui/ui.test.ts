@@ -188,6 +188,18 @@ describe("Menu", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
+  it("menu_returns_focus_to_the_trigger_before_the_chosen_action_runs", async () => {
+    // An action that opens a dialog must see the trigger focused, so the dialog captures it as its
+    // opener and the menu cannot take focus back from the dialog afterwards.
+    const user = userEvent.setup();
+    const trigger = () => screen.getByRole("button", { name: "Actions" });
+    let focusedDuringAction: Element | null = null;
+    render(MenuHarness, { props: { onselect: () => (focusedDuringAction = document.activeElement) } });
+    await user.click(trigger());
+    await user.click(await screen.findByRole("menuitem", { name: "Copy" }));
+    await waitFor(() => expect(focusedDuringAction).toBe(trigger()));
+  });
+
   it("disabled_menu_item_is_not_selected", async () => {
     const user = userEvent.setup();
     const onselect = vi.fn();
