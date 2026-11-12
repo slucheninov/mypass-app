@@ -281,7 +281,7 @@ describe("history", () => {
   async function openHistory(prepare = seed) {
     const user = userEvent.setup();
     const utils = await mount({}, prepare);
-    await user.click(screen.getByRole("radio", { name: "Recently generated" }));
+    await user.click(screen.getByRole("tab", { name: "Recently generated" }));
     const list = prepare === seed ? await screen.findByRole("list", { name: "Generated passwords" }) : document.body;
     return { ...utils, user, list };
   }
@@ -329,7 +329,7 @@ describe("history", () => {
     Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
     await user.click(within(within(list).getAllByRole("listitem")[0]!).getByRole("button", { name: "Reveal" }));
     await screen.findByText("NEW-secret-h2");
-    await user.click(screen.getByRole("radio", { name: "Generate" }));
+    await user.click(screen.getByRole("tab", { name: "Generate" }));
     expect(document.body.textContent).not.toContain("NEW-secret-h2");
   });
 
@@ -340,7 +340,7 @@ describe("history", () => {
     await user.click(screen.getByRole("button", { name: "Generate" }));
     await waitFor(() => expect(shown().textContent).toHaveLength(20));
     await user.click(screen.getByRole("button", { name: "Copy" }));
-    await user.click(screen.getByRole("radio", { name: "Recently generated" }));
+    await user.click(screen.getByRole("tab", { name: "Recently generated" }));
     const list = await screen.findByRole("list", { name: "Generated passwords" });
     expect(within(list).getAllByRole("listitem")).toHaveLength(1);
     expect(list.textContent).toContain("fresh.example");
@@ -363,6 +363,85 @@ describe("toolbar entry", () => {
   });
 });
 
+describe("review fixes", () => {
+  const field = () => screen.getByRole("spinbutton", { name: "Length" }) as HTMLInputElement;
+
+  it("length_field_accepts_typing_a_two_digit_value", async () => {
+    const user = userEvent.setup();
+    const { fake } = await mount();
+    await user.clear(field());
+    await user.type(field(), "12");
+    expect(field().value).toBe("12");
+    await user.click(screen.getByRole("button", { name: "Generate" }));
+    await waitFor(() => expect(calls(fake, "generatorGenerate")).toHaveLength(1));
+    expect(calls(fake, "generatorGenerate")[0]!.args.req.options.length).toBe(12);
+  });
+
+  it("length_field_clamps_out_of_range_values_on_blur_and_enter", async () => {
+    const user = userEvent.setup();
+    const { fake } = await mount();
+    await user.clear(field());
+    await user.type(field(), "3");
+    expect(field().value).toBe("3");
+    await user.tab();
+    expect(field().value).toBe("8");
+    await user.clear(field());
+    await user.type(field(), "99{Enter}");
+    expect(field().value).toBe("64");
+    await waitFor(() => expect(fake.state.settings.generator.length).toBe(64));
+  });
+
+  it("tabs_are_a_real_tablist_with_arrow_keys_and_a_panel", async () => {
+    const user = userEvent.setup();
+    await mount();
+    const tabs = screen.getAllByRole("tab");
+    expect(screen.getByRole("tablist")).toBeTruthy();
+    expect(tabs.map((x) => x.getAttribute("aria-selected"))).toEqual(["true", "false"]);
+    tabs[0]!.focus();
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("tab", { name: "Recently generated" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe(screen.getByRole("tab", { name: "Recently generated" }).id);
+    await user.keyboard("{ArrowLeft}");
+    expect(screen.getByRole("tab", { name: "Generate" }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("a_lock_returns_to_the_generate_tab", async () => {
+    const user = userEvent.setup();
+    const { fake } = await mount();
+    await user.click(screen.getByRole("tab", { name: "Recently generated" }));
+    await screen.findByText("No generated passwords yet");
+    await fake.emit("sessionChanged", sessionStatus("locked"));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Generate" }).getAttribute("aria-selected")).toBe("true"));
+    expect(screen.getByRole("button", { name: "Generate" })).toBeTruthy();
+  });
+
+  it("generate_is_disabled_while_a_request_is_in_flight", async () => {
+    const user = userEvent.setup();
+    let release: () => void = () => undefined;
+    const { fake } = await mount({}, (f) => {
+      const original = f.handlers.generatorGenerate;
+      f.handlers.generatorGenerate = async (args) => {
+        await new Promise<void>((r) => (release = r));
+        return original(args);
+      };
+    });
+    await user.click(screen.getByRole("button", { name: "Generate" }));
+    await waitFor(() => expect((screen.getByRole("button", { name: "Generate" }) as HTMLButtonElement).disabled).toBe(true));
+    release();
+    await waitFor(() => expect(shown().textContent).toHaveLength(20));
+    expect((screen.getByRole("button", { name: "Generate" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(calls(fake, "generatorGenerate")).toHaveLength(1);
+  });
+
+  it("settings_loaded_after_mount_refresh_the_controls", async () => {
+    await mount();
+    expect((screen.getByRole("slider", { name: "Length" }) as HTMLInputElement).value).toBe("20");
+    await settings.update({ generator: { length: 14, lowercase: true, uppercase: true, digits: true, symbols: false } });
+    await waitFor(() => expect((screen.getByRole("slider", { name: "Length" }) as HTMLInputElement).value).toBe("14"));
+    expect(screen.getByRole("switch", { name: "Symbols" }).getAttribute("aria-checked")).toBe("false");
+  });
+});
+
 describe("accessibility", () => {
   it("generator_passes_axe", async () => {
     const user = userEvent.setup();
@@ -374,7 +453,7 @@ describe("accessibility", () => {
     await user.click(screen.getByRole("button", { name: "Generate" }));
     await waitFor(() => expect(shown().textContent).toHaveLength(15));
     await expectNoAxeViolations(container);
-    await user.click(screen.getByRole("radio", { name: "Recently generated" }));
+    await user.click(screen.getByRole("tab", { name: "Recently generated" }));
     await screen.findByRole("list", { name: "Generated passwords" });
     await expectNoAxeViolations(container);
   });

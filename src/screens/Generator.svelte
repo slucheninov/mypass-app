@@ -18,7 +18,6 @@
   import { settings } from "../lib/stores/settings.svelte";
   import { toasts } from "../lib/stores/toasts.svelte";
   import Button from "../lib/ui/Button.svelte";
-  import Segmented from "../lib/ui/Segmented.svelte";
   import TextField from "../lib/ui/TextField.svelte";
   import Toggle from "../lib/ui/Toggle.svelte";
   import { announceCopied } from "./detail-actions";
@@ -58,6 +57,9 @@
   let sentLength = $state(0);
   let effectiveLength = $state(0);
   let error = $state<string | null>(null);
+  let busy = $state(false);
+  /** The number field's text while it is being typed; null shows the clamped length. */
+  let draft = $state<string | null>(null);
   let tab = $state<"generate" | "history">("generate");
   let history = $state<GeneratorHistoryItem[] | null>(null);
 
@@ -124,8 +126,18 @@
       });
   });
 
+  // The remembered defaults may load or change (another window) after mount.
+  $effect(() => {
+    const g = settings.value?.generator;
+    if (!g) return;
+    length = g.length;
+    chosen = { lowercase: g.lowercase, uppercase: g.uppercase, digits: g.digits, symbols: g.symbols };
+    draft = null;
+  });
+
   function clearSecrets() {
     genSeq++;
+    busy = false;
     value = null;
     error = null;
     group.hideAll();
@@ -136,6 +148,7 @@
       clearSecrets();
       history = null;
       historySeq++;
+      tab = "generate";
     });
     const offWindow = onWindowHidden(clearSecrets);
     return () => {
@@ -165,15 +178,32 @@
     length = Math.min(MAX, Math.max(MIN, Math.round(next)));
   }
 
+  function commitDraft() {
+    if (draft !== null) {
+      const parsed = Number.parseInt(draft, 10);
+      setLength(Number.isFinite(parsed) ? parsed : length);
+      draft = null;
+    }
+    persist();
+  }
+
+  function typeDraft(text: string) {
+    draft = text;
+    const parsed = Number.parseInt(text, 10);
+    if (Number.isFinite(parsed) && parsed >= lowest && parsed <= highest) length = parsed;
+  }
+
   function toggle(name: ClassName, on: boolean) {
     chosen[name] = on;
     persist();
   }
 
   async function generate() {
+    if (busy) return;
     const mine = ++genSeq;
     const unchanged = lockGuard();
     error = null;
+    busy = true;
     const asked = length;
     try {
       const made = await api.generatorGenerate({
@@ -189,6 +219,8 @@
       if (mine !== genSeq || !unchanged()) return;
       value = null;
       error = errorMessage(e);
+    } finally {
+      if (mine === genSeq) busy = false;
     }
   }
 
@@ -216,6 +248,19 @@
       if (mine !== historySeq || !unchanged()) return;
       toasts.reportError(e);
     }
+  }
+
+  const TABS = ["generate", "history"] as const;
+  const uid = $props.id();
+  const tabId = (name: string) => `generator-tab-${uid}-${name}`;
+
+  function onTabKey(event: KeyboardEvent, index: number) {
+    const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+    if (step === 0) return;
+    event.preventDefault();
+    const next = TABS[(index + step + TABS.length) % TABS.length]!;
+    selectTab(next);
+    document.getElementById(tabId(next))?.focus();
   }
 
   function selectTab(next: "generate" | "history") {
@@ -254,18 +299,25 @@
 </script>
 
 <div class="generator">
-  <Segmented
-    value={tab}
-    label={t("Password Generator…")}
-    options={[
-      { value: "generate", label: t("Generate") },
-      { value: "history", label: t("Recently generated") },
-    ]}
-    onchange={selectTab}
-  />
+  <div class="tabs" role="tablist" aria-label={t("Password Generator…")}>
+    {#each TABS as name, i (name)}
+      <button
+        type="button"
+        role="tab"
+        id={tabId(name)}
+        aria-selected={tab === name}
+        aria-controls={`${tabId(name)}-panel`}
+        tabindex={tab === name ? 0 : -1}
+        onclick={() => selectTab(name)}
+        onkeydown={(e) => onTabKey(e, i)}
+      >
+        {name === "generate" ? t("Generate") : t("Recently generated")}
+      </button>
+    {/each}
+  </div>
 
   {#if tab === "generate"}
-    <div class="panel">
+    <div class="panel" role="tabpanel" id={`${tabId("generate")}-panel`} aria-labelledby={tabId("generate")}>
       <div class="row">
         <span class="caption">{t("Length")}</span>
         <input
@@ -274,7 +326,10 @@
           min={lowest}
           max={highest}
           value={shownLength}
-          oninput={(e) => setLength(e.currentTarget.valueAsNumber)}
+          oninput={(e) => {
+            draft = null;
+            setLength(e.currentTarget.valueAsNumber);
+          }}
           onchange={(e) => {
             setLength(e.currentTarget.valueAsNumber);
             persist();
@@ -286,12 +341,11 @@
           aria-label={t("Length")}
           min={lowest}
           max={highest}
-          value={shownLength}
-          oninput={(e) => setLength(e.currentTarget.valueAsNumber)}
-          onchange={(e) => {
-            setLength(e.currentTarget.valueAsNumber);
-            persist();
-          }}
+          value={draft ?? shownLength}
+          oninput={(e) => typeDraft(e.currentTarget.value)}
+          onchange={commitDraft}
+          onblur={() => draft !== null && commitDraft()}
+          onkeydown={(e) => e.key === "Enter" && commitDraft()}
         />
       </div>
 
@@ -311,7 +365,7 @@
       {/if}
 
       <div class="actions">
-        <Button variant="primary" disabled={!anyOn} onclick={() => void generate()}>{t("Generate")}</Button>
+        <Button variant="primary" disabled={!anyOn || busy} onclick={() => void generate()}>{t("Generate")}</Button>
       </div>
 
       {#if error !== null}<p class="error" role="alert">{error}</p>{/if}
@@ -331,7 +385,7 @@
       </div>
     </div>
   {:else}
-    <div class="panel">
+    <div class="panel" role="tabpanel" id={`${tabId("history")}-panel`} aria-labelledby={tabId("history")}>
       {#if history !== null && history.length === 0}
         <p class="empty">{t("No generated passwords yet")}</p>
       {:else if history !== null}
@@ -367,6 +421,25 @@
     flex-direction: column;
     gap: 12px;
     min-width: 320px;
+  }
+  .tabs {
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    border-radius: var(--radius);
+    background: var(--control-border);
+  }
+  .tabs button {
+    flex: 1;
+    padding: 3px 10px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text);
+  }
+  .tabs button[aria-selected="true"] {
+    background: var(--bg);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
   }
   .panel {
     display: flex;
