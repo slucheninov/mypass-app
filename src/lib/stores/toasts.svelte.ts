@@ -27,8 +27,25 @@ class ToastStore {
     const toast: Toast = { id, kind, text, sticky };
     if (opts.detail) toast.detail = opts.detail;
     this.items.push(toast);
-    if (!sticky) this.#timers.set(id, setTimeout(() => this.dismiss(id), TOAST_LIFETIME_MS));
+    if (!sticky) this.#arm(id);
     return id;
+  }
+
+  #arm(id: number): void {
+    this.#timers.set(id, setTimeout(() => this.dismiss(id), TOAST_LIFETIME_MS));
+  }
+
+  /** Stops a toast's expiry while the pointer or focus is on it (WCAG 2.2.1). */
+  pause(id: number): void {
+    const timer = this.#timers.get(id);
+    if (timer !== undefined) clearTimeout(timer);
+    this.#timers.delete(id);
+  }
+
+  /** Restarts the full lifetime of a non-sticky toast after `pause`. */
+  resume(id: number): void {
+    const toast = this.items.find((t) => t.id === id);
+    if (toast && !toast.sticky && !this.#timers.has(id)) this.#arm(id);
   }
 
   dismiss(id: number): void {
@@ -39,7 +56,8 @@ class ToastStore {
   }
 
   clear(): void {
-    for (const id of [...this.#timers.keys()]) this.dismiss(id);
+    for (const timer of this.#timers.values()) clearTimeout(timer);
+    this.#timers.clear();
     this.items = [];
   }
 

@@ -17,14 +17,19 @@ function applyAppearance(theme: Theme, language: Language): void {
 class SettingsStore {
   value = $state<Settings_Serialize | null>(null);
   #unlisten: (() => void) | null = null;
+  #subscribed: Promise<void> | null = null;
 
   /** Listens for `SettingsChanged`, then loads. Call once per window. */
   async start(): Promise<void> {
-    this.#unlisten ??= await events.settingsChanged.listen((e) => this.#adopt(e.payload));
+    this.#subscribed ??= events.settingsChanged.listen((e) => this.#adopt(e.payload)).then((off) => {
+      this.#unlisten = off;
+    });
+    await this.#subscribed;
     await this.load();
   }
 
   stop(): void {
+    this.#subscribed = null;
     this.#unlisten?.();
     this.#unlisten = null;
     this.value = null;
@@ -43,7 +48,8 @@ class SettingsStore {
     try {
       this.#adopt(await api.settingsUpdate(patch));
     } catch (e) {
-      if (before) applyAppearance(before.theme, before.language);
+      // Revert only when nothing newer arrived meanwhile.
+      if (before && this.value === before) applyAppearance(before.theme, before.language);
       throw e;
     }
   }

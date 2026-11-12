@@ -3,7 +3,8 @@ import { session } from "./stores/session.svelte";
 /**
  * A secret value that exists in the webview only after an explicit `reveal` and only until the
  * first of: `hide()`, a lock (`session.lockEpoch` changes), or a newer `reveal`. A load that
- * resolves after any of those is discarded.
+ * resolves after any of those is discarded. The owning component must call `hide()` when it is
+ * destroyed (an `$effect` cleanup), or the value and the lock subscription outlive it until a lock.
  */
 export function createRevealed(): {
   readonly value: string | null;

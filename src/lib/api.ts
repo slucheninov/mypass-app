@@ -9,7 +9,7 @@ import { t } from "./i18n/index.svelte";
 export class ApiFailure extends Error {
   readonly code: ErrorCode;
   constructor(code: ErrorCode, message = "") {
-    super(message || code);
+    super(code);
     this.name = "ApiFailure";
     this.code = code;
     this.detail = message;

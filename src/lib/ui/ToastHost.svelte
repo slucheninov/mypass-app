@@ -6,7 +6,7 @@
 
 <section class="host" aria-label={t("Notifications")}>
   {#each toasts.items as toast (toast.id)}
-    <Toast {toast} ondismiss={(id) => toasts.dismiss(id)} />
+    <Toast {toast} ondismiss={(id) => toasts.dismiss(id)} onpause={(id) => toasts.pause(id)} onresume={(id) => toasts.resume(id)} />
   {/each}
 </section>
 

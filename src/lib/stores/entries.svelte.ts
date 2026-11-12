@@ -17,6 +17,7 @@ class EntriesStore {
   #sort = $state<SortKey>("title");
 
   #generation = 0;
+  #sidebarGeneration = 0;
   #timer: ReturnType<typeof setTimeout> | null = null;
   #unlisten: (() => void)[] = [];
   #offHooks: (() => void)[] = [];
@@ -86,9 +87,10 @@ class EntriesStore {
   }
 
   async #refreshSidebar(): Promise<void> {
+    const generation = ++this.#sidebarGeneration;
     try {
       const sidebar = await api.sidebarGet();
-      if (session.status.state === "unlocked") this.sidebar = sidebar;
+      if (generation === this.#sidebarGeneration) this.sidebar = sidebar;
     } catch (e) {
       this.#fail(e);
     }
@@ -103,6 +105,7 @@ class EntriesStore {
   /** Forgets everything of the vault: list, sidebar, search, selection and any edit model. */
   clear(): void {
     this.#generation++;
+    this.#sidebarGeneration++;
     if (this.#timer !== null) clearTimeout(this.#timer);
     this.#timer = null;
     this.items = [];

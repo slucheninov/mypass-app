@@ -28,6 +28,7 @@ class SessionStore {
   #unlisten: (() => void)[] = [];
   /** Bumped by every event, so a slower `vault_status` answer never overwrites a newer event. */
   #seq = 0;
+  #subscribed: Promise<void> | null = null;
   #saveToast: number | null = null;
 
   /** Calls `cb` whenever the session state changes (including the first load). Returns the unsubscriber. */
@@ -45,19 +46,24 @@ class SessionStore {
 
   /** Registers the event listeners, then loads the status. Call once per window. */
   async start(): Promise<void> {
-    if (this.#unlisten.length === 0) {
-      this.#unlisten.push(
-        await events.sessionChanged.listen((e) => {
-          this.#seq++;
-          this.#apply(e.payload);
-        }),
-        await events.saveStateChanged.listen((e) => {
-          this.#seq++;
-          this.#applySave(e.payload);
-        }),
-      );
-    }
+    // The promise is kept before the first await, so two concurrent calls subscribe once.
+    this.#subscribed ??= this.#subscribe();
+    await this.#subscribed;
     await this.init();
+  }
+
+  async #subscribe(): Promise<void> {
+    const offs = await Promise.all([
+      events.sessionChanged.listen((e) => {
+        this.#seq++;
+        this.#apply(e.payload);
+      }),
+      events.saveStateChanged.listen((e) => {
+        this.#seq++;
+        this.#applySave(e.payload);
+      }),
+    ]);
+    this.#unlisten.push(...offs);
   }
 
   async init(): Promise<void> {
@@ -68,8 +74,10 @@ class SessionStore {
   }
 
   async unlock(password: string): Promise<void> {
-    this.#seq++;
-    this.#apply(await api.vaultUnlock(password));
+    const seq = ++this.#seq;
+    const status = await api.vaultUnlock(password);
+    // An event that arrived meanwhile is newer than this answer; it already applied the state.
+    if (seq === this.#seq || status.state === this.status.state) this.#apply(status);
   }
 
   async lock(): Promise<void> {
@@ -80,6 +88,7 @@ class SessionStore {
 
   /** Removes the listeners and returns to the initial state (tests and window teardown). */
   stop(): void {
+    this.#subscribed = null;
     for (const off of this.#unlisten.splice(0)) off();
     this.#listeners.clear();
     if (this.#saveToast !== null) toasts.dismiss(this.#saveToast);

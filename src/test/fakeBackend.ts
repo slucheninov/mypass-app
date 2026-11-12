@@ -187,7 +187,10 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     settingsLoginItemStatus: notImplemented("settingsLoginItemStatus"),
     settingsUpdate: ({ patch }) => {
       const defined = Object.entries(patch as Record<string, unknown>).filter(([, v]) => v !== null && v !== undefined);
-      state.settings = { ...state.settings, ...Object.fromEntries(defined) };
+      const next = { ...state.settings, ...Object.fromEntries(defined) } as Settings_Serialize;
+      // Nested objects merge field by field, like the backend's patch.
+      if (patch.generator) next.generator = { ...state.settings.generator, ...patch.generator };
+      state.settings = next;
       publish("settingsChanged", structuredClone(state.settings));
       return structuredClone(state.settings);
     },
@@ -200,6 +203,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     vaultFindFiles: notImplemented("vaultFindFiles"),
     vaultForget: notImplemented("vaultForget"),
     vaultLock: () => {
+      if (state.session.state === "noVault") return null;
       setSession({ ...state.session, state: "locked", lockReason: "manual" });
       return null;
     },
@@ -208,6 +212,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     vaultRecent: notImplemented("vaultRecent"),
     vaultStatus: () => structuredClone(state.session),
     vaultUnlock: ({ password }) => {
+      if (state.session.state === "noVault") throw apiError("noVault");
       if (password !== state.masterPassword) throw apiError("wrongPassword");
       return setSession({ ...state.session, state: "unlocked", lockReason: null });
     },

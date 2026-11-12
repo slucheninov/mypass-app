@@ -31,5 +31,5 @@ if (target) {
   // Bootstrap after the first paint: a slow or failing backend never blocks the window. A failure
   // leaves the stores at their safe defaults.
   void loadPlatform();
-  void startStores().catch(() => {});
+  void startStores({ entries: getCurrentWindow().label !== "settings" }).catch(() => {});
 }

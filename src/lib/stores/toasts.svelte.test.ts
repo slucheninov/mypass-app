@@ -49,6 +49,19 @@ describe("toasts store", () => {
     expect(toasts.items[1]).toMatchObject({ text: t("Something went wrong"), detail: "disk full", sticky: true });
   });
 
+  it("pause_stops_expiry_and_resume_restarts_it", () => {
+    const id = toasts.push("info", "Hover me");
+    vi.advanceTimersByTime(4000);
+    toasts.pause(id);
+    vi.advanceTimersByTime(60_000);
+    expect(toasts.items).toHaveLength(1);
+    toasts.resume(id);
+    vi.advanceTimersByTime(4999);
+    expect(toasts.items).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(toasts.items).toHaveLength(0);
+  });
+
   it("cancelled_is_swallowed", () => {
     toasts.reportError(new ApiFailure("cancelled"));
     expect(toasts.items).toHaveLength(0);

@@ -3,10 +3,23 @@
   import type { Toast } from "../stores/toasts.svelte";
   import Button from "./Button.svelte";
 
-  let { toast, ondismiss }: { toast: Toast; ondismiss: (id: number) => void } = $props();
+  let {
+    toast,
+    ondismiss,
+    onpause,
+    onresume,
+  }: { toast: Toast; ondismiss: (id: number) => void; onpause?: (id: number) => void; onresume?: (id: number) => void } =
+    $props();
 </script>
 
-<div class="toast {toast.kind}" role={toast.kind === "error" ? "alert" : "status"}>
+<div
+  class="toast {toast.kind}"
+  role={toast.kind === "error" ? "alert" : "status"}
+  onpointerenter={() => onpause?.(toast.id)}
+  onpointerleave={() => onresume?.(toast.id)}
+  onfocusin={() => onpause?.(toast.id)}
+  onfocusout={() => onresume?.(toast.id)}
+>
   <div class="body">
     <span class="text">{toast.text}</span>
     {#if toast.detail}

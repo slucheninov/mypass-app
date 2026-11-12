@@ -61,6 +61,7 @@ describe("errorMessage", () => {
       expect(message, code).not.toBe("");
       expect(message, code).not.toBe(code);
       expect(message, code).not.toContain("RAW-BACKEND-TEXT");
+      expect(new ApiFailure(code, "RAW-BACKEND-TEXT").message, code).not.toContain("RAW-BACKEND-TEXT");
     }
     expect(errorMessage(new ApiFailure("locked"))).toBe(t("Vault is locked"));
     expect(errorMessage(new ApiFailure("wrongPassword"))).toBe(t("Wrong master password"));
@@ -97,6 +98,13 @@ describe("errorMessage", () => {
       expect(errorMessage(new ApiFailure(code as ErrorCode)), code).toBe(text);
     }
     expect("Cancelled" in uk && "Cancelled" in ru).toBe(true);
+  });
+
+  it("every_error_message_is_translated_in_uk_and_ru", () => {
+    for (const code of errorCodes()) {
+      const english = errorMessage(new ApiFailure(code));
+      expect(english in uk && english in ru, `${code}: ${english}`).toBe(true);
+    }
   });
 
   it("every_error_message_key_exists_in_all_catalogs", () => {
