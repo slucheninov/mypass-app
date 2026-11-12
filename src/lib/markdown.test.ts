@@ -42,11 +42,11 @@ describe("renderMarkdown", () => {
     );
     const links = Array.from(host.querySelectorAll("a"));
     const byText = (text: string) => links.find((a) => a.textContent === text);
-    for (const text of ["ok", "plain", "mail"]) {
+    for (const text of ["ok", "plain"]) {
       expect(byText(text)?.getAttribute("href"), text).toBeTruthy();
       expect(byText(text)?.getAttribute("rel"), text).toBe("noopener noreferrer");
     }
-    for (const text of ["bad", "data", "file", "raw"]) {
+    for (const text of ["mail", "bad", "data", "file", "raw"]) {
       expect(byText(text)?.hasAttribute("href") ?? false, text).toBe(false);
     }
     for (const a of links) expect(a.hasAttribute("target")).toBe(false);

@@ -216,6 +216,12 @@ describe("login detail", () => {
     expect(JSON.stringify(opened[0])).toContain("https://secure.test/a");
     await userEvent.setup().click(links[1]!);
     await waitFor(() => expect(opened).toHaveLength(2));
+    // Middle click and Enter take the same road and never navigate.
+    expect(await fireEvent(links[0]!, new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 }))).toBe(false);
+    await waitFor(() => expect(opened).toHaveLength(3));
+    expect(await fireEvent.keyDown(links[0]!, { key: "Enter" })).toBe(false);
+    await waitFor(() => expect(opened).toHaveLength(4));
+    expect(await fireEvent.dragStart(links[0]!)).toBe(false);
   });
 
   it("detail_for_missing_entry_shows_not_found_state", async () => {

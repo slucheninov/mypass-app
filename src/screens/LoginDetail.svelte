@@ -2,15 +2,14 @@
   // The field rows of a login: username, password, one-time code, websites, the passkey chip.
   // Secrets are members of the entry's reveal group; the websites are links only for http(s).
   import { onDestroy, untrack } from "svelte";
-  import { openUrl } from "@tauri-apps/plugin-opener";
   import type { EntryDetailDto_Serialize, FieldRef } from "../lib/bindings";
   import { formatDate } from "../lib/i18n/format";
   import { t } from "../lib/i18n/index.svelte";
   import type { RevealGroup } from "../lib/secret.svelte";
-  import { toasts } from "../lib/stores/toasts.svelte";
   import Button from "../lib/ui/Button.svelte";
   import FieldRow from "../lib/ui/FieldRow.svelte";
   import Icon from "../lib/ui/Icon.svelte";
+  import { webLinks } from "../lib/ui/web-links";
   import { webUrl } from "../lib/web-url";
   import DetailField from "./DetailField.svelte";
   import TotpField from "./TotpField.svelte";
@@ -32,10 +31,6 @@
   const entryId = $derived(detail.id);
   let passkeyOpen = $state(false);
 
-  const open = (event: MouseEvent, url: string) => {
-    event.preventDefault();
-    void openUrl(url).catch((e) => toasts.reportError(e));
-  };
 </script>
 
 {#if detail.username !== ""}
@@ -49,12 +44,12 @@
 {/if}
 {#if detail.urls.length > 0}
   <DetailField label={t("Website")} {entryId} field={{ kind: "url" }} {onlargetype}>
-    <ul class="urls">
+    <ul class="urls" use:webLinks>
       {#each detail.urls as raw, i (i)}
         {@const url = webUrl(raw)}
         <li>
           {#if url !== null}
-            <a href={url} onclick={(e) => open(e, url)}>{raw}</a>
+            <a href={url}>{raw}</a>
           {:else}
             {raw}
           {/if}

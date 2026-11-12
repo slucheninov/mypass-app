@@ -7,7 +7,7 @@ const ALLOWED_TAGS = [
   "p", "br", "strong", "em", "ul", "ol", "li", "code", "pre", "blockquote",
   "h1", "h2", "h3", "h4", "h5", "h6", "a", "hr",
 ];
-const SAFE_HREF = /^(https?:|mailto:)/i;
+const SAFE_HREF = /^https?:/i;
 
 let configured = false;
 
@@ -22,7 +22,7 @@ function configure(): void {
   });
 }
 
-/** Markdown to sanitised HTML: no scripts, styles, forms, images or event handlers; links are http(s) or mailto only. */
+/** Markdown to sanitised HTML: no scripts, styles, forms, images or event handlers; links are http(s) only (mailto: has no opener scope, so it renders as text). */
 export function renderMarkdown(src: string): string {
   if (src === "") return "";
   configure();
