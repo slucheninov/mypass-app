@@ -159,6 +159,57 @@ describe("other entry types", () => {
   });
 });
 
+describe("replacing an open editor", () => {
+  async function chooseNew(item: string) {
+    await user().click(screen.getByRole("button", { name: "New Entry" }));
+    await user().click(await screen.findByRole("menuitem", { name: item }));
+  }
+
+  it("new_editor_over_dirty_editor_asks_discard_confirmation", async () => {
+    await openNew(backendWith(), "login");
+    await user().type(field("Title"), "unsaved");
+    await chooseNew("New Address");
+    const dialog = await screen.findByRole("dialog", { name: "Discard changes?" });
+    expect(navigation.editModel?.title).toBe("unsaved");
+    expect(navigation.editModel?.entryType).toBe("login");
+    await user().click(within(dialog).getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(navigation.editModel?.entryType).toBe("address"));
+    expect(screen.getByRole("heading", { name: "New Address" })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("keep_editing_leaves_the_dirty_editor_and_drops_the_request", async () => {
+    await openNew(backendWith(), "login");
+    await user().type(field("Title"), "unsaved");
+    await chooseNew("New Address");
+    const dialog = await screen.findByRole("dialog", { name: "Discard changes?" });
+    await user().click(within(dialog).getByRole("button", { name: "Keep editing" }));
+    expect(navigation.editModel?.entryType).toBe("login");
+    expect(navigation.pendingModel).toBeNull();
+    expect(field("Title").value).toBe("unsaved");
+    // A later plain cancel must not open the dropped request.
+    await user().click(screen.getByRole("button", { name: "Cancel" }));
+    await user().click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Discard" }));
+    expect(navigation.editModel).toBeNull();
+  });
+
+  it("a_clean_editor_is_replaced_at_once", async () => {
+    await openNew(backendWith(), "login");
+    await chooseNew("New Address");
+    await waitFor(() => expect(navigation.editModel?.entryType).toBe("address"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("edit_over_a_dirty_editor_goes_through_the_same_request", async () => {
+    await openNew(backendWith(), "login");
+    await user().type(field("Title"), "unsaved");
+    const other = await api.entryNewModel("card", null);
+    navigation.requestOpenEditor(other);
+    expect(await screen.findByRole("dialog", { name: "Discard changes?" })).toBeTruthy();
+    expect(navigation.editModel?.entryType).toBe("login");
+  });
+});
+
 describe("editor lifecycle", () => {
   it("edit_model_cleared_on_cancel_save_and_lock", async () => {
     // Cancel (clean)
@@ -263,6 +314,16 @@ describe("editor lifecycle", () => {
     const created = fake.state.entries.at(-1)!;
     expect(navigation.selectedId).toBe(created.summary.id);
     expect(await screen.findByRole("heading", { name: "Bank" })).toBeTruthy();
+  });
+
+  it("an_inline_save_error_receives_focus", async () => {
+    const fake = backendWith();
+    await openNew(fake, "login");
+    await user().type(field("Title"), "Bank");
+    fake.state.saveFailure = "invalidInput";
+    await user().click(screen.getByRole("button", { name: "Save" }));
+    const alert = await screen.findByRole("alert");
+    await waitFor(() => expect(document.activeElement).toBe(alert));
   });
 
   it("other_save_failures_go_to_a_toast_and_keep_the_editor", async () => {

@@ -12,6 +12,10 @@ class NavigationStore {
   /** The one store-held secret: the editor's model carries the entry's password. Nulled on close,
    *  save and lock. */
   editModel = $state<EntryEditModel_Serialize | null>(null);
+  /** A model waiting to replace a dirty editor; the editor asks "Discard changes?" before it opens. */
+  pendingModel = $state<EntryEditModel_Serialize | null>(null);
+  /** Registered by the mounted `EntryEditor`: whether it holds unsaved changes. */
+  editorDirty: (() => boolean) | null = null;
 
   #scopeListeners = new Set<(scope: Scope) => void>();
   #offLock: (() => void) | null = null;
@@ -47,11 +51,27 @@ class NavigationStore {
   }
 
   openEditor(model: EntryEditModel_Serialize): void {
+    this.pendingModel = null;
     this.editModel = model;
     this.presentation = model.id ? "edit" : "create";
   }
 
+  /**
+   * Opens `model` in the editor. When an editor is already open with unsaved changes the model
+   * waits in `pendingModel` and the editor asks first; otherwise it opens at once. Every caller
+   * that can replace an open editor (Toolbar "New ...", the detail Edit button) uses this.
+   */
+  requestOpenEditor(model: EntryEditModel_Serialize): void {
+    if (this.presentation !== "browse" && this.editModel && this.editorDirty?.()) {
+      this.pendingModel = model;
+      return;
+    }
+    this.pendingModel = null;
+    this.openEditor(model);
+  }
+
   closeEditor(): void {
+    this.pendingModel = null;
     this.editModel = null;
     this.presentation = "browse";
   }

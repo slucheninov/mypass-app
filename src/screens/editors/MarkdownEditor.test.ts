@@ -130,10 +130,27 @@ describe("undo", () => {
     expect(area().value).toBe("**ear**lier note text");
     // A fresh editor starts without any of the earlier text.
     first.unmount();
-    render(MarkdownEditorHarness, { initial: "" });
+    render(MarkdownEditorHarness, { initial: "fresh" });
     expect(button("Undo").disabled).toBe(true);
     await fireEvent.keyDown(area(), { key: "z", metaKey: true });
-    expect(area().value).toBe("");
+    expect(area().value).toBe("fresh");
+    expect(document.body.textContent).not.toContain("earlier note text");
+  });
+});
+
+describe("native history", () => {
+  it("edit_menu_undo_and_redo_are_routed_to_the_stack", async () => {
+    render(MarkdownEditorHarness, { initial: "abc" });
+    select(0, 3);
+    await userEvent.setup().click(button("Bold"));
+    const undo = new InputEvent("beforeinput", { inputType: "historyUndo", cancelable: true, bubbles: true });
+    area().dispatchEvent(undo);
+    expect(undo.defaultPrevented).toBe(true);
+    await waitFor(() => expect(area().value).toBe("abc"));
+    const redo = new InputEvent("beforeinput", { inputType: "historyRedo", cancelable: true, bubbles: true });
+    area().dispatchEvent(redo);
+    expect(redo.defaultPrevented).toBe(true);
+    await waitFor(() => expect(area().value).toBe("**abc**"));
   });
 });
 

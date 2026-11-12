@@ -67,6 +67,31 @@ describe("draft autosave", () => {
   });
 });
 
+describe("draft write racing the save", () => {
+  it("a_draft_write_in_flight_when_save_is_pressed_does_not_recreate_the_draft", async () => {
+    const fake = backendWith([NOTE]);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    const original = fake.handlers.draftSave;
+    fake.handlers.draftSave = async (args) => {
+      await gate;
+      return original(args);
+    };
+    await openEdit(fake, "e-note");
+    vi.useFakeTimers();
+    await typeNote("changed");
+    await vi.advanceTimersByTimeAsync(3100);
+    vi.useRealTimers();
+    expect(calls(fake, "draftSave")).toHaveLength(1);
+    await user().click(screen.getByRole("button", { name: "Save" }));
+    release();
+    await waitFor(() => expect(navigation.editModel).toBeNull());
+    await waitFor(() => expect(calls(fake, "draftClear").length).toBeGreaterThan(0));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fake.state.drafts["e-note"]).toBeUndefined();
+  });
+});
+
 describe("draft banner and versions", () => {
   const older = [
     { id: "d1", savedAt: 1_700_000_000_000, notes: "first draft" },

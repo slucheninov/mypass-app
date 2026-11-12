@@ -114,7 +114,7 @@
     guard(async () => {
       const unchanged = lockGuard();
       const model = await api.entryEditModel(id);
-      if (unchanged()) navigation.openEditor(model);
+      if (unchanged()) navigation.requestOpenEditor(model);
     });
   const restore = () => guard(() => api.entryRestore(id, null));
 

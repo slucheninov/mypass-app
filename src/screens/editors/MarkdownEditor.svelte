@@ -125,6 +125,18 @@
     });
   }
 
+  // The Edit menu and the context menu fire the browser's own history, which does not know the
+  // programmatic edits above; they are routed to the same stack instead.
+  function onbeforeinput(event: InputEvent) {
+    if (event.inputType === "historyUndo") {
+      event.preventDefault();
+      undo();
+    } else if (event.inputType === "historyRedo") {
+      event.preventDefault();
+      redo();
+    }
+  }
+
   function onkeydown(event: KeyboardEvent) {
     if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
     const key = event.key.toLowerCase();
@@ -160,6 +172,7 @@
     spellcheck="true"
     oninput={typed}
     {onkeydown}
+    {onbeforeinput}
   ></textarea>
   {#if previewing}<div class="preview"><MarkdownView source={value} /></div>{/if}
 </div>

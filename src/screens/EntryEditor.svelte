@@ -5,7 +5,7 @@
   // and vault switch. Dirtiness is a comparison with a snapshot taken when the editor opened; the
   // snapshot is dropped with the component. Errors follow R15: `invalidInput` is one inline
   // message, `limitExceeded` goes to the Files form, everything else is a toast.
-  import { onDestroy, onMount, untrack } from "svelte";
+  import { onDestroy, onMount, tick, untrack } from "svelte";
   import { api, ApiFailure, errorMessage } from "../lib/api";
   import type { AddressDto, EntryEditModel_Serialize, EntryTypeDto } from "../lib/bindings";
   import { findGroup } from "../lib/group-tree";
@@ -64,6 +64,8 @@
   let formError = $state<string | null>(null);
   let filesError = $state<string | null>(null);
   let titleInput: HTMLInputElement | undefined = $state();
+  let formEl: HTMLFormElement | undefined = $state();
+  let notes: { settle(): Promise<void> } | undefined = $state();
 
   const headings: Record<EntryTypeDto, () => string> = {
     login: () => t("New Login"),
@@ -82,10 +84,35 @@
 
   onMount(() => {
     if (model.id === null) titleInput?.focus();
+    navigation.editorDirty = isDirty;
   });
   onDestroy(() => {
     baseline = null;
+    if (navigation.editorDirty === isDirty) navigation.editorDirty = null;
   });
+
+  // Another editor was requested over this dirty one: ask before it replaces this model.
+  $effect(() => {
+    if (navigation.pendingModel) confirming = true;
+  });
+
+  function keepEditing() {
+    confirming = false;
+    navigation.pendingModel = null;
+  }
+
+  function discard() {
+    confirming = false;
+    const next = navigation.pendingModel;
+    if (next) navigation.openEditor(next);
+    else close();
+  }
+
+  /** Moves focus to the inline error so a keyboard user lands on it. */
+  async function focusError() {
+    await tick();
+    formEl?.querySelector<HTMLElement>('[role="alert"]')?.focus();
+  }
 
   function close() {
     navigation.closeEditor();
@@ -115,6 +142,9 @@
     try {
       const id = await api.entrySave(payload);
       if (!unchanged()) return;
+      // A draft write still in flight must land before the clear below, never after it.
+      await notes?.settle();
+      if (!unchanged()) return;
       const previous = payload.id;
       navigation.select(id);
       close();
@@ -122,9 +152,13 @@
       if (previous !== null) void api.draftClear(previous).catch(() => undefined);
     } catch (e) {
       if (!unchanged()) return;
-      if (e instanceof ApiFailure && e.code === "limitExceeded") filesError = errorMessage(e);
-      else if (e instanceof ApiFailure && e.code === "invalidInput") formError = errorMessage(e);
-      else toasts.reportError(e);
+      if (e instanceof ApiFailure && e.code === "limitExceeded") {
+        filesError = errorMessage(e);
+        void focusError();
+      } else if (e instanceof ApiFailure && e.code === "invalidInput") {
+        formError = errorMessage(e);
+        void focusError();
+      } else toasts.reportError(e);
     } finally {
       saving = false;
     }
@@ -153,7 +187,7 @@
 
 <svelte:window {onkeydown} />
 
-<form class="editor" onsubmit={(e) => e.preventDefault()} aria-labelledby="editor-title">
+<form bind:this={formEl} class="editor" onsubmit={(e) => e.preventDefault()} aria-labelledby="editor-title">
   <header>
     <h2 id="editor-title">{heading}</h2>
     <div class="actions">
@@ -162,7 +196,7 @@
     </div>
   </header>
 
-  {#if formError}<p class="form-error" role="alert">{formError}</p>{/if}
+  {#if formError}<p class="form-error" role="alert" tabindex="-1">{formError}</p>{/if}
 
   <div class="body">
     <TextField label={t("Title")} bind:value={model.title} bind:input={titleInput} error={titleError} />
@@ -174,7 +208,7 @@
     {:else if model.entryType === "card" && model.card}
       <CardForm bind:card={model.card} />
     {:else if model.entryType === "notes"}
-      <NotesForm bind:model />
+      <NotesForm bind:this={notes} bind:model />
     {:else if model.entryType === "files"}
       <FilesForm bind:model error={filesError} />
     {/if}
@@ -200,17 +234,11 @@
 />
 
 {#if confirming}
-  <Modal open={true} title={t("Discard changes?")} onclose={() => (confirming = false)}>
+  <Modal open={true} title={t("Discard changes?")} onclose={keepEditing}>
     <p>{t("Your changes to this item will be lost.")}</p>
     {#snippet footer()}
-      <Button onclick={() => (confirming = false)}>{t("Keep editing")}</Button>
-      <Button
-        variant="danger"
-        onclick={() => {
-          confirming = false;
-          close();
-        }}>{t("Discard")}</Button
-      >
+      <Button onclick={keepEditing}>{t("Keep editing")}</Button>
+      <Button variant="danger" onclick={discard}>{t("Discard")}</Button>
     {/snippet}
   </Modal>
 {/if}

@@ -34,6 +34,8 @@
   let sheet = $state(false);
   let timer: ReturnType<typeof setTimeout> | null = null;
   let closed = false;
+  /** The `draft_save` call in flight, if any (see `settle`). */
+  let inflight: Promise<unknown> | null = null;
 
   const newestFirst = (a: DraftVersionDto, b: DraftVersionDto) => (b.savedAt ?? 0) - (a.savedAt ?? 0);
 
@@ -69,14 +71,33 @@
   function changed() {
     if (entryId === null || closed) return;
     if (timer !== null) clearTimeout(timer);
-    timer = setTimeout(() => void writeDraft(entryId), DRAFT_IDLE_MS);
+    timer = setTimeout(() => writeDraft(entryId), DRAFT_IDLE_MS);
   }
 
-  async function writeDraft(id: string) {
+  /**
+   * Called by the editor once the note is saved: stops the idle timer and waits for a write that
+   * is already on its way, so the editor's `draft_clear` always comes after the last write.
+   */
+  export async function settle(): Promise<void> {
+    if (timer !== null) clearTimeout(timer);
+    timer = null;
+    closed = true;
+    await inflight?.catch(() => undefined);
+  }
+
+  function writeDraft(id: string) {
     timer = null;
     if (closed || model.notes === baseline) return;
+    const write = send(id, model.notes);
+    inflight = write;
+    void write.finally(() => {
+      if (inflight === write) inflight = null;
+    });
+  }
+
+  async function send(id: string, text: string) {
     try {
-      const stored = await api.draftSave(id, model.notes);
+      const stored = await api.draftSave(id, text);
       if (!stored && !closed) {
         // No draft key: the editor works without drafts.
         versions = [];

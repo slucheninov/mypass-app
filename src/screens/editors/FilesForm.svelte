@@ -70,7 +70,7 @@
       {/each}
     </ul>
   {/if}
-  {#if error}<p class="error" role="alert">{error}</p>{/if}
+  {#if error}<p class="error" role="alert" tabindex="-1">{error}</p>{/if}
   <p class="hint">{t("8 files per item, 5 MB each")}</p>
 </div>
 

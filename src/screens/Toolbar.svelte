@@ -54,7 +54,7 @@
     await toasts.guard(async () => {
       const model = await api.entryNewModel(id as EntryTypeDto, currentGroup());
       // A lock that landed meanwhile must not leave an editor behind for the next unlock.
-      if (unchanged()) navigation.openEditor(model);
+      if (unchanged()) navigation.requestOpenEditor(model);
     });
   }
 
