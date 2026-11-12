@@ -10,6 +10,8 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import type {
   ApiError,
   AttachmentMeta,
+  BackupFailure,
+  BackupItem,
   commands,
   DraftVersionDto,
   events,
@@ -17,6 +19,7 @@ import type {
   FoundVaultFileDto,
   GeneratorHistoryItem,
   GroupNode_Serialize,
+  LoginItemStatus,
   OpenWarning,
   PickedFile,
   RecentVaultDto,
@@ -133,6 +136,18 @@ export interface FakeState {
   generatorRules: Record<string, RulesSummary_Serialize>;
   /** The generator history, oldest first; a row keeps its password here like the vault's hidden group does. */
   generatorHistory: (GeneratorHistoryItem & { password: string })[];
+  /** The backup files `backup_list` shows, newest first. */
+  backups: BackupItem[];
+  /** The last snapshot failure `backup_list` reports. */
+  backupFailure: BackupFailure | null;
+  /** A failure the next `backup_restore` throws (then it is cleared), e.g. `invalidInput` for a password mismatch. */
+  restoreFailure: ApiError["code"] | null;
+  /** What `settings_login_item_status` answers; `settings_update` of `launchAtLogin` flips enabled/disabled. */
+  loginItem: LoginItemStatus;
+  /** A system message the next `launchAtLogin` update fails with (code `internal`), like a refused registration. */
+  loginItemError: string | null;
+  /** A failure the next `settings_update` throws (then it is cleared). */
+  settingsFailure: ApiError["code"] | null;
 }
 
 export interface FakeBackend {
@@ -171,6 +186,12 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     draftsAvailable: true,
     generatorRules: {},
     generatorHistory: [],
+    backups: [],
+    backupFailure: null,
+    restoreFailure: null,
+    loginItem: "disabled",
+    loginItemError: null,
+    settingsFailure: null,
   };
   // The real backend emits its events as a side effect of a command; so does the fake.
   const publish = (event: EventName, payload: unknown) => void emit(kebab(event), payload ?? null);
@@ -296,7 +317,8 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     appOpenEntry: notImplemented("appOpenEntry"),
     appOpenSettings: () => null,
     appRecordActivity: () => null,
-    appRevealBackups: notImplemented("appRevealBackups"),
+    // Only the call log matters: the file manager opens on the Rust side.
+    appRevealBackups: () => null,
     // Like Rust: the save dialog opens there; `false` means the user cancelled it.
     attachmentExport: ({ entryId, name }) => {
       requireUnlocked();
@@ -311,8 +333,23 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       for (const file of picked) pickedFiles.set(file.token, file);
       return picked;
     },
-    backupList: notImplemented("backupList"),
-    backupRestore: notImplemented("backupRestore"),
+    backupList: () => ({
+      items: structuredClone(state.backups),
+      lastFailure: structuredClone(state.backupFailure),
+      count: state.settings.backupCount,
+      interval: state.settings.backupInterval,
+    }),
+    // Like Rust: the vault is replaced and locked; a wrong-password backup is `invalidInput`.
+    backupRestore: ({ id }) => {
+      if (state.restoreFailure) {
+        const code = state.restoreFailure;
+        state.restoreFailure = null;
+        throw apiError(code);
+      }
+      if (!state.backups.some((b) => b.id === id)) throw apiError("notFound");
+      setSession({ ...sessionStatus("locked"), lockReason: "manual" });
+      return null;
+    },
     draftClear: ({ entryId }) => {
       requireUnlocked();
       delete state.drafts[entryId];
@@ -685,12 +722,30 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     importCsvPreview: notImplemented("importCsvPreview"),
     platformKeyboardLayout: () => keyboardLayout,
     settingsGet: () => structuredClone(state.settings),
-    settingsLoginItemStatus: notImplemented("settingsLoginItemStatus"),
+    settingsLoginItemStatus: () => state.loginItem,
     settingsUpdate: ({ patch }) => {
+      if (state.settingsFailure) {
+        const code = state.settingsFailure;
+        state.settingsFailure = null;
+        throw apiError(code);
+      }
+      if (typeof patch.launchAtLogin === "boolean") {
+        if (state.loginItemError !== null) {
+          const message = state.loginItemError;
+          state.loginItemError = null;
+          throw apiError("internal", message);
+        }
+        if (state.loginItem === "enabled" || state.loginItem === "disabled") {
+          state.loginItem = patch.launchAtLogin ? "enabled" : "disabled";
+        }
+      }
       const defined = Object.entries(patch as Record<string, unknown>).filter(([, v]) => v !== null && v !== undefined);
       const next = { ...state.settings, ...Object.fromEntries(defined) } as Settings_Serialize;
       // Nested objects merge field by field, like the backend's patch.
       if (patch.generator) next.generator = { ...state.settings.generator, ...patch.generator };
+      // Like `Settings::normalize`: out-of-range numbers are clamped (the clipboard delay to a multiple of 5).
+      next.backupCount = Math.min(50, Math.max(1, next.backupCount));
+      next.clipboardClearSeconds = Math.floor((Math.min(120, Math.max(10, next.clipboardClearSeconds)) + 2) / 5) * 5;
       state.settings = next;
       publish("settingsChanged", structuredClone(state.settings));
       return structuredClone(state.settings);
