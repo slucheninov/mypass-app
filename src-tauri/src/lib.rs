@@ -431,6 +431,7 @@ mod tests {
                 "core:event:default",
                 "core:window:allow-close",
                 "core:window:allow-is-maximized",
+                "core:window:allow-is-minimized",
                 "core:window:allow-maximize",
                 "core:window:allow-minimize",
                 "core:window:allow-start-dragging",

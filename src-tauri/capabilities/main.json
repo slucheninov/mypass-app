@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Permissions of the main window (events, its own window controls, the vault open and save dialogs, http(s) links). No fs, shell, http or clipboard access; shortcuts are registered from Rust only.",
+  "description": "Permissions of the main window (events, its own window controls and the minimised query that hides revealed secrets, the vault open and save dialogs, http(s) links). No fs, shell, http or clipboard access; shortcuts are registered from Rust only.",
   "windows": ["main"],
   "permissions": [
     "core:event:default",
@@ -11,6 +11,7 @@
     "core:window:allow-close",
     "core:window:allow-start-dragging",
     "core:window:allow-is-maximized",
+    "core:window:allow-is-minimized",
     "dialog:allow-open",
     "dialog:allow-save",
     "dialog:allow-ask",
