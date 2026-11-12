@@ -119,6 +119,52 @@ describe("createRevealGroup", () => {
   });
 });
 
+describe("a minimised window", () => {
+  it("a_minimised_window_leaves_no_member_value", async () => {
+    mockWindows("main");
+    let minimized = false;
+    createFakeBackend({ plugins: { "plugin:window|is_minimized": () => minimized } }).install();
+    const group = createRevealGroup();
+    const a = group.create();
+    const b = group.create();
+    await a.reveal(async () => "alpha");
+    await new Promise((r) => setTimeout(r, 10));
+    await emit("tauri://resize", { width: 800, height: 600 });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(a.value).toBe("alpha");
+    minimized = true;
+    await emit("tauri://resize", { width: 800, height: 600 });
+    await vi.waitFor(() => expect(a.value).toBeNull());
+    expect(b.value).toBeNull();
+    group.destroy();
+  });
+
+  it("a_burst_of_resizes_asks_the_window_once_at_a_time", async () => {
+    mockWindows("main");
+    let inFlight = 0;
+    let most = 0;
+    let queries = 0;
+    createFakeBackend({
+      plugins: {
+        "plugin:window|is_minimized": async () => {
+          queries++;
+          most = Math.max(most, ++inFlight);
+          await new Promise((r) => setTimeout(r, 20));
+          inFlight--;
+          return false;
+        },
+      },
+    }).install();
+    const off = onWindowHidden(() => undefined);
+    await new Promise((r) => setTimeout(r, 10));
+    for (let i = 0; i < 10; i++) await emit("tauri://resize", { width: 800 + i, height: 600 });
+    await new Promise((r) => setTimeout(r, 60));
+    expect(most).toBe(1);
+    expect(queries).toBeLessThan(10);
+    off();
+  });
+});
+
 describe("onWindowHidden", () => {
   it("fires_when_the_document_becomes_hidden_and_not_when_it_becomes_visible", () => {
     const cb = vi.fn();

@@ -16,6 +16,7 @@
   const uid = $props.id();
   const BLUR_HIDE_MS = 60_000;
   const secret = untrack(() => group.create());
+  onDestroy(() => secret.hide());
   let blurTimer: ReturnType<typeof setTimeout> | null = null;
 
   const toggle = () =>

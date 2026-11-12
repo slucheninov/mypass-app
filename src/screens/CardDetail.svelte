@@ -1,7 +1,7 @@
 <script lang="ts">
   // A payment card: holder, expiry, the number as `•••• 1111` and the security code, both
   // revealed only on request through `entry_reveal` into the entry's reveal group.
-  import { untrack } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import type { CardDto, FieldRef } from "../lib/bindings";
   import { t } from "../lib/i18n/index.svelte";
   import type { RevealGroup } from "../lib/secret.svelte";
@@ -18,6 +18,8 @@
   // A member belongs to this mount; the owner never swaps the group under a mounted row.
   const number = untrack(() => group.create());
   const cvv = untrack(() => group.create());
+  onDestroy(() => number.hide());
+  onDestroy(() => cvv.hide());
 </script>
 
 {#if card.holder !== ""}

@@ -52,6 +52,24 @@ describe("renderMarkdown", () => {
     for (const a of links) expect(a.hasAttribute("target")).toBe(false);
   });
 
+  it("only_href_and_rel_survive_on_any_element", () => {
+    const host = parse(
+      renderMarkdown(
+        [
+          '<p data-tauri-drag-region aria-label="x" aria-hidden="true" role="button" id="a" name="b" class="c" style="color:red" onclick="x()" onmouseover="y()">hi</p>',
+          '<a href="https://ok.test" data-tauri-drag-region aria-describedby="z" id="documentElement" name="cookie" onfocus="x()">link</a>',
+          "[md](https://md.test)",
+        ].join("\n\n"),
+      ),
+    );
+    const names = new Set<string>();
+    for (const el of Array.from(host.querySelectorAll("*"))) {
+      for (const name of el.getAttributeNames()) names.add(`${el.nodeName.toLowerCase()}:${name}`);
+    }
+    expect(Array.from(names).sort()).toEqual(["a:href", "a:rel"]);
+    expect(host.querySelector("p")?.textContent).toBe("hi");
+  });
+
   it("empty_input_renders_nothing", () => {
     expect(renderMarkdown("")).toBe("");
   });

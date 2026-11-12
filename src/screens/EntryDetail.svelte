@@ -46,7 +46,7 @@
   let generation = 0;
 
   const guard = (work: () => Promise<unknown>) => toasts.guard(work);
-  const binEnabled = $derived(entries.sidebar?.recycleBinEnabled ?? true);
+  const binEnabled = $derived(entries.sidebar?.recycleBinEnabled ?? false);
 
   async function load() {
     const mine = ++generation;
@@ -55,12 +55,17 @@
       const next = await api.entryGet(id);
       if (mine !== generation || !unchanged()) return;
       // Content changed (an edit, a sync): a revealed value could be stale, so it goes.
-      if (detail && detail.modified !== next.modified) group.hideAll();
+      if (detail && detail.modified !== next.modified) {
+        group.hideAll();
+        largeType = null;
+      }
       detail = next;
       missing = false;
     } catch (e) {
       if (mine !== generation || !unchanged()) return;
       if (e instanceof ApiFailure && e.code === "notFound") {
+        group.hideAll();
+        largeType = null;
         detail = null;
         missing = true;
       } else toasts.reportError(e);

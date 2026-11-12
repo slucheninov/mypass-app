@@ -1,7 +1,7 @@
 <script lang="ts">
   // The field rows of a login: username, password, one-time code, websites, the passkey chip.
   // Secrets are members of the entry's reveal group; the websites are links only for http(s).
-  import { untrack } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import type { EntryDetailDto_Serialize, FieldRef } from "../lib/bindings";
   import { formatDate } from "../lib/i18n/format";
@@ -28,6 +28,7 @@
   } = $props();
 
   const password = untrack(() => group.create());
+  onDestroy(() => password.hide());
   const entryId = $derived(detail.id);
   let passkeyOpen = $state(false);
 

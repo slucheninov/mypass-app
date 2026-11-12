@@ -11,7 +11,11 @@
 
   let { entryId, attachments }: { entryId: string; attachments: AttachmentMeta[] } = $props();
 
-  const exportFile = (name: string) => toasts.guard(() => api.attachmentExport(entryId, name));
+  // `true` is a saved file (a short confirmation), `false` a cancelled dialog (silent).
+  const exportFile = (name: string) =>
+    toasts.guard(async () => {
+      if (await api.attachmentExport(entryId, name)) toasts.push("success", t("Exported."));
+    });
 </script>
 
 <div class="files" role="group" aria-label={t("Attachments")}>

@@ -112,6 +112,20 @@ describe("login detail", () => {
     expect(document.body.textContent).not.toContain(FIXTURE_LOGIN_PASSWORD);
   });
 
+  it("a_mounted_detail_clears_its_revealed_value_when_the_session_locks", async () => {
+    // The detail stays mounted here (no MainApp unmount), so only the reveal's own lock handling
+    // can remove the value.
+    const fake = backend();
+    const { container } = renderWithBackend(EntryDetailHarness, { id: github, onopenhistory: vi.fn() }, fake);
+    stops.push(await startStores());
+    await screen.findByRole("heading", { name: "GitHub" });
+    await userEvent.setup().click(within(within(container).getByRole("group", { name: t("Password") })).getByRole("button", { name: "Reveal" }));
+    await waitFor(() => expect(container.textContent).toContain(FIXTURE_LOGIN_PASSWORD));
+    await fake.emit("sessionChanged", sessionStatus("locked"));
+    await waitFor(() => expect(container.textContent).not.toContain(FIXTURE_LOGIN_PASSWORD));
+    expect(screen.getByRole("heading", { name: "GitHub" })).toBeTruthy();
+  });
+
   it("copy_password_calls_entry_copy_and_toast_mentions_clear_seconds", async () => {
     const fake = backend();
     await open(fake, github);
@@ -337,6 +351,17 @@ describe("header actions", () => {
     expect(calls(fake, "entryDelete")).toHaveLength(0);
   });
 
+  it("an_unknown_bin_state_counts_as_bin_off_and_delete_asks_first", async () => {
+    const fake = backend();
+    fake.state.recycleBinEnabled = false;
+    // The sidebar never answers, so the bin state stays unknown.
+    fake.handlers.sidebarGet = () => new Promise(() => undefined);
+    await open(fake, github);
+    await press(pane(), "Delete permanently");
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(calls(fake, "entryDelete")).toHaveLength(0);
+  });
+
   it("the_favorite_star_toggles_through_entry_set_favorite", async () => {
     const fake = backend();
     await open(fake, "e-gitlab");
@@ -434,7 +459,6 @@ describe("address, card, files", () => {
     // R7: the save dialog opens in Rust; the webview passes only the entry id and the name.
     expect(calls(fake, "attachmentExport")[0]!.args).toEqual({ entryId: "e-files", name: "passport.pdf" });
     expect(dialogCalls).toEqual([]);
-    expect(toasts.items).toHaveLength(0);
   });
 
   it("a_cancelled_export_shows_nothing", async () => {
@@ -444,6 +468,13 @@ describe("address, card, files", () => {
     await press(within(pane()).getByRole("group", { name: "Attachments" }), "Export…");
     await waitFor(() => expect(calls(fake, "attachmentExport")).toHaveLength(1));
     expect(toasts.items).toHaveLength(0);
+  });
+
+  it("a_saved_export_says_so_and_carries_no_path", async () => {
+    const fake = backend([{ id: "e-files", title: "Docs", entryType: "files", modified: 5, attachments: [{ name: "a.txt", size: 3 }] }]);
+    await open(fake, "e-files");
+    await press(within(pane()).getByRole("group", { name: "Attachments" }), "Export…");
+    await waitFor(() => expect(toasts.items.map((x) => x.text)).toEqual(["Exported."]));
   });
 });
 
@@ -476,6 +507,13 @@ describe("notes in the detail", () => {
     ]);
     await open(fake, "e-mix");
     const visible = () => ["pw-mixed-1", "notes-mixed-1", "tok-mixed-1"].filter((s) => text().includes(s));
+    // Settled states alone would miss a moment with two secrets on screen, so every DOM mutation
+    // records how many were visible.
+    let most = 0;
+    const observer = new MutationObserver(() => {
+      most = Math.max(most, visible().length);
+    });
+    observer.observe(pane(), { subtree: true, childList: true, characterData: true });
     await press(row(t("Password")), "Reveal");
     await waitFor(() => expect(visible()).toEqual(["pw-mixed-1"]));
     await press(pane(), "Reveal notes");
@@ -484,8 +522,12 @@ describe("notes in the detail", () => {
     await waitFor(() => expect(visible()).toEqual(["tok-mixed-1"]));
     await press(row(t("Password")), "Reveal");
     await waitFor(() => expect(visible()).toEqual(["pw-mixed-1"]));
+    observer.disconnect();
+    expect(most).toBe(1);
   });
 
+  // This checks the DOM; that the group itself holds no value after a minimise is asserted on the
+  // members in secret.svelte.test.ts (a_minimised_window_leaves_no_member_value).
   it("notes_rehide_on_window_minimize_or_hide", async () => {
     mockWindows("main");
     const fake = withNotes("topsecret note");
@@ -566,7 +608,6 @@ describe("large type", () => {
   it("large_type_is_exclusive_with_inline_reveal", async () => {
     const fake = backend();
     await open(fake, github);
-    await press(row(t("Username")), "Copy");
     await press(row(t("Password")), "Reveal");
     await waitFor(() => expect(text()).toContain(FIXTURE_LOGIN_PASSWORD));
     await menuChoice(row(t("Password")), "Show Large Type");
@@ -574,6 +615,18 @@ describe("large type", () => {
     await waitFor(() => expect(dialog.textContent).toContain(FIXTURE_LOGIN_PASSWORD));
     // The only copy of the value in the document is the one in the dialog.
     expect(row(t("Password")).textContent).not.toContain(FIXTURE_LOGIN_PASSWORD);
+  });
+
+  it("large_type_closes_when_the_entry_content_changes", async () => {
+    const fake = backend();
+    await open(fake, github);
+    await menuChoice(row(t("Password")), "Show Large Type");
+    await screen.findByRole("dialog", { name: "Large Type" });
+    const entry = fake.state.entries.find((e) => e.summary.id === github)!;
+    entry.modified += 10;
+    await fake.emit("vaultChanged", null);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Large Type" })).toBeNull());
+    expect(text()).not.toContain(FIXTURE_LOGIN_PASSWORD);
   });
 
   it("the_context_menu_offers_large_type_copy_and_reveal", async () => {
@@ -653,10 +706,9 @@ describe("change website", () => {
     expect(calls(fake, "entrySave")).toHaveLength(0);
     expect(screen.queryByRole("dialog", { name: "Websites" })).toBeNull();
 
-    dialog = await screen.findByRole("dialog", { name: "Websites" }).catch(async () => {
-      await press(row(t("Website")), "Change…");
-      return screen.findByRole("dialog", { name: "Websites" });
-    });
+    await press(row(t("Website")), "Change…");
+    dialog = await screen.findByRole("dialog", { name: "Websites" });
+    expect(dialog).toBeTruthy();
     expect(navigation.editModel).not.toBeNull();
     await fake.emit("sessionChanged", sessionStatus("locked"));
     await waitFor(() => expect(navigation.editModel).toBeNull());

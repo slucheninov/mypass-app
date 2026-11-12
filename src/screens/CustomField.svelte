@@ -1,7 +1,7 @@
 <script lang="ts">
   // One user-defined field. A protected field arrives without its value and is revealed on
   // request into the entry's reveal group; the label is user content, not UI text.
-  import { untrack } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import type { CustomFieldDto_Serialize, FieldRef } from "../lib/bindings";
   import type { RevealGroup } from "../lib/secret.svelte";
   import DetailField from "./DetailField.svelte";
@@ -19,6 +19,7 @@
   } = $props();
 
   const secret = untrack(() => group.create());
+  onDestroy(() => secret.hide());
 </script>
 
 <DetailField

@@ -54,6 +54,8 @@ export type Revealed = ReturnType<typeof createRevealed>;
 export function onWindowHidden(cb: () => void): () => void {
   let active = true;
   let unlisten: (() => void) | null = null;
+  // A live resize fires dozens of events a second; one `isMinimized` query at a time is enough.
+  let querying = false;
   const onVisibility = () => {
     if (document.visibilityState === "hidden") cb();
   };
@@ -62,10 +64,14 @@ export function onWindowHidden(cb: () => void): () => void {
     const win = getCurrentWindow();
     win
       .onResized(async () => {
+        if (querying) return;
+        querying = true;
         try {
           if (active && (await win.isMinimized())) cb();
         } catch {
           // A refused or failed query: the document event still covers the common case.
+        } finally {
+          querying = false;
         }
       })
       .then((off) => {

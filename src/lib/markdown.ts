@@ -27,5 +27,20 @@ export function renderMarkdown(src: string): string {
   if (src === "") return "";
   configure();
   const html = marked.parse(src, { async: false, gfm: true });
-  return DOMPurify.sanitize(html, { ALLOWED_TAGS, ALLOWED_ATTR: ["href"] });
+  // ALLOWED_ATTR does not cover DOMPurify's separate data-* and aria-* switches (both on by
+  // default): data-tauri-drag-region would turn note text into a window drag handle and aria-*
+  // would let notes rewrite what a screen reader announces. The rest is stated explicitly so a
+  // library default change cannot loosen it: no unknown protocols, DOM clobbering guarded, no
+  // custom elements, no DOM or string return types other than the plain string.
+  return DOMPurify.sanitize(html, {
+    ALLOWED_TAGS,
+    ALLOWED_ATTR: ["href"],
+    ALLOW_DATA_ATTR: false,
+    ALLOW_ARIA_ATTR: false,
+    ALLOW_UNKNOWN_PROTOCOLS: false,
+    ALLOW_SELF_CLOSE_IN_ATTR: false,
+    SANITIZE_DOM: true,
+    SANITIZE_NAMED_PROPS: true,
+    KEEP_CONTENT: true,
+  });
 }
