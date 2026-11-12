@@ -57,13 +57,17 @@
 
   onMount(() => {
     // The panel is a long-lived hidden window: refresh when the vault changes and when it is shown.
-    const offHidden = onWindowHidden(() => {
+    const clearOnHide = () => {
       selectedId = null;
       // A half-typed master password does not wait in a hidden window.
       field?.take();
       hasPassword = false;
       error = null;
-    });
+    };
+    const offHidden = onWindowHidden(clearOnHide);
+    // The backend hides the panel on blur, but whether the webview then reports `hidden` is not
+    // guaranteed (WebView2), so a blur clears the secrets too; it costs nothing, the panel hides anyway.
+    window.addEventListener("blur", clearOnHide);
     const refresh = () => {
       if (unlocked && document.visibilityState !== "hidden") void loadRecents();
     };
@@ -83,6 +87,7 @@
       gone = true;
       if (off) quietly(off);
       offHidden();
+      window.removeEventListener("blur", clearOnHide);
       document.removeEventListener("visibilitychange", refresh);
       window.removeEventListener("focus", refresh);
     };

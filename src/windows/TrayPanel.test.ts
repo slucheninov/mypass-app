@@ -305,6 +305,29 @@ describe("tray panel, compact detail", () => {
   });
 });
 
+describe("tray panel, hide without visibilitychange", () => {
+  // The panel is hidden from Rust on blur; WebView2 may not report `hidden` after a plain hide, so
+  // the window `blur` clears the secrets as well.
+  it("a_window_blur_hides_the_revealed_password_and_returns_to_the_list", async () => {
+    const { detail, user } = await openGithub();
+    await within(detail).findByText("octo");
+    await user.click(within(within(detail).getByRole("group", { name: "Password" })).getByRole("button", { name: "Reveal" }));
+    await within(detail).findByText(FIXTURE_LOGIN_PASSWORD);
+    window.dispatchEvent(new Event("blur"));
+    expect(await screen.findByRole("list", { name: "Recent items" })).toBeTruthy();
+    expect(document.body.textContent).not.toContain(FIXTURE_LOGIN_PASSWORD);
+  });
+
+  it("a_window_blur_empties_a_half_typed_master_password", async () => {
+    const user = userEvent.setup();
+    await renderTrayPanel({ session: "locked" });
+    const input = (await screen.findByLabelText("Master password")) as HTMLInputElement;
+    await user.type(input, "half-typed");
+    window.dispatchEvent(new Event("blur"));
+    await waitFor(() => expect(input.value).toBe(""));
+  });
+});
+
 describe("tray panel, accessibility and toasts", () => {
   it("tray_and_import_pass_axe_locked_list_and_detail", async () => {
     const { container, user } = await unlockedTray();

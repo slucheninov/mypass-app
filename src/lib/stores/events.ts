@@ -13,6 +13,9 @@ import { toasts } from "./toasts.svelte";
 async function openEntry({ id, edit }: OpenEntryEvent): Promise<void> {
   if (session.status.state !== "unlocked") return;
   if (!edit) {
+    // Selecting another entry over an open editor (maybe dirty) would land the editor's close or
+    // save on that entry; the Task 9 ruling is to ask first, and nothing here is worth a prompt.
+    if (navigation.presentation !== "browse") return;
     navigation.select(id);
     return;
   }

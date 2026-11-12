@@ -54,6 +54,16 @@ describe("main window event bridge", () => {
     expect(calls(fake, "entryEditModel")).toHaveLength(0);
   });
 
+  it("open_entry_event_without_edit_leaves_the_selection_alone_while_an_editor_is_open", async () => {
+    const { fake } = await mainApp();
+    await fake.emit("openEntryEvent", { id: "e-github", edit: true });
+    await waitFor(() => expect(navigation.presentation).toBe("edit"));
+    await fake.emit("openEntryEvent", { id: "e-gitlab", edit: false });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(navigation.selectedId).toBe("e-github");
+    expect(navigation.editModel?.id).toBe("e-github");
+  });
+
   it("open_entry_event_while_locked_opens_nothing", async () => {
     const { fake } = await mainApp("locked");
     await fake.emit("openEntryEvent", { id: "e-gitlab", edit: true });
