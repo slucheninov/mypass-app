@@ -25,7 +25,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `repo-guards` | implemented | Test-only (`publish = false`, never shipped): guard tests for the workspace, CI, docs and scripts |
 | `mypass-platform` | in progress (stage 2a) | OS glue behind traits (system events, secure clipboard, secret stores, device unlock, native host registrar, launch at login, keyboard layout) and `AppPaths`; fakes behind the `test-util` feature, `Unsupported` fallbacks where a platform body has not landed |
 | `mypass-session` | in progress (stage 2a) | Vault session, settings, scheduling and the `AppCore` command facade; no Tauri dependency |
-| `src/` (Svelte UI) | in progress (stage 2b) | The webview UI: typed API wrapper, stores, i18n, design kit; screens follow |
+| `src/` (Svelte UI) | implemented (stage 2b) | The webview UI: typed API wrapper, stores (`src/lib/stores`), i18n, design kit, the screens (`src/screens`, `src/screens/editors`) and the windows (`src/windows`: main, settings, tray panel) |
 | `src-tauri` (package `mypass-app`, lib `mypass_app_lib`) | in progress (stage 2a) | The Tauri 2 app shell: the typed commands and events (`tauri-specta`), capabilities, native file dialogs, plugins, tray, global hotkeys, single instance, quit flow, native-side i18n; a workspace member listed explicitly |
 | `mypass-bridge` | planned | Browser bridge protocol and loopback server |
 | `mypass-host` | planned | Native messaging host binary |
@@ -43,7 +43,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `pnpm-workspace.yaml` | pnpm settings: `allowBuilds: esbuild: false` (esbuild's postinstall is not needed, the platform binary comes as an optional dependency) |
 | `package.json`, `pnpm-lock.yaml`, `.nvmrc` | Node and pnpm pins, the exact-pinned npm dependencies and the scripts `dev`, `build`, `check`, `test`, `tauri`; the lockfile is committed |
 | `index.html`, `vite.config.ts`, `svelte.config.js`, `tsconfig.json`, `vitest.setup.ts` | The Svelte 5 (runes) + Vite + Vitest toolchain of the UI |
-| `src/` | The UI: `main.ts` picks the root for the window label (`windows/`), `test/` holds the fake backend and the render helper, `scaffold.test.ts` holds the static source guards |
+| `src/` | The UI: `main.ts` picks the root for the window label (`windows/`), `lib/` the API wrapper, stores and i18n, `screens/` the screens and editors, `test/` holds the fake backend and the render helper, `scaffold.test.ts` holds the static source guards |
 | `scripts/test.sh` | The single local and CI test entry point |
 | `scripts/convert-xcstrings.mjs` | One-time converter of the old app's String Catalogs; its output (`src/lib/i18n/locales/{en,uk,ru}.json`, `src-tauri/resources/macos/*.lproj/InfoPlist.strings`) is then the hand-edited source of truth |
 | `.github/` | Workflows (`ci.yml`, `codeql.yml`), Dependabot config, issue forms, pull request template |
@@ -56,7 +56,8 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 Stage 1 (the Rust core: KDBX4 engine, TOTP, generator, Public Suffix List, matcher, merge, atomic
 vault file) is implemented.
 Stage 2a (the app backend behind the glass: `mypass-platform`, `mypass-session`, the Tauri shell) is in progress; the command layer, events, capabilities and the shell integration (tray, hotkeys, single instance, quit flow) have landed.
-Later stages (rest of the app backend, UI, extension bridge, passkeys, macOS release, Windows) are listed in `docs/implementation/ROADMAP.md`.
+Stage 2b (the Svelte UI: unlock, create and open, the three-pane shell, editors, history and bin, generator, settings window, CSV import, tray panel, themes, uk/ru/en) has landed; its manual checks live in `RUN.md`.
+Later stages (rest of the app backend, extension bridge, passkeys, macOS release, Windows) are listed in `docs/implementation/ROADMAP.md`.
 
 ## Build, run, test
 
@@ -219,7 +220,7 @@ change is done.
   and quit rules, login-item reconcile, `WindowOps`), `tray.rs` (menu model and ids), `hotkeys.rs`
   (plan, `HotkeyRegistry` seam), `lifecycle.rs` (platform events into auto-lock, the quit flow,
   the external-change watcher, `ShellEffects`, tray refresh) and `i18n.rs` (the shared catalogs, `{0}`
-  substitution, English fallback); only `shell_runtime.rs` touches the runtime. Webviews hold
+  substitution, English fallback) and `navigation.rs` (a webview may navigate only to the app's own origin); only `shell_runtime.rs` touches the runtime. Webviews hold
   `core:event:default`, so no Rust listener acts on a webview-emittable event: every trigger is
   a Rust call (session observer, platform sink, menu, tray, window or run-event callback). Tray
   icon and menus are built in Rust only (no `core:tray`/`core:menu` permission). Work for the main

@@ -4,7 +4,7 @@
 its tests pass, or, for manual-only items, once the manual check has actually been walked. History
 lives in `git log`, not here.
 
-Last updated: 2026-11-10
+Last updated: 2026-11-13
 
 ---
 
@@ -32,10 +32,26 @@ Last updated: 2026-11-10
 - [ ] Typed Tauri command and event surface with generated TypeScript bindings, and the i18n catalog
   pipeline.
 
-## Stage 2b UI
+## Stage 2b UI follow-ups
 
-- [ ] Every screen of the app in Svelte 5: unlock, create, open and find vaults, the three-pane shell,
-  entry editors, generator, settings, CSV import, tray panel, themes and localisation.
+- [ ] Manual: walk the Stage 2b checklist in `RUN.md` on a copy of the owner's vault (unlock, shell,
+  editors, history and bin, generator, settings, CSV import, tray panel, quit flow, themes, languages).
+- [ ] Restore from the bin to the original group: the UI restores to the root today because the backend
+  keeps no origin; use the KDBX 4.1 `PreviousParentGroup` in `mypass-session`.
+- [ ] Empty Deleted or deleting a parent group while one of its entries is open in the editor: define
+  and test what the editor does (close, or keep and refuse to save).
+- [ ] History values are not revealable: add a backend command for per-version reveal, then the UI.
+- [ ] Generator Use is not recorded in the generator history (only Copy is).
+- [ ] Reserved hotkeys are refused in the UI only; move the check into the backend hotkey parser.
+- [ ] CSV import error causes are matched by their English message; add separate error codes
+  (`csvMissingColumn`, `csvNotUtf8`, `csvEmpty`) instead.
+- [ ] Per-window command ACL: `app_quit` and `app_show_main` are callable from every window, including
+  the tray panel and settings; restrict by window label where a window does not need them.
+- [ ] Flaky test `keyboard_layout_off_main_without_a_run_loop_is_unknown_not_a_deadlock` in
+  `mypass-platform` (timing; failed once in two full runs): make it deterministic.
+- [ ] Prune unused legacy catalog keys (418 at the time of writing) once stage 3 has ported its screens.
+- [ ] npm dependencies are bumped by hand (exact pins); add an npm ecosystem with grouping to
+  Dependabot, with the same cooldown as cargo.
 
 ## Stage 3 extension bridge
 
