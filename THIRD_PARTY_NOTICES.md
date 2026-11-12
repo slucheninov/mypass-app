@@ -818,3 +818,12 @@ Used to build and test the frontend only; none of it is part of a MyPass artifac
 | `vitest` | 3.2.7 | MIT |
 
 Their own transitive dependencies are listed in `pnpm-lock.yaml`.
+
+### Test-only npm packages (not shipped)
+
+These are `devDependencies` used by the component tests; nothing from them is in the bundle.
+
+| Package | Version | Licence |
+|---|---|---|
+| `axe-core` | 4.11.0 | MPL-2.0 |
+| `@testing-library/user-event` | 14.6.1 | MIT |
