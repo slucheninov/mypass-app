@@ -3,9 +3,10 @@
   // one-time password, notes and custom fields. Title, group and favourite belong to the editor
   // shell. The Generator popover of a later task plugs in through `generatorSlot`, which receives
   // `onuse` (puts the chosen value into the password field) and the first website for the rules.
-  import type { Snippet } from "svelte";
+  import { onMount, type Snippet } from "svelte";
   import type { EntryEditModel_Serialize } from "../../lib/bindings";
   import { t } from "../../lib/i18n/index.svelte";
+  import { onWindowHidden } from "../../lib/secret.svelte";
   import { webUrl } from "../../lib/web-url";
   import Button from "../../lib/ui/Button.svelte";
   import IconButton from "../../lib/ui/IconButton.svelte";
@@ -24,6 +25,10 @@
   let shown = $state(false);
   let generating = $state(false);
   let sheetOpen = $state(false);
+
+  // The plain-text password must not stay on screen when the window hides or minimises, like the
+  // detail pane's reveals.
+  onMount(() => onWindowHidden(() => (shown = false)));
 
   const firstUrl = $derived(model.urls.map((u) => webUrl(u)).find((u) => u !== null) ?? null);
   const host = $derived.by(() => {

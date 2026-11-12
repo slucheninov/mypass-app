@@ -1,3 +1,5 @@
+import { emit } from "@tauri-apps/api/event";
+import { mockWindows } from "@tauri-apps/api/mocks";
 import { fireEvent, screen, waitFor, within } from "@testing-library/svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../lib/api";
@@ -156,6 +158,29 @@ describe("other entry types", () => {
     await user().click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(calls(fake, "entrySave")).toHaveLength(1));
     expect(savedModel(fake).card).toEqual({ holder: "A B", number: "4111", expiry: "12/30", cvv: "123" });
+  });
+});
+
+describe("show password", () => {
+  it("show_password_turns_off_when_the_window_hides_or_minimises", async () => {
+    mockWindows("main");
+    const fake = backendWith([{ id: "e-bank", title: "Bank", password: "hunter2-secret", modified: 1 }]);
+    await openEdit(fake, "e-bank");
+    const password = () => screen.getByLabelText("Password") as HTMLInputElement;
+    await user().click(screen.getByRole("button", { name: "Show password" }));
+    expect(password().type).toBe("text");
+
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    document.dispatchEvent(new Event("visibilitychange"));
+    await waitFor(() => expect(password().type).toBe("password"));
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+
+    await user().click(screen.getByRole("button", { name: "Show password" }));
+    expect(password().type).toBe("text");
+    fake.state.minimized = true;
+    await emit("tauri://resize", { width: 1, height: 1 });
+    await waitFor(() => expect(password().type).toBe("password"));
+    expect(screen.getByRole("button", { name: "Show password" })).toBeTruthy();
   });
 });
 
