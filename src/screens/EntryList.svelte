@@ -36,6 +36,7 @@
   let menu = $state<{ x: number; y: number; id: string } | null>(null);
   let confirming = $state<{ kind: "purge"; id: string } | { kind: "empty" } | null>(null);
   let moving = $state<string | null>(null);
+  let restoring = $state<string | null>(null);
   // The menu closes before `onselect` runs, so the entry it was opened for is kept here too.
   let menuEntryId: string | null = null;
 
@@ -257,7 +258,13 @@
       { id: "website", label: t("Open website"), icon: "link", disabled: !login },
       { id: "sep-1", label: "", separator: true },
       { id: "favorite", label: entry.favorite ? t("Remove from Favorites") : t("Add to Favorites"), icon: "star" },
-      // A bin entry is brought back with Restore (the detail pane), not moved.
+      // A bin entry is brought back with Restore, not moved.
+      ...(entry.inRecycleBin
+        ? [
+            { id: "restore", label: t("Restore"), icon: "undo" as const },
+            { id: "restore-to", label: t("Restore to…"), icon: "folder" as const },
+          ]
+        : []),
       { id: "move", label: t("Move to…"), icon: "folder", disabled: entry.inRecycleBin },
       { id: "sep-2", label: "", separator: true },
       {
@@ -288,10 +295,28 @@
       case "move":
         moving = entry.id;
         break;
+      case "restore":
+        void restore(entry.id, null);
+        break;
+      case "restore-to":
+        restoring = entry.id;
+        break;
       case "delete":
         requestDelete(entry);
         break;
     }
+  }
+
+  async function restore(id: string, groupId: string | null) {
+    await guard(() => api.entryRestore(id, groupId));
+    await tick();
+    listbox?.focus();
+  }
+
+  function restoreTo(groupId: string) {
+    const id = restoring;
+    restoring = null;
+    if (id !== null) void restore(id, groupId);
   }
 
   async function moveTo(groupId: string) {
@@ -400,6 +425,13 @@
     {/snippet}
   </Modal>
 {/if}
+
+<GroupPicker
+  open={restoring !== null}
+  title={t("Choose a group")}
+  onpick={restoreTo}
+  onclose={() => (restoring = null)}
+/>
 
 <GroupPicker
   open={moving !== null}

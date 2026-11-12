@@ -9,8 +9,23 @@
   import EntryDetail from "../screens/EntryDetail.svelte";
   import EntryEditor from "../screens/EntryEditor.svelte";
   import EntryList from "../screens/EntryList.svelte";
+  import History from "../screens/History.svelte";
   import Shell from "../screens/Shell.svelte";
   import Unlock from "../screens/Unlock.svelte";
+
+  // The history modal belongs to the selected entry of one unlocked stretch: another selection, a
+  // lock, or an editor opening (a restore must never land under unsaved edits) closes it.
+  let historyId = $state<string | null>(null);
+  $effect(() => {
+    if (
+      historyId !== null &&
+      (session.status.state !== "unlocked" ||
+        navigation.selectedId !== historyId ||
+        (navigation.presentation !== "browse" && navigation.editModel !== null))
+    ) {
+      historyId = null;
+    }
+  });
 </script>
 
 <main data-testid="main-app">
@@ -26,10 +41,13 @@
               {#key navigation.editModel}<EntryEditor bind:model={navigation.editModel} />{/key}
             {:else if navigation.selectedId !== null}
               <!-- Keyed by id: every revealed value and dialog of a pane dies with its selection. -->
-              {#key navigation.selectedId}<EntryDetail id={navigation.selectedId} />{/key}
+              {#key navigation.selectedId}<EntryDetail id={navigation.selectedId} onopenhistory={(id) => (historyId = id)} />{/key}
             {/if}
           {/snippet}
         </Shell>
+        {#if historyId !== null}
+          <History entryId={historyId} open={true} onclose={() => (historyId = null)} />
+        {/if}
       {/key}
     {:else}
       <Unlock />

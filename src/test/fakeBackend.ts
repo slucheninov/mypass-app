@@ -31,6 +31,7 @@ import {
   ROOT_GROUP_ID,
   defaultSettings,
   detailOf,
+  changedKeys,
   makeEntry,
   fixtureEntries,
   fixtureGroups,
@@ -338,8 +339,43 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       requireUnlocked();
       return detailOf(findEntry(id));
     },
-    entryHistory: notImplemented("entryHistory"),
-    entryHistoryRestore: notImplemented("entryHistoryRestore"),
+    // Newest first; `changedFields` names what the next newer version (or the entry) changed.
+    entryHistory: ({ id }) => {
+      requireUnlocked();
+      const found = findEntry(id);
+      return [...found.history].reverse().map((v, index) => {
+        const newer = found.history[found.history.length - index] ?? { model: found.model };
+        return {
+          index,
+          modified: v.modified,
+          title: v.model.title,
+          changedFields: v.changedFields ?? changedKeys(v.model, newer.model),
+        };
+      });
+    },
+    // Like `editing::restore_history`: the current state is snapshotted first (the restore is
+    // undoable), then the version's content replaces it; the group and the favourite stay.
+    entryHistoryRestore: ({ id, index }) => {
+      requireUnlocked();
+      const found = findEntry(id);
+      const old = found.history[found.history.length - 1 - index];
+      if (!Number.isInteger(index) || index < 0 || !old) throw apiError("notFound");
+      found.history.push({ modified: found.modified, model: structuredClone(found.model) });
+      found.model = {
+        ...structuredClone(old.model),
+        id: found.model.id,
+        groupId: found.model.groupId,
+        favorite: found.model.favorite,
+      };
+      found.summary.title = found.model.title;
+      found.summary.subtitle = found.model.username;
+      found.summary.hasTotp = found.model.totp !== "";
+      found.summary.attachmentCount = found.model.attachments.length;
+      found.modified += 1;
+      found.summary.modified = found.modified;
+      changed();
+      return null;
+    },
     entryList: ({ query }) => {
       requireUnlocked();
       return listEntries(state.entries, query, state.groups);
@@ -406,11 +442,16 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         .slice(0, limit)
         .map((e) => structuredClone(e.summary));
     },
-    // Back to the group it came from; the fake does not remember it, so Personal.
+    // Like `editing::restore_entry`: only a bin entry, into `groupId` (the root when null; the real
+    // backend does not remember the group an entry came from either).
     entryRestore: ({ id, groupId }) => {
       requireUnlocked();
       const found = findEntry(id);
-      const target = groupId ?? PERSONAL_GROUP_ID;
+      if (!found.summary.inRecycleBin) throw apiError("invalidInput");
+      const target = groupId ?? ROOT_GROUP_ID;
+      if (target !== ROOT_GROUP_ID && (!locate(target) || locate(target)?.node.isRecycleBin)) {
+        throw apiError(locate(target) ? "invalidInput" : "notFound");
+      }
       found.summary.groupId = target;
       found.model.groupId = target;
       found.summary.inRecycleBin = false;
@@ -449,6 +490,8 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       const saved = { ...structuredClone(model), title, attachments, attachmentOps: [] };
       const found = model.id ? findEntry(model.id) : null;
       if (found) {
+        // Every save of an existing entry snapshots the previous state into its history.
+        found.history.push({ modified: found.modified, model: structuredClone(found.model) });
         found.model = saved;
         found.summary.title = title;
         found.summary.favorite = model.favorite;

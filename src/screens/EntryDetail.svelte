@@ -23,6 +23,7 @@
   import CustomField from "./CustomField.svelte";
   import WebsitesSheet from "./editors/WebsitesSheet.svelte";
   import FilesDetail from "./FilesDetail.svelte";
+  import GroupPicker from "./GroupPicker.svelte";
   import LargeType from "./LargeType.svelte";
   import LoginDetail from "./LoginDetail.svelte";
   import NotesDetail from "./NotesDetail.svelte";
@@ -43,6 +44,7 @@
   let missing = $state(false);
   let largeType = $state<FieldRef | null>(null);
   let confirmingPurge = $state(false);
+  let restoringTo = $state(false);
   let generation = 0;
 
   const guard = (work: () => Promise<unknown>) => toasts.guard(work);
@@ -116,7 +118,12 @@
       const model = await api.entryEditModel(id);
       if (unchanged()) navigation.requestOpenEditor(model);
     });
+  // No group: the backend restores to the top level, the same default as the list's menu.
   const restore = () => guard(() => api.entryRestore(id, null));
+  const restoreTo = (groupId: string) => {
+    restoringTo = false;
+    return guard(() => api.entryRestore(id, groupId));
+  };
 
   function showGroup() {
     if (!detail) return;
@@ -187,6 +194,7 @@
       <div class="actions">
         {#if detail.inRecycleBin}
           <Button onclick={restore}>{t("Restore")}</Button>
+          <Button onclick={() => (restoringTo = true)}>{t("Restore to…")}</Button>
           <Button variant="danger" onclick={requestDelete}>{t("Delete permanently")}</Button>
         {:else}
           <IconButton
@@ -234,6 +242,13 @@
 {#if sheetModel}
   <WebsitesSheet model={sheetModel} onsave={saveWebsites} oncancel={() => (navigation.editModel = null)} />
 {/if}
+
+<GroupPicker
+  open={restoringTo}
+  title={t("Choose a group")}
+  onpick={(groupId) => void restoreTo(groupId)}
+  onclose={() => (restoringTo = false)}
+/>
 
 {#if confirmingPurge}
   <Modal open={true} title={t("Delete permanently")} onclose={() => (confirmingPurge = false)}>

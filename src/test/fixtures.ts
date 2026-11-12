@@ -38,7 +38,51 @@ export interface FixtureEntry {
   modified: number;
   /** What `entry_get` reports besides the edit model. */
   passkey: PasskeyMeta_Serialize | null;
-  historyCount: number;
+  /** Earlier versions, oldest first (the order of the KDBX `History` element). */
+  history: HistoryVersion[];
+}
+
+/** One earlier version: what the entry looked like, and optionally the field names it differs by. */
+export interface HistoryVersion {
+  modified: number;
+  model: EntryEditModel_Serialize;
+  /** Overrides the computed difference to the next newer version (KDBX field keys). */
+  changedFields?: string[];
+}
+
+/** An earlier version of a fixture entry: the entry with these values, saved at `modified`. */
+export interface HistorySpec {
+  modified: number;
+  title?: string;
+  username?: string;
+  password?: string;
+  urls?: string[];
+  notes?: string;
+  changedFields?: string[];
+}
+
+/** KDBX field keys whose value differs, like `editing::changed_fields` (names only, never values). */
+export function changedKeys(older: EntryEditModel_Serialize, newer: EntryEditModel_Serialize): string[] {
+  const out: string[] = [];
+  const diff = (key: string, a: unknown, b: unknown) => {
+    if (JSON.stringify(a) !== JSON.stringify(b)) out.push(key);
+  };
+  diff("Title", older.title, newer.title);
+  diff("UserName", older.username, newer.username);
+  diff("Password", older.password, newer.password);
+  diff("URL", older.urls, newer.urls);
+  diff("otp", older.totp, newer.totp);
+  diff("Notes", older.notes, newer.notes);
+  const keys = new Set([...older.customFields, ...newer.customFields].map((f) => f.key));
+  for (const key of keys) {
+    diff(
+      key,
+      older.customFields.find((f) => f.key === key),
+      newer.customFields.find((f) => f.key === key),
+    );
+  }
+  diff("Attachments", older.attachments, newer.attachments);
+  return out;
 }
 
 export interface EntrySpec {
@@ -62,6 +106,8 @@ export interface EntrySpec {
   customFields?: CustomFieldEdit[];
   passkey?: PasskeyMeta_Serialize;
   historyCount?: number;
+  /** Explicit earlier versions (oldest first); wins over `historyCount`. */
+  history?: HistorySpec[];
   modified: number;
 }
 
@@ -70,10 +116,10 @@ export function makeEntry(spec: EntrySpec): FixtureEntry {
   const entryType = spec.entryType ?? "login";
   const groupId = spec.groupId ?? PERSONAL_GROUP_ID;
   const favorite = spec.favorite ?? false;
-  return {
+  const entry: FixtureEntry = {
     modified: spec.modified,
     passkey: spec.passkey ?? null,
-    historyCount: spec.historyCount ?? 0,
+    history: [],
     summary: {
       id: spec.id,
       title: spec.title,
@@ -107,6 +153,24 @@ export function makeEntry(spec: EntrySpec): FixtureEntry {
       attachmentOps: [],
     },
   };
+  const versions: HistorySpec[] =
+    spec.history ??
+    Array.from({ length: spec.historyCount ?? 0 }, (_, i) => ({
+      modified: spec.modified - ((spec.historyCount ?? 0) - i) * 1000,
+    }));
+  entry.history = versions.map((v) => ({
+    modified: v.modified,
+    changedFields: v.changedFields,
+    model: {
+      ...structuredClone(entry.model),
+      title: v.title ?? entry.model.title,
+      username: v.username ?? entry.model.username,
+      password: v.password ?? entry.model.password,
+      urls: v.urls ?? entry.model.urls,
+      notes: v.notes ?? entry.model.notes,
+    },
+  }));
+  return entry;
 }
 
 export function fixtureEntries(): FixtureEntry[] {
@@ -327,7 +391,7 @@ export function detailOf(e: FixtureEntry): EntryDetailDto_Serialize {
     // A protected field's value never travels in the detail.
     customFields: model.customFields.map((f) => ({ key: f.key, protected: f.protected, value: f.protected ? null : f.value })),
     attachments: structuredClone(model.attachments),
-    historyCount: e.historyCount,
+    historyCount: e.history.length,
     inRecycleBin: summary.inRecycleBin,
   };
 }
