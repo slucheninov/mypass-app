@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MyPass inline icon — position:fixed field in an overflow:hidden wrapper</title>
+  <style>
+    /* The wrapper is tiny and clips normal descendants, but a position:fixed child is laid out
+       against the viewport and is NOT clipped by it (the wrapper is not its containing block), so
+       the icon must still appear. Add `transform: translateZ(0)` to .wrap and the field IS clipped
+       to 100 x 40 px, and the icon must then stay hidden. */
+    .wrap { overflow: hidden; width: 100px; height: 40px; border: 1px dashed #99a; }
+    input { position: fixed; left: 20px; width: 300px; height: 44px; box-sizing: border-box; padding: 8px; font: 16px system-ui, sans-serif; }
+    #fu { top: 80px; }
+    #fp { top: 140px; }
+  </style>
+</head>
+<body>
+<form onsubmit="return false">
+  <div class="wrap">
+    <input id="fu" name="username" autocomplete="username" aria-label="Email">
+    <input id="fp" name="password" type="password" autocomplete="current-password" aria-label="Password">
+  </div>
+</form>
+</body>
+</html>

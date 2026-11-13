@@ -83,7 +83,7 @@ fn ci_aggregator_needs_every_job() {
         [
             "changes",
             "crosscompat",
-            "i18n",
+            "js",
             "lint",
             "test",
             "ui",
@@ -559,21 +559,21 @@ fn extracted_aggregator_executes_result_matrix() {
 }
 
 #[test]
-fn ci_i18n_job_runs_the_js_part_with_node_from_nvmrc() {
+fn ci_js_job_runs_the_js_part_with_node_from_nvmrc() {
     let doc = workflow(".github/workflows/ci.yml");
-    let i18n = job(&doc, "i18n");
+    let js = job(&doc, "js");
     assert_eq!(
-        i18n.get("runs-on").and_then(Value::as_str),
+        js.get("runs-on").and_then(Value::as_str),
         Some("ubuntu-latest")
     );
-    let setup = steps(i18n)
+    let setup = steps(js)
         .into_iter()
         .find(|s| {
             s.get("uses")
                 .and_then(Value::as_str)
                 .is_some_and(|u| u.starts_with("actions/setup-node@"))
         })
-        .expect("job `i18n` must set up Node through actions/setup-node");
+        .expect("job `js` must set up Node through actions/setup-node");
     assert_eq!(
         setup
             .get("with")
@@ -582,17 +582,17 @@ fn ci_i18n_job_runs_the_js_part_with_node_from_nvmrc() {
         Some(".nvmrc"),
         "Node must come from .nvmrc"
     );
-    let runs: Vec<String> = steps(i18n).iter().map(|s| run_text(s)).collect();
+    let runs: Vec<String> = steps(js).iter().map(|s| run_text(s)).collect();
     let step = runs
         .iter()
         .find(|r| r.contains("scripts/test.sh"))
-        .expect("job `i18n` must run scripts/test.sh");
+        .expect("job `js` must run scripts/test.sh");
     assert!(
         step.contains("--ci") && step.contains("--only js"),
         "expected `scripts/test.sh --ci --only js`, found `{step}`"
     );
-    // The i18n job must be a hard requirement of the aggregator, never a tolerated skip.
-    assert!(!GATED_JOBS.contains(&"i18n"));
+    // The js job must be a hard requirement of the aggregator, never a tolerated skip.
+    assert!(!GATED_JOBS.contains(&"js"));
 }
 
 #[test]

@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MyPass inline icon — position:fixed login</title>
+  <style>
+    /* A login card pinned to the viewport. A position:fixed input has no offsetParent, which the
+       old visibility check read as "hidden", so no icon was attached. */
+    .card { position: fixed; top: 80px; left: 50%; transform: translateX(-50%); width: 340px;
+      padding: 20px; background: #fff; border: 1px solid #d7dfe6; border-radius: 12px; font: 16px system-ui, sans-serif; }
+    input { position: fixed; box-sizing: border-box; width: 300px; height: 44px; padding: 8px; font: inherit; }
+    #fu { top: 170px; }
+    #fp { top: 230px; }
+    body { height: 1600px; }
+  </style>
+</head>
+<body>
+<div class="card"><h2>Sign in</h2><div style="height:130px"></div></div>
+<form onsubmit="return false">
+  <input id="fu" name="username" autocomplete="username" style="left: calc(50% - 150px)" aria-label="Email">
+  <input id="fp" name="password" type="password" autocomplete="current-password" style="left: calc(50% - 150px)" aria-label="Password">
+</form>
+</body>
+</html>

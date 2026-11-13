@@ -182,7 +182,13 @@ fn cyrillic_allowed(rel: &str) -> bool {
         // the English catalog stays Cyrillic-free (pinned by the Node completeness tests).
         || matches!(
             rel,
-            "src/lib/i18n/locales/uk.json"
+            // The extension keeps localized keyword lists (and the tests that pin them) as copied.
+            "extension/shared/form-detection.js"
+                | "extension/shared/page-identifier.js"
+                | "extension/tests/formDetection.test.js"
+                | "extension/tests/inlineIcon.test.js"
+                | "extension/tests/pageIdentifier.test.js"
+                | "src/lib/i18n/locales/uk.json"
                 | "src/lib/i18n/locales/ru.json"
                 | "src-tauri/resources/macos/uk.lproj/InfoPlist.strings"
                 | "src-tauri/resources/macos/ru.lproj/InfoPlist.strings"
@@ -232,7 +238,7 @@ fn cyrillic_only_in_allowed_files() {
         };
         assert!(
             !has_cyrillic(&text),
-            "{rel} contains Cyrillic; use \\u{{..}} escapes (literal Cyrillic is allowed only in *.xcstrings, RUN.md, src/lib/i18n/locales/{{uk,ru}}.json, src-tauri/resources/macos/{{uk,ru}}.lproj/InfoPlist.strings, crates/mypass-kdbx/tests/unicode.rs, vendored data under crates/mypass-core/resources/ and binary fixtures crates/mypass-kdbx/tests/fixtures/*.kdbx)"
+            "{rel} contains Cyrillic; use \\u{{..}} escapes (literal Cyrillic is allowed only in *.xcstrings, RUN.md, src/lib/i18n/locales/{{uk,ru}}.json, src-tauri/resources/macos/{{uk,ru}}.lproj/InfoPlist.strings, five extension files listed in AGENTS.md, crates/mypass-kdbx/tests/unicode.rs, vendored data under crates/mypass-core/resources/ and binary fixtures crates/mypass-kdbx/tests/fixtures/*.kdbx)"
         );
     }
 }

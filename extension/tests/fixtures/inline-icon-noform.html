@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>MyPass inline icon fixture — no form, scroll container, fixed header</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 72px 24px 900px; }
+    header { position: fixed; top: 0; left: 0; right: 0; background: #222; color: #fff;
+             padding: 12px 24px; display: flex; gap: 8px; align-items: center; }
+    section { margin: 32px 0; }
+    .scroller { height: 140px; overflow-y: auto; border: 1px solid #ccc; padding: 12px; }
+    .spacer { height: 200px; }
+    input { padding: 6px 8px; font-size: 14px; }
+    code { background: #eee; padding: 1px 4px; }
+  </style>
+</head>
+<body>
+  <!-- Fixed header: the icon must track this field even though the page scrolls under it. -->
+  <header>
+    <label>Quick sign in</label>
+    <input type="text" name="username" placeholder="Username">
+    <input type="password" name="password" placeholder="Password">
+  </header>
+
+  <section>
+    <h2>1. Password outside any &lt;form&gt;</h2>
+    <p>No <code>&lt;form&gt;</code> element anywhere in this section. The old
+       <code>findLoginForm</code> returned <code>null</code> here and autofill silently did nothing.</p>
+    <div>
+      <input type="text" name="login" placeholder="Login">
+      <input type="password" name="pass" placeholder="Password">
+      <button type="button">Sign in</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. Field inside a scrollable sub-container</h2>
+    <p>Scroll <em>inside</em> the box. Icons are positioned in document-absolute
+       coordinates, so this is the known drift case — check whether the icon stays on its field.</p>
+    <div class="scroller">
+      <div class="spacer"></div>
+      <input type="text" name="user_inner" placeholder="Username (inside scroller)">
+      <input type="password" name="pass_inner" placeholder="Password (inside scroller)">
+      <div class="spacer"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>3. Site's own control in the password field</h2>
+    <p>The eye button sits where our icon goes. The site must stay usable.</p>
+    <div style="position: relative; display: inline-block;">
+      <input type="password" name="pass_eye" placeholder="Password" style="padding-right: 28px;">
+      <button type="button" style="position:absolute; right:2px; top:2px; border:none; background:none; cursor:pointer;">👁</button>
+    </div>
+  </section>
+
+  <p>Scroll down — the page is deliberately tall so window scrolling can be checked too.</p>
+</body>
+</html>

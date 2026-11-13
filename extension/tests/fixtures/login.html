@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>MyPass test login fixture</title></head>
+<body>
+  <h1>Test Login</h1>
+  <form id="login-form" action="#" method="post"
+        onsubmit="event.preventDefault(); document.getElementById('result').textContent='submitted';">
+    <label>Username <input type="text" name="username" autocomplete="username"></label>
+    <br>
+    <label>Password <input type="password" name="password" autocomplete="current-password"></label>
+    <br>
+    <button type="submit">Sign in</button>
+  </form>
+  <div id="result"></div>
+</body>
+</html>

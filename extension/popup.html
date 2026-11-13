@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html data-theme="system">
+<head>
+  <meta charset="utf-8">
+  <title>MyPass</title>
+  <link rel="stylesheet" href="shared/ui.css">
+  <link rel="stylesheet" href="shared/prompt-card.css">
+  <style>
+    html {
+      width: 400px;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      width: 400px;
+      margin: 0;
+      padding: 16px;
+      box-sizing: border-box;
+      color: var(--mp-text);
+      background: var(--mp-bg);
+    }
+    #panel-shell {
+      position: relative;
+    }
+    .brand-key {
+      display: block;
+      width: 32px;
+      height: 32px;
+      margin: 0 auto 12px;
+    }
+    .brand-key--leading {
+      margin: 0 0 12px;
+    }
+    h1.panel-title {
+      font-size: 15px;
+      font-weight: 600;
+      margin: 0 0 6px;
+      line-height: 1.3;
+    }
+    p.panel-helper {
+      font-size: 13px;
+      color: var(--mp-secondary);
+      margin: 0 0 12px;
+      line-height: 1.35;
+    }
+    p.list-header {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--mp-text);
+      margin: 0 0 8px;
+    }
+    .btn-primary,
+    .btn-secondary {
+      box-sizing: border-box;
+      height: var(--mp-control-height, 32px);
+      font-family: inherit;
+      font-size: var(--mp-control-font, 13px);
+      font-weight: var(--mp-control-weight, 600);
+      line-height: 1;
+      padding: 0 12px;
+      border-radius: var(--mp-control-radius, 8px);
+      cursor: pointer;
+      border: 1px solid transparent;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .btn-primary {
+      background: #007aff;
+      color: #fff;
+      border-color: #007aff;
+    }
+    .btn-secondary {
+      background: var(--mp-fill);
+      color: var(--mp-text);
+      border-color: var(--mp-line);
+      margin-left: 8px;
+    }
+    .btn-row {
+      margin-top: 4px;
+    }
+    ul {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+    li.credential-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 4px 6px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    li.credential-row:hover {
+      background: var(--mp-fill);
+    }
+    .letter-avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .letter-avatar-letter {
+      color: #ffffff;
+      font-size: 15px;
+      font-weight: 600;
+      line-height: 1;
+    }
+    .credential-text {
+      min-width: 0;
+      flex: 1;
+    }
+    .credential-title {
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 1.25;
+    }
+    .credential-username {
+      font-size: 12px;
+      color: var(--mp-secondary);
+      line-height: 1.25;
+      margin-top: 2px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    li.credential-row-unsaved {
+      background: var(--mp-accent-soft);
+    }
+    .identifier-offer {
+      margin: 4px 6px 10px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: var(--mp-accent-soft);
+    }
+    .identifier-offer p {
+      margin: 0 0 8px;
+      line-height: 1.4;
+    }
+    .identifier-offer-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .identifier-offer .btn-secondary {
+      margin-left: 0;
+    }
+    .totp-circle {
+      position: relative;
+      flex-shrink: 0;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      border: 1px solid rgba(127, 127, 127, 0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 11px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .totp-circle .totp-ring {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+    .totp-circle .totp-ring circle {
+      transition: stroke-dashoffset 1s linear;
+    }
+    .totp-circle-label {
+      position: relative;
+      z-index: 1;
+    }
+    .totp-circle.revealed {
+      border-color: rgba(80, 160, 255, 0.6);
+    }
+    .totp-circle.copied {
+      font-size: 9px;
+      border-color: rgba(60, 200, 120, 0.6);
+    }
+    #pairing-panel .panel-title {
+      margin-bottom: 12px;
+    }
+    #code-entry {
+      margin-top: 12px;
+    }
+    #code-hint {
+      margin: 0 0 6px;
+      font-size: 12px;
+      color: var(--mp-secondary);
+    }
+    #code-input {
+      width: 100%;
+      box-sizing: border-box;
+      font-size: 16px;
+      letter-spacing: 2px;
+      margin-bottom: 8px;
+    }
+    #pairing-error {
+      color: #c00;
+      font-size: 12px;
+      margin: 8px 0 0;
+    }
+    #open-mypass-helper {
+      margin: 8px 0 0;
+      font-size: 12px;
+      color: var(--mp-secondary);
+    }
+    #add-totp-section {
+      margin-top: 16px;
+      padding-top: 12px;
+      border-top: 1px solid var(--mp-hairline);
+    }
+    #add-totp-hint {
+      margin: 0 0 6px;
+      font-size: 12px;
+      color: var(--mp-secondary);
+    }
+    #totp-paste-input {
+      width: 100%;
+      box-sizing: border-box;
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+    #add-totp-error {
+      color: #c00;
+      font-size: 12px;
+      margin: 8px 0 0;
+    }
+    .passkey-summary {
+      overflow-wrap: anywhere;
+    }
+    .passkey-fields {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 8px 12px;
+      margin: 12px 0 20px;
+      font-size: 13px;
+    }
+    .passkey-fields dt { color: var(--mp-secondary); }
+    .passkey-fields dd { margin: 0; overflow-wrap: anywhere; word-break: normal; }
+    .passkey-summary:empty { display: none; }
+    #passkey-picker-list {
+      list-style: none;
+      margin: 0 0 8px;
+      padding: 0;
+    }
+    #popup-menu {
+      box-sizing: border-box;
+      background: var(--mp-bg);
+      margin: -16px;
+      padding: 16px;
+      max-height: 560px;
+      overflow: auto;
+    }
+    /* The open menu replaces the page, so the popup height follows that page. */
+    #panel-shell:has(#popup-menu:not([hidden])) > :not(#popup-menu) {
+      display: none !important;
+    }
+    .popup-menu-row,
+    .popup-menu-back {
+      display: flex;
+      align-items: center;
+      width: 100%;
+      box-sizing: border-box;
+      min-height: 40px;
+      text-align: left;
+      border: 0;
+      background: transparent;
+      color: var(--mp-text);
+      font: inherit;
+      font-size: 14px;
+      font-weight: 500;
+      padding: 8px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .popup-menu-back {
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .popup-menu-row:hover,
+    .popup-menu-back:hover,
+    .popup-menu-row:focus-visible,
+    .popup-menu-back:focus-visible {
+      background: var(--mp-fill);
+      outline: none;
+    }
+    .popup-menu-row {
+      gap: 10px;
+    }
+    .popup-menu-icon {
+      width: 18px;
+      height: 18px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      color: var(--mp-text);
+    }
+    .popup-menu-icon svg {
+      display: block;
+    }
+    .popup-menu-drill::after {
+      content: "›";
+      margin-left: auto;
+      color: var(--mp-muted);
+      font-size: 18px;
+      line-height: 1;
+    }
+    #lock-vault-error {
+      color: #c00;
+      font-size: 12px;
+      margin: 8px 10px 0;
+    }
+    #browser-chrome {
+      margin: 0 0 10px;
+    }
+    .browser-tools {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      position: relative;
+    }
+    #vault-search {
+      flex: 1;
+      min-width: 0;
+      box-sizing: border-box;
+      height: var(--mp-control-height, 32px);
+      font-size: var(--mp-control-font, 13px);
+      padding: 0 10px;
+      border: 1px solid var(--mp-line, #d2d2d7);
+      border-radius: var(--mp-control-radius, 8px);
+      background: var(--mp-control-bg);
+      color: var(--mp-text);
+      outline: none;
+    }
+    .icon-btn {
+      box-sizing: border-box;
+      width: var(--mp-control-height, 32px);
+      height: var(--mp-control-height, 32px);
+      border-radius: var(--mp-control-radius, 8px);
+      border: 1px solid var(--mp-line);
+      background: var(--mp-control-bg);
+      color: var(--mp-text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      padding: 0;
+      flex-shrink: 0;
+    }
+    #add-entry-btn {
+      background: #007aff;
+      color: #fff;
+      border-color: #007aff;
+      font-size: 22px;
+      line-height: 1;
+      font-weight: 400;
+    }
+    .category-wrap {
+      position: relative;
+      margin-top: 8px;
+    }
+    #category-btn {
+      width: 100%;
+      box-sizing: border-box;
+      height: var(--mp-control-height, 32px);
+      text-align: left;
+      font-size: var(--mp-control-font, 13px);
+      font-weight: var(--mp-control-weight, 600);
+      padding: 0 10px;
+      border-radius: var(--mp-control-radius, 8px);
+      border: 1px solid var(--mp-line, #d2d2d7);
+      background: var(--mp-fill, #f5f5f7);
+      cursor: pointer;
+    }
+    #category-menu,
+    #add-entry-menu {
+      position: absolute;
+      z-index: 2;
+      left: 0;
+      right: 0;
+      margin-top: 4px;
+      background: var(--mp-bg);
+      border: 1px solid var(--mp-hairline);
+      border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+      padding: 4px;
+    }
+    #add-entry-menu {
+      left: auto;
+      right: 0;
+      width: 228px;
+      top: 36px;
+      padding: 6px;
+    }
+    .category-option {
+      display: block;
+      width: 100%;
+      text-align: left;
+      border: 0;
+      background: transparent;
+      font-size: 13px;
+      padding: 7px 8px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .category-option:hover {
+      background: var(--mp-fill);
+    }
+    .add-entry-option {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      box-sizing: border-box;
+      min-height: 40px;
+      text-align: left;
+      border: 0;
+      background: transparent;
+      color: var(--mp-text);
+      font-size: 14px;
+      font-weight: 500;
+      padding: 4px 8px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .add-entry-icon {
+      width: 22px;
+      height: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .add-entry-icon-login { color: #2aa198; }
+    .add-entry-icon-card { color: #007aff; }
+    .add-entry-icon-note { color: #e68619; }
+    .add-entry-option:hover,
+    .add-entry-option:focus-visible {
+      background: #007aff;
+      color: #fff;
+      outline: none;
+    }
+    .add-entry-option:hover .add-entry-icon,
+    .add-entry-option:focus-visible .add-entry-icon {
+      color: #fff;
+    }
+    .address-fill-chooser {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .address-fill-chooser p {
+      margin: 0 0 4px;
+      overflow-wrap: anywhere;
+      line-height: 1.45;
+    }
+    .address-fill-option { width: 100%; margin-left: 0; box-sizing: border-box; text-align: left; }
+    .address-fill-back { align-self: flex-start; margin-top: 8px; margin-left: 0; }
+    #list {
+      max-height: 360px;
+      overflow: auto;
+    }
+    #panel-shell:has(#locked-panel:not([hidden])),
+    #panel-shell:has(#app-unavailable-panel:not([hidden])) {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    #panel-shell:has(#locked-panel:not([hidden])) #browser-chrome,
+    #panel-shell:has(#app-unavailable-panel:not([hidden])) #browser-chrome,
+    #panel-shell:has(#pairing-panel:not([hidden])) #browser-chrome {
+      width: 100%;
+      margin: 0 0 16px;
+    }
+    #panel-shell:has(#locked-panel:not([hidden])) .browser-tools,
+    #panel-shell:has(#app-unavailable-panel:not([hidden])) .browser-tools,
+    #panel-shell:has(#pairing-panel:not([hidden])) .browser-tools {
+      justify-content: center;
+    }
+    #locked-panel:not([hidden]),
+    #app-unavailable-panel:not([hidden]) {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+    }
+    #locked-panel .panel-title,
+    #locked-panel .panel-helper,
+    #app-unavailable-panel .panel-helper {
+      text-align: center;
+    }
+    #locked-actions,
+    #app-unavailable-actions {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    #locked-actions .btn-secondary,
+    #app-unavailable-actions .btn-secondary {
+      margin-left: 0;
+    }
+    #open-mypass-helper {
+      flex-basis: 100%;
+      text-align: center;
+    }
+
+    .totp-badge {
+      flex-shrink: 0;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(80, 160, 255, 0.15);
+      color: #3b82f6;
+    }
+    .passkey-badge {
+      flex-shrink: 0;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(52, 199, 89, 0.15);
+      color: #248a3d;
+    }
+    p.passkey-detail {
+      font-size: 11px;
+      color: var(--mp-muted);
+      margin: -6px 0 12px;
+    }
+    [hidden] {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  <div id="panel-shell">
+    <div id="browser-chrome" hidden>
+      <div class="browser-tools">
+        <button id="popup-menu-btn" type="button" class="icon-btn" aria-label="More" title="More" aria-expanded="false" aria-controls="popup-menu">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <circle cx="5.5" cy="12" r="1.8" fill="currentColor"></circle>
+            <circle cx="12" cy="12" r="1.8" fill="currentColor"></circle>
+            <circle cx="18.5" cy="12" r="1.8" fill="currentColor"></circle>
+          </svg>
+        </button>
+        <input id="vault-search" type="search" placeholder="Search" autocomplete="off">
+        <button id="open-generator-btn" type="button" class="icon-btn" aria-label="Password generator">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <rect x="3" y="3" width="18" height="18" rx="4" fill="none" stroke="currentColor" stroke-width="1.8"></rect>
+            <circle cx="8.2" cy="8.2" r="1.3" fill="currentColor"></circle>
+            <circle cx="15.8" cy="8.2" r="1.3" fill="currentColor"></circle>
+            <circle cx="12" cy="12" r="1.3" fill="currentColor"></circle>
+            <circle cx="8.2" cy="15.8" r="1.3" fill="currentColor"></circle>
+            <circle cx="15.8" cy="15.8" r="1.3" fill="currentColor"></circle>
+          </svg>
+        </button>
+        <button id="add-entry-btn" type="button" class="icon-btn" aria-label="Add item">+</button>
+        <div id="add-entry-menu" hidden></div>
+      </div>
+      <div id="category-wrap" class="category-wrap">
+        <button id="category-btn" type="button">Favorites</button>
+        <div id="category-menu" hidden></div>
+      </div>
+    </div>
+
+    <section id="locked-panel" hidden>
+      <img class="brand-key" src="icons/icon128.png" width="32" height="32" alt="">
+      <h1 class="panel-title" id="locked-title"></h1>
+      <p class="panel-helper" id="locked-helper"></p>
+      <div id="locked-actions">
+        <button id="locked-unlock-btn" type="button" class="btn-primary">Unlock MyPass</button>
+      </div>
+    </section>
+
+    <section id="app-unavailable-panel" hidden>
+      <img class="brand-key" src="icons/icon128.png" width="32" height="32" alt="">
+      <p class="panel-helper" id="app-unavailable-status"></p>
+      <div id="app-unavailable-actions">
+        <button id="retry-btn" type="button" class="btn-primary">Retry</button>
+        <button id="open-mypass-btn" type="button" class="btn-secondary">Open MyPass</button>
+        <p id="open-mypass-helper" hidden></p>
+      </div>
+    </section>
+
+    <section id="empty-panel" hidden>
+      <h1 class="panel-title" id="empty-title"></h1>
+    </section>
+
+    <section id="list-panel" hidden>
+      <p class="list-header" id="list-header" hidden></p>
+      <p id="site-passkey-hint" class="panel-helper" hidden></p>
+      <div id="identifier-offer" class="identifier-offer" hidden>
+        <p id="identifier-offer-text"></p>
+        <div id="identifier-offer-actions" class="identifier-offer-actions"></div>
+      </div>
+      <ul id="list"></ul>
+    </section>
+
+    <section id="pairing-panel" hidden>
+      <h1 class="panel-title" id="pairing-title"></h1>
+      <button id="connect-btn" type="button" class="btn-primary">Connect</button>
+      <div id="code-entry" hidden>
+        <p id="code-hint">Enter the code shown in MyPass</p>
+        <input id="code-input" type="text" inputmode="numeric" maxlength="7" pattern="[0-9]{6}" />
+        <button id="submit-code-btn" type="button" class="btn-primary">Submit</button>
+      </div>
+      <p id="pairing-error" hidden></p>
+    </section>
+
+    <!-- Every passkey confirm panel shows the relying-party ID and the origin the
+         ceremony actually came from. That pairing is the phishing-resistance
+         requirement from the design's Global Constraints, not decorative copy. -->
+    <section id="passkey-failure-panel" hidden>
+      <h1 class="panel-title">Passkey request did not finish</h1>
+      <p id="passkey-failure-message" class="panel-helper" role="alert"></p>
+      <button id="passkey-failure-close-btn" type="button" class="btn-secondary">Close</button>
+    </section>
+
+    <section id="passkey-checking-panel" hidden>
+      <h1 id="passkey-checking-title" class="panel-title">Preparing passkey request</h1>
+      <p id="passkey-checking-message" class="panel-helper">Waiting for MyPass. You will be asked to approve before a passkey is saved or used.</p>
+      <button id="passkey-checking-cancel-btn" type="button" class="btn-secondary">Cancel</button>
+    </section>
+
+    <section id="prompt-panel" hidden>
+      <div id="prompt-card-root"></div>
+    </section>
+
+    <section id="passkey-save-panel" hidden>
+      <h1 class="panel-title">Save passkey</h1>
+      <p class="panel-helper passkey-summary" id="passkey-save-summary"></p>
+      <dl class="passkey-fields" id="passkey-save-detail"></dl>
+      <button id="passkey-save-btn" type="button" class="btn-primary">Save</button>
+      <button id="passkey-cancel-btn" type="button" class="btn-secondary">Cancel</button>
+    </section>
+
+    <section id="passkey-replace-panel" hidden>
+      <h1 class="panel-title">Replace passkey?</h1>
+      <p class="panel-helper passkey-summary" id="passkey-replace-summary"></p>
+      <dl class="passkey-fields" id="passkey-replace-detail"></dl>
+      <p class="panel-helper">This entry already has a passkey. Replacing removes the passkey this site currently uses. Some sites (such as Google) activate a new passkey only after a delay, so sign-in may fail until then. The previous passkey is kept in the entry's history.</p>
+      <button id="passkey-replace-btn" type="button" class="btn-primary">Replace</button>
+      <button id="passkey-replace-cancel-btn" type="button" class="btn-secondary">Cancel</button>
+    </section>
+
+    <section id="passkey-use-panel" hidden>
+      <h1 class="panel-title">Use passkey</h1>
+      <p class="panel-helper passkey-summary" id="passkey-use-summary"></p>
+      <dl class="passkey-fields" id="passkey-use-detail"></dl>
+      <button id="passkey-approve-btn" type="button" class="btn-primary">Approve</button>
+      <button id="passkey-use-cancel-btn" type="button" class="btn-secondary">Cancel</button>
+    </section>
+
+    <section id="passkey-picker-panel" hidden>
+      <h1 class="panel-title">Choose an entry</h1>
+      <p class="panel-helper passkey-summary" id="passkey-picker-summary"></p>
+      <ul id="passkey-picker-list"></ul>
+      <button id="passkey-picker-cancel-btn" type="button" class="btn-secondary">Cancel</button>
+    </section>
+
+    <div id="generate-password-section" hidden>
+      <p id="generate-password-hint">This page has a new-password field</p>
+      <button id="generate-password-btn" type="button" class="btn-primary">Generate password</button>
+      <p id="generate-password-error" hidden></p>
+    </div>
+
+    <div id="add-totp-section" hidden>
+      <p id="add-totp-hint">Paste otpauth:// URL or secret key</p>
+      <input id="totp-paste-input" type="text" placeholder="Paste otpauth:// URL or secret key" />
+      <button id="add-totp-btn" type="button" class="btn-primary">Add</button>
+      <p id="add-totp-error" hidden></p>
+    </div>
+
+    <aside id="passkey-diagnostics" aria-live="polite">
+      <p id="passkey-proxy-status" class="panel-helper"></p>
+      <p id="browser-manager-status" class="panel-helper"></p>
+    </aside>
+    <div id="popup-menu" hidden>
+      <div id="popup-menu-root">
+        <button id="lock-vault-btn" type="button" class="popup-menu-row"><span class="popup-menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5zm3 8H9V7a3 3 0 0 1 6 0v3z"/></svg></span>Lock MyPass</button>
+        <button id="popup-menu-help-btn" type="button" class="popup-menu-row popup-menu-drill"><span class="popup-menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm.1 15.4a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5zM14.2 8.3c0 1.1-.55 1.75-1.6 2.4-.65.42-.9.75-.9 1.3v.4h-1.7v-.55c0-1.1.5-1.75 1.55-2.4.6-.4 1-.75 1-1.25 0-.65-.52-1.1-1.25-1.1-.8 0-1.32.48-1.42 1.2l-1.68-.3c.25-1.7 1.6-2.7 3.2-2.7 1.9 0 3.2 1.2 3.2 3z"/></svg></span>Help</button>
+        <p id="lock-vault-error" class="panel-helper" role="status" hidden></p>
+      </div>
+      <div id="popup-menu-help" hidden>
+        <button id="popup-menu-help-back" type="button" class="popup-menu-back">‹ Help</button>
+        <p class="panel-helper">MyPass keeps the vault on this Mac. Unlock, pair this browser, and change vault settings in the app. This menu only covers the extension in this browser profile.</p>
+      </div>
+    </div>
+  </div>
+  <script src="shared/entry-visuals.js"></script>
+  <script src="shared/bridge-status.js"></script>
+  <script src="shared/base32.js"></script>
+  <script src="shared/passkey-sites.js"></script>
+  <script src="shared/page-identifier.js"></script>
+  <script src="shared/autofill-settings.js"></script>
+  <script src="shared/appearance-settings.js"></script>
+  <script src="shared/theme.js"></script>
+  <script src="shared/prompt-card.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

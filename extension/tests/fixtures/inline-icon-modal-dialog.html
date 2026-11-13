@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MyPass inline icon — modal dialog login</title>
+  <style>
+    /* A modal <dialog> renders in the top layer, above every z-index. The icon and the picker must
+       be mounted inside the open dialog or they are painted underneath it. */
+    dialog { width: 360px; padding: 20px; border: 1px solid #d7dfe6; border-radius: 12px; font: 16px system-ui, sans-serif; }
+    input { box-sizing: border-box; width: 100%; height: 44px; padding: 8px; font: inherit; margin: 4px 0 16px; }
+    button { padding: 8px 12px; }
+  </style>
+</head>
+<body>
+<p><button id="open" type="button" onclick="document.getElementById('d').showModal()">Sign in</button></p>
+<dialog id="d">
+  <form onsubmit="return false">
+    <h2>Sign in</h2>
+    <label for="du">Email</label>
+    <input id="du" name="username" autocomplete="username">
+    <label for="dp">Password</label>
+    <input id="dp" name="password" type="password" autocomplete="current-password">
+    <button type="button" onclick="document.getElementById('d').close()">Close</button>
+  </form>
+</dialog>
+</body>
+</html>

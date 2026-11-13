@@ -74,7 +74,7 @@ cargo run -p mypass-kdbx --example write_crosscompat -- <out.kdbx>   # synthetic
 - Argon2 at 64 MiB x 3 passes takes minutes at opt-level 0, so dependencies are built at opt-level 3
   in the dev and test profiles (`[profile.dev.package."*"]`, `[profile.test.package."*"]`).
 - CI runs `lint` (clippy on macOS and Windows, format check on macOS), `test` (macOS and Windows),
-  `i18n` (the `js` part on Ubuntu), `ui` (the `ui` part on Ubuntu: frozen pnpm install, check, tests, build), `crosscompat` and a disabled Windows integration skeleton as
+  `js` (the `js` part on Ubuntu), `ui` (the `ui` part on Ubuntu: frozen pnpm install, check, tests, build), `crosscompat` and a disabled Windows integration skeleton as
   parallel jobs, joined by the `ci`
   aggregator.
 - The `crosscompat` CI job (Rust writes and Python reads, then the reverse) uses `pykeepass`. The

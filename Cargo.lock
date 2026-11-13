@@ -3523,8 +3523,10 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 name = "repo-guards"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "serde_json",
  "serde_yaml_ng",
+ "sha2 0.11.1",
  "toml 1.2.1+spec-1.1.0",
 ]
 

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en" data-theme="system">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Check this browser — MyPass</title>
+  <link rel="stylesheet" href="shared/ui.css">
+  <style>
+    body { margin: 0; padding: 32px 20px; background: var(--mp-fill); color: var(--mp-text); font: 15px -apple-system, BlinkMacSystemFont, sans-serif; }
+    main { max-width: 620px; margin: 0 auto; padding: 28px; border-radius: 16px; background: var(--mp-bg); }
+    h1 { font-size: 24px; margin: 0 0 12px; }
+    p { line-height: 1.5; }
+    .muted { color: var(--mp-secondary); }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 20px 0; }
+    button { font: inherit; border: 1px solid var(--mp-line); border-radius: 8px; padding: 10px 14px; background: var(--mp-fill); color: var(--mp-text); cursor: pointer; }
+    #check-btn { background: #007aff; color: white; border-color: #007aff; }
+    button:focus-visible { outline: 3px solid #007aff; outline-offset: 3px; }
+    button:disabled { opacity: .6; cursor: wait; }
+    dl { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 16px; border-top: 1px solid var(--mp-hairline); padding-top: 20px; }
+    dt { color: var(--mp-secondary); } dd { margin: 0; overflow-wrap: anywhere; }
+    [hidden] { display: none !important; }
+    @media (max-width: 440px) { body { padding: 12px; } main { padding: 20px; } dl { grid-template-columns: 1fr; gap: 8px; } dd { margin-bottom: 12px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Check this browser</h1>
+    <p>Check this profile for other password managers and send the results to MyPass settings.</p>
+    <p class="muted">Chrome will ask to let MyPass read browser privacy settings and your installed extensions. This check does not change settings or disable extensions.</p>
+    <div class="actions">
+      <button id="check-btn" type="button">Allow and check</button>
+      <button id="open-settings-btn" type="button">Open MyPass settings</button>
+    </div>
+    <p id="check-status" role="status">Permission has not been requested.</p>
+    <dl id="results" hidden>
+      <dt>Browser password saving</dt><dd id="password-saving-result"></dd>
+      <dt>Other manager extensions</dt><dd id="extensions-result"></dd>
+    </dl>
+    <p class="muted">This cannot verify Google Password Manager passkeys, autofill, or macOS providers. Use the help in MyPass → Settings → Browser to check those separately.</p>
+    <div class="actions">
+      <button id="password-settings-btn" type="button">Browser password settings</button>
+      <button id="extensions-settings-btn" type="button">Browser extensions</button>
+    </div>
+  </main>
+  <script src="shared/appearance-settings.js"></script>
+  <script src="shared/theme.js"></script>
+  <script src="browser-check.js"></script>
+</body>
+</html>

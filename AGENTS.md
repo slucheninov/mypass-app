@@ -29,7 +29,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `src-tauri` (package `mypass-app`, lib `mypass_app_lib`) | implemented | The Tauri 2 app shell: the typed commands and events (`tauri-specta`), capabilities, native file dialogs, plugins, tray, global hotkeys, single instance, quit flow, native-side i18n; a workspace member listed explicitly |
 | `mypass-bridge` | in progress (stage 3) | Browser bridge protocol, codec, endpoint, relay and loopback server (`server` feature, off for the host) |
 | `mypass-host` | in progress (stage 3) | Native messaging host binary; never links the session, core or KDBX crates |
-| `extension/` | planned | The Chromium extension (JavaScript, with its own Node test suites) |
+| `extension/` | moved in (stage 3, wire up in progress) | The Chromium extension (Manifest V3 JavaScript, vendored `vendor/jsQR.js`), with its 41 Node suites in `extension/tests/`, run by `scripts/test-extension.sh` |
 
 ## Repo layout
 
@@ -85,7 +85,7 @@ pnpm build                       # production bundle into dist/
 - The `ui` part runs `pnpm install --frozen-lockfile`, `pnpm check`, `pnpm test` and `pnpm build`;
   `--ci` makes a missing node or pnpm a failure, a local run without them prints `ui: NOT RUN`.
 - The `js` part runs `node --test scripts/` (the i18n converter and catalog tests; plain Node, nothing
-  to install) and, from stage 3, the extension suites. `--no-js` is only for a local machine without
+  to install) and the extension suites (`scripts/test-extension.sh`: every `extension/tests/*.test.js` in its own `node` process, `N suites, M failed`; `--list` prints the discovered files). `--no-js` is only for a local machine without
   `node`, and it prints that the JavaScript suites were NOT run. It is never a way to report a change as tested when that change touches `extension/`.
 - Windows: run `cargo` commands from PowerShell, and `scripts/*.sh` from Git Bash.
 
@@ -110,16 +110,16 @@ jobs are independent and run in parallel, so the wall-clock time is the slowest 
   Python reads, then Python writes / Rust reads. It is path-gated on pull requests through
   `changes.outputs.crosscompat` and always runs on main pushes and manual dispatch.
   The env-gated Rust test prints a skip locally unless `MYPASS_PYKEEPASS_VAULT` is set.
-- `i18n` runs on Ubuntu with Node from `.nvmrc` (`actions/setup-node`): `bash scripts/test.sh --ci
+- `js` runs on Ubuntu with Node from `.nvmrc` (`actions/setup-node`): `bash scripts/test.sh --ci
   --only js`, i.e. `node --test scripts/` (the xcstrings converter and the catalog completeness
-  tests; built-in runner, no dependencies, no package install). It always runs and must be `success`.
+  tests) and `scripts/test-extension.sh` (the extension suites); built-in runner, no dependencies, no package install. It always runs and must be `success`.
 - `ui` runs on Ubuntu with pnpm (`pnpm/action-setup`, `version` equal to `packageManager`) and Node from
   `.nvmrc` with the pnpm cache: `bash scripts/test.sh --ci --only ui`. It has no rust-cache (it never
   runs cargo), always runs and must be `success`.
 - `windows-integration` is a disabled skeleton for stage 6: it runs only when the repository variable
   `MYPASS_WINDOWS_INTEGRATION_TESTS` is `true`, otherwise it is skipped.
 - `ci` is the aggregator and the required status check. It needs every other job (`changes`, `lint`,
-  `test`, `i18n`, `ui`, `windows-integration`, `crosscompat`); a gated job may be `skipped`, every other result
+  `test`, `js`, `ui`, `windows-integration`, `crosscompat`); a gated job may be `skipped`, every other result
   (`lint` and `test` included) must be `success`. A job added later must be wired into it
   (pinned by `ci_aggregator_needs_every_job`).
 - `.github/workflows/codeql.yml` is a separate workflow (push to `main`, weekly, manual; never on pull
@@ -387,7 +387,7 @@ skipped. Pause, re-read this file, dispatch the next chunk.
 
 English for code, comments, commit messages, docs, plans and specs. Cyrillic appears only inside tests
 as `\u{..}` escapes, in `*.xcstrings` and in the root `RUN.md` (the Ukrainian manual checklist,
-never translated). Literal Cyrillic is also allowed in the translation files
+never translated). Literal Cyrillic is also allowed in the extension files `extension/shared/{form-detection,page-identifier}.js` and `extension/tests/{formDetection,inlineIcon,pageIdentifier}.test.js` (localized keyword lists and their tests; the extension is vendored as copied), and in the translation files
 `src/lib/i18n/locales/{uk,ru}.json` and `src-tauri/resources/macos/{uk,ru}.lproj/InfoPlist.strings`
 (exactly these four; the English files stay Cyrillic-free, and the Node tests read their expectations
 from the catalogs), in `crates/mypass-kdbx/tests/unicode.rs`,

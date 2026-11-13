@@ -112,7 +112,7 @@ fn test_sh_ui_part_says_plainly_when_no_ui_suite_exists() {
 #[test]
 fn test_sh_js_part_runs_the_node_suites() {
     // The i18n converter and catalog tests use only the Node built-in runner; they belong to the
-    // js part, so `--no-js` honestly skips them and `--ci --only js` is what the `i18n` job runs.
+    // js part, so `--no-js` honestly skips them and `--ci --only js` is what the `js` job runs.
     let script = repo_guards::read("scripts/test.sh");
     assert!(script.contains("node --test scripts/"));
     assert!(script.contains("need_tool node js"));

@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html data-theme="system">
+<head>
+  <meta charset="utf-8">
+  <title>MyPass</title>
+  <link rel="stylesheet" href="shared/ui.css">
+  <link rel="stylesheet" href="shared/prompt-card.css">
+  <style>
+    html, body { margin: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      padding: 16px;
+      box-sizing: border-box;
+      color: var(--mp-text);
+      background: var(--mp-bg);
+    }
+    .brand-key { display: block; width: 32px; height: 32px; margin: 0 0 12px; }
+    h1.panel-title { font-size: 15px; font-weight: 600; margin: 0 0 6px; line-height: 1.3; }
+    p.panel-helper { font-size: 13px; color: var(--mp-secondary); margin: 0 0 12px; line-height: 1.35; }
+    .btn-primary, .btn-secondary {
+      box-sizing: border-box;
+      height: var(--mp-control-height, 32px);
+      font-family: inherit;
+      font-size: var(--mp-control-font, 13px);
+      font-weight: var(--mp-control-weight, 600);
+      line-height: 1;
+      padding: 0 12px;
+      border-radius: var(--mp-control-radius, 8px);
+      cursor: pointer;
+      border: 1px solid transparent;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .btn-primary { background: #007aff; color: #fff; border-color: #007aff; }
+    .btn-secondary { background: var(--mp-fill); color: var(--mp-text); border-color: var(--mp-line); margin-left: 8px; }
+    .btn-row { margin-top: 4px; }
+    .passkey-fields { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 12px; margin: 12px 0 20px; font-size: 13px; }
+    .passkey-fields dt { color: var(--mp-secondary); }
+    .passkey-fields dd { margin: 0; overflow-wrap: anywhere; word-break: normal; }
+  </style>
+</head>
+<body>
+  <img class="brand-key" src="icons/icon128.png" width="32" height="32" alt="">
+  <div id="prompt-card-root"></div>
+  <script src="shared/autofill-settings.js"></script>
+  <script src="shared/appearance-settings.js"></script>
+  <script src="shared/theme.js"></script>
+  <script src="shared/prompt-card.js"></script>
+  <script src="prompt.js"></script>
+</body>
+</html>

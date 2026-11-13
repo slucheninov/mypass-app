@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MyPass inline icon — positioned and transformed body</title>
+  <style>
+    /* Both rules used to move the icon: a positioned, margined <body> made it sit 40 px off, and a
+       transformed <body> shifted it by the transform. The icon must still touch the right end of
+       each field. */
+    body { margin: 40px; position: relative; font: 16px system-ui, sans-serif; }
+    body.transformed { margin: 8px; position: static; transform: translate(8px, 19px); }
+    input { box-sizing: border-box; width: 100%; height: 44px; padding: 8px; font: inherit; margin: 4px 0 18px; }
+    button { padding: 8px 12px; }
+  </style>
+</head>
+<body>
+<h1>Sign in</h1>
+<p>Synthetic fixture. <button type="button" onclick="document.body.classList.toggle('transformed')">Toggle transformed body</button></p>
+<form onsubmit="return false">
+  <label for="u">Email</label>
+  <input id="u" name="username" autocomplete="username">
+  <label for="p">Password</label>
+  <input id="p" name="password" type="password" autocomplete="current-password">
+</form>
+</body>
+</html>

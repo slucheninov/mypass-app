@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MyPass inline icon — scaled root</title>
+  <script>
+    const scale = new URLSearchParams(location.search).get('scale');
+    if (scale === 'half' || scale === 'double' || scale === 'wide') document.documentElement.className = scale;
+  </script>
+  <style>
+    /* A scaled <html> is the containing block of the position:fixed icon and picker hosts, so
+       their left/top are local pixels. The icon must still touch the right end of each field and
+       the picker must still open flush under it, at scale 0.5, 2 and the non-uniform 0.5 x 2. The
+       icon must also keep its on-screen size (a local 28 px renders 14 or 56 under the scale). */
+    html.half { transform: scale(0.5); transform-origin: 0 0; width: 200vw; }
+    html.double { transform: scale(2); transform-origin: 0 0; width: 50vw; }
+    html.wide { transform: scale(0.5, 2); transform-origin: 0 0; width: 200vw; }
+    body { margin: 24px; font: 16px system-ui, sans-serif; }
+    input { box-sizing: border-box; width: 100%; height: 64px; padding: 8px; font: inherit; margin: 4px 0 18px; }
+    button { padding: 8px 12px; }
+  </style>
+</head>
+<body>
+<h1>Sign in</h1>
+<p>Synthetic fixture. Choosing a scale reloads the page; the selection survives subsequent reloads.
+  <button type="button" onclick="location.search='?scale=half'">Scale 0.5</button>
+  <button type="button" onclick="location.search='?scale=double'">Scale 2</button>
+  <button type="button" onclick="location.search='?scale=wide'">Scale 0.5 x 2</button>
+  <button type="button" onclick="location.search=''">Reset</button></p>
+<form onsubmit="return false">
+  <label for="u">Email</label>
+  <input id="u" name="username" autocomplete="username">
+  <label for="p">Password</label>
+  <input id="p" name="password" type="password" autocomplete="current-password">
+</form>
+</body>
+</html>

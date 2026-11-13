@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html data-theme="system">
+<head>
+  <meta charset="utf-8">
+  <title>New Entry</title>
+  <link rel="stylesheet" href="shared/ui.css">
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      color: var(--mp-text);
+      background: var(--mp-fill);
+      display: flex;
+      flex-direction: column;
+    }
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 16px;
+      background: var(--mp-fill);
+      border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+    }
+    .toolbar h1 {
+      flex: 1;
+      margin: 0;
+      text-align: center;
+      font-size: 15px;
+      font-weight: 650;
+    }
+    .toolbar-btn {
+      box-sizing: border-box;
+      height: var(--mp-control-height, 32px);
+      min-width: 72px;
+      padding: 0 12px;
+      border-radius: var(--mp-control-radius, 8px);
+      font-family: inherit;
+      font-size: var(--mp-control-font, 13px);
+      font-weight: var(--mp-control-weight, 600);
+      line-height: 1;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #cancel-btn {
+      background: var(--mp-bg);
+      border: 1px solid var(--mp-line, #d2d2d7);
+      color: var(--mp-text, #1d1d1f);
+    }
+    #save-btn {
+      background: var(--mp-blue, #007aff);
+      border: 0;
+      color: #fff;
+    }
+    #favorite-btn {
+      box-sizing: border-box;
+      width: var(--mp-control-height, 32px);
+      height: var(--mp-control-height, 32px);
+      padding: 0;
+      border: 0;
+      border-radius: var(--mp-control-radius, 8px);
+      background: transparent;
+      appearance: none;
+      -webkit-appearance: none;
+      box-shadow: none;
+      font-size: 20px;
+      color: #8e8e93;
+      line-height: 1;
+      cursor: pointer;
+    }
+    #favorite-btn[aria-pressed="true"] { color: #f5a524; }
+    #favorite-btn:focus-visible {
+      outline: 2px solid var(--mp-blue, #007aff);
+      outline-offset: 2px;
+    }
+    [hidden] { display: none !important; }
+    .scroll {
+      flex: 1;
+      overflow: auto;
+      padding: 0 24px 28px;
+    }
+    .hero {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      padding: 24px 0 20px;
+    }
+    .hero-icon {
+      width: 72px;
+      height: 72px;
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .hero-letter {
+      color: #fff;
+      font-size: 42px;
+      font-weight: 650;
+      line-height: 1;
+    }
+    .hero-title {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 700;
+      text-align: center;
+      word-break: break-word;
+    }
+    .field-card {
+      max-width: 420px;
+      margin: 0 auto;
+      background: var(--mp-bg);
+      border: 0.5px solid rgba(0, 0, 0, 0.08);
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+      padding: 4px 16px;
+    }
+    .field-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-top: 1px solid rgba(0, 0, 0, 0.08);
+      min-height: 40px;
+    }
+    .field-card > .field-row:first-child,
+    .field-card > .stack:first-child { border-top: 0; }
+    .field-card input[type="text"],
+    .field-card input[type="password"],
+    .field-card input[type="url"],
+    .field-card textarea,
+    .notes-title,
+    .notes-body {
+      flex: 1;
+      width: 100%;
+      box-sizing: border-box;
+      border: 0;
+      background: transparent;
+      font: inherit;
+      font-size: 15px;
+      color: var(--mp-text);
+      padding: 10px 0;
+      outline: none;
+    }
+    .field-card textarea { min-height: 80px; resize: vertical; }
+    .icon-btn, .text-btn {
+      border: 0;
+      background: transparent;
+      color: var(--mp-secondary);
+      cursor: pointer;
+      font-size: 13px;
+      padding: 4px;
+    }
+    .text-btn { color: #007aff; font-weight: 600; }
+    .match-label {
+      color: var(--mp-text);
+      font-size: 15px;
+    }
+    select {
+      margin-left: auto;
+      border: 1px solid #d2d2d7;
+      background: var(--mp-bg);
+      border-radius: 8px;
+      font: inherit;
+      font-size: 13px;
+      padding: 4px 8px;
+    }
+    .help {
+      margin: 0 0 10px;
+      color: var(--mp-secondary);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .otp-add {
+      border: 0;
+      background: transparent;
+      color: #007aff;
+      font: inherit;
+      font-size: 15px;
+      text-align: left;
+      padding: 10px 0;
+      cursor: pointer;
+      width: 100%;
+    }
+    .form-error {
+      max-width: 420px;
+      margin: 12px auto 0;
+      color: #d70015;
+      font-size: 13px;
+      text-align: center;
+    }
+    body.is-notes .scroll {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      padding: 20px 24px 24px;
+    }
+    .notes-wrap {
+      width: 100%;
+      max-width: 480px;
+      margin: 0 auto;
+    }
+    #notes-editor:not([hidden]) {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+    }
+    .notes-card {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--mp-bg);
+      border: 0.5px solid rgba(0, 0, 0, 0.08);
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+      padding: 4px 16px 12px;
+    }
+    #notes-title {
+      flex: 0 0 auto;
+      height: 44px;
+      box-sizing: border-box;
+      border: 0;
+      border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+      border-radius: 0;
+      background: transparent;
+      padding: 0;
+      font-size: 17px;
+      font-weight: 650;
+    }
+    .md-bar {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 0;
+      border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+    }
+    .md-divider {
+      width: 1px;
+      height: 16px;
+      background: #d2d2d7;
+    }
+    .md-bar button {
+      box-sizing: border-box;
+      min-width: var(--mp-control-height, 32px);
+      height: var(--mp-control-height, 32px);
+      border: 1px solid var(--mp-line, #d2d2d7);
+      background: var(--mp-bg);
+      border-radius: var(--mp-control-radius, 8px);
+      cursor: pointer;
+      font-size: var(--mp-control-font, 13px);
+    }
+    #notes-body {
+      flex: 1 1 auto;
+      min-height: 0;
+      height: auto;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      padding: 12px 0 0;
+      resize: none;
+      line-height: 1.45;
+    }
+  </style>
+</head>
+<body>
+  <header class="toolbar">
+    <button id="cancel-btn" class="toolbar-btn" type="button">Cancel</button>
+    <h1 id="nav-title">New Entry</h1>
+    <button id="favorite-btn" type="button" aria-pressed="false" aria-label="Add to Favorites">☆</button>
+    <button id="save-btn" class="toolbar-btn" type="button">Save</button>
+  </header>
+  <div class="scroll">
+    <div id="hero" class="hero">
+      <div id="hero-icon" class="hero-icon" aria-hidden="true"><span id="hero-letter" class="hero-letter">?</span></div>
+      <p id="hero-title" class="hero-title">(untitled)</p>
+    </div>
+
+    <div id="login-card" class="field-card">
+      <div class="field-row">
+        <input id="login-title" type="text" placeholder="Title" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field-row">
+        <input id="login-username" type="text" placeholder="Username" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field-row">
+        <input id="login-password" type="password" placeholder="Password" autocomplete="new-password" spellcheck="false">
+        <button id="login-password-reveal" class="icon-btn" type="button" aria-label="Show password">Show</button>
+        <button id="login-generate" class="text-btn" type="button">Generate</button>
+      </div>
+      <div class="field-row">
+        <input id="login-url" type="url" placeholder="URL" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="stack">
+        <div class="field-row">
+          <span class="match-label">Match</span>
+          <select id="match-mode" aria-label="Match">
+            <option value="registrable-domain">Registrable domain (recommended)</option>
+            <option value="host">Exact host</option>
+            <option value="starts-with">Starts with</option>
+            <option value="exact">Exact address</option>
+            <option value="never">Never (hide from extension)</option>
+          </select>
+        </div>
+        <p id="match-help" class="help"></p>
+      </div>
+      <div class="field-row">
+        <textarea id="login-notes" placeholder="Notes" rows="3"></textarea>
+      </div>
+      <div class="field-row" id="otp-add-row">
+        <button id="otp-add" class="otp-add" type="button">+ Add one-time password</button>
+      </div>
+      <div class="field-row" id="otp-row" hidden>
+        <input id="otp-input" type="text" placeholder="otpauth:// or secret" autocomplete="off" spellcheck="false">
+        <button id="otp-remove" class="text-btn" type="button">Remove</button>
+      </div>
+    </div>
+
+    <div id="card-card" class="field-card" hidden>
+      <div class="field-row">
+        <input id="card-title" type="text" placeholder="Title" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field-row">
+        <input id="card-number" type="password" placeholder="Card Number" autocomplete="off" spellcheck="false" inputmode="numeric">
+        <button id="card-number-reveal" class="icon-btn" type="button" aria-label="Show card number">Show</button>
+      </div>
+      <div class="field-row">
+        <input id="card-holder" type="text" placeholder="Cardholder Name" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field-row">
+        <input id="card-expiry" type="text" placeholder="Expiry Date (MM/YY)" autocomplete="off" spellcheck="false" inputmode="numeric">
+      </div>
+      <div class="field-row">
+        <input id="card-cvv" type="password" placeholder="CVV" autocomplete="off" spellcheck="false" inputmode="numeric">
+        <button id="card-cvv-reveal" class="icon-btn" type="button" aria-label="Show CVV">Show</button>
+      </div>
+    </div>
+
+    <div id="notes-editor" class="notes-wrap" hidden>
+      <div class="notes-card">
+        <input id="notes-title" class="notes-title" type="text" placeholder="Title" autocomplete="off">
+        <div class="md-bar">
+          <button id="md-bold" type="button" aria-label="Bold">B</button>
+          <button id="md-italic" type="button" aria-label="Italic">I</button>
+          <span class="md-divider" aria-hidden="true"></span>
+          <button id="md-code" type="button" aria-label="Code">`code`</button>
+        </div>
+        <textarea id="notes-body" class="notes-body" placeholder="Note"></textarea>
+      </div>
+    </div>
+    <p id="form-error" class="form-error" hidden></p>
+  </div>
+  <script src="shared/appearance-settings.js"></script>
+  <script src="shared/theme.js"></script>
+  <script src="shared/entry-visuals.js"></script>
+  <script src="create.js"></script>
+</body>
+</html>

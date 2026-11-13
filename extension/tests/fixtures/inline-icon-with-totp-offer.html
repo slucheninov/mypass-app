@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>MyPass fixture — fillable fields AND a TOTP candidate on one page</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; max-width: 640px; }
+    input { padding: 6px 8px; font-size: 14px; width: 260px; }
+    .why { background: #fff8e1; border-left: 4px solid #f0b429; padding: 12px 16px; margin: 24px 0; }
+  </style>
+</head>
+<body>
+  <h1>Account security</h1>
+
+  <div class="why">
+    <strong>Why this fixture exists.</strong> The inline-icon work shipped a defect that killed
+    the Stage-5 TOTP save banner: an uncaught <code>ReferenceError</code> thrown while building
+    the first icon aborted the rest of the content script, including
+    <code>observeTotpCandidates</code>. No existing fixture could reproduce it — the TOTP
+    candidate pages (<code>otpauth-link</code>, <code>manual-key</code>, <code>qr</code>) have no
+    fillable field, so no icon is ever built there and nothing throws; and the pages with fields
+    (<code>login</code>, <code>login-with-otp</code>) carry no TOTP candidate, so the banner has
+    nothing to offer. The two conditions never met. This page holds both.
+  </div>
+
+  <h2>Sign in</h2>
+  <form>
+    <label>Username <input type="text" name="username" autocomplete="username"></label>
+    <br>
+    <label>Password <input type="password" name="password" autocomplete="current-password"></label>
+    <br>
+    <button type="submit">Sign in</button>
+  </form>
+
+  <h2>Set up two-factor authentication</h2>
+  <p>Scan the QR code, or use this link if scanning isn't available:</p>
+  <a href="otpauth://totp/Example:alice@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Example">Open in authenticator app</a>
+
+  <p><strong>Expect both at once:</strong> the key icon in the username and password fields,
+     <em>and</em> the &laquo;Save 2FA to MyPass?&raquo; banner in the bottom-right corner. If the
+     icon appears but the banner does not, the content script threw after attaching icons —
+     check the page console for an exception.</p>
+</body>
+</html>

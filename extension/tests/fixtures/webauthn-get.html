@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>MyPass WebAuthn get fixture</title></head>
+<body>
+  <h1>Sign in with a passkey</h1>
+  <p>
+    Register first with <a href="webauthn-create.html">webauthn-create.html</a> on the
+    same origin — the relying-party ID is the page's own hostname.
+  </p>
+  <button id="signin-btn">Sign in with passkey</button>
+  <button id="cancel-btn">Cancel pending request</button>
+  <p>With MyPass enabled and unlocked, its confirmation must appear. With a competing proxy enabled, check the MyPass popup for an actionable conflict warning. Canceling must not leave a stale confirmation.</p>
+  <pre id="result"></pre>
+  <script>
+    let controller;
+    document.getElementById("cancel-btn").addEventListener("click", () => controller?.abort());
+    function randomBytes(n) {
+      const arr = new Uint8Array(n);
+      crypto.getRandomValues(arr);
+      return arr;
+    }
+    document.getElementById('signin-btn').addEventListener('click', async () => {
+      controller = new AbortController();
+      try {
+        const credential = await navigator.credentials.get({
+          signal: controller.signal,
+          publicKey: { challenge: randomBytes(32), rpId: location.hostname, allowCredentials: [] }
+        });
+        document.getElementById('result').textContent = JSON.stringify(credential.toJSON(), null, 2);
+      } catch (error) {
+        document.getElementById('result').textContent = 'Error: ' + error.name + ' — ' + error.message;
+      }
+    });
+  </script>
+</body>
+</html>
