@@ -10,7 +10,7 @@ to report a vulnerability, see [`SECURITY.md`](SECURITY.md); coding agents read
 You need [rustup](https://rustup.rs). The toolchain is pinned in `rust-toolchain.toml` (with
 `rustfmt` and `clippy`) and rustup installs it on first use. `bash` is needed for
 `scripts/test.sh`. Node.js (the version in `.nvmrc`) is needed for the `js` part of `scripts/test.sh`, which runs the
-i18n converter and catalog tests with the built-in `node --test` runner (no packages to install);
+i18n converter and catalog tests and the Chromium extension suites (`scripts/test-extension.sh`, Node 26 or newer) with the built-in Node runners (no packages to install);
 `cargo test --workspace` itself needs no Node. pnpm (the version in `packageManager` of `package.json`) is needed for the `ui` part and for working on
 the frontend; without it `scripts/test.sh` says `ui: NOT RUN`, and `--ci` fails instead.
 
@@ -27,8 +27,8 @@ On Windows, run `cargo` commands from PowerShell and `scripts/*.sh` from Git Bas
 | `mypass-session` | in progress (stage 2a) | Vault session, settings, scheduling and the command facade; no Tauri dependency |
 | `src/` (Svelte UI) | implemented (stage 2b) | The webview UI: typed API wrapper, stores, i18n, design kit, screens and the three windows (main, settings, tray panel), with its Vitest suites |
 | `src-tauri` (`mypass-app`) | in progress (stage 2a) | The Tauri 2 app shell and the typed IPC bindings (`src/lib/bindings.ts`, generated) |
-| `mypass-bridge`, `mypass-host` | in progress (stage 3) | Browser bridge and native messaging host |
-| `extension/` | planned | The Chromium extension |
+| `mypass-bridge`, `mypass-host` | implemented | Browser bridge (protocol, loopback server, pairing) and the native messaging host; `scripts/build-host.sh` builds the host and `scripts/dev-app.sh` runs the app with it |
+| `extension/` | implemented | The Chromium extension (Manifest V3 JavaScript) with its Node suites, run by `scripts/test-extension.sh` |
 
 ## Build and check
 
@@ -63,6 +63,8 @@ cargo run -p mypass-kdbx --example write_crosscompat -- <out.kdbx>   # synthetic
 - The `js` part runs `node --test scripts/`: `convert-xcstrings.test.mjs` (the converter) and
   `i18n-completeness.test.mjs` (the committed catalogs: every key in `uk` and `ru`, matching
   placeholders, plural `other` branches, InfoPlist strings). `npm run i18n:test` is the same command.
+  The same part then runs `scripts/test-extension.sh`: every `extension/tests/*.test.js` in its own node
+  process, ending with `N suites, M failed`; `--list` prints the suite files.
   The JSON catalogs in `src/lib/i18n/locales/` came from `node scripts/convert-xcstrings.mjs --in
   <Localizable.xcstrings> --out src/lib/i18n/locales --strict` once and are now edited by hand; add
   a new key to all three files together (`--merge` keeps hand edits if the converter is re-run).

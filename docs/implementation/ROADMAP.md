@@ -70,12 +70,11 @@ Last updated: 2026-11-13
 
 ## Stage 3 extension bridge
 
-- [ ] `mypass-bridge`: the browser protocol, loopback server, per-launch token and pairing.
-- [ ] `mypass-host`: the native messaging host, sharing the per-launch endpoint with the app through
-  the 0600 file store in `AppPaths::secrets_shared`, and self-registration of native messaging
-  manifests for all Chromium browsers.
-- [ ] The extension moved into this repository as `extension/` with its Node suites running in CI.
-- [ ] Browser settings pane with pairing and save proposals.
+- [ ] Manual: walk the Stage 3 checklist in `RUN.md` (registration, pairing, endpoint file, autofill,
+  save flows, lock behaviour, crash and quit, other browsers, iCloud guard) on a copy of the owner's
+  vault and record the results in the PR.
+- [ ] `PairingManager`: add one atomic "clear all" (a single save plus the cache). `reset_pairings` on a
+  running bridge revokes one browser at a time, so an error midway leaves a partial reset.
 - [ ] Before any `connectNative` use: host handshake lazily on the first frame, reconnect with a fresh
   handshake, never resend a frame already written.
 

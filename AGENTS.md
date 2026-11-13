@@ -27,9 +27,9 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `mypass-session` | implemented | Vault session, settings, scheduling and the `AppCore` command facade; no Tauri dependency |
 | `src/` (Svelte UI) | implemented (stage 2b) | The webview UI: typed API wrapper, stores (`src/lib/stores`), i18n, design kit, the screens (`src/screens`, `src/screens/editors`) and the windows (`src/windows`: main, settings, tray panel) |
 | `src-tauri` (package `mypass-app`, lib `mypass_app_lib`) | implemented | The Tauri 2 app shell: the typed commands and events (`tauri-specta`), capabilities, native file dialogs, plugins, tray, global hotkeys, single instance, quit flow, native-side i18n; a workspace member listed explicitly |
-| `mypass-bridge` | in progress (stage 3) | Browser bridge protocol, codec, endpoint, relay and loopback server (`server` feature, off for the host) |
-| `mypass-host` | in progress (stage 3) | Native messaging host binary; never links the session, core or KDBX crates |
-| `extension/` | moved in (stage 3, wire up in progress) | The Chromium extension (Manifest V3 JavaScript, vendored `vendor/jsQR.js`), with its 41 Node suites in `extension/tests/`, run by `scripts/test-extension.sh` |
+| `mypass-bridge` | implemented | Browser bridge protocol, codec, endpoint, relay and loopback server (`server` feature, off for the host) |
+| `mypass-host` | implemented | Native messaging host binary; never links the session, core or KDBX crates |
+| `extension/` | implemented | The Chromium extension (Manifest V3 JavaScript, vendored `vendor/jsQR.js`), with its 41 Node suites in `extension/tests/`, run by `scripts/test-extension.sh` |
 
 ## Repo layout
 
@@ -45,6 +45,8 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `index.html`, `vite.config.ts`, `svelte.config.js`, `tsconfig.json`, `vitest.setup.ts` | The Svelte 5 (runes) + Vite + Vitest toolchain of the UI |
 | `src/` | The UI: `main.ts` picks the root for the window label (`windows/`), `lib/` the API wrapper, stores and i18n, `screens/` the screens and editors, `test/` holds the fake backend (type-checked against the bindings), the render helper and the shared source scan `textScan.ts`, `scaffold.test.ts` holds the static source guards, `journey.test.ts`, `a11y.test.ts` and `i18n.audit.test.ts` the journey, accessibility and string-audit suites |
 | `scripts/test.sh` | The single local and CI test entry point |
+| `scripts/build-host.sh`, `scripts/dev-app.sh` | Build the `mypass-host` sidecar (signed when `MYPASS_SIGNING_IDENTITY` names a certificate SHA-1; never ad-hoc), and build and run the app locally with it |
+| `scripts/test-extension.sh` | Runs every `extension/tests/*.test.js` suite in its own node process (`--list` prints them); part of the `js` part |
 | `scripts/convert-xcstrings.mjs` | One-time converter of the old app's String Catalogs; its output (`src/lib/i18n/locales/{en,uk,ru}.json`, `src-tauri/resources/macos/*.lproj/InfoPlist.strings`) is then the hand-edited source of truth |
 | `.github/` | Workflows (`ci.yml`, `codeql.yml`), Dependabot config, issue forms, pull request template |
 | `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts) and the Stage 2b UI walk-through |
@@ -57,7 +59,8 @@ Stage 1 (the Rust core: KDBX4 engine, TOTP, generator, Public Suffix List, match
 vault file) is implemented.
 Stage 2a (the app backend behind the glass: `mypass-platform` macOS bodies, `mypass-session`, the Tauri shell with commands, events, capabilities, tray, hotkeys, single instance and the quit flow) is implemented; its open follow-ups are in `docs/implementation/ROADMAP.md`.
 Stage 2b (the Svelte UI: unlock, create and open, the three-pane shell, editors, history and bin, generator, settings window, CSV import, tray panel, themes, uk/ru/en) has landed; its manual checks live in `RUN.md`.
-Later stages (rest of the app backend, extension bridge, passkeys, macOS release, Windows) are listed in `docs/implementation/ROADMAP.md`.
+Stage 3 (the browser bridge: `mypass-bridge`, the `mypass-host` native messaging host, the Settings Browser pane with pairing and save proposals, and the extension moved into `extension/` with its suites in CI) is implemented apart from the owner's manual checks, which live in `RUN.md`.
+Later stages (the rest of the app backend, passkeys, macOS release, Windows) are listed in `docs/implementation/ROADMAP.md`.
 
 ## Build, run, test
 
@@ -240,8 +243,23 @@ change is done.
   `browser_proposal_take` is the one command that hands a browser's proposed password to the webview, once, after
   the user opened the proposal; like typed input it may land in an encrypted editor draft. `browser_status` never
   returns a secret or a hash.
+- **Browser bridge.** Three hops: the extension talks to `mypass-host` (native messaging, one host process per
+  message), the host to the app's loopback server (`127.0.0.1`, `mypass_bridge::server`, thread per connection, no async
+  runtime). The host never links the session, core or KDBX crates. Each launch draws a fresh token and port and
+  publishes them as an endpoint record in the hardened 0600 file store under `AppPaths::secrets_shared`
+  (read by the host); the pairing hashes live in the app-only Keychain and the host can never read them. A connection
+  starts with a handshake: the host sends a hello with a fresh nonce, the server answers with an HMAC proof over
+  the token, and only after the host verified it does the host send a token-bearing request, so a squatter on a stale
+  port never receives the token; unauthenticated connections have an absolute deadline. The gate order is quitting,
+  locked, then pairing; gating `match`es stay exhaustive (no wildcard arm), so a new request type is a compile error
+  until it is classified. Residual risk: a process of the same user can read the endpoint file and request pairing
+  (pairing still needs the code shown in the app), or replace the host copy the manifests point at; stage 5 moves
+  the endpoint into a Keychain item that trusts only the signed host and points the manifests at the host inside the
+  bundle (ROADMAP). The earlier idea of a shared Keychain access group was dropped.
 - **Signing.** The stable team `W645B93PPQ` arrives in stage 5. Never sign ad-hoc: it breaks the
   Keychain access that guards the unlock key.
+- **Manual checks and the old app.** The manual checks of every stage live in `RUN.md` (Ukrainian). Never run the old
+  Swift MyPass side by side with this app, and open only a copy of a real vault.
 
 ---
 
@@ -389,7 +407,7 @@ English for code, comments, commit messages, docs, plans and specs. Cyrillic app
 as `\u{..}` escapes, in `*.xcstrings` and in the root `RUN.md` (the Ukrainian manual checklist,
 never translated). Literal Cyrillic is also allowed in the extension files `extension/shared/{form-detection,page-identifier}.js` and `extension/tests/{formDetection,inlineIcon,pageIdentifier}.test.js` (localized keyword lists and their tests; the extension is vendored as copied), and in the translation files
 `src/lib/i18n/locales/{uk,ru}.json` and `src-tauri/resources/macos/{uk,ru}.lproj/InfoPlist.strings`
-(exactly these four; the English files stay Cyrillic-free, and the Node tests read their expectations
+(exactly these four of the translation files; the English files stay Cyrillic-free, and the Node tests read their expectations
 from the catalogs), in `crates/mypass-kdbx/tests/unicode.rs`,
 vendored upstream data under `crates/mypass-core/resources/`, and opaque binary fixtures
 `crates/mypass-kdbx/tests/fixtures/*.kdbx` (fixture README and generator files follow the text rules).
