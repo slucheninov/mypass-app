@@ -4,6 +4,7 @@
 //! the native messaging host links none of that code.
 
 pub mod codec;
+pub mod diagnostics;
 pub mod endpoint;
 pub mod gating;
 #[cfg(feature = "server")]

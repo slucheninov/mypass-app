@@ -423,6 +423,30 @@ pub struct BrowserDiagnosticsReport {
     pub enabled_managers: Vec<String>,
 }
 
+/// Most manager names a report may carry.
+const MAX_REPORTED_MANAGERS: usize = 20;
+/// Longest manager name, in characters.
+const MAX_MANAGER_NAME_CHARS: usize = 120;
+
+impl BrowserDiagnosticsReport {
+    /// Bounds and consistency rules of the Swift app: a hostile or buggy extension cannot push
+    /// oversized, control-character or self-contradicting reports into the UI.
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.enabled_managers.len() <= MAX_REPORTED_MANAGERS
+            && self.enabled_managers.iter().all(|name| {
+                !name.trim().is_empty()
+                    && name.chars().count() <= MAX_MANAGER_NAME_CHARS
+                    && !name.chars().any(char::is_control)
+            })
+            && (self.extension_scan_state == ExtensionScanState::Complete
+                || self.enabled_managers.is_empty())
+            && (self.permission_state == PermissionState::Granted
+                || (self.password_saving_enabled.is_none()
+                    && self.extension_scan_state == ExtensionScanState::NotChecked))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProxyState {
