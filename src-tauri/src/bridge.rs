@@ -394,6 +394,9 @@ type Starter = dyn Fn() -> Result<BridgeHandle, BridgeStartError> + Send + Sync;
 struct StateInner {
     slot: Mutex<Option<Arc<BridgeHandle>>>,
     store_failed: AtomicBool,
+    /// Set by the final quit: nothing starts after it, so a start that was still queued cannot
+    /// publish an endpoint record the exiting process never clears.
+    quit: AtomicBool,
     starter: Box<Starter>,
     secrets: Arc<dyn SecretStore>,
     bundled_host: Option<PathBuf>,
@@ -415,6 +418,7 @@ impl BridgeState {
         Self(Arc::new(StateInner {
             slot: Mutex::new(None),
             store_failed: AtomicBool::new(false),
+            quit: AtomicBool::new(false),
             starter,
             secrets,
             bundled_host,
@@ -429,7 +433,7 @@ impl BridgeState {
     }
 
     fn start_locked(&self, slot: &mut Option<Arc<BridgeHandle>>) -> Result<(), BridgeStartError> {
-        if slot.is_some() {
+        if slot.is_some() || self.0.quit.load(Ordering::SeqCst) {
             return Ok(());
         }
         match (self.0.starter)() {
@@ -485,9 +489,15 @@ impl BridgeState {
         Ok(())
     }
 
-    /// Stops the server (idempotent).
+    /// Stops the server (idempotent) and refuses every later start. Taking the slot lock first
+    /// waits for a start that is in flight, so its endpoint record is cleared too.
     pub fn shutdown(&self) {
-        if let Some(handle) = self.handle() {
+        let handle = {
+            let slot = lock(&self.0.slot);
+            self.0.quit.store(true, Ordering::SeqCst);
+            slot.clone()
+        };
+        if let Some(handle) = handle {
             handle.server.shutdown();
         }
     }
@@ -969,6 +979,24 @@ mod tests {
         std::fs::create_dir_all(&ext).unwrap();
         std::fs::write(ext.join("manifest.json"), b"{}").unwrap();
         assert_eq!(extension_folder(None, Some(dir.path()), None), Some(ext));
+    }
+
+    #[test]
+    fn no_bridge_start_after_the_final_quit() {
+        let f = unstarted(false, None);
+        on_quit_outcome(&f.state, ExitOutcome::Exit);
+        f.state.start().unwrap();
+        assert!(
+            f.state.handle().is_none(),
+            "a start after the quit is a no-op"
+        );
+        assert!(f
+            .w
+            .fake
+            .shared_secrets
+            .get(ENDPOINT_SERVICE, ENDPOINT_ACCOUNT)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
