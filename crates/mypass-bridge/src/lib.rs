@@ -10,6 +10,8 @@ pub mod gating;
 #[cfg(feature = "server")]
 pub mod pairing;
 pub mod protocol;
+#[cfg(feature = "server")]
+pub mod server;
 
 /// The native messaging host name registered with every browser.
 pub const HOST_NAME: &str = "com.mypass.chromehost";
