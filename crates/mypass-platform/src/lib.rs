@@ -14,6 +14,8 @@ mod keyboard_layout;
 mod launch_at_login;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+mod macos_keychain;
 mod paths;
 mod secrets;
 

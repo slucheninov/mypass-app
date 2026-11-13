@@ -10,7 +10,7 @@ publish = false
 
 # The only member with its own lint tables (guard `workspace_lints_forbid_unsafe`): an exact copy
 # of `[workspace.lints]` except `unsafe_code = "deny"` instead of `forbid`, because the macOS glue
-# calls Objective-C and Carbon. `deny` can be lifted per module; only `src/macos.rs` does so
+# calls Objective-C and Carbon. `deny` can be lifted per module; only `src/macos.rs` and `src/macos_keychain.rs` do so
 # (guard `unsafe_only_in_allow_listed_modules`). Keep these tables in sync with the workspace.
 [lints.rust]
 unsafe_code = "deny"

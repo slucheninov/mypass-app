@@ -297,7 +297,10 @@ const OWN_LINTS_MEMBER: &str = "mypass-platform";
 
 /// Files of our crates where `unsafe` code may appear. Stage 6 adds
 /// `crates/mypass-platform/src/windows.rs` here for the Win32 calls; nothing else, ever.
-const UNSAFE_ALLOWED_FILES: &[&str] = &["crates/mypass-platform/src/macos.rs"];
+const UNSAFE_ALLOWED_FILES: &[&str] = &[
+    "crates/mypass-platform/src/macos.rs",
+    "crates/mypass-platform/src/macos_keychain.rs",
+];
 
 /// Blanks out comments (line, nested block), string literals (plain and raw) and char literals,
 /// keeping every other byte, so token scans see code only. Lifetimes (`'a`) are left alone.

@@ -405,8 +405,8 @@ move together with the Rust `tauri` family (the CLI rejects mismatched minors).
 
 - No `unsafe` in our crates (`unsafe_code = "forbid"` through `[workspace.lints]`), with one
   exception: `mypass-platform` carries its own `[lints]` tables, an exact copy of the workspace
-  tables except `unsafe_code = "deny"`, and only `crates/mypass-platform/src/macos.rs` lifts it
-  with a module-level `#![allow(unsafe_code)]` for the Objective-C and Carbon calls (stage 6 may
+  tables except `unsafe_code = "deny"`, and only `crates/mypass-platform/src/macos.rs` and `macos_keychain.rs` lift it
+  with a module-level `#![allow(unsafe_code)]` for the Objective-C, Carbon and Keychain access-list calls (stage 6 may
   add `windows.rs` the same way). Every `unsafe` block there is minimal, wrapped in a small safe
   function and carries a `// SAFETY:` comment stating the invariant. Pinned by
   `workspace_lints_forbid_unsafe` and `unsafe_only_in_allow_listed_modules`.

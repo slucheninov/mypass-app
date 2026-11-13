@@ -24,10 +24,9 @@ Last updated: 2026-11-13
 
 - [ ] `VaultFile`: reject non-regular files (FIFO/device symlink targets) at open and cap the
   encoded vault read size, once stage 2 fixes a size policy.
-- [ ] `mypass-platform` macOS bodies that still return `Unsupported`: Keychain secret stores (the
-  unlock key and the secret shared with the native host), device unlock (Touch ID and device
-  password), the native messaging host registrar and launch at login. System events, the concealed
-  clipboard and the keyboard layout already ship.
+- [ ] `mypass-platform` macOS bodies that still return `Unsupported`: device unlock (Touch ID and
+  device password), the native messaging host registrar and launch at login. System events, the
+  concealed clipboard, the keyboard layout and the Keychain secret stores already ship.
 
 ## Stage 2a follow-ups
 
@@ -85,6 +84,10 @@ Last updated: 2026-11-13
 - [ ] iCloud Drive as a primary vault location with conflict merging and migration.
 - [ ] "Also sync to folder" secondary destination (`mypass-sync`).
 - [ ] Touch ID and device-password unlock, launch at login, and the daily update check.
+- [ ] Keychain secret shared with the native host: `shared_secrets` already trusts the app and
+  `AppPaths::host_exe` through a `SecAccess` list, but a trusted application matches by code
+  signature, so with the stable team `W645B93PPQ` signing both binaries, verify that the host reads
+  the item without a prompt (the ignored tests only cover the test binary trusting itself).
 - [ ] Signed macOS packaging with a stable team (DMG, extension zip, checksums, tag-driven release
   workflow).
 - [ ] Manual checklist against a copy of the owner's vault and the cutover checklist from the old

@@ -1,5 +1,5 @@
 //! macOS: sleep, wake and screen-lock events, the concealed clipboard, the keyboard layout and the
-//! running-application lookup.
+//! running-application lookup (the Keychain secret stores live in `macos_keychain.rs`).
 //!
 //! Why screen lock is observed separately from sleep: the old app only observed `willSleep`, so a
 //! locked-but-awake Mac (hot corner, Cmd+Ctrl+Q, lid closed on an external display) never locked
@@ -24,8 +24,8 @@
 
 use crate::fallback::{
     UnsupportedDeviceUnlock, UnsupportedHostRegistrar, UnsupportedLaunchAtLogin,
-    UnsupportedSecretStore,
 };
+use crate::macos_keychain::MacKeychainSecretStore;
 use crate::{
     AppPaths, ClipboardStamp, KeyboardLayout, Platform, PlatformError, PlatformResult,
     SecureClipboard, Subscription, SystemEvent, SystemEvents,
@@ -64,14 +64,22 @@ pub(crate) const INPUT_SOURCE_CHANGED: &str =
 /// How long a background thread waits for the main thread to read the keyboard layout.
 const MAIN_THREAD_WAIT: Duration = Duration::from_millis(500);
 
-/// The real macOS platform: events, clipboard and keyboard layout; `Unsupported` placeholders for
-/// the secret stores and host registrar (stage 3) and device unlock and launch at login (stage 5).
-pub(crate) fn platform(_paths: &AppPaths) -> Platform {
+/// The real macOS platform: events, clipboard, keyboard layout and the Keychain secret stores;
+/// `Unsupported` placeholders for the host registrar (stage 3) and device unlock and launch at
+/// login (stage 5).
+pub(crate) fn platform(paths: &AppPaths) -> Platform {
+    // The shared store trusts the running app and the installed host. Without the app's own path
+    // the list could not name the creator, so it falls back to the app-only access (the host then
+    // cannot read, but nothing is exposed).
+    let shared = match std::env::current_exe() {
+        Ok(app_exe) => MacKeychainSecretStore::shared_with(vec![app_exe, paths.host_exe.clone()]),
+        Err(_) => MacKeychainSecretStore::app_only(),
+    };
     Platform {
         events: Arc::new(MacSystemEvents),
         clipboard: Arc::new(MacClipboard::general()),
-        secrets: Arc::new(UnsupportedSecretStore),
-        shared_secrets: Arc::new(UnsupportedSecretStore),
+        secrets: Arc::new(MacKeychainSecretStore::app_only()),
+        shared_secrets: Arc::new(shared),
         device_unlock: Arc::new(UnsupportedDeviceUnlock),
         host_registrar: Arc::new(UnsupportedHostRegistrar),
         launch_at_login: Arc::new(UnsupportedLaunchAtLogin),
