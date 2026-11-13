@@ -13,18 +13,29 @@ pub const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
 
 const HEADER_LEN: usize = 4;
 
-/// Frame `payload` with its four-byte little-endian length. A payload above `u32::MAX` bytes cannot
-/// occur by construction (the callers cap frames at [`MAX_FRAME_BYTES`]).
-pub fn encode_frame(payload: &[u8]) -> Vec<u8> {
-    debug_assert!(u32::try_from(payload.len()).is_ok());
-    let len = u32::try_from(payload.len()).unwrap_or(u32::MAX);
+/// The largest frame the writer emits: Chromium refuses a native host message to the browser above
+/// 1 MiB, so a bigger payload is an error here instead of a connection the browser kills.
+pub const MAX_OUTBOUND_FRAME_BYTES: usize = 1024 * 1024;
+
+/// Frame `payload` with its four-byte little-endian length. A payload above
+/// [`MAX_OUTBOUND_FRAME_BYTES`] (or one whose length does not fit a `u32`) is an error and nothing
+/// is written.
+pub fn encode_frame(payload: &[u8]) -> Result<Vec<u8>, FrameError> {
+    let too_large = || FrameError::TooLarge {
+        claimed: payload.len(),
+        max: MAX_OUTBOUND_FRAME_BYTES,
+    };
+    if payload.len() > MAX_OUTBOUND_FRAME_BYTES {
+        return Err(too_large());
+    }
+    let len = u32::try_from(payload.len()).map_err(|_| too_large())?;
     let mut out = Vec::with_capacity(HEADER_LEN.saturating_add(payload.len()));
     out.extend_from_slice(&len.to_le_bytes());
     out.extend_from_slice(payload);
-    out
+    Ok(out)
 }
 
-#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum FrameError {
     #[error("frame too large: claimed {claimed}, max {max}")]
     TooLarge { claimed: usize, max: usize },
@@ -35,6 +46,7 @@ pub enum FrameError {
 pub struct FrameReader {
     buf: Vec<u8>,
     max: usize,
+    failed: Option<FrameError>,
 }
 
 impl FrameReader {
@@ -42,6 +54,7 @@ impl FrameReader {
         Self {
             buf: Vec::new(),
             max,
+            failed: None,
         }
     }
 
@@ -50,9 +63,13 @@ impl FrameReader {
     }
 
     /// Add `data` and return every frame that is now complete. A claimed length above the cap
-    /// clears the buffer and returns an error; the stream cannot be resynchronised after that, so
-    /// the caller drops the connection.
+    /// clears the buffer and returns an error. The stream cannot be resynchronised after that, so
+    /// the reader is poisoned: every later `feed` returns the same error and buffers nothing, and
+    /// the caller MUST drop the connection.
     pub fn feed(&mut self, data: &[u8]) -> Result<Vec<Vec<u8>>, FrameError> {
+        if let Some(err) = &self.failed {
+            return Err(err.clone());
+        }
         self.buf.extend_from_slice(data);
         let mut frames = Vec::new();
         let mut pos = 0usize;
@@ -61,10 +78,12 @@ impl FrameReader {
             let Some(claimed) = peek_len(rest) else { break };
             if claimed > self.max {
                 self.buf.clear();
-                return Err(FrameError::TooLarge {
+                let err = FrameError::TooLarge {
                     claimed,
                     max: self.max,
-                });
+                };
+                self.failed = Some(err.clone());
+                return Err(err);
             }
             let Some(end) = HEADER_LEN.checked_add(claimed) else {
                 break;
@@ -140,9 +159,13 @@ pub fn read_frame(r: &mut impl Read, max: usize) -> io::Result<Option<Vec<u8>>> 
 mod tests {
     use super::*;
 
+    fn enc(p: &[u8]) -> Vec<u8> {
+        encode_frame(p).unwrap()
+    }
+
     #[test]
     fn encode_prepends_four_byte_little_endian_length() {
-        assert_eq!(encode_frame(b"hi"), vec![2, 0, 0, 0, b'h', b'i']);
+        assert_eq!(enc(b"hi"), vec![2, 0, 0, 0, b'h', b'i']);
         // 0x01020304 is just above 16 MiB, so the cap is raised; read as big endian the same
         // bytes would claim 0x04030201 (over 67 MB) and be rejected.
         let mut r = FrameReader::new(32 * 1024 * 1024);
@@ -155,14 +178,14 @@ mod tests {
     #[test]
     fn frame_reader_returns_frame_when_all_bytes_arrive_at_once() {
         let mut r = FrameReader::default_max();
-        assert_eq!(r.feed(&encode_frame(b"hello")), Ok(vec![b"hello".to_vec()]));
+        assert_eq!(r.feed(&enc(b"hello")), Ok(vec![b"hello".to_vec()]));
         assert!(r.buf.is_empty());
     }
 
     #[test]
     fn frame_reader_accumulates_across_partial_feeds() {
         let mut r = FrameReader::default_max();
-        let bytes = encode_frame(b"partial");
+        let bytes = enc(b"partial");
         let mut got = Vec::new();
         for b in &bytes {
             got.extend(r.feed(std::slice::from_ref(b)).unwrap());
@@ -173,22 +196,19 @@ mod tests {
     #[test]
     fn frame_reader_returns_multiple_frames_from_one_feed() {
         let mut r = FrameReader::default_max();
-        let mut bytes = encode_frame(b"one");
-        bytes.extend(encode_frame(b"two"));
-        bytes.extend_from_slice(&encode_frame(b"three")[..3]);
+        let mut bytes = enc(b"one");
+        bytes.extend(enc(b"two"));
+        bytes.extend_from_slice(&enc(b"three")[..3]);
         assert_eq!(r.feed(&bytes), Ok(vec![b"one".to_vec(), b"two".to_vec()]));
         assert_eq!(r.buf.len(), 3);
-        assert_eq!(
-            r.feed(&encode_frame(b"three")[3..]),
-            Ok(vec![b"three".to_vec()])
-        );
+        assert_eq!(r.feed(&enc(b"three")[3..]), Ok(vec![b"three".to_vec()]));
     }
 
     #[test]
     fn empty_payload_round_trips() {
         let mut r = FrameReader::default_max();
-        assert_eq!(r.feed(&encode_frame(b"")), Ok(vec![Vec::new()]));
-        let mut cur = io::Cursor::new(encode_frame(b""));
+        assert_eq!(r.feed(&enc(b"")), Ok(vec![Vec::new()]));
+        let mut cur = io::Cursor::new(enc(b""));
         assert_eq!(read_frame(&mut cur, 16).unwrap(), Some(Vec::new()));
     }
 
@@ -211,7 +231,7 @@ mod tests {
     fn frame_reader_accepts_frame_exactly_at_max() {
         let mut r = FrameReader::new(1024);
         let payload = vec![7u8; 1024];
-        assert_eq!(r.feed(&encode_frame(&payload)), Ok(vec![payload]));
+        assert_eq!(r.feed(&enc(&payload)), Ok(vec![payload]));
     }
 
     #[test]
@@ -239,13 +259,13 @@ mod tests {
         let mut empty = io::Cursor::new(Vec::new());
         assert_eq!(read_frame(&mut empty, 16).unwrap(), None);
 
-        let mut two = io::Cursor::new([encode_frame(b"a"), encode_frame(b"bc")].concat());
+        let mut two = io::Cursor::new([enc(b"a"), enc(b"bc")].concat());
         assert_eq!(read_frame(&mut two, 16).unwrap(), Some(b"a".to_vec()));
         assert_eq!(read_frame(&mut two, 16).unwrap(), Some(b"bc".to_vec()));
         assert_eq!(read_frame(&mut two, 16).unwrap(), None);
 
         for cut in [1usize, 3, 5, 6] {
-            let bytes = encode_frame(b"abcdef");
+            let bytes = enc(b"abcdef");
             let mut cur = io::Cursor::new(bytes[..cut].to_vec());
             let e = read_frame(&mut cur, 16).unwrap_err();
             assert_eq!(e.kind(), io::ErrorKind::UnexpectedEof, "cut {cut}");
@@ -259,5 +279,41 @@ mod tests {
         let mut cur = io::Cursor::new(bytes);
         let e = read_frame(&mut cur, MAX_FRAME_BYTES).unwrap_err();
         assert_eq!(e.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn encode_frame_rejects_payload_above_outbound_cap() {
+        assert_eq!(MAX_OUTBOUND_FRAME_BYTES, 1024 * 1024);
+        assert_eq!(
+            enc(&vec![0u8; MAX_OUTBOUND_FRAME_BYTES]).len(),
+            MAX_OUTBOUND_FRAME_BYTES + 4
+        );
+        let err = encode_frame(&vec![0u8; MAX_OUTBOUND_FRAME_BYTES + 1]).unwrap_err();
+        assert_eq!(
+            err,
+            FrameError::TooLarge {
+                claimed: MAX_OUTBOUND_FRAME_BYTES + 1,
+                max: MAX_OUTBOUND_FRAME_BYTES
+            }
+        );
+    }
+
+    #[test]
+    fn encode_frame_length_goes_through_checked_conversion() {
+        // The cap sits far below u32::MAX, so the checked conversion never fires for a payload
+        // that passes the cap; the maximum accepted payload still encodes its exact length.
+        let f = enc(&vec![1u8; MAX_OUTBOUND_FRAME_BYTES]);
+        let len = u32::from_le_bytes([f[0], f[1], f[2], f[3]]);
+        assert_eq!(usize::try_from(len).unwrap(), MAX_OUTBOUND_FRAME_BYTES);
+    }
+
+    #[test]
+    fn frame_reader_is_poisoned_after_an_error() {
+        let mut r = FrameReader::new(8);
+        let first = r.feed(&9u32.to_le_bytes()).unwrap_err();
+        // A perfectly valid frame afterwards is still refused, and nothing is buffered.
+        assert_eq!(r.feed(&enc(b"ok")), Err(first.clone()));
+        assert_eq!(r.feed(&[]), Err(first));
+        assert!(r.buf.is_empty());
     }
 }
