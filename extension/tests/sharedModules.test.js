@@ -19,6 +19,8 @@ const background = require('../background.js');
 
 assert.strictEqual(content.hostnameMatches, urlMatch.hostnameMatches);
 assert.strictEqual(background.hostnameMatches, urlMatch.hostnameMatches);
+assert.strictEqual(content.fillTargetMatches, urlMatch.fillTargetMatches);
+assert.strictEqual(background.fillTargetMatches, urlMatch.fillTargetMatches);
 assert.strictEqual(content.classifyGetCredentialsResponse, bridgeStatus.classifyGetCredentialsResponse);
 assert.strictEqual(popup.classifyGetCredentialsResponse, bridgeStatus.classifyGetCredentialsResponse);
 assert.strictEqual(content.isBase32Secret, base32.isBase32Secret);

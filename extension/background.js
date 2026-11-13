@@ -174,7 +174,7 @@ const promptRecords = typeof require === 'function'
 //                               reject outright, do NOT fall back to the active tab.
 function resolveSenderFillTarget(sender, requestUrl) {
   if (!sender || !sender.tab || sender.tab.id === undefined) return null;
-  return { tabId: sender.tab.id, ok: urlMatch.hostnameMatches(requestUrl, sender.url) };
+  return { tabId: sender.tab.id, ok: urlMatch.fillTargetMatches(requestUrl, sender.url) };
 }
 
 function buildApplyFillMessage(credentialResponse, requestUrl) {
@@ -210,7 +210,7 @@ function buildApplyFillMessage(credentialResponse, requestUrl) {
 // (unscoped) call was a broadcast with exactly one possible recipient. With all_frames
 // EVERY frame has that listener: a tab-wide broadcast hands the decrypted password to
 // every subframe at once. A subframe sharing the top page's hostname passes content.js's
-// hostnameMatches check (which compares hostname only, and requires an https page with the message's scheme; the port is ignored), has no
+// hostnameMatches check (hostnameMatches compares hostname only; the fill path uses fillTargetMatches, an https page with the message's scheme, port ignored), has no
 // pending fill target, and falls through to findLoginForm()/findOtpField(), writing the
 // password into a field the user never chose. frameId: 0 keeps the credential in the one
 // document the popup was actually acting on.
@@ -461,10 +461,10 @@ function relayFillToActiveTab(credentialResponse, requestUrl, sender) {
 
     // First line of defense: verify the active tab's origin matches the
     // request's origin BEFORE the secret-bearing message is ever sent to
-    // that tab's content-script runtime. content.js's own hostnameMatches
+    // that tab's content-script runtime. content.js's own fillTargetMatches
     // check stays in place too, as defense-in-depth — this only stops the
     // secret from being *delivered* to a mismatched tab in the first place.
-    if (!urlMatch.hostnameMatches(requestUrl, activeTab.url)) {
+    if (!urlMatch.fillTargetMatches(requestUrl, activeTab.url)) {
       console.warn("MyPass: relayFillToActiveTab aborted — active tab origin does not match request origin");
       return;
     }
@@ -1197,7 +1197,7 @@ async function createPrompt(kind, message, sender) {
   if (!isContentScriptSender(sender)) return { type: "error", code: "prompt_unauthorized" };
   if (kind === "saveLogin" || kind === "saveTotp") {
     // The message names the page it came from; it must be the page Chrome says sent it.
-    if (!urlMatch.hostnameMatches(message.url, sender.url)) return { type: "error", code: "prompt_origin_mismatch" };
+    if (!urlMatch.fillTargetMatches(message.url, sender.url)) return { type: "error", code: "prompt_origin_mismatch" };
     // The settings are re-read here, not trusted from the content script: a switch turned off
     // in the popup must stop prompts even from a page that loaded before it was changed.
     const settings = await readAutofillSettings();
@@ -1299,7 +1299,7 @@ function verifyPromptDocument(record) {
         { frameId: record.frameId, documentId: record.documentId },
         (response) => {
           if (chrome.runtime.lastError) { resolve(false); return; }
-          resolve(!!response && response.type === "ok" && urlMatch.hostnameMatches(record.pageUrl, response.url));
+          resolve(!!response && response.type === "ok" && urlMatch.fillTargetMatches(record.pageUrl, response.url));
         }
       );
     } catch (_) {
@@ -1739,7 +1739,7 @@ function handleRuntimeMessage(message, sender, sendResponse) {
         sendResponse({ type: "none" });
         return;
       }
-      if (!urlMatch.hostnameMatches(pending.url, message.url)) {
+      if (!urlMatch.fillTargetMatches(pending.url, message.url)) {
         sendResponse({ type: "none" });
         return;
       }
@@ -1979,6 +1979,7 @@ if (typeof module !== "undefined") {
     handleRuntimeMessage,
     noteFilledCredential,
     hostnameMatches: urlMatch.hostnameMatches,
+    fillTargetMatches: urlMatch.fillTargetMatches,
     resolveSenderFillTarget,
     relayFillToActiveTab,
     openMyPassPrompt,

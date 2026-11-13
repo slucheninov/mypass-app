@@ -114,6 +114,7 @@ const contentScripts = manifest.content_scripts.find((entry) => entry.js.include
 assert.ok(contentScripts, 'manifest content script entry that loads content.js');
 const contentGroup = assertDisjoint('content_scripts', contentScripts.js);
 assert.strictEqual(contentGroup.get('hostnameMatches'), 'shared/url-match.js');
+assert.strictEqual(contentGroup.get('fillTargetMatches'), 'shared/url-match.js');
 assert.strictEqual(contentGroup.get('findFillableFields'), 'shared/form-detection.js');
 assert.strictEqual(contentGroup.get('detectManualSetupKey'), 'shared/totp-detection.js');
 assert.ok(![...contentGroup.values()].includes('content.js'), 'content.js must not add top-level names; it is an IIFE after the shared scripts');

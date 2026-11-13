@@ -50,6 +50,7 @@
         placement: mypassPlacement,
       };
   const hostnameMatches = shared.urlMatch.hostnameMatches;
+  const fillTargetMatches = shared.urlMatch.fillTargetMatches;
   const securityWatch = shared.securityWatch;
   const classifyGetCredentialsResponse = shared.bridgeStatus.classifyGetCredentialsResponse;
   const isBase32Secret = shared.base32.isBase32Secret;
@@ -1496,7 +1497,7 @@
         // applyFill — accepted or rejected — can ever leave a target behind.
         const target = takePendingFillTarget(Date.now());
 
-        if (!hostnameMatches(message.url, location.href)) {
+        if (!fillTargetMatches(message.url, location.href)) {
           console.warn('MyPass: applyFill rejected — message URL does not match the current page hostname');
           return;
         }
@@ -1691,7 +1692,7 @@
 
   if (typeof module !== 'undefined') {
     module.exports = {
-      scoreUsernameLikeness, findBestUsernameInput, hostnameMatches, scoreOtpLikeness, findOtpField,
+      scoreUsernameLikeness, findBestUsernameInput, hostnameMatches, fillTargetMatches, scoreOtpLikeness, findOtpField,
       isFieldVisible, findFillableFields, findLoginForm, resolveFillTargets, resolveApplyFillTargets,
       isNewPasswordCandidate,
       isFillTargetUsable,

@@ -134,6 +134,8 @@ const { getBrowserManagerDiagnostics, reportBrowserDiagnostics, handleRuntimeMes
     });
   }
   assert.deepEqual(await check({ type: 'checkSecurityUse', action: 'paste', text: 's3cret-password', url: 'https://evil.example/pay' }, evil), { warn: true });
+  const evilHttp = { id: 'extension-id', tab: { id: 5 }, url: 'http://evil.example/pay' };
+  assert.deepEqual(await check({ type: 'checkSecurityUse', action: 'paste', text: 's3cret-password', url: 'http://evil.example/pay' }, evilHttp), { warn: true }, 'the warning still fires on a plain-http page');
   assert.deepEqual(await check({ type: 'checkSecurityUse', action: 'paste', text: 's3cret-password', url: 'https://www.bank.example/login' }, bank), { warn: false });
   assert.deepEqual(await check({ type: 'checkSecurityUse', action: 'copy', text: 'alice', url: 'https://evil.example/pay' }, evil), { warn: true });
   assert.deepEqual(await check({ type: 'checkSecurityUse', action: 'paste', text: 's3cret-password', url: 'https://other.example' }, evil), { warn: false });
