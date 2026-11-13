@@ -3,6 +3,7 @@
 //! Modules are added task by task; the ones that touch the vault sit behind the `server` feature so
 //! the native messaging host links none of that code.
 
+pub mod gating;
 pub mod protocol;
 
 /// The native messaging host name registered with every browser.
