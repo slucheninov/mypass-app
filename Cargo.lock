@@ -2534,13 +2534,19 @@ dependencies = [
 name = "mypass-bridge"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
+ "hmac",
  "mypass-core",
  "mypass-kdbx",
  "mypass-platform",
  "mypass-session",
+ "rand 0.8.8",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
+ "subtle",
  "thiserror 2.0.21",
+ "zeroize",
 ]
 
 [[package]]
