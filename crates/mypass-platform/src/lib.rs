@@ -15,6 +15,8 @@ mod keyboard_layout;
 mod launch_at_login;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(unix)]
+mod macos_host_install;
 #[cfg(target_os = "macos")]
 mod macos_keychain;
 mod paths;
@@ -30,10 +32,13 @@ pub use error::{PlatformError, PlatformResult};
 pub use events::{Subscription, SystemEvent, SystemEvents};
 pub use file_store::{shared_store, FileSecretStore};
 pub use host_registrar::{
-    BrowserRegistration, HostRegistrationReport, NativeHostRegistrar, RegistrationState,
+    locate_bundled_host, manifest_json, BrowserRegistration, HostRegistrationReport, ManifestError,
+    NativeHostRegistrar, RegistrationState, EXTENSION_ID, HOST_NAME,
 };
 pub use keyboard_layout::KeyboardLayout;
 pub use launch_at_login::{LaunchAtLogin, LoginItemStatus};
+#[cfg(unix)]
+pub use macos_host_install::MacHostRegistrar;
 pub use paths::{AppPaths, Browser, VaultId, BUNDLE_ID, HOST_MANIFEST_FILE};
 pub use secrets::SecretStore;
 

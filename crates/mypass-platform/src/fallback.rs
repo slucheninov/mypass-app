@@ -1,17 +1,19 @@
 //! Fallbacks: `Unsupported` stubs for every trait and, off macOS, the `arboard` clipboard.
 //!
 //! Every stub is a one-line `Unsupported` body, so a later stage replaces a body, never a
-//! signature. macOS uses the host registrar, device unlock and launch-at-login stubs until stages 3
+//! signature. macOS uses the device unlock and launch-at-login stubs until stages 3
 //! and 5; Windows uses all of them (except the host-shared file secret store) until stage 6.
 
 #[cfg(any(not(target_os = "macos"), test))]
 use crate::SecretStore;
+#[cfg(any(not(target_os = "macos"), test))]
+use crate::{BrowserRegistration, HostRegistrationReport, NativeHostRegistrar};
 use crate::{
-    BrowserRegistration, DeviceUnlock, DeviceUnlockAvailability, DeviceUnlockMode,
-    HostRegistrationReport, LaunchAtLogin, LoginItemStatus, NativeHostRegistrar, PlatformError,
-    PlatformResult,
+    DeviceUnlock, DeviceUnlockAvailability, DeviceUnlockMode, LaunchAtLogin, LoginItemStatus,
+    PlatformError, PlatformResult,
 };
 use secrecy::SecretString;
+#[cfg(any(not(target_os = "macos"), test))]
 use std::path::Path;
 // Items used only off macOS (and by this module's tests on macOS).
 #[cfg(not(target_os = "macos"))]
@@ -73,10 +75,12 @@ impl DeviceUnlock for UnsupportedDeviceUnlock {
     }
 }
 
-/// No native host registration on this platform yet (macOS stage 3, Windows stage 6).
+/// No native host registration off macOS yet (Windows stage 6).
+#[cfg(any(not(target_os = "macos"), test))]
 #[derive(Debug, Default)]
 pub(crate) struct UnsupportedHostRegistrar;
 
+#[cfg(any(not(target_os = "macos"), test))]
 impl NativeHostRegistrar for UnsupportedHostRegistrar {
     fn register(&self, _: &Path) -> PlatformResult<HostRegistrationReport> {
         Err(PlatformError::Unsupported("native host registration"))

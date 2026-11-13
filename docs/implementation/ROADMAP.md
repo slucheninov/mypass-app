@@ -25,7 +25,7 @@ Last updated: 2026-11-13
 - [ ] `VaultFile`: reject non-regular files (FIFO/device symlink targets) at open and cap the
   encoded vault read size, once stage 2 fixes a size policy.
 - [ ] `mypass-platform` macOS bodies that still return `Unsupported`: device unlock (Touch ID and
-  device password), the native messaging host registrar and launch at login. System events, the
+  device password) and launch at login. System events, the
   concealed clipboard, the keyboard layout and the Keychain secret stores already ship.
 
 ## Stage 2a follow-ups
@@ -90,6 +90,10 @@ Last updated: 2026-11-13
   (`anchor apple generic and certificate leaf[subject.OU] = "W645B93PPQ"` plus the host
   identifier); never trust a path under Application Support. Delete-then-add on write (a crash in
   between only loses the per-launch endpoint), then delete the file.
+- [ ] The native messaging manifests point at a host copy under Application Support, which a
+  same-user process can replace (the same accepted risk as the 0600 endpoint file). Point the
+  manifests at the host inside the signed app bundle (`Contents/MacOS/mypass-host`, which Chrome
+  accepts as any absolute path) or verify the copy's signature before registering.
 - [ ] Signed macOS packaging with a stable team (DMG, extension zip, checksums, tag-driven release
   workflow).
 - [ ] Manual checklist against a copy of the owner's vault and the cutover checklist from the old
