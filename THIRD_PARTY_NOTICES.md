@@ -364,6 +364,8 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `schemars_derive` | 0.8.22 | MIT |
 | `scopeguard` | 1.2.0 | MIT OR Apache-2.0 |
 | `secrecy` | 0.10.3 | Apache-2.0 OR MIT |
+| `security-framework` | 3.7.0 | MIT OR Apache-2.0 |
+| `security-framework-sys` | 2.17.0 | MIT OR Apache-2.0 |
 | `selectors` | 0.38.0 | MPL-2.0 |
 | `selectors` | 0.41.0 | MPL-2.0 |
 | `semver` | 1.0.28 | MIT OR Apache-2.0 |
