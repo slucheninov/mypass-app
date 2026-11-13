@@ -11,6 +11,7 @@ pub(crate) mod fill;
 pub(crate) mod generator;
 pub(crate) mod identifier;
 pub(crate) mod session_ops;
+pub(crate) mod text;
 
 /// The answer of a handler that a later task replaces.
 pub(crate) fn not_implemented() -> Response {
