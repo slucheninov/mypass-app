@@ -142,9 +142,30 @@ pub fn on_exit_requested(steps: &dyn QuitSteps, ask: &dyn Fn(&str) -> bool) -> E
     }
 }
 
-/// What the quit worker needs from the runtime: the data-loss prompt and the final exit. A seam
-/// so the whole `ExitRequested` path runs in tests with a fake dialog.
+/// The step BEFORE the quit flow: when the main window reported an editor with unsaved changes,
+/// asks (through `confirm`, `true` means Quit) whether to discard them. Returns `true` when the
+/// quit flow may go on. On Cancel the main window is shown (`show_main`) so the user sees the
+/// editor, and nothing else has happened yet: no `begin_quit`, so there is nothing to re-open.
+pub fn confirm_discard_edits(
+    editor_dirty: bool,
+    confirm: &dyn Fn() -> bool,
+    show_main: &dyn Fn(),
+) -> bool {
+    if !crate::shell::discard_edits_prompt_needed(editor_dirty) || confirm() {
+        return true;
+    }
+    show_main();
+    false
+}
+
+/// What the quit worker needs from the runtime: the data-loss prompts, the main window and the
+/// final exit. A seam so the whole `ExitRequested` path runs in tests with a fake dialog.
 pub trait QuitPort: Send + Sync {
+    /// The Cancel / Quit prompt for an editor with unsaved changes, in `language`. `true` means
+    /// Quit (discard the edits). Blocks: never call it on the main thread.
+    fn confirm_discard_edits(&self, language: Language) -> bool;
+    /// Shows and focuses the main window (after a cancelled quit).
+    fn show_main(&self);
     /// The Cancel / Quit Anyway prompt for a failed final save, in `language`, around the error
     /// text. `true` means Quit Anyway. Blocks: never call it on the main thread.
     fn confirm_quit_anyway(&self, language: Language, error: &str) -> bool;
@@ -464,6 +485,35 @@ mod tests {
     use mypass_session::settings::Language;
     use std::cell::RefCell;
     use std::sync::atomic::AtomicUsize;
+
+    // ---- discard prompt ----
+
+    #[test]
+    fn a_clean_editor_never_prompts() {
+        let shown = RefCell::new(0);
+        let go =
+            confirm_discard_edits(false, &|| panic!("no prompt"), &|| *shown.borrow_mut() += 1);
+        assert!(go);
+        assert_eq!(*shown.borrow(), 0);
+    }
+
+    #[test]
+    fn a_dirty_editor_prompts_and_quit_goes_on_without_showing_the_window() {
+        let shown = RefCell::new(0);
+        assert!(confirm_discard_edits(true, &|| true, &|| *shown
+            .borrow_mut() +=
+            1));
+        assert_eq!(*shown.borrow(), 0);
+    }
+
+    #[test]
+    fn a_dirty_editor_and_cancel_stops_the_quit_and_shows_the_window() {
+        let shown = RefCell::new(0);
+        assert!(!confirm_discard_edits(true, &|| false, &|| *shown
+            .borrow_mut() +=
+            1));
+        assert_eq!(*shown.borrow(), 1);
+    }
 
     // ---- platform events ----
 

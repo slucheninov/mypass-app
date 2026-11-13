@@ -629,6 +629,7 @@
   "The backup could not be restored: %@": "Не удалось восстановить резервную копию: {0}",
   "The backup does not open with your current master password": "Резервная копия не открывается текущим мастер-паролем",
   "The check reads browser settings and recognized extensions. It cannot verify all autofill, passkey or macOS providers. Nothing is disabled automatically.": "Проверка считывает настройки браузера и распознанные расширения. Она не может проверить всех поставщиков автозаполнения, ключей доступа или macOS. Ничего не отключается автоматически.",
+  "The entry editor has unsaved changes. If you quit, they will be lost.": "В редакторе записи есть несохранённые изменения. Если выйти, они будут потеряны.",
   "The file at that location is not a MyPass vault. Nothing was changed on either side.": "Файл в этом расположении не является хранилищем MyPass. Ничего не изменено ни в одном из расположений.",
   "The file is empty": "Файл пустой",
   "The file is not UTF-8 text": "Файл не является текстом UTF-8",

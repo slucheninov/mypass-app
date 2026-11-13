@@ -4,6 +4,7 @@ app_open_settings
 app_quit
 app_record_activity
 app_reveal_backups
+app_set_editor_dirty
 app_show_main
 attachment_export
 attachment_pick

@@ -629,6 +629,7 @@
   "The backup could not be restored: %@": "The backup could not be restored: {0}",
   "The backup does not open with your current master password": "The backup does not open with your current master password",
   "The check reads browser settings and recognized extensions. It cannot verify all autofill, passkey or macOS providers. Nothing is disabled automatically.": "The check reads browser settings and recognized extensions. It cannot verify all autofill, passkey or macOS providers. Nothing is disabled automatically.",
+  "The entry editor has unsaved changes. If you quit, they will be lost.": "The entry editor has unsaved changes. If you quit, they will be lost.",
   "The file at that location is not a MyPass vault. Nothing was changed on either side.": "The file at that location is not a MyPass vault. Nothing was changed on either side.",
   "The file is empty": "The file is empty",
   "The file is not UTF-8 text": "The file is not UTF-8 text",

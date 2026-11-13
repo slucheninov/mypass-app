@@ -2,7 +2,7 @@
 
 use crate::events::OpenEntryEvent;
 use crate::shell::WindowOps;
-use crate::state::{AppState, ShellState};
+use crate::state::{AppState, EditorDirty, ShellState};
 use mypass_session::dto::AppInfo;
 use mypass_session::{ApiError, AppCore};
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
@@ -95,6 +95,15 @@ pub fn app_show_main(shell: State<'_, ShellState>) -> Result<(), ApiError> {
 #[specta::specta]
 pub fn app_quit(app: AppHandle) -> Result<(), ApiError> {
     request_quit(&app);
+    Ok(())
+}
+
+/// The main window reports whether its editor holds unsaved changes; the quit flow asks before
+/// discarding them. Advisory: the flag only decides whether the prompt shows.
+#[tauri::command]
+#[specta::specta]
+pub fn app_set_editor_dirty(dirty: bool, flag: State<'_, EditorDirty>) -> Result<(), ApiError> {
+    flag.set(dirty);
     Ok(())
 }
 

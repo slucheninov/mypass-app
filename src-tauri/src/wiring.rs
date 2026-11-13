@@ -146,6 +146,7 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     ));
     app.manage(conflicts);
     app.manage(ExitGate::default());
+    app.manage(crate::state::EditorDirty::default());
     app.manage::<Arc<dyn QuitPort>>(Arc::new(TauriQuitPort(handle.clone())));
     app.manage(AppState(core.clone()));
     app.manage(ShellState {

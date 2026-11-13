@@ -10,6 +10,22 @@ use std::sync::Arc;
 /// The one `AppCore` of the process; every command reaches the backend through it.
 pub struct AppState(pub Arc<AppCore>);
 
+/// Whether the main window's editor holds unsaved changes, as the webview last reported it
+/// (`app_set_editor_dirty`). Advisory only: a webview that lies can cause or suppress the
+/// "discard changes" prompt on quit, and nothing else.
+#[derive(Debug, Default)]
+pub struct EditorDirty(pub std::sync::atomic::AtomicBool);
+
+impl EditorDirty {
+    pub fn set(&self, dirty: bool) {
+        self.0.store(dirty, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn get(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
 /// Runs the effects `settings_update` computed (autostart, tray, hotkeys, theme, language).
 /// The real runner is `lifecycle::ShellEffects`; tests use fakes.
 ///
