@@ -99,3 +99,37 @@ pub fn dirty_world_with_failing_writes() -> World {
     w.login("Unsaved");
     w
 }
+
+/// Like [`World`] but the core is shared (`Arc`), as the bridge wiring needs it. The vault is
+/// created and unlocked (password `pw`, cheap KDF) when `open` is true.
+pub struct SharedWorld {
+    /// Keeps the temporary home alive.
+    #[allow(dead_code)]
+    pub dir: TempDir,
+    pub core: Arc<AppCore>,
+    pub clock: Arc<ManualScheduler>,
+    pub fake: FakePlatform,
+}
+
+pub fn shared_world(open: bool) -> SharedWorld {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = fake_platform();
+    let clock = ManualScheduler::new(UNIX_EPOCH + Duration::from_secs(1_700_000_000));
+    let core = Arc::new(AppCore::with_parts(
+        AppPaths::macos(dir.path()),
+        fake.platform.clone(),
+        clock.clone(),
+        SettingsStore::in_memory(),
+    ));
+    if open {
+        core.session
+            .create_vault_with(&dir.path().join("v.kdbx"), pw("pw"), fast_database("Test"))
+            .unwrap();
+    }
+    SharedWorld {
+        dir,
+        core,
+        clock,
+        fake,
+    }
+}

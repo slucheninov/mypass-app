@@ -32,7 +32,9 @@ Last updated: 2026-11-13
 
 - [ ] Per-window command access: every window (main, settings, tray panel) can call every app
   command (`app_quit` and `app_show_main` included); add per-window command permissions through a
-  `tauri_build` app manifest so the tray panel and settings window get only what they use.
+  `tauri_build` app manifest so the tray panel and settings window get only what they use. This
+  includes the `browser_*` commands: `browser_proposal_take` returns a proposal's password, so only
+  the main window should be able to call it.
 - [ ] Startup failure is reported only on stderr (invisible in a Windows release build and when
   launched from Finder); show a native dialog.
 - [ ] Quit-dialog default button: with tauri-plugin-dialog 2.8.4 a closed dialog is reported as the

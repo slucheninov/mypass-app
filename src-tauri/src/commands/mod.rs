@@ -14,6 +14,7 @@
 pub mod app;
 pub mod attachment;
 pub mod backup;
+pub mod browser;
 pub mod draft;
 pub mod entry;
 pub mod generator;

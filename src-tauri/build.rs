@@ -1,5 +1,8 @@
 use std::path::Path;
 
+#[path = "build_support.rs"]
+mod build_support;
+
 fn main() {
     // `tauri::generate_context!` embeds `frontendDist` (`../dist`) and fails when it is missing.
     // `dist/` is git-ignored and built by the UI toolchain (stage 2b), so a Rust-only checkout
@@ -21,6 +24,26 @@ fn main() {
     }
     println!("cargo:rerun-if-changed=../dist");
 
+    // The same pattern for the `externalBin` host: `tauri-build` fails when it is missing.
+    let triple = std::env::var("TARGET").unwrap_or_default();
+    if let Err(error) = build_support::ensure_sidecar_placeholder(Path::new("binaries"), &triple) {
+        println!("cargo:warning=cannot create the placeholder sidecar in binaries/: {error}");
+    }
+
+    // `tauri-build` copies the sidecar over `<profile dir>/mypass-host`, which is also cargo's own
+    // output for the host package: keep a real host that is already there (see `build_support`).
+    let host_dest = std::env::var("OUT_DIR").ok().and_then(|out| {
+        let suffix = if targets_windows_msvc() { ".exe" } else { "" };
+        // `<profile>/build/<package>-<hash>/out`, the layout `tauri-build` itself relies on.
+        Path::new(&out)
+            .ancestors()
+            .nth(3)
+            .map(|profile| profile.join(format!("mypass-host{suffix}")))
+    });
+    let real_host = host_dest
+        .as_deref()
+        .and_then(build_support::real_host_before_copy);
+
     let attributes = if targets_windows_msvc() {
         embed_windows_manifest();
         tauri_build::Attributes::new()
@@ -31,6 +54,11 @@ fn main() {
     if let Err(error) = tauri_build::try_build(attributes) {
         println!("cargo:warning=tauri-build failed: {error:#}");
         std::process::exit(1);
+    }
+    if let Some(dest) = host_dest.as_deref() {
+        if let Err(error) = build_support::restore_real_host(dest, real_host.as_deref()) {
+            println!("cargo:warning=cannot restore the built mypass-host: {error}");
+        }
     }
 }
 

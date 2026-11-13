@@ -392,6 +392,12 @@ pub fn on_run_event<R: Runtime>(app: &tauri::AppHandle<R>, event: &RunEvent) {
                 }
             }
         }
+        // Safety net for any exit that did not go through the quit flow; `shutdown` is idempotent.
+        RunEvent::Exit => {
+            if let Some(bridge) = app.try_state::<crate::bridge::BridgeState>() {
+                bridge.shutdown();
+            }
+        }
         #[cfg(target_os = "macos")]
         RunEvent::Reopen {
             has_visible_windows: false,
@@ -447,6 +453,10 @@ fn start_quit_flow<R: Runtime>(app: tauri::AppHandle<R>) {
             // were handled before the gate is confirmed it would read `AlreadyRunning`,
             // prevent the exit and nothing would exit again.
             guard.finish(outcome);
+            // The bridge stops only once the decision is final; a cancelled quit keeps it serving.
+            if let Some(bridge) = app.try_state::<crate::bridge::BridgeState>() {
+                crate::bridge::on_quit_outcome(&bridge, outcome);
+            }
             if outcome == ExitOutcome::Exit {
                 port.exit();
             }

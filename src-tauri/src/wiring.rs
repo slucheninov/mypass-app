@@ -5,12 +5,13 @@
 //! start from `shell_runtime::start` once this has managed the state; the effect runner of
 //! [`ShellState`] is the real [`ShellEffects`] built here.
 
+use crate::bridge::{build_state, TauriBridgeEvents};
 use crate::events::{ClipboardClearedEvent, SaveStateChanged, SessionChanged, VaultChanged};
 use crate::files::{FileGrants, TauriFilePicker};
 use crate::hotkeys::ConflictGate;
 use crate::lifecycle::{ExitGate, QuitPort};
 use crate::lifecycle::{ShellEffects, TRAY_REFRESH_DELAY};
-use crate::shell::TauriWindowOps;
+use crate::shell::{TauriWindowOps, WindowOps};
 use crate::shell_runtime::{hide_panel, tray_refresher, TauriQuitPort, TauriTarget};
 use crate::state::{AppState, ShellState, SystemProcessLookup};
 use mypass_session::clipboard_service::ClearedSink;
@@ -152,10 +153,21 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(editor_dirty);
     app.manage::<Arc<dyn QuitPort>>(Arc::new(TauriQuitPort(handle.clone())));
     app.manage(AppState(core.clone()));
+    let windows: Arc<dyn WindowOps> = Arc::new(TauriWindowOps(handle.clone()));
+    // The bridge starts even while the vault is locked. A start failure (an unreadable pairing
+    // list, a port that cannot be bound) leaves the app running; the Browser pane shows
+    // `listening: false` and, for the pairing list, offers the reset.
+    let bridge = build_state(
+        &core,
+        windows.clone(),
+        Arc::new(TauriBridgeEvents(handle.clone())),
+    );
+    let _ = bridge.start();
+    app.manage(bridge);
     app.manage(ShellState {
-        picker: Arc::new(TauriFilePicker(handle.clone())),
+        picker: Arc::new(TauriFilePicker(handle)),
         grants,
-        windows: Arc::new(TauriWindowOps(handle)),
+        windows,
         effects: Arc::new(ShellEffects::new(core, target)),
         settings_gate: Arc::new(Mutex::new(())),
     });

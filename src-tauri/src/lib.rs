@@ -4,6 +4,7 @@
 //! `src/lib/bindings.ts` is generated from [`specta_builder`], never edited by hand; the command
 //! list is pinned by `tests/commands.snap`.
 
+pub mod bridge;
 pub mod commands;
 pub mod events;
 pub mod files;
@@ -26,7 +27,7 @@ use tauri_specta::{collect_commands, collect_events, Builder, Commands};
 
 /// Every command, in one place (the tests read their names from here).
 pub fn commands() -> Commands<tauri::Wry> {
-    use commands::{app, attachment, backup, draft, entry, generator, group, import};
+    use commands::{app, attachment, backup, browser, draft, entry, generator, group, import};
     use commands::{platform, settings, sidebar, vault};
     collect_commands![
         app::app_info,
@@ -41,6 +42,13 @@ pub fn commands() -> Commands<tauri::Wry> {
         attachment::attachment_pick,
         backup::backup_list,
         backup::backup_restore,
+        browser::browser_pairing_cancel,
+        browser::browser_proposal_take,
+        browser::browser_reinstall_host,
+        browser::browser_reset_pairings,
+        browser::browser_revoke,
+        browser::browser_show_extension_folder,
+        browser::browser_status,
         draft::draft_clear,
         draft::draft_save,
         draft::draft_versions,
@@ -97,18 +105,24 @@ pub fn commands() -> Commands<tauri::Wry> {
 /// bindings exporter go through it, so the generated TypeScript can never drift from the app.
 pub fn specta_builder() -> Builder<tauri::Wry> {
     use events::{
-        ClipboardClearedEvent, OpenEntryEvent, SaveStateChanged, SessionChanged, SettingsChanged,
-        ShortcutConflictEvent, VaultChanged,
+        BridgeChangedEvent, ClipboardClearedEvent, OpenEntryEvent, PairingChallengeEvent,
+        ProposalEvent, SaveStateChanged, SessionChanged, SettingsChanged, SettingsPaneEvent,
+        ShortcutConflictEvent, UnlockRequestedEvent, VaultChanged,
     };
     Builder::<tauri::Wry>::new()
         .commands(commands())
         .events(collect_events![
+            BridgeChangedEvent,
             ClipboardClearedEvent,
             OpenEntryEvent,
+            PairingChallengeEvent,
+            ProposalEvent,
             SaveStateChanged,
             SessionChanged,
             SettingsChanged,
+            SettingsPaneEvent,
             ShortcutConflictEvent,
+            UnlockRequestedEvent,
             VaultChanged,
         ])
 }
@@ -254,7 +268,7 @@ mod tests {
 
     #[test]
     fn command_names_follow_domain_verb_convention() {
-        const DOMAINS: [&str; 13] = [
+        const DOMAINS: [&str; 14] = [
             "vault",
             "entry",
             "group",
@@ -268,6 +282,7 @@ mod tests {
             "app",
             "platform",
             "shortcut",
+            "browser",
         ];
         let names = command_names();
         assert!(!names.is_empty());
@@ -351,6 +366,34 @@ mod tests {
             "shortcut-conflict-event"
         );
         assert_eq!(events::OpenEntryEvent::NAME, "open-entry-event");
+        assert_eq!(
+            events::PairingChallengeEvent::NAME,
+            "pairing-challenge-event"
+        );
+        assert_eq!(events::BridgeChangedEvent::NAME, "bridge-changed-event");
+        assert_eq!(events::ProposalEvent::NAME, "proposal-event");
+        assert_eq!(events::UnlockRequestedEvent::NAME, "unlock-requested-event");
+        assert_eq!(events::SettingsPaneEvent::NAME, "settings-pane-event");
+    }
+
+    #[test]
+    fn browser_commands_are_in_the_committed_snapshot() {
+        let snapshot = fs::read_to_string(committed_snapshot()).unwrap();
+        for name in [
+            "browser_pairing_cancel",
+            "browser_proposal_take",
+            "browser_reinstall_host",
+            "browser_reset_pairings",
+            "browser_revoke",
+            "browser_show_extension_folder",
+            "browser_status",
+        ] {
+            assert!(
+                command_names().iter().any(|n| n == name),
+                "{name} unregistered"
+            );
+            assert!(snapshot.lines().any(|l| l == name), "{name} not in snap");
+        }
     }
 
     /// Every permission identifier of every capability file, with the file's windows.

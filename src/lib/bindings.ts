@@ -7,10 +7,7 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 export const commands = {
 	appInfo: () => typedError<AppInfo, ApiError>(__TAURI_INVOKE("app_info")),
 	appOpenEntry: (id: string, edit: boolean) => typedError<null, ApiError>(__TAURI_INVOKE("app_open_entry", { id, edit })),
-	/**
-	 *  Shows the settings window, creating it on first use. `async` because creating a window from a
-	 *  synchronous command deadlocks on Windows.
-	 */
+	/**  Shows the settings window (General pane). */
 	appOpenSettings: () => typedError<null, ApiError>(__TAURI_INVOKE("app_open_settings")),
 	appQuit: () => typedError<null, ApiError>(__TAURI_INVOKE("app_quit")),
 	/**  User activity in a window (resets the idle timer); a no-op while locked. */
@@ -30,6 +27,14 @@ export const commands = {
 	attachmentPick: () => typedError<PickedFile[], ApiError>(__TAURI_INVOKE("attachment_pick")),
 	backupList: () => typedError<BackupStatus_Serialize, ApiError>(__TAURI_INVOKE("backup_list")),
 	backupRestore: (id: string) => typedError<null, ApiError>(__TAURI_INVOKE("backup_restore", { id })),
+	browserPairingCancel: () => typedError<null, ApiError>(__TAURI_INVOKE("browser_pairing_cancel")),
+	browserProposalTake: (id: string) => typedError<EntryEditModel_Serialize, ApiError>(__TAURI_INVOKE("browser_proposal_take", { id })),
+	browserReinstallHost: () => typedError<BrowserRegistrationDto_Serialize[], ApiError>(__TAURI_INVOKE("browser_reinstall_host")),
+	browserResetPairings: () => typedError<null, ApiError>(__TAURI_INVOKE("browser_reset_pairings")),
+	browserRevoke: (id: string) => typedError<null, ApiError>(__TAURI_INVOKE("browser_revoke", { id })),
+	/**  Reveals the extension folder with the same helper as `app_reveal_backups`. */
+	browserShowExtensionFolder: () => typedError<null, ApiError>(__TAURI_INVOKE("browser_show_extension_folder")),
+	browserStatus: () => typedError<BrowserStatus_Serialize, ApiError>(__TAURI_INVOKE("browser_status")),
 	draftClear: (entryId: string) => typedError<null, ApiError>(__TAURI_INVOKE("draft_clear", { entryId })),
 	draftSave: (entryId: string, notes: string) => typedError<boolean, ApiError>(__TAURI_INVOKE("draft_save", { entryId, notes })),
 	draftVersions: (entryId: string) => typedError<DraftVersionDto[], ApiError>(__TAURI_INVOKE("draft_versions", { entryId })),
@@ -91,12 +96,17 @@ export const commands = {
 
 /** Events */
 export const events = {
+	bridgeChangedEvent: makeEvent<BridgeChangedEvent, BridgeChangedEvent>("bridge-changed-event"),
 	clipboardClearedEvent: makeEvent<ClipboardClearedEvent, ClipboardClearedEvent>("clipboard-cleared-event"),
 	openEntryEvent: makeEvent<OpenEntryEvent, OpenEntryEvent>("open-entry-event"),
+	pairingChallengeEvent: makeEvent<PairingChallengeEvent_Serialize, PairingChallengeEvent_Deserialize>("pairing-challenge-event"),
+	proposalEvent: makeEvent<ProposalEvent_Serialize, ProposalEvent_Deserialize>("proposal-event"),
 	saveStateChanged: makeEvent<SaveStateChanged_Serialize, SaveStateChanged_Deserialize>("save-state-changed"),
 	sessionChanged: makeEvent<SessionChanged_Serialize, SessionChanged_Deserialize>("session-changed"),
 	settingsChanged: makeEvent<SettingsChanged_Serialize, SettingsChanged_Deserialize>("settings-changed"),
+	settingsPaneEvent: makeEvent<SettingsPaneEvent, SettingsPaneEvent>("settings-pane-event"),
 	shortcutConflictEvent: makeEvent<ShortcutConflictEvent, ShortcutConflictEvent>("shortcut-conflict-event"),
+	unlockRequestedEvent: makeEvent<UnlockRequestedEvent, UnlockRequestedEvent>("unlock-requested-event"),
 	vaultChanged: makeEvent<VaultChanged, VaultChanged>("vault-changed"),
 };
 
@@ -187,6 +197,91 @@ export type BackupStatus_Serialize = {
 	lastFailure: BackupFailure | null,
 	count: number,
 	interval: BackupInterval,
+};
+
+/**
+ *  The paired browsers, their diagnostics or the host registration changed (re-query
+ *  `browser_status`).
+ */
+export type BridgeChangedEvent = null;
+
+/**  The latest report a paired browser sent (the enums as their wire strings). */
+export type BrowserDiagnosticsDto = BrowserDiagnosticsDto_Serialize | BrowserDiagnosticsDto_Deserialize;
+
+/**  The latest report a paired browser sent (the enums as their wire strings). */
+export type BrowserDiagnosticsDto_Deserialize = {
+	proxyState: string,
+	permissionState: string,
+	passwordSavingEnabled?: boolean | null,
+	extensionScanState: string,
+	enabledManagers: string[],
+	receivedAt: number | null,
+};
+
+/**  The latest report a paired browser sent (the enums as their wire strings). */
+export type BrowserDiagnosticsDto_Serialize = {
+	proxyState: string,
+	permissionState: string,
+	passwordSavingEnabled: boolean | null,
+	extensionScanState: string,
+	enabledManagers: string[],
+	receivedAt: number | null,
+};
+
+/**  One browser's native messaging registration (`state`: `ok`, `missing`, `stale` or `error`). */
+export type BrowserRegistrationDto = BrowserRegistrationDto_Serialize | BrowserRegistrationDto_Deserialize;
+
+/**  One browser's native messaging registration (`state`: `ok`, `missing`, `stale` or `error`). */
+export type BrowserRegistrationDto_Deserialize = {
+	id: string,
+	display: string,
+	state: string,
+	manifestPath?: string | null,
+	detail?: string | null,
+};
+
+/**  One browser's native messaging registration (`state`: `ok`, `missing`, `stale` or `error`). */
+export type BrowserRegistrationDto_Serialize = {
+	id: string,
+	display: string,
+	state: string,
+	manifestPath: string | null,
+	detail: string | null,
+};
+
+/**  Everything the Browser pane shows. */
+export type BrowserStatus = BrowserStatus_Serialize | BrowserStatus_Deserialize;
+
+/**  Everything the Browser pane shows. */
+export type BrowserStatus_Deserialize = {
+	/**  The loopback server is running. */
+	listening: boolean,
+	/**
+	 *  The stored list of paired browsers could not be read, so the bridge did not start; the pane
+	 *  offers `browser_reset_pairings`.
+	 */
+	pairingStoreFailed: boolean,
+	paired: PairedBrowserDto_Deserialize[],
+	pairing?: PairingChallengeDto | null,
+	registrations: BrowserRegistrationDto_Deserialize[],
+	/**  The host binary shipped with the app, when there is one. */
+	hostPath?: string | null,
+};
+
+/**  Everything the Browser pane shows. */
+export type BrowserStatus_Serialize = {
+	/**  The loopback server is running. */
+	listening: boolean,
+	/**
+	 *  The stored list of paired browsers could not be read, so the bridge did not start; the pane
+	 *  offers `browser_reset_pairings`.
+	 */
+	pairingStoreFailed: boolean,
+	paired: PairedBrowserDto_Serialize[],
+	pairing: PairingChallengeDto | null,
+	registrations: BrowserRegistrationDto_Serialize[],
+	/**  The host binary shipped with the app, when there is one. */
+	hostPath: string | null,
 };
 
 /**  Never carries the full number or the CVV. */
@@ -562,6 +657,56 @@ export type OpenWarning =
 /**  Another `com.mypass.app` process, with a different executable (the old Swift app), runs. */
 { kind: "oldAppRunning"; executable: string };
 
+/**  A paired browser. No secret, no hash. */
+export type PairedBrowserDto = PairedBrowserDto_Serialize | PairedBrowserDto_Deserialize;
+
+/**  A paired browser. No secret, no hash. */
+export type PairedBrowserDto_Deserialize = {
+	id: string,
+	label: string,
+	createdAt: number | null,
+	diagnostics?: BrowserDiagnosticsDto_Deserialize | null,
+};
+
+/**  A paired browser. No secret, no hash. */
+export type PairedBrowserDto_Serialize = {
+	id: string,
+	label: string,
+	createdAt: number | null,
+	diagnostics: BrowserDiagnosticsDto_Serialize | null,
+};
+
+/**
+ *  A pairing code waiting for the browser. `expires_at` (Unix milliseconds) lets the UI count down and
+ *  then re-query `browser_status`.
+ */
+export type PairingChallengeDto = {
+	code: string,
+	browser: string,
+	expiresAt: number | null,
+};
+
+/**
+ *  The pairing challenge changed: `Some` while a code is waiting for the browser, `None` once it
+ *  was finished, cancelled, expired or the vault locked. Sent to the main window only (it carries
+ *  the code the user types into the extension).
+ */
+export type PairingChallengeEvent = PairingChallengeEvent_Serialize | PairingChallengeEvent_Deserialize;
+
+/**
+ *  The pairing challenge changed: `Some` while a code is waiting for the browser, `None` once it
+ *  was finished, cancelled, expired or the vault locked. Sent to the main window only (it carries
+ *  the code the user types into the extension).
+ */
+export type PairingChallengeEvent_Deserialize = PairingChallengeDto | null;
+
+/**
+ *  The pairing challenge changed: `Some` while a code is waiting for the browser, `None` once it
+ *  was finished, cancelled, expired or the vault locked. Sent to the main window only (it carries
+ *  the code the user types into the extension).
+ */
+export type PairingChallengeEvent_Serialize = PairingChallengeDto | null;
+
 export type PasskeyMeta = PasskeyMeta_Serialize | PasskeyMeta_Deserialize;
 
 export type PasskeyMeta_Deserialize = {
@@ -588,6 +733,39 @@ export type PickedFile = {
 	/**  Bytes (`f64`: specta rejects 64-bit integers). */
 	size: number | null,
 };
+
+/**
+ *  The browser proposed saving a login or a one-time-password secret. It carries no secret: the
+ *  main window takes the proposal with `browser_proposal_take`. Sent to the main window only.
+ */
+export type ProposalEvent = ProposalEvent_Serialize | ProposalEvent_Deserialize;
+
+/**
+ *  The browser proposed saving a login or a one-time-password secret. It carries no secret: the
+ *  main window takes the proposal with `browser_proposal_take`. Sent to the main window only.
+ */
+export type ProposalEvent_Deserialize = {
+	id: string,
+	kind: ProposalKind,
+	url: string,
+	username?: string | null,
+	entryId?: string | null,
+};
+
+/**
+ *  The browser proposed saving a login or a one-time-password secret. It carries no secret: the
+ *  main window takes the proposal with `browser_proposal_take`. Sent to the main window only.
+ */
+export type ProposalEvent_Serialize = {
+	id: string,
+	kind: ProposalKind,
+	url: string,
+	username: string | null,
+	entryId: string | null,
+};
+
+/**  What a save proposal is about. */
+export type ProposalKind = "login" | "totp";
 
 /**  One row of the recent-vaults list. */
 export type RecentVaultDto = {
@@ -706,6 +884,11 @@ export type SettingsChanged_Deserialize = Settings_Deserialize;
 
 /**  The settings changed (every window shows the same ones). */
 export type SettingsChanged_Serialize = Settings_Serialize;
+
+/**  The settings window, already open, should select `pane` (for example `browser`). */
+export type SettingsPaneEvent = {
+	pane: string,
+};
 
 /**
  *  A partial update: every field of [`Settings`] except `recent_vaults` (owned by
@@ -905,6 +1088,9 @@ export type TotpDto = {
 	secondsRemaining: number,
 	period: number,
 };
+
+/**  A browser asked for an unlock. Payload-free; the unlock screen (stage 5) listens to it. */
+export type UnlockRequestedEvent = null;
 
 /**
  *  How long a device unlock (Touch ID / account password) stays allowed after a master-password

@@ -237,6 +237,9 @@ change is done.
   cleared on close, save and lock, and the single `{@html}` site renders sanitised markdown. The main
   window reports whether its editor holds unsaved changes (`app_set_editor_dirty`), and the quit flow
   asks before discarding them.
+  `browser_proposal_take` is the one command that hands a browser's proposed password to the webview, once, after
+  the user opened the proposal; like typed input it may land in an encrypted editor draft. `browser_status` never
+  returns a secret or a hash.
 - **Signing.** The stable team `W645B93PPQ` arrives in stage 5. Never sign ad-hoc: it breaks the
   Keychain access that guards the unlock key.
 
