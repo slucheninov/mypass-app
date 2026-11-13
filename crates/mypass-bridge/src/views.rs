@@ -58,7 +58,8 @@ pub fn summary(entry: &Entry) -> ExtensionCredentialSummary {
         id: wire_id(entry.uuid),
         title: entry.title().to_owned(),
         username: entry.field("UserName").unwrap_or("").to_owned(),
-        has_totp: entry.totp().is_some(),
+        // The same non-empty `otp` test as the `codes` category, as in the earlier app.
+        has_totp: entry.otp_source().is_some(),
         has_passkey: entry.has_passkey(),
         url: None,
         entry_type: None,

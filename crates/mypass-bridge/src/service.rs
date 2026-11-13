@@ -16,7 +16,7 @@
 //! Swift app and reveals no vault data. The handlers re-check the lock under the session's own lock
 //! (`with_db`), so this gate is an early answer, never the guard of the data.
 //!
-//! The bridge always searches with `SearchScope::Autofill` (Task 11 onwards): free text the
+//! The bridge always searches with `SearchScope::Autofill`: free text the
 //! extension has no use for is never matched.
 
 #![deny(clippy::wildcard_enum_match_arm)]

@@ -5,8 +5,9 @@
 //! 6 digits, 30 seconds and SHA-1.
 //!
 //! Secrets leave the session only inside the response: they are copied once, into `Zeroizing`
-//! buffers, under the session lock, and handed to the response without further copies. Nothing here
-//! is logged.
+//! buffers, under the session lock, and moved into the response without further copies here. The
+//! response holds plain `String`s and the server serialises it into a buffer that is not wiped, so
+//! this limits the copies; it does not promise erasure. Nothing here is logged.
 
 use std::time::UNIX_EPOCH;
 
@@ -338,8 +339,9 @@ mod tests {
         send(&f, fill(ids.a, GITHUB));
         let (count, time) = usage(&f);
         assert_eq!(count, before_count + 1);
-        // The session clock is the injected one, so the stamp moved to it.
+        // The session clock is the injected one, so the stamp is exactly its wall time.
         assert_ne!(time, before_time);
+        assert_eq!(time, mypass_kdbx::Timestamp(1_700_000_000));
         assert_eq!(f.session.status().save.state, SaveState::Idle);
     }
 

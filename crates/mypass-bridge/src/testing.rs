@@ -387,7 +387,7 @@ pub(crate) fn resets_timer(f: &Fx, act: impl FnOnce()) -> bool {
 }
 
 /// The ids of the entries of [`sample_database`].
-#[allow(dead_code)] // `d` and `e` are read by the handlers of later tasks
+#[allow(dead_code)] // `e` is not read by any test yet; it documents the fixture
 pub(crate) struct Ids {
     /// GitHub login: favorite, TOTP, passkey, public `Phone`, protected `Recovery`, extra URL.
     pub a: Uuid,
