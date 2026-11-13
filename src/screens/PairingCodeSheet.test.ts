@@ -98,4 +98,16 @@ describe("PairingCodeSheet", () => {
     expect(browser.pairing).toBeNull();
     expect(document.body.innerHTML).not.toMatch(/123\s?456/);
   });
+
+  it("a_backdrop_click_does_not_cancel_and_focus_is_not_on_a_button", async () => {
+    const { fake } = await openApp();
+    fake.state.browser.pairing = challenge();
+    await fake.emit("pairingChallengeEvent", challenge());
+    const dialog = await screen.findByRole("dialog", { name: "Pairing code" });
+    await waitFor(() => expect(document.activeElement).toBe(dialog));
+    const user = userEvent.setup();
+    await user.click(dialog.parentElement as HTMLElement);
+    expect(calls(fake, "browserPairingCancel")).toHaveLength(0);
+    expect(screen.getByRole("dialog", { name: "Pairing code" })).toBeTruthy();
+  });
 });

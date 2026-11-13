@@ -120,6 +120,13 @@
   }
 </script>
 
+{#if browser.failed && !status}
+  <div class="notice" role="alert">
+    <p>{t("Browser status could not be read.")}</p>
+    <Button onclick={() => void browser.refresh()}>{t("Retry")}</Button>
+  </div>
+{/if}
+
 {#if status}
   <div class="header">
     <p class="state" data-testid="bridge-state">{status.listening ? t("Listening") : t("Not running")}</p>

@@ -56,7 +56,10 @@
 
   // Dropped with the component (it holds the password like the model does).
   let baseline: string | null = untrack(() => JSON.stringify($state.snapshot(model)));
-  const isDirty = () => baseline !== null && JSON.stringify($state.snapshot(model)) !== baseline;
+  const changed = () => baseline !== null && JSON.stringify($state.snapshot(model)) !== baseline;
+  // A proposal from the browser counts as unsaved even untouched: it was taken from the backend
+  // and cannot be fetched again, so leaving it (another entry, a lock by the user, quit) asks first.
+  const isDirty = () => changed() || navigation.editorSource === "browser";
 
   let saving = $state(false);
   let confirming = $state(false);
@@ -128,6 +131,13 @@
   function cancel() {
     if (saving) return;
     if (isDirty()) confirming = true;
+    else close();
+  }
+
+  /** The banner's Dismiss: discards the proposal at once, unless the user edited it meanwhile. */
+  function dismiss() {
+    if (saving) return;
+    if (changed()) confirming = true;
     else close();
   }
 
@@ -207,7 +217,7 @@
     <!-- A save proposal from the browser: nothing is stored until Save; Dismiss is the same as Cancel. -->
     <div class="banner" data-testid="proposal-banner">
       <span>{t("Saving from your browser")}</span>
-      <Button variant="plain" disabled={saving} onclick={cancel}>{t("Dismiss")}</Button>
+      <Button variant="plain" disabled={saving} onclick={dismiss}>{t("Dismiss")}</Button>
     </div>
   {/if}
 

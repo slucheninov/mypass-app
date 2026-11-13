@@ -54,6 +54,8 @@ class BrowserStore {
       this.failed = false;
     } catch (e) {
       if (seq !== this.#seq) return;
+      // Nothing stale is shown as if it were current: the pane offers a retry instead.
+      this.status = null;
       this.failed = true;
       toasts.reportError(e);
     }
@@ -67,6 +69,7 @@ class BrowserStore {
       off();
       this.#seq++;
       this.status = null;
+      this.failed = false;
     };
   }
 

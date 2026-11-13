@@ -196,6 +196,22 @@ describe("Browser pane", () => {
     await expectNoAxeViolations(panel());
   });
 
+  it("a_failed_status_query_shows_a_retry_not_stale_data", async () => {
+    const user = userEvent.setup();
+    const { fake } = await open();
+    await within(panel()).findByText("Chrome (Work)");
+    const real = fake.handlers.browserStatus;
+    fake.handlers.browserStatus = () => {
+      throw new Error("boom");
+    };
+    await fake.emit("bridgeChangedEvent", null);
+    expect(await within(panel()).findByText("Browser status could not be read.")).toBeTruthy();
+    expect(within(panel()).queryByText("Chrome (Work)")).toBeNull();
+    fake.handlers.browserStatus = real;
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await within(panel()).findByText("Chrome (Work)")).toBeTruthy();
+  });
+
   it("selects_the_browser_pane_on_a_settings_pane_event", async () => {
     const { fake } = await renderSettingsApp({}, { prepare: (f: FakeBackend) => void (f.state.browser = status()) });
     expect(screen.getByRole("tab", { name: "General", selected: true })).toBeTruthy();

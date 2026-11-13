@@ -34,7 +34,7 @@
 </script>
 
 {#if challenge}
-  <Modal open={true} title={t("Pairing code")} onclose={() => void browser.cancelPairing()}>
+  <Modal open={true} title={t("Pairing code")} backdropCloses={false} focusDialog onclose={() => void browser.cancelPairing()}>
     <p class="code" data-testid="pairing-code">{grouped}</p>
     <p class="browser">{challenge.browser}</p>
     <p class="hint">

@@ -34,8 +34,11 @@ Last updated: 2026-11-13
   command (`app_quit` and `app_show_main` included); add per-window command permissions through a
   `tauri_build` app manifest so the tray panel and settings window get only what they use. This
   includes the `browser_*` commands: `browser_proposal_take` returns a proposal's password, so only
-  the main window should be able to call it, and `browser_status`, `browser_reset_pairings` and
-  `browser_revoke` belong to the main window alone.
+  the main window should be able to call it (and `browser_pairing_cancel`); `browser_status`,
+  `browser_revoke`, `browser_reset_pairings`, `browser_reinstall_host` and
+  `browser_show_extension_folder` are used by the Settings Browser pane, so they belong to the
+  settings window (and `browser_status`, which carries the live pairing code, to the main window too)
+  and not to the tray panel.
 - [ ] Startup failure is reported only on stderr (invisible in a Windows release build and when
   launched from Finder); show a native dialog.
 - [ ] Quit-dialog default button: with tauri-plugin-dialog 2.8.4 a closed dialog is reported as the

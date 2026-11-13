@@ -1,12 +1,14 @@
-import { screen, waitFor } from "@testing-library/svelte";
+import { fireEvent, screen, waitFor } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../lib/api";
 import type { EntryEditModel_Serialize } from "../lib/bindings";
 import { navigation } from "../lib/stores/navigation.svelte";
 import { toasts } from "../lib/stores/toasts.svelte";
 import { calls, renderMainApp } from "../test/mainApp";
 import type { FakeBackend } from "../test/fakeBackend";
+
+afterEach(() => vi.useRealTimers());
 
 const WAITING = "Saving from your browser is waiting";
 
@@ -104,5 +106,96 @@ describe("ProposalHandler", () => {
     expect(navigation.editModel).toBeNull();
     expect(waiting()).toHaveLength(0);
     expect(JSON.stringify(navigation.editModel)).not.toContain("pw-p1");
+  });
+
+  const typeTitle = (text: string) => fireEvent.input(screen.getByRole("textbox", { name: "Title" }), { target: { value: text } });
+
+  it("a_waiting_proposal_expires_with_the_backend_ttl_and_is_never_taken", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { fake } = await openApp();
+    navigation.openEditor(await api.entryNewModel("login", null));
+    await screen.findByRole("textbox", { name: "Title" });
+    await typeTitle("my own draft");
+    await fake.emit("proposalEvent", await propose(fake, "p1", "From the browser"));
+    await waitFor(() => expect(waiting()).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(121_000);
+    expect(waiting()).toHaveLength(0);
+    // Closing the editor later takes nothing and says nothing.
+    navigation.closeEditor();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(calls(fake, "browserProposalTake")).toHaveLength(0);
+    expect(toasts.items).toHaveLength(0);
+  });
+
+  it("a_take_that_answers_not_found_says_the_request_expired", async () => {
+    const { fake } = await openApp();
+    await fake.emit("proposalEvent", { id: "gone", kind: "login", url: "https://example.test", username: null, entryId: null });
+    await waitFor(() => expect(toasts.items.map((x) => x.text)).toContain("This browser request has expired"));
+    expect(navigation.editModel).toBeNull();
+  });
+
+  it("an_editor_that_turns_dirty_during_the_take_holds_the_model_and_asks_nothing", async () => {
+    const { fake } = await openApp();
+    navigation.openEditor(await api.entryNewModel("login", null));
+    await screen.findByRole("textbox", { name: "Title" });
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const take = fake.handlers.browserProposalTake;
+    fake.handlers.browserProposalTake = async (args) => {
+      await gate;
+      return take(args);
+    };
+    await fake.emit("proposalEvent", await propose(fake, "p1", "From the browser"));
+    await waitFor(() => expect(calls(fake, "browserProposalTake")).toHaveLength(1));
+    await typeTitle("typed meanwhile");
+    release();
+    await waitFor(() => expect(waiting()).toHaveLength(1));
+    // No "Discard changes?", no parked model, no banner, the draft is untouched.
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(navigation.pendingModel).toBeNull();
+    expect(navigation.editorSource).toBeNull();
+    expect((screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toBe("typed meanwhile");
+    // After the user acts it opens with the banner, and nothing is taken twice.
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(await screen.findByRole("button", { name: "Discard" }));
+    await waitFor(() => expect((screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toBe("From the browser"));
+    expect(screen.getByTestId("proposal-banner")).toBeTruthy();
+    expect(calls(fake, "browserProposalTake")).toHaveLength(1);
+    expect(waiting()).toHaveLength(0);
+  });
+
+  it("lock_overwrites_a_held_model", async () => {
+    const { fake } = await openApp();
+    navigation.openEditor(await api.entryNewModel("login", null));
+    await screen.findByRole("textbox", { name: "Title" });
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let taken: EntryEditModel_Serialize | undefined;
+    const take = fake.handlers.browserProposalTake;
+    fake.handlers.browserProposalTake = async (args) => {
+      await gate;
+      taken = (await take(args)) as EntryEditModel_Serialize;
+      return taken;
+    };
+    await fake.emit("proposalEvent", await propose(fake, "p1", "From the browser"));
+    await waitFor(() => expect(calls(fake, "browserProposalTake")).toHaveLength(1));
+    await typeTitle("typed meanwhile");
+    release();
+    await waitFor(() => expect(waiting()).toHaveLength(1));
+    expect(taken?.password).toBe("pw-p1");
+    await api.vaultLock();
+    await waitFor(() => expect(waiting()).toHaveLength(0));
+    expect(taken?.password).toBe("");
+    expect(navigation.editModel).toBeNull();
+  });
+
+  it("an_untouched_proposal_editor_counts_as_unsaved", async () => {
+    const { fake } = await openApp();
+    await fake.emit("proposalEvent", await propose(fake, "p1", "From the browser"));
+    await screen.findByTestId("proposal-banner");
+    expect(navigation.editorDirty?.()).toBe(true);
+    await userEvent.setup().click(screen.getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByRole("dialog", { name: "Discard changes?" })).toBeTruthy();
   });
 });

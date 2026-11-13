@@ -523,7 +523,11 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .map(|a| a["url"].as_str().unwrap())
+            .map(|a| {
+                // Only `url`: an `app` key would let the webview name a program to open it with.
+                assert_eq!(a.as_object().unwrap().len(), 1, "{a}");
+                a["url"].as_str().unwrap()
+            })
             .collect();
         assert_eq!(
             urls,
@@ -551,7 +555,11 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .map(|a| a["url"].as_str().unwrap())
+            .map(|a| {
+                // Only `url`: an `app` key would let the webview name a program to open it with.
+                assert_eq!(a.as_object().unwrap().len(), 1, "{a}");
+                a["url"].as_str().unwrap()
+            })
             .collect();
         assert_eq!(urls, ["https://*", "http://*"]);
     }

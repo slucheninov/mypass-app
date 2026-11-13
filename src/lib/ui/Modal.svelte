@@ -7,7 +7,19 @@
     onclose,
     children,
     footer,
-  }: { open: boolean; title: string; onclose: () => void; children: Snippet; footer?: Snippet } = $props();
+    backdropCloses = true,
+    focusDialog = false,
+  }: {
+    open: boolean;
+    title: string;
+    onclose: () => void;
+    children: Snippet;
+    footer?: Snippet;
+    /** A click on the backdrop closes the dialog (default). */
+    backdropCloses?: boolean;
+    /** Focus the dialog itself, not its first control: for a dialog nobody asked for, where a stray key must not press a button. */
+    focusDialog?: boolean;
+  } = $props();
 
   const uid = $props.id();
   const titleId = `modal-title-${uid}`;
@@ -27,7 +39,7 @@
     if (!open) return;
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     void tick().then(() => {
-      const first = focusables()[0];
+      const first = focusDialog ? undefined : focusables()[0];
       (first ?? dialog)?.focus();
     });
     return () => opener?.focus();
@@ -70,7 +82,7 @@
     class="backdrop"
     onpointerdown={(e) => (pressedOnBackdrop = e.target === e.currentTarget)}
     onclick={(e) => {
-      if (pressedOnBackdrop && e.target === e.currentTarget) onclose();
+      if (backdropCloses && pressedOnBackdrop && e.target === e.currentTarget) onclose();
       pressedOnBackdrop = false;
     }}
   >
