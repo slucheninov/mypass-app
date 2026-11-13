@@ -12,7 +12,7 @@ import { WORK_GROUP_ID, sessionStatus } from "../test/fixtures";
 import { calls, renderMainApp } from "../test/mainApp";
 import LoginFormHarness from "../test/LoginFormHarness.svelte";
 import { renderWithBackend } from "../test/render";
-import { createFakeBackend } from "../test/fakeBackend";
+import { createFakeBackend, type FakeCall } from "../test/fakeBackend";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -232,6 +232,59 @@ describe("replacing an open editor", () => {
     navigation.requestOpenEditor(other);
     expect(await screen.findByRole("dialog", { name: "Discard changes?" })).toBeTruthy();
     expect(navigation.editModel?.entryType).toBe("login");
+  });
+});
+
+describe("editor dirty report", () => {
+  const reported = (fake: { calls: FakeCall[] }) =>
+    calls(fake, "appSetEditorDirty").map((c) => c.args.dirty);
+
+  it("reports_true_once_when_the_editor_becomes_dirty_and_false_when_it_is_clean_again", async () => {
+    const fake = backendWith();
+    await openNew(fake, "login");
+    expect(reported(fake)).toEqual([]);
+    await user().type(field("Title"), "ab");
+    await waitFor(() => expect(reported(fake)).toEqual([true]));
+    await user().clear(field("Title"));
+    await waitFor(() => expect(reported(fake)).toEqual([true, false]));
+  });
+
+  it("reports_false_after_save", async () => {
+    const fake = backendWith();
+    await openNew(fake, "login");
+    await user().type(field("Title"), "Bank");
+    await waitFor(() => expect(reported(fake)).toEqual([true]));
+    await user().click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(navigation.editModel).toBeNull());
+    await waitFor(() => expect(reported(fake)).toEqual([true, false]));
+  });
+
+  it("reports_false_after_a_discarded_cancel", async () => {
+    const fake = backendWith();
+    await openNew(fake, "login");
+    await user().type(field("Title"), "x");
+    await waitFor(() => expect(reported(fake)).toEqual([true]));
+    await user().click(screen.getByRole("button", { name: "Cancel" }));
+    await user().click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(reported(fake)).toEqual([true, false]));
+  });
+
+  it("reports_false_on_lock", async () => {
+    const fake = backendWith();
+    await openNew(fake, "login");
+    await user().type(field("Title"), "x");
+    await waitFor(() => expect(reported(fake)).toEqual([true]));
+    await fake.emit("sessionChanged", sessionStatus("locked"));
+    await waitFor(() => expect(navigation.editModel).toBeNull());
+    await waitFor(() => expect(reported(fake)).toEqual([true, false]));
+  });
+
+  it("a_clean_editor_reports_nothing_when_closed", async () => {
+    const fake = backendWith();
+    await openNew(fake, "login");
+    await user().click(screen.getByRole("button", { name: "Cancel" }));
+    expect(navigation.editModel).toBeNull();
+    expect(reported(fake)).toEqual([]);
   });
 });
 
