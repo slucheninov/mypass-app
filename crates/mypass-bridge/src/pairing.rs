@@ -549,7 +549,12 @@ mod tests {
     }
 
     fn wrong_code(c: &PairingChallenge) -> String {
-        if c.code == "000000" { "000001" } else { "000000" }.to_owned()
+        if c.code == "000000" {
+            "000001"
+        } else {
+            "000000"
+        }
+        .to_owned()
     }
 
     /// A secret store that counts reads and can fail them.
@@ -617,9 +622,13 @@ mod tests {
         let (_s, _m, m) = manager();
         assert_eq!(started(&m).browser, "Chromium browser");
         let (_s, _m, m) = manager();
-        assert!(matches!(m.start(Some("  \n ")), StartOutcome::Started(c) if c.browser == "Chromium browser"));
+        assert!(
+            matches!(m.start(Some("  \n ")), StartOutcome::Started(c) if c.browser == "Chromium browser")
+        );
         let (_s, _m, m) = manager();
-        assert!(matches!(m.start(Some("Brave\u{7}")), StartOutcome::Started(c) if c.browser == "Brave"));
+        assert!(
+            matches!(m.start(Some("Brave\u{7}")), StartOutcome::Started(c) if c.browser == "Brave")
+        );
     }
 
     #[test]
@@ -641,9 +650,7 @@ mod tests {
         let c = started(&m);
         let secret = m.complete(&c.code).unwrap().unwrap();
         let stored = mem.get(PAIRING_SERVICE, PAIRING_ACCOUNT).unwrap().unwrap();
-        assert!(!stored
-            .windows(secret.len())
-            .any(|w| w == secret.as_bytes()));
+        assert!(!stored.windows(secret.len()).any(|w| w == secret.as_bytes()));
     }
 
     #[test]
