@@ -6,6 +6,8 @@
 pub mod codec;
 pub mod endpoint;
 pub mod gating;
+#[cfg(feature = "server")]
+pub mod pairing;
 pub mod protocol;
 
 /// The native messaging host name registered with every browser.
