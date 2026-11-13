@@ -25,7 +25,17 @@ for arg in "$@"; do
   esac
 done
 
-for cmd in cargo rustc; do
+# Never sign ad-hoc ("-" makes codesign and Tauri sign ad-hoc; an empty value is a mistake).
+if [[ -n "${MYPASS_SIGNING_IDENTITY+set}" ]]; then
+  if [[ -z "$MYPASS_SIGNING_IDENTITY" || "$MYPASS_SIGNING_IDENTITY" == "-" ]]; then
+    echo "Error: MYPASS_SIGNING_IDENTITY is empty or '-' (ad-hoc signing is refused)." >&2
+    echo "  Unset it, or set the 40-hex SHA-1 of a valid certificate:" >&2
+    echo "  security find-identity -v -p codesigning (use the entry that is not revoked)" >&2
+    exit 2
+  fi
+fi
+
+for cmd in cargo rustc python3; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "Error: required command '$cmd' not found." >&2
     exit 1

@@ -1,8 +1,8 @@
 //! Fallbacks: `Unsupported` stubs for every trait and, off macOS, the `arboard` clipboard.
 //!
 //! Every stub is a one-line `Unsupported` body, so a later stage replaces a body, never a
-//! signature. macOS uses the device unlock and launch-at-login stubs until stages 3
-//! and 5; Windows uses all of them (except the host-shared file secret store) until stage 6.
+//! signature. macOS uses the device unlock and launch-at-login stubs until stage 5;
+//! Windows uses all of them (except the host-shared file secret store) until stage 6.
 
 #[cfg(any(not(target_os = "macos"), test))]
 use crate::SecretStore;

@@ -13,6 +13,13 @@
 //!   copied or written.
 //! - `unregister` removes only the files this registrar created.
 //!
+//! `check_dir_chain` is a check, not a race-free guarantee: a component swapped for a symlink
+//! between the check and the write is not caught (no dirfd-anchored walk). Only a same-user process
+//! can do that, and it can already write these files.
+//!
+//! `unregister` removes the manifest under our name in each browser whatever its target, because
+//! `register` overwrites such a manifest too.
+//!
 //! Residual risk, accepted with the 0600 endpoint file: the installed host lives in the user's own
 //! Application Support folder, so a same-user process can replace it. The Stage 5 roadmap moves
 //! trust to the signed bundle.
@@ -93,6 +100,10 @@ impl MacHostRegistrar {
     /// Copies `bundled` to `host_exe` unless the hash is equal. `Ok(true)` when it copied.
     fn install_host(&self, bundled: &Path) -> PlatformResult<bool> {
         let bytes = fs::read(bundled).map_err(|e| io_err("read the bundled host", bundled, &e))?;
+        // The metadata check in `register` and this read are separate: re-check the bytes we install.
+        if bytes.is_empty() {
+            return Err(PlatformError::Failed(NOT_BUILT.to_owned()));
+        }
         let dest = &self.paths.host_exe;
         check_dir_chain(self.paths.home(), &self.paths.host_dir)?;
         check_file_dest(dest)?;
@@ -257,6 +268,18 @@ impl NativeHostRegistrar for MacHostRegistrar {
                     );
                 }
                 let (state, detail) = self.read_state(&manifest);
+                // A correct manifest is not healthy while the host it names is gone.
+                if state == RegistrationState::Ok
+                    && !fs::symlink_metadata(&self.paths.host_exe)
+                        .is_ok_and(|m| m.is_file() && m.mode() & 0o111 != 0)
+                {
+                    return Self::row(
+                        b,
+                        RegistrationState::Stale,
+                        Some(manifest),
+                        Some("host missing or not executable".to_owned()),
+                    );
+                }
                 Self::row(b, state, Some(manifest), detail)
             })
             .collect()
@@ -348,6 +371,9 @@ fn write_atomic(dest: &Path, bytes: &[u8], mode: u32) -> PlatformResult<()> {
         .and_then(|()| fs::rename(&temp, dest).map_err(|e| io_err("rename onto", dest, &e)));
     if result.is_err() {
         let _ = fs::remove_file(&temp);
+    } else if let Ok(d) = File::open(dir) {
+        // Best effort: persist the new name so a crash right after the rename keeps it.
+        let _ = d.sync_all();
     }
     result
 }
@@ -424,12 +450,11 @@ mod tests {
         let f = fixture();
         let r = MacHostRegistrar::new(f.paths.clone());
         r.register(&f.host).unwrap();
-        let before = fs::metadata(&f.paths.host_exe).unwrap().modified().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        // A rename onto the path would change the inode.
+        let before = fs::metadata(&f.paths.host_exe).unwrap().ino();
         let report = r.register(&f.host).unwrap();
         assert!(!report.host_copied);
-        let after = fs::metadata(&f.paths.host_exe).unwrap().modified().unwrap();
-        assert_eq!(before, after);
+        assert_eq!(fs::metadata(&f.paths.host_exe).unwrap().ino(), before);
     }
 
     #[test]
@@ -577,10 +602,7 @@ mod tests {
     #[test]
     fn register_rejects_control_char_in_host_path() {
         let dir = tempfile::tempdir().unwrap();
-        let home = dir.path().join(
-            "h
-x",
-        );
+        let home = dir.path().join("h\nx");
         fs::create_dir_all(&home).unwrap();
         let host = dir.path().join("host");
         fs::write(&host, b"x").unwrap();
@@ -611,6 +633,18 @@ x",
         let report = r.register(&f.host).unwrap();
         assert!(!report.host_copied);
         assert!(!f.paths.host_exe.exists());
+    }
+
+    #[test]
+    fn status_reports_stale_when_the_installed_host_is_gone() {
+        let f = fixture();
+        let r = MacHostRegistrar::new(f.paths.clone());
+        r.register(&f.host).unwrap();
+        fs::remove_file(&f.paths.host_exe).unwrap();
+        assert_eq!(
+            state_of(&r.status(), Browser::Chrome),
+            RegistrationState::Stale
+        );
     }
 
     #[test]

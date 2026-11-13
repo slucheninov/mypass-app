@@ -440,7 +440,7 @@ MyPass is Apache-2.0. Whenever a dependency or a vendored file is added, removed
 ## Never commit
 
 Everything in `.gitignore` (`/docs/superpowers/`, `.superpowers/`, `/target/`, `node_modules/`,
-`/dist/`, `.DS_Store`, `.worktrees/`, `*.profraw`), vault files with real data, and secrets.
+`/dist/`, `/src-tauri/binaries/`, `/src-tauri/gen/`, `.DS_Store`, `.worktrees/`, `*.profraw`), vault files with real data, and secrets.
 
 ## Real data
 

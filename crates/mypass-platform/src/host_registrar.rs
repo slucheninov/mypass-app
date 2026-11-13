@@ -104,7 +104,8 @@ pub fn manifest_json(host_path: &Path) -> Result<String, ManifestError> {
         path,
         r#type: "stdio",
     };
-    // Serialising plain strings cannot fail; the fallback keeps the function total without a panic.
+    // Unreachable: serialising a struct of plain strings cannot fail. The variant only keeps the
+    // function total without a panic.
     serde_json::to_string_pretty(&manifest).map_err(|_| ManifestError::NotUtf8)
 }
 

@@ -63,8 +63,8 @@ pub(crate) const INPUT_SOURCE_CHANGED: &str =
 const MAIN_THREAD_WAIT: Duration = Duration::from_millis(500);
 
 /// The real macOS platform: events, clipboard, keyboard layout and the app-private Keychain store;
-/// the 0600 file store shared with the native host; the native host registrar; `Unsupported` placeholders for device
-/// unlock and launch at login (stage 5).
+/// the 0600 file store shared with the native host; the native host registrar; `Unsupported`
+/// placeholders for device unlock and launch at login (stage 5).
 pub(crate) fn platform(paths: &AppPaths) -> Platform {
     Platform {
         events: Arc::new(MacSystemEvents),

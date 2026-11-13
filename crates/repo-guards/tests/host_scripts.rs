@@ -62,6 +62,52 @@ fn dev_app_sh_runs_build_host_first_and_passes_identity_unchanged() {
     assert!(text.contains("APPLE_SIGNING_IDENTITY=\"$MYPASS_SIGNING_IDENTITY\""));
 }
 
+/// Runs the script with the identity set; the refusal comes before any build, so this is cheap.
+fn run_with_identity(script: &str, identity: &str) -> Option<std::process::Output> {
+    match bash_command()
+        .arg(script)
+        .env("MYPASS_SIGNING_IDENTITY", identity)
+        .current_dir(repo_root())
+        .output()
+    {
+        Ok(out) => Some(out),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            println!("skipped: bash is not on PATH");
+            None
+        }
+        Err(e) => panic!("cannot run bash: {e}"),
+    }
+}
+
+#[test]
+fn scripts_refuse_ad_hoc_and_empty_identity_before_building() {
+    for script in ["scripts/build-host.sh", "scripts/dev-app.sh"] {
+        for identity in ["-", ""] {
+            let Some(out) = run_with_identity(script, identity) else {
+                return;
+            };
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{script} {identity:?}: {err}");
+            assert!(err.contains("ad-hoc"), "{script}: {err}");
+            // Refused before cargo ran.
+            assert!(!err.contains("Compiling"), "{script}: {err}");
+        }
+    }
+}
+
+#[test]
+fn dev_app_sh_accepts_release_and_rejects_unknown_flags() {
+    let text = read("scripts/dev-app.sh");
+    assert!(text.contains("--release"));
+    let out = bash_command()
+        .args(["scripts/dev-app.sh", "--bogus"])
+        .current_dir(repo_root())
+        .output();
+    if let Ok(out) = out {
+        assert_eq!(out.status.code(), Some(2));
+    }
+}
+
 #[test]
 fn no_script_or_workflow_reintroduces_the_secret_store_override() {
     for rel in ["scripts/build-host.sh", "scripts/dev-app.sh"] {
