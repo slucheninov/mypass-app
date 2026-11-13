@@ -11,7 +11,8 @@ use std::io::{self, Read};
 /// 4 GiB and a message to it at 1 MiB; no legitimate bridge message comes near 10 MiB.
 pub const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
 
-const HEADER_LEN: usize = 4;
+/// Bytes of the length header in front of every frame.
+pub const HEADER_LEN: usize = 4;
 
 /// The largest frame the writer emits: Chromium refuses a native host message to the browser above
 /// 1 MiB, so a bigger payload is an error here instead of a connection the browser kills.

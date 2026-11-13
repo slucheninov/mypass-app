@@ -67,10 +67,22 @@ fn hello(c: &mut TcpStream) -> (String, String) {
     (nonce, reply)
 }
 
+/// Hello plus one request with the right token: the connection is then authenticated.
 fn authed(s: &LoopbackServer) -> TcpStream {
     let mut c = connect(s);
     hello(&mut c);
+    send(&mut c, &list(&s.endpoint().token));
+    assert_eq!(recv(&mut c).unwrap(), OK);
     c
+}
+
+const OK: &str = r#"{"type":"ok"}"#;
+
+fn short(ms: u64) -> ServerConfig {
+    ServerConfig {
+        first_frame_deadline: Duration::from_millis(ms),
+        ..ServerConfig::default()
+    }
 }
 
 fn fav(token: &str) -> String {
@@ -118,7 +130,7 @@ fn valid_request_gets_handler_response() {
     let mut c = authed(&s);
     send(&mut c, &list(&s.endpoint().token));
     assert_eq!(recv(&mut c).unwrap(), r#"{"type":"ok"}"#);
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 
 #[test]
@@ -144,7 +156,7 @@ fn invalid_token_gets_error_and_close() {
         r#"{"type":"error","message":"invalid token"}"#
     );
     assert!(eof(&mut c));
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -284,9 +296,20 @@ fn hello_with_bad_nonce_closes_the_connection() {
 #[test]
 fn listener_is_ipv4_loopback_only() {
     let (s, _, _) = start();
-    let c = connect(&s);
-    let local: SocketAddr = c.peer_addr().unwrap();
-    assert_eq!(local, SocketAddr::from(([127, 0, 0, 1], s.port())));
+    assert_eq!(s.local_addr(), SocketAddr::from(([127, 0, 0, 1], s.port())));
+    // Route discovery sends no packet: it only asks the OS which local address it would use.
+    let probe = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+    if probe.connect("192.0.2.1:9").is_ok() {
+        if let Ok(local) = probe.local_addr() {
+            if !local.ip().is_loopback() && !local.ip().is_unspecified() {
+                let r = TcpStream::connect_timeout(
+                    &SocketAddr::new(local.ip(), s.port()),
+                    Duration::from_secs(2),
+                );
+                assert!(r.is_err(), "reachable through {}", local.ip());
+            }
+        }
+    }
 }
 
 #[test]
@@ -348,4 +371,113 @@ fn concurrent_clients_get_their_own_responses() {
         t.join().unwrap();
     }
     assert_eq!(calls.load(Ordering::SeqCst), 400);
+}
+
+#[test]
+fn idle_connection_after_hello_is_closed_at_the_deadline() {
+    let (s, _, _) = start_with(short(300));
+    let mut c = connect(&s);
+    hello(&mut c);
+    assert!(eof(&mut c));
+    wait_until(|| s.active_connections() == 0);
+}
+
+#[test]
+fn trickle_connection_is_closed_at_the_deadline() {
+    let (s, _, _) = start_with(short(300));
+    let mut c = connect(&s);
+    hello(&mut c);
+    // A header claiming a large frame, then one byte at a time: the frame never completes.
+    c.write_all(&1000u32.to_le_bytes()).unwrap();
+    c.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
+    let end = Instant::now() + GUARD;
+    let mut closed = false;
+    while Instant::now() < end {
+        if c.write_all(b"x").is_err() {
+            closed = true;
+            break;
+        }
+        let mut b = [0u8; 1];
+        if let Ok(0) = c.read(&mut b) {
+            closed = true;
+            break;
+        }
+    }
+    assert!(closed);
+    wait_until(|| s.active_connections() == 0);
+}
+
+#[test]
+fn early_hello_ack_closes() {
+    let (s, _, _) = start();
+    let mut c = connect(&s);
+    send(&mut c, r#"{"type":"helloAck","proof":"00"}"#);
+    assert!(eof(&mut c));
+}
+
+#[test]
+fn second_hello_closes() {
+    let (s, _, _) = start();
+    let mut c = connect(&s);
+    hello(&mut c);
+    send(
+        &mut c,
+        &format!(r#"{{"type":"hello","nonce":"{}"}}"#, new_nonce()),
+    );
+    assert!(eof(&mut c));
+}
+
+#[test]
+fn hello_after_authentication_closes() {
+    let (s, _, _) = start();
+    let mut c = authed(&s);
+    send(
+        &mut c,
+        &format!(r#"{{"type":"hello","nonce":"{}"}}"#, new_nonce()),
+    );
+    assert!(eof(&mut c));
+}
+
+#[test]
+fn wrong_token_before_auth_closes() {
+    let (s, _, calls) = start();
+    let mut c = connect(&s);
+    hello(&mut c);
+    send(&mut c, &list(&generate_token()));
+    assert!(recv(&mut c).unwrap().contains("invalid token"));
+    assert!(eof(&mut c));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn malformed_frame_before_auth_closes() {
+    let (s, _, _) = start();
+    let mut c = connect(&s);
+    hello(&mut c);
+    send(&mut c, "{not json");
+    assert!(eof(&mut c));
+}
+
+#[test]
+fn sixteen_unauthenticated_connections_cannot_lock_out_a_real_client() {
+    let (s, _, _) = start_with(short(300));
+    let mut squatters: Vec<TcpStream> = (0..16).map(|_| connect(&s)).collect();
+    for c in &mut squatters {
+        hello(c);
+    }
+    // Their deadline passes and every slot is freed.
+    wait_until(|| s.active_connections() == 0);
+    let mut real = authed(&s);
+    send(&mut real, &list(&s.endpoint().token));
+    assert_eq!(recv(&mut real).unwrap(), OK);
+}
+
+#[test]
+fn authenticated_idle_connection_stays_open() {
+    let (s, _, _) = start_with(short(200));
+    let mut c = authed(&s);
+    std::thread::sleep(Duration::from_millis(700));
+    assert_eq!(s.active_connections(), 1);
+    send(&mut c, &list(&s.endpoint().token));
+    assert_eq!(recv(&mut c).unwrap(), OK);
 }
