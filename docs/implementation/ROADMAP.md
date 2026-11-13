@@ -34,8 +34,6 @@ Last updated: 2026-11-13
 
 ## Stage 2b UI follow-ups
 
-- [ ] Decide whether quitting with unsaved editor changes should ask first (needs a dirty signal from
-  the main webview to the quit flow).
 - [ ] Manual: walk the Stage 2b checklist in `RUN.md` on a copy of the owner's vault (unlock, shell,
   editors, history and bin, generator, settings, CSV import, tray panel, quit flow, themes, languages).
 - [ ] Restore from the bin to the original group: the UI restores to the root today because the backend
@@ -47,7 +45,7 @@ Last updated: 2026-11-13
 - [ ] Reserved hotkeys are refused in the UI only; move the check into the backend hotkey parser.
 - [ ] CSV import error causes are matched by their English message; add separate error codes
   (`csvMissingColumn`, `csvNotUtf8`, `csvEmpty`) instead.
-- [ ] Per-window command ACL: `app_quit` and `app_show_main` are callable from every window, including
+- [ ] Per-window command ACL: `app_quit`, `app_show_main` and `app_set_editor_dirty` are callable from every window, including
   the tray panel and settings; restrict by window label where a window does not need them.
 - [ ] Flaky test `keyboard_layout_off_main_without_a_run_loop_is_unknown_not_a_deadlock` in
   `mypass-platform` (timing; failed once in two full runs): make it deterministic.

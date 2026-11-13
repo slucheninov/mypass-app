@@ -232,8 +232,9 @@ change is done.
   settings gate and never takes it.
 - **UI.** The Svelte UI talks only through the generated `src/lib/bindings.ts`; tests run on a fake backend
   (`src/test/fakeBackend.ts`) that is type-checked against those bindings. Secrets held by stores are
-  cleared on close, save and lock, and the single `{@html}` site renders sanitised markdown. Closing the
-  app with a changed, unsaved editor drops those changes without a prompt (open item in the roadmap).
+  cleared on close, save and lock, and the single `{@html}` site renders sanitised markdown. The main
+  window reports whether its editor holds unsaved changes (`app_set_editor_dirty`), and the quit flow
+  asks before discarding them.
 - **Signing.** The stable team `W645B93PPQ` arrives in stage 5. Never sign ad-hoc: it breaks the
   Keychain access that guards the unlock key.
 
