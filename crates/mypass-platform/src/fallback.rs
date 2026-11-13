@@ -1,9 +1,8 @@
 //! Fallbacks: `Unsupported` stubs for every trait and, off macOS, the `arboard` clipboard.
-
 //!
 //! Every stub is a one-line `Unsupported` body, so a later stage replaces a body, never a
-//! signature. macOS uses the host-shared secret store, device unlock, host registrar and launch-at-login stubs
-//! until stages 3 and 5; Windows uses all of them until stage 6.
+//! signature. macOS uses the host registrar, device unlock and launch-at-login stubs until stages 3
+//! and 5; Windows uses all of them (except the host-shared file secret store) until stage 6.
 
 #[cfg(any(not(target_os = "macos"), test))]
 use crate::SecretStore;
@@ -16,7 +15,7 @@ use secrecy::SecretString;
 use std::path::Path;
 // Items used only off macOS (and by this module's tests on macOS).
 #[cfg(not(target_os = "macos"))]
-use crate::{AppPaths, FileSecretStore, Platform};
+use crate::{AppPaths, Platform};
 #[cfg(any(not(target_os = "macos"), test))]
 use crate::{KeyboardLayout, Subscription, SystemEvent, SystemEvents};
 #[cfg(any(not(target_os = "macos"), test))]
@@ -278,10 +277,7 @@ pub(crate) fn platform(paths: &AppPaths) -> Platform {
         events: Arc::new(UnsupportedSystemEvents),
         clipboard: Arc::new(HashingClipboard::new(ArboardBackend)),
         secrets: Arc::new(UnsupportedSecretStore),
-        shared_secrets: Arc::new(FileSecretStore::new(
-            paths.secrets_shared.clone(),
-            paths.home().to_path_buf(),
-        )),
+        shared_secrets: Arc::new(crate::file_store::shared_store(paths)),
         device_unlock: Arc::new(UnsupportedDeviceUnlock),
         host_registrar: Arc::new(UnsupportedHostRegistrar),
         launch_at_login: Arc::new(UnsupportedLaunchAtLogin),

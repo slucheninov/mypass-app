@@ -67,13 +67,9 @@ Last updated: 2026-11-13
 ## Stage 3 extension bridge
 
 - [ ] `mypass-bridge`: the browser protocol, loopback server, per-launch token and pairing.
-- [ ] `mypass-host`: the native messaging host, with Keychain secret sharing between app and host and
-  self-registration of native messaging manifests for all Chromium browsers.
-- [ ] Host-shared Keychain secret: trust only the host binary inside the signed app bundle,
-  verified against a code requirement pinned to the team (`anchor apple generic and certificate
-  leaf[subject.OU] = "W645B93PPQ"` plus the host identifier) before building the access list; never
-  trust a path under Application Support. Delete-then-add on write; a crash in between only loses
-  the per-launch endpoint.
+- [ ] `mypass-host`: the native messaging host, sharing the per-launch endpoint with the app through
+  the 0600 file store in `AppPaths::secrets_shared`, and self-registration of native messaging
+  manifests for all Chromium browsers.
 - [ ] The extension moved into this repository as `extension/` with its Node suites running in CI.
 - [ ] Browser settings pane with pairing and save proposals.
 
@@ -89,6 +85,11 @@ Last updated: 2026-11-13
 - [ ] iCloud Drive as a primary vault location with conflict merging and migration.
 - [ ] "Also sync to folder" secondary destination (`mypass-sync`).
 - [ ] Touch ID and device-password unlock, launch at login, and the daily update check.
+- [ ] Move the bridge endpoint from the 0600 file store into a Keychain item that trusts only the
+  host binary inside the signed app bundle, verified against a code requirement pinned to the team
+  (`anchor apple generic and certificate leaf[subject.OU] = "W645B93PPQ"` plus the host
+  identifier); never trust a path under Application Support. Delete-then-add on write (a crash in
+  between only loses the per-launch endpoint), then delete the file.
 - [ ] Signed macOS packaging with a stable team (DMG, extension zip, checksums, tag-driven release
   workflow).
 - [ ] Manual checklist against a copy of the owner's vault and the cutover checklist from the old

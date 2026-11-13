@@ -2602,6 +2602,7 @@ dependencies = [
  "arboard",
  "block2",
  "core-foundation",
+ "libc",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
@@ -2610,6 +2611,7 @@ dependencies = [
  "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
+ "zeroize",
 ]
 
 [[package]]

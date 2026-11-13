@@ -26,11 +26,20 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime};
+use zeroize::Zeroizing;
 
 /// File name extension of one item.
 const EXTENSION: &str = "secret";
 /// How many temp names `set` tries before giving up.
 const MAX_TEMP_ATTEMPTS: usize = 8;
+/// The largest item `get` reads. The one production record is a few dozen bytes.
+const MAX_ITEM_BYTES: u64 = 64 * 1024;
+/// Prefix and suffix of the temp files this store creates.
+const TEMP_PREFIX: &str = ".tmp-";
+const TEMP_SUFFIX: &str = ".partial";
+/// A temp file older than this is a leftover of a crashed write and is swept.
+const STALE_TEMP_AGE: Duration = Duration::from_secs(60);
 
 /// Distinguishes the temp files of concurrent writers in one process.
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -74,8 +83,10 @@ impl FileSecretStore {
 
     fn temp_path(&self) -> PathBuf {
         let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        self.dir
-            .join(format!(".tmp-{}-{n}.partial", std::process::id()))
+        self.dir.join(format!(
+            "{TEMP_PREFIX}{}-{n}{TEMP_SUFFIX}",
+            std::process::id()
+        ))
     }
 
     /// Creates the directory (0700 on Unix) when missing, then checks it.
@@ -140,13 +151,48 @@ impl FileSecretStore {
                 Err(e) => return Err(io_error("create temp file", &path, &e)),
             }
         }
-        Err(PlatformError::SecretStoreTampered)
+        Err(PlatformError::Failed(format!(
+            "no free temp file name in {}",
+            self.dir.display()
+        )))
     }
+
+    /// Removes temp files this store left behind (crashed writes), best effort.
+    fn sweep_stale_temps(&self) {
+        let Ok(entries) = fs::read_dir(&self.dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !(name.starts_with(TEMP_PREFIX) && name.ends_with(TEMP_SUFFIX)) {
+                continue;
+            }
+            let Ok(meta) = fs::symlink_metadata(entry.path()) else {
+                continue;
+            };
+            let old = meta
+                .modified()
+                .ok()
+                .and_then(|m| SystemTime::now().duration_since(m).ok())
+                .is_some_and(|age| age > STALE_TEMP_AGE);
+            if meta.is_file() && old {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
+/// The store `Platform.shared_secrets` uses: `AppPaths::secrets_shared`, owner checked against the
+/// home folder.
+pub(crate) fn shared_store(paths: &crate::AppPaths) -> FileSecretStore {
+    FileSecretStore::new(paths.secrets_shared.clone(), paths.home().to_path_buf())
 }
 
 impl SecretStore for FileSecretStore {
     fn set(&self, service: &str, account: &str, secret: &[u8]) -> PlatformResult<()> {
         self.ensure_dir()?;
+        self.sweep_stale_temps();
         let target = self.item_path(service, account);
         let (mut file, temp) = self.create_temp()?;
         let written = file
@@ -182,7 +228,15 @@ impl SecretStore for FileSecretStore {
         if link_meta.file_type().is_symlink() || !link_meta.is_file() {
             return Err(refused(&path, "not a regular file"));
         }
-        let mut file = match File::open(&path) {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        // Refuse a symlink swapped in after the check above, and never block on a FIFO.
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::custom_flags(
+            &mut options,
+            libc::O_NOFOLLOW | libc::O_NONBLOCK,
+        );
+        let mut file = match options.open(&path) {
             Ok(file) => file,
             Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(io_error("open file", &path, &e)),
@@ -195,10 +249,17 @@ impl SecretStore for FileSecretStore {
             return Err(refused(&path, "not a regular file"));
         }
         self.check_trust(&meta, &path)?;
-        let mut bytes = Vec::new();
-        std::io::Read::read_to_end(&mut file, &mut bytes)
+        if meta.len() > MAX_ITEM_BYTES {
+            return Err(refused(&path, "larger than the item size limit"));
+        }
+        let capacity = usize::try_from(meta.len())
+            .map_err(|_| refused(&path, "larger than the item size limit"))?;
+        // Pre-sized from the metadata so the buffer is never reallocated (a realloc would leave an
+        // unzeroed copy behind); `take` bounds a file that grows after the check.
+        let mut bytes = Zeroizing::new(Vec::with_capacity(capacity));
+        std::io::Read::read_to_end(&mut std::io::Read::take(&mut file, meta.len()), &mut bytes)
             .map_err(|e| io_error("read file", &path, &e))?;
-        Ok(Some(bytes))
+        Ok(Some(std::mem::take(&mut bytes)))
     }
 
     fn delete(&self, service: &str, account: &str) -> PlatformResult<()> {
@@ -300,9 +361,62 @@ mod tests {
         assert!(!text.contains("topsecret"));
     }
 
+    #[test]
+    fn oversized_file_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store(tmp.path());
+        let big = vec![7u8; usize::try_from(MAX_ITEM_BYTES).unwrap() + 1];
+        s.set("svc", "acct", &big).unwrap();
+        assert!(matches!(
+            s.get("svc", "acct"),
+            Err(PlatformError::Failed(m)) if m.starts_with("refusing")
+        ));
+        let ok = vec![7u8; usize::try_from(MAX_ITEM_BYTES).unwrap()];
+        s.set("svc", "acct", &ok).unwrap();
+        assert_eq!(
+            s.get("svc", "acct").unwrap().map(|v| v.len()),
+            Some(ok.len())
+        );
+    }
+
+    #[test]
+    fn stale_partial_files_are_swept_and_fresh_ones_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store(tmp.path());
+        s.set("svc", "acct", b"1").unwrap();
+        let stale = s.dir.join(".tmp-1-1.partial");
+        let fresh = s.dir.join(".tmp-1-2.partial");
+        let other = s.dir.join("unrelated.txt");
+        for f in [&stale, &fresh, &other] {
+            fs::write(f, b"x").unwrap();
+        }
+        let old = SystemTime::now() - STALE_TEMP_AGE * 2;
+        File::options()
+            .write(true)
+            .open(&stale)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        s.set("svc", "acct", b"2").unwrap();
+        assert!(!stale.exists());
+        assert!(fresh.exists());
+        assert!(other.exists());
+    }
+
     #[cfg(unix)]
     mod unix {
         use super::*;
+
+        /// The refusal error: `Failed` whose text starts with `refusing`.
+        fn assert_refused<T: std::fmt::Debug>(r: PlatformResult<T>) {
+            match r {
+                Err(PlatformError::Failed(msg)) => {
+                    assert!(msg.starts_with("refusing"), "{msg}");
+                }
+                other => panic!("expected a refusal, got {other:?}"),
+            }
+        }
+
         use std::os::unix::fs::{symlink, PermissionsExt};
 
         fn mode(path: &Path) -> u32 {
@@ -314,7 +428,7 @@ mod tests {
         }
 
         #[test]
-        fn dir_created_0700_and_file_created_0600_without_window() {
+        fn dir_is_0700_and_file_is_0600_after_set() {
             let tmp = tempfile::tempdir().unwrap();
             let s = store(tmp.path());
             s.set("svc", "acct", b"s3cret").unwrap();
@@ -344,14 +458,14 @@ mod tests {
             let file = item_file(&s);
             fs::remove_file(&file).unwrap();
             symlink(&real, &file).unwrap();
-            assert!(s.get("svc", "acct").is_err());
+            assert_refused(s.get("svc", "acct"));
 
             // Symlinked directory.
             let moved = tmp.path().join("moved");
             fs::rename(&s.dir, &moved).unwrap();
             symlink(&moved, &s.dir).unwrap();
-            assert!(s.get("svc", "acct").is_err());
-            assert!(s.set("svc", "acct", b"x").is_err());
+            assert_refused(s.get("svc", "acct"));
+            assert_refused(s.set("svc", "acct", b"x"));
         }
 
         #[test]
@@ -362,7 +476,7 @@ mod tests {
             let file = item_file(&s);
             for bad in [0o640, 0o604, 0o644] {
                 fs::set_permissions(&file, fs::Permissions::from_mode(bad)).unwrap();
-                assert!(s.get("svc", "acct").is_err(), "mode {bad:o}");
+                assert_refused(s.get("svc", "acct"));
             }
             fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
             assert!(s.get("svc", "acct").unwrap().is_some());
@@ -374,8 +488,8 @@ mod tests {
             let s = store(tmp.path());
             s.set("svc", "acct", b"s3cret").unwrap();
             fs::set_permissions(&s.dir, fs::Permissions::from_mode(0o750)).unwrap();
-            assert!(s.get("svc", "acct").is_err());
-            assert!(s.set("svc", "acct", b"x").is_err());
+            assert_refused(s.get("svc", "acct"));
+            assert_refused(s.set("svc", "acct", b"x"));
         }
     }
 }

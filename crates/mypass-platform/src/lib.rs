@@ -81,16 +81,14 @@ pub fn running_app_executables(bundle_id: &str) -> Vec<PathBuf> {
 mod tests {
     use super::*;
 
+    /// Tests the selection logic on its own: `current` would touch the real pasteboard on macOS.
     #[cfg(unix)]
     #[test]
-    fn shared_secrets_is_the_file_store_under_secrets_shared() {
+    fn shared_store_is_the_file_store_under_secrets_shared() {
         let tmp = tempfile::tempdir().unwrap();
         let paths = AppPaths::macos(tmp.path());
-        let platform = current(&paths);
-        platform
-            .shared_secrets
-            .set("svc", "acct", b"endpoint")
-            .unwrap();
+        let store = file_store::shared_store(&paths);
+        store.set("svc", "acct", b"endpoint").unwrap();
         let direct = FileSecretStore::new(paths.secrets_shared.clone(), tmp.path().to_path_buf());
         assert_eq!(
             direct.get("svc", "acct").unwrap(),

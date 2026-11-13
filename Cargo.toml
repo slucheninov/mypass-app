@@ -86,6 +86,8 @@ core-foundation = "0.10.1"
 arboard = { version = "3.7.0", default-features = false }
 chacha20poly1305 = "0.11.0"
 sys-locale = "0.3.2"
+# Constants only (`O_NOFOLLOW`, `O_NONBLOCK`) for the file secret store; never an `unsafe` call.
+libc = "0.2.191"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

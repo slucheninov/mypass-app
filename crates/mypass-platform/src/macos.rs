@@ -27,8 +27,8 @@ use crate::fallback::{
 };
 use crate::macos_keychain::MacKeychainSecretStore;
 use crate::{
-    AppPaths, ClipboardStamp, FileSecretStore, KeyboardLayout, Platform, PlatformError,
-    PlatformResult, SecureClipboard, Subscription, SystemEvent, SystemEvents,
+    AppPaths, ClipboardStamp, KeyboardLayout, Platform, PlatformError, PlatformResult,
+    SecureClipboard, Subscription, SystemEvent, SystemEvents,
 };
 use block2::RcBlock;
 use objc2::rc::{autoreleasepool, Retained};
@@ -72,10 +72,7 @@ pub(crate) fn platform(paths: &AppPaths) -> Platform {
         events: Arc::new(MacSystemEvents),
         clipboard: Arc::new(MacClipboard::general()),
         secrets: Arc::new(MacKeychainSecretStore::app_only()),
-        shared_secrets: Arc::new(FileSecretStore::new(
-            paths.secrets_shared.clone(),
-            paths.home().to_path_buf(),
-        )),
+        shared_secrets: Arc::new(crate::file_store::shared_store(paths)),
         device_unlock: Arc::new(UnsupportedDeviceUnlock),
         host_registrar: Arc::new(UnsupportedHostRegistrar),
         launch_at_login: Arc::new(UnsupportedLaunchAtLogin),
