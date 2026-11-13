@@ -18,7 +18,7 @@
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpStream};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use zeroize::Zeroizing;
@@ -117,7 +117,8 @@ struct Pending {
     count: usize,
     /// The app side is gone.
     closed: bool,
-    /// The relay itself is tearing the connection down; a closed socket is then expected.
+    /// The relay itself is tearing the connection down: a closed socket is then expected and
+    /// nothing more reaches stdout. Set only while the stdout lock is held (see `teardown`).
     closing: bool,
 }
 
@@ -135,7 +136,22 @@ impl Shared {
 /// Writes one complete frame to stdout and flushes; `false` when Chromium is gone.
 fn write_out<W: Write>(out: &Mutex<W>, frame: &[u8]) -> bool {
     let mut w = out.lock().unwrap_or_else(PoisonError::into_inner);
+    write_locked(&mut *w, frame)
+}
+
+fn write_locked<W: Write>(w: &mut W, frame: &[u8]) -> bool {
     w.write_all(frame).is_ok() && w.flush().is_ok()
+}
+
+/// The pump's write: like `write_out`, but nothing is written once the relay is closing. The
+/// check runs under the stdout lock, which `teardown` also holds while it sets `closing`, so no
+/// frame from the pump reaches stdout after `run_relay` returned.
+fn pump_write<W: Write>(out: &Mutex<W>, shared: &Shared, frame: &[u8]) -> bool {
+    let mut w = out.lock().unwrap_or_else(PoisonError::into_inner);
+    if shared.lock().closing {
+        return false;
+    }
+    write_locked(&mut *w, frame)
 }
 
 /// Reads with an absolute deadline, so a peer that trickles bytes cannot stretch the handshake.
@@ -201,7 +217,7 @@ fn pump<W: Write + Send + 'static>(
             // Chromium refuses a host message above 1 MiB.
             Err(_) => Zeroizing::new(error_frame("response_too_large")),
         };
-        let delivered = write_out(out, &framed);
+        let delivered = pump_write(out, shared, &framed);
         {
             let mut st = shared.lock();
             st.count = st.count.saturating_sub(1);
@@ -211,24 +227,39 @@ fn pump<W: Write + Send + 'static>(
             break;
         }
     }
-    let unexpected = {
-        let mut st = shared.lock();
-        st.closed = true;
-        // Only a request in flight is owed an answer; an idle close is not announced.
-        !st.closing && st.count > 0
-    };
-    shared.changed.notify_all();
-    if unexpected {
-        // Tell the extension its request will not be answered; the app may have quit.
-        write_out(out, &error_frame(APP_NOT_RUNNING));
+    {
+        // The error frame is written before `closed` is published: `drain` returns on `closed`,
+        // and the frame must already be out by then because the pump is never joined.
+        let mut w = out.lock().unwrap_or_else(PoisonError::into_inner);
+        let unexpected = {
+            let st = shared.lock();
+            // Only a request in flight is owed an answer; an idle close is not announced.
+            !st.closing && st.count > 0
+        };
+        if unexpected {
+            // Tell the extension its request will not be answered; the app may have quit.
+            write_locked(&mut *w, &error_frame(APP_NOT_RUNNING));
+        }
+        shared.lock().closed = true;
     }
+    shared.changed.notify_all();
 }
 
-/// Marks the teardown as intended, closes the socket and waits for the pump.
-fn teardown(stream: &TcpStream, shared: &Shared, pump: JoinHandle<()>) {
-    shared.lock().closing = true;
-    let _ = stream.shutdown(Shutdown::Both);
-    let _ = pump.join();
+/// Marks the teardown as intended, so the pump writes nothing more, and sends FIN to the app.
+///
+/// The pump is never joined. On Windows neither `shutdown` nor closing another handle of the
+/// socket wakes a `recv` blocked in another thread, so a join would wait for the app to answer or
+/// close: a peer that never does (a stalled app, or a server socket kept open by a handle some
+/// other process inherited) would hang the host, and Chromium spawns one host per message. Only
+/// the write half is shut, so the pump stays blocked on every OS alike and the suppression of a
+/// late response is exercised by the tests on macOS too. The host process exits right after
+/// `run_relay` returns, which ends the pump and closes the socket.
+fn teardown<W: Write>(stream: &TcpStream, out: &Mutex<W>, shared: &Shared) {
+    {
+        let _w = out.lock().unwrap_or_else(PoisonError::into_inner);
+        shared.lock().closing = true;
+    }
+    let _ = stream.shutdown(Shutdown::Write);
 }
 
 /// Waits until every request has its response, the app closed, or `limit` ran out.
@@ -290,13 +321,14 @@ pub fn run_relay<R: Read, W: Write + Send + 'static>(
         state: Mutex::new(Pending::default()),
         changed: Condvar::new(),
     });
+    // Detached on purpose: see `teardown`.
     let pump_handle = {
         let (out, shared, max) = (Arc::clone(&out), Arc::clone(&shared), opts.max_frame);
         thread::Builder::new()
             .name("relay-pump".into())
             .spawn(move || pump(read_half, &out, &shared, max))
     };
-    let Ok(pump_handle) = pump_handle else {
+    let Ok(_detached) = pump_handle else {
         let _ = stream.shutdown(Shutdown::Both);
         return not_running(&out);
     };
@@ -334,7 +366,7 @@ pub fn run_relay<R: Read, W: Write + Send + 'static>(
             break RelayOutcome::AppNotRunning;
         }
     };
-    teardown(&stream, &shared, pump_handle);
+    teardown(&stream, &out, &shared);
     outcome
 }
 
@@ -346,6 +378,7 @@ mod tests {
     use crate::endpoint::{generate_token, hello_proof};
     use std::io::Cursor;
     use std::net::TcpListener;
+    use std::thread::JoinHandle;
 
     const TOKEN_FRAME_TYPE: &str = r#"{"type":"getStatus"}"#;
 
@@ -729,6 +762,36 @@ mod tests {
         assert_eq!(r, RelayOutcome::StdinClosed);
         let took = start.elapsed();
         assert!(took >= Duration::from_millis(250) && took < Duration::from_secs(2));
+        assert!(out.frames().is_empty());
+    }
+
+    #[test]
+    fn a_response_after_the_drain_timeout_never_reaches_stdout() {
+        let (ep, app) = good_app(&generate_token(), Duration::from_millis(500));
+        let out = SharedBuf::default();
+        let o = RelayOptions {
+            drain_timeout: Duration::from_millis(100),
+            ..opts()
+        };
+        let r = run_relay(
+            Cursor::new(frame(TOKEN_FRAME_TYPE)),
+            out.clone(),
+            Some(ep),
+            &o,
+        );
+        assert_eq!(r, RelayOutcome::StdinClosed);
+        // The app writes its late answer, then reads the host's FIN and closes.
+        assert_eq!(app.join().unwrap().len(), 1);
+        // The detached pump holds the only other reference to the buffer: once it is gone, the
+        // pump has read the late answer and the close, and every write it could make is done.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Arc::strong_count(&out.0) > 1 {
+            assert!(
+                Instant::now() < deadline,
+                "the pump outlived the app's close"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
         assert!(out.frames().is_empty());
     }
 
