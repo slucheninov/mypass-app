@@ -20,6 +20,11 @@ export const commands = {
 	 *  no opener capability for it.
 	 */
 	appRevealBackups: () => typedError<null, ApiError>(__TAURI_INVOKE("app_reveal_backups")),
+	/**
+	 *  The main window reports whether its editor holds unsaved changes; the quit flow asks before
+	 *  discarding them. Advisory: the flag only decides whether the prompt shows.
+	 */
+	appSetEditorDirty: (dirty: boolean) => typedError<null, ApiError>(__TAURI_INVOKE("app_set_editor_dirty", { dirty })),
 	appShowMain: () => typedError<null, ApiError>(__TAURI_INVOKE("app_show_main")),
 	attachmentExport: (entryId: string, name: string) => typedError<boolean, ApiError>(__TAURI_INVOKE("attachment_export", { entryId, name })),
 	attachmentPick: () => typedError<PickedFile[], ApiError>(__TAURI_INVOKE("attachment_pick")),

@@ -2,7 +2,7 @@
 
 use crate::events::OpenEntryEvent;
 use crate::shell::WindowOps;
-use crate::state::{AppState, ShellState};
+use crate::state::{AppState, EditorDirty, ShellState};
 use mypass_session::dto::AppInfo;
 use mypass_session::{ApiError, AppCore};
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
@@ -98,6 +98,26 @@ pub fn app_quit(app: AppHandle) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// The main window reports whether its editor holds unsaved changes; the quit flow asks before
+/// discarding them. Advisory: the flag only decides whether the prompt shows.
+#[tauri::command]
+#[specta::specta]
+pub fn app_set_editor_dirty(
+    dirty: bool,
+    webview: tauri::Webview,
+    flag: State<'_, EditorDirty>,
+) -> Result<(), ApiError> {
+    if accepts_editor_report(webview.label()) {
+        flag.set(dirty);
+    }
+    Ok(())
+}
+
+/// Only the main window has an editor; reports from the tray panel and settings are ignored.
+pub fn accepts_editor_report(label: &str) -> bool {
+    label == MAIN_WINDOW
+}
+
 /// Reveals the vault's backup folder in the file manager. Called from Rust, so the webview needs
 /// no opener capability for it.
 #[tauri::command]
@@ -136,6 +156,13 @@ mod tests {
     use super::*;
     use crate::shell::FakeWindowOps;
     use crate::testing::{open_world, world};
+
+    #[test]
+    fn only_the_main_window_may_report_the_editor_state() {
+        assert!(accepts_editor_report(MAIN_WINDOW));
+        assert!(!accepts_editor_report(SETTINGS_WINDOW));
+        assert!(!accepts_editor_report("tray-panel"));
+    }
 
     #[test]
     fn app_info_reports_the_app_version() {

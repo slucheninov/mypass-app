@@ -89,6 +89,7 @@ export const api = {
   appQuit: wrap(commands.appQuit),
   appRecordActivity: wrap(commands.appRecordActivity),
   appRevealBackups: wrap(commands.appRevealBackups),
+  appSetEditorDirty: wrap(commands.appSetEditorDirty),
   appShowMain: wrap(commands.appShowMain),
   attachmentExport: wrap(commands.attachmentExport),
   attachmentPick: wrap(commands.attachmentPick),

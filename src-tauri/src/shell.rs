@@ -92,6 +92,12 @@ pub fn close_action(os: &str, tray_visible: bool) -> CloseAction {
     }
 }
 
+/// Whether quitting must first ask to discard the editor's unsaved changes: the webview reported
+/// a dirty editor. The prompt comes before `begin_quit`, so a Cancel leaves everything untouched.
+pub fn discard_edits_prompt_needed(editor_dirty: bool) -> bool {
+    editor_dirty
+}
+
 /// What to do after the final flush on quit.
 #[derive(Debug, PartialEq, Eq)]
 pub enum QuitDecision {
@@ -561,6 +567,12 @@ mod tests {
     #[test]
     fn quit_with_ok_flush_proceeds() {
         assert_eq!(quit_decision(Ok(())), QuitDecision::Proceed);
+    }
+
+    #[test]
+    fn discard_prompt_is_needed_only_for_a_dirty_editor() {
+        assert!(discard_edits_prompt_needed(true));
+        assert!(!discard_edits_prompt_needed(false));
     }
 
     #[test]

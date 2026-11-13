@@ -87,7 +87,11 @@
     if (model.id === null) titleInput?.focus();
     navigation.editorDirty = isDirty;
   });
+  // The backend's quit flow asks before it discards unsaved changes: report every change of the
+  // dirty state (the snapshot inside `isDirty` tracks the whole model).
+  $effect(() => navigation.reportEditorDirty(isDirty()));
   onDestroy(() => {
+    navigation.reportEditorDirty(false);
     baseline = null;
     if (navigation.editorDirty === isDirty) navigation.editorDirty = null;
   });

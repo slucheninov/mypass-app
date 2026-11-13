@@ -338,6 +338,8 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     appOpenSettings: () => null,
     // Only the call log matters: the window and the quit flow live in Rust.
     appQuit: () => null,
+    // Only the call log matters: the flag is read by the Rust quit flow.
+    appSetEditorDirty: () => null,
     appShowMain: () => null,
     appRecordActivity: () => null,
     // Only the call log matters: the file manager opens on the Rust side.

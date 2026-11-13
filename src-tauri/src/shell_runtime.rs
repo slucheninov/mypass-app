@@ -13,12 +13,13 @@ use crate::events::ShortcutConflictEvent;
 use crate::hotkeys::{self, ConflictGate};
 use crate::i18n;
 use crate::lifecycle::{
-    attach_platform_events, current_tray_model, emit_save_state, emit_settings, lock_via_scheduler,
-    on_exit_requested, start_external_poll, sync_login_item, ExitGate, ExitOutcome, ExitRequest,
-    ExternalWatcher, QuitPort, QuitWorkerGuard, ShellTarget, TrayRefresher, EXTERNAL_POLL,
+    attach_platform_events, confirm_discard_edits, current_tray_model, emit_save_state,
+    emit_settings, lock_via_scheduler, on_exit_requested, start_external_poll, sync_login_item,
+    ExitGate, ExitOutcome, ExitRequest, ExternalWatcher, QuitPort, QuitWorkerGuard, ShellTarget,
+    TrayRefresher, EXTERNAL_POLL,
 };
 use crate::shell::{close_action, current_os, panel_position, show_main, CloseAction, PanelRect};
-use crate::state::{AppState, ShellState};
+use crate::state::{AppState, EditorDirty, ShellState};
 use crate::tray::{
     action_for_id, separator_before, TrayAction, TrayMenuModel, PANEL_WINDOW, TRAY_ID,
 };
@@ -428,8 +429,20 @@ fn start_quit_flow<R: Runtime>(app: tauri::AppHandle<R>) {
             // A panic below drops the guard, which re-opens the session and the gate.
             let guard = QuitWorkerGuard::new(core.as_ref(), &gate);
             let language = core.settings.get().language;
-            let ask = |error: &str| port.confirm_quit_anyway(language, error);
-            let outcome = on_exit_requested(core.as_ref(), &ask);
+            // The unsaved-editor prompt comes before `begin_quit`: Cancel leaves everything as it
+            // was. The gate is reported through the guard like any other cancelled quit.
+            let dirty = app
+                .try_state::<EditorDirty>()
+                .is_some_and(|flag| flag.get());
+            let outcome =
+                if confirm_discard_edits(dirty, &|| port.confirm_discard_edits(language), &|| {
+                    port.show_main()
+                }) {
+                    let ask = |error: &str| port.confirm_quit_anyway(language, error);
+                    on_exit_requested(core.as_ref(), &ask)
+                } else {
+                    ExitOutcome::Stay
+                };
             // The gate FIRST: `exit` posts `ExitRequested` to the main loop, and if that
             // were handled before the gate is confirmed it would read `AlreadyRunning`,
             // prevent the exit and nothing would exit again.
@@ -465,6 +478,35 @@ pub fn quit_dialog_buttons(quit_label: &str, cancel_label: &str) -> (String, Str
 }
 
 impl QuitPort for TauriQuitPort {
+    fn confirm_discard_edits(&self, language: Language) -> bool {
+        let quit_label = i18n::t(language, "Quit", &[]);
+        // Same button layout as the data-loss dialog: Quit in the ok slot, Cancel in the cancel
+        // slot, so a closed dialog or Esc reads as Cancel.
+        let result = self
+            .0
+            .dialog()
+            .message(i18n::t(
+                language,
+                "The entry editor has unsaved changes. If you quit, they will be lost.",
+                &[],
+            ))
+            .title(i18n::t(language, "Quit MyPass", &[]))
+            .kind(MessageDialogKind::Warning)
+            .buttons({
+                let (ok, cancel) =
+                    quit_dialog_buttons(&quit_label, &i18n::t(language, "Cancel", &[]));
+                MessageDialogButtons::OkCancelCustom(ok, cancel)
+            })
+            .blocking_show_with_result();
+        quit_anyway_chosen(&result, &quit_label)
+    }
+
+    fn show_main(&self) {
+        if let Some(shell) = self.0.try_state::<ShellState>() {
+            let _ = show_main(shell.windows.as_ref());
+        }
+    }
+
     fn confirm_quit_anyway(&self, language: Language, error: &str) -> bool {
         let quit_label = i18n::t(language, "Quit Anyway", &[]);
         // Quit Anyway takes the "ok" slot and Cancel the "cancel" slot: the plugin reports a
@@ -514,6 +556,13 @@ mod tests {
     }
 
     impl QuitPort for FakePort {
+        fn confirm_discard_edits(&self, _language: Language) -> bool {
+            let _ = self.calls.send("discard?".to_owned());
+            self.answer
+        }
+        fn show_main(&self) {
+            let _ = self.calls.send("show main".to_owned());
+        }
         fn confirm_quit_anyway(&self, _language: Language, error: &str) -> bool {
             let _ = self.calls.send(format!("ask {error}"));
             self.answer
@@ -536,20 +585,37 @@ mod tests {
     /// and `on_exit_requested` run as in production, with only the dialog and the final exit
     /// behind the fake port. The loop keeps running after a prevented exit, so its thread is
     /// left to die with the test process.
-    fn drive_exit_requested(world: &World, answer: bool) -> mpsc::Receiver<String> {
+    fn drive_exit_requested(world: &World, answer: bool, dirty: bool) -> mpsc::Receiver<String> {
+        drive_exit_requested_with_app(world, answer, dirty).0
+    }
+
+    type SharedApp = Arc<std::sync::Mutex<Option<tauri::AppHandle<tauri::test::MockRuntime>>>>;
+
+    /// [`drive_exit_requested`] that also hands back the app handle once it exists, so a test can
+    /// raise a second `ExitRequested`.
+    fn drive_exit_requested_with_app(
+        world: &World,
+        answer: bool,
+        dirty: bool,
+    ) -> (mpsc::Receiver<String>, SharedApp) {
         let (tx, rx) = mpsc::channel();
         let core = Arc::new(world.core.clone());
+        let shared: SharedApp = Arc::new(std::sync::Mutex::new(None));
+        let thread_handle = shared.clone();
         std::thread::spawn(move || {
             let app = mock_builder()
                 .build(mock_context(noop_assets()))
                 .expect("the mock app builds");
             app.manage(AppState(core));
             app.manage(ExitGate::default());
-            let handle = Arc::new(std::sync::Mutex::new(Some(app.handle().clone())));
+            let flag = EditorDirty::default();
+            flag.set(dirty);
+            app.manage(flag);
+            *thread_handle.lock().expect("handle lock") = Some(app.handle().clone());
             app.manage::<Arc<dyn QuitPort>>(Arc::new(FakePort {
                 answer,
                 calls: tx,
-                app: handle,
+                app: thread_handle,
             }));
             WebviewWindowBuilder::new(&app, MAIN_WINDOW, WebviewUrl::App("index.html".into()))
                 .build()
@@ -565,7 +631,7 @@ mod tests {
                 on_run_event(app, &event);
             });
         });
-        rx
+        (rx, shared)
     }
 
     fn next(rx: &mpsc::Receiver<String>) -> String {
@@ -585,7 +651,7 @@ mod tests {
     fn exit_requested_smoke_clean_quit_exits_without_a_prompt() {
         let w = open_world();
         w.login("Saved by the final flush");
-        let rx = drive_exit_requested(&w, false);
+        let rx = drive_exit_requested(&w, false, false);
         assert_eq!(
             next(&rx),
             "exit Some(Allow)",
@@ -597,7 +663,7 @@ mod tests {
     #[test]
     fn exit_requested_smoke_failing_flush_and_cancel_stays_and_accepts_edits() {
         let w = dirty_world_with_failing_writes();
-        let rx = drive_exit_requested(&w, false);
+        let rx = drive_exit_requested(&w, false, false);
         assert!(next(&rx).starts_with("ask "), "the user is asked");
         wait_until("the session to re-open", || !w.core.is_quitting());
         // No exit followed the Cancel, and the session takes edits again.
@@ -608,10 +674,49 @@ mod tests {
     #[test]
     fn exit_requested_smoke_failing_flush_and_quit_anyway_exits_with_the_gate_set() {
         let w = dirty_world_with_failing_writes();
-        let rx = drive_exit_requested(&w, true);
+        let rx = drive_exit_requested(&w, true, false);
         assert!(next(&rx).starts_with("ask "));
         assert_eq!(next(&rx), "exit Some(Allow)");
         assert!(w.core.is_quitting());
+    }
+
+    #[test]
+    fn exit_requested_smoke_dirty_editor_and_cancel_stays_untouched_and_shows_the_window() {
+        let w = open_world();
+        w.login("Saved by the final flush");
+        let (rx, app) = drive_exit_requested_with_app(&w, false, true);
+        assert_eq!(next(&rx), "discard?");
+        assert_eq!(next(&rx), "show main");
+        // Nothing else happened: no exit, and the session was never closed.
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
+        assert!(!w.core.is_quitting());
+        // The gate is open again: a second quit attempt starts the flow and asks again.
+        let handle = app
+            .lock()
+            .expect("handle lock")
+            .clone()
+            .expect("the app handle is set");
+        // The mock runtime cannot `exit`; closing the last window again raises `ExitRequested` again.
+        let window =
+            WebviewWindowBuilder::new(&handle, "second", WebviewUrl::App("index.html".into()))
+                .build()
+                .expect("the second window builds");
+        window.as_ref().window().close().expect("close is queued");
+        assert_eq!(next(&rx), "discard?");
+        assert_eq!(next(&rx), "show main");
+        assert!(!w.core.is_quitting());
+    }
+
+    #[test]
+    fn exit_requested_smoke_dirty_editor_and_quit_asks_once_then_exits() {
+        let w = open_world();
+        w.login("Saved by the final flush");
+        let rx = drive_exit_requested(&w, true, true);
+        assert_eq!(next(&rx), "discard?");
+        // The confirmed exit passes the gate again without a second prompt.
+        assert_eq!(next(&rx), "exit Some(Allow)");
+        assert!(w.core.is_quitting());
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
     }
 
     #[test]

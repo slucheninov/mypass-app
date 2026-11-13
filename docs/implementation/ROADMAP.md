@@ -50,8 +50,6 @@ Last updated: 2026-11-13
 
 ## Stage 2b UI follow-ups
 
-- [ ] Decide whether quitting with unsaved editor changes should ask first (needs a dirty signal from
-  the main webview to the quit flow).
 - [ ] Manual: walk the Stage 2b checklist in `RUN.md` on a copy of the owner's vault (unlock, shell,
   editors, history and bin, generator, settings, CSV import, tray panel, quit flow, themes, languages).
 - [ ] Restore from the bin to the original group: the UI restores to the root today because the backend

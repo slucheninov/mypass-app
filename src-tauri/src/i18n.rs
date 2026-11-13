@@ -200,7 +200,7 @@ pub fn t_resolved(lang: Language, key: &str, args: &[&str]) -> String {
 mod tests {
     use super::*;
 
-    const TRAY_KEYS: [&str; 7] = [
+    const TRAY_KEYS: [&str; 8] = [
         "Unlock",
         "Lock",
         "Open MyPass",
@@ -208,6 +208,7 @@ mod tests {
         "Quit",
         "Quit Anyway",
         "Cancel",
+        "The entry editor has unsaved changes. If you quit, they will be lost.",
     ];
 
     #[test]

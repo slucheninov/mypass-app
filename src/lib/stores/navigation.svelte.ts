@@ -1,4 +1,5 @@
 import type { EntryEditModel_Serialize, Scope } from "../bindings";
+import { api } from "../api";
 import { session } from "./session.svelte";
 
 export type Presentation = "browse" | "edit" | "create";
@@ -24,6 +25,7 @@ class NavigationStore {
   editorDirty: (() => boolean) | null = null;
 
   #leave: ((leave: boolean) => void) | null = null;
+  #reportedDirty = false;
   #scopeListeners = new Set<(scope: Scope) => void>();
   #offLock: (() => void) | null = null;
 
@@ -112,7 +114,19 @@ class NavigationStore {
     settle?.(leave);
   }
 
+  /**
+   * Tells the backend whether the editor holds unsaved changes, so the quit flow can ask before it
+   * discards them. The one place that calls `appSetEditorDirty`: only the main window mounts an
+   * editor, and the call goes out on a change only. Advisory: a failed call is ignored.
+   */
+  reportEditorDirty(dirty: boolean): void {
+    if (dirty === this.#reportedDirty) return;
+    this.#reportedDirty = dirty;
+    void api.appSetEditorDirty(dirty).catch(() => {});
+  }
+
   closeEditor(): void {
+    this.reportEditorDirty(false);
     this.#settleLeave(false);
     this.pendingModel = null;
     this.editModel = null;
