@@ -26,11 +26,9 @@ pub mod ui;
 #[cfg(feature = "server")]
 pub mod views;
 
-/// The native messaging host name registered with every browser.
-pub const HOST_NAME: &str = "com.mypass.chromehost";
-
-/// The one extension id allowed to talk to the host.
-pub const EXTENSION_ID: &str = "hjijbabodfldconmhdcdphlbgaajkejn";
+/// The native messaging host name and the one extension id allowed to talk to the host: one copy,
+/// owned by the platform crate that writes the manifests.
+pub use mypass_platform::{EXTENSION_ID, HOST_NAME};
 
 #[cfg(test)]
 mod tests {

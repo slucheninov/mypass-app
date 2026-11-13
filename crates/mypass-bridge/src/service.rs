@@ -21,7 +21,7 @@
 
 #![deny(clippy::wildcard_enum_match_arm)]
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
 
 use mypass_session::autolock::AutoLock;
@@ -74,20 +74,45 @@ impl BridgeService {
     /// Builds the service and registers the session observer that drops pending proposals and
     /// tells the passkey handler when the vault stops being unlocked.
     pub fn new(deps: BridgeDeps) -> Arc<Self> {
-        let proposals = deps.proposals.clone();
-        let passkeys = deps.passkeys.clone();
-        deps.session.add_observer(Arc::new(move |e: &SessionEvent| {
-            if let SessionEvent::StateChanged(status) = e {
-                if status.state != SessionState::Unlocked {
-                    proposals.clear();
-                    passkeys.on_session_locked();
-                }
-            }
-        }));
+        let service = Self::new_unobserved(deps);
+        service.register_observer();
+        service
+    }
+
+    /// Builds the service without the session observer: a caller that can still fail to start
+    /// registers it with [`Self::register_observer`] only once it is sure to run, so a failed
+    /// start leaves no observer behind.
+    pub fn new_unobserved(deps: BridgeDeps) -> Arc<Self> {
         Arc::new(Self {
             deps,
             last_unlock_request: Mutex::new(None),
         })
+    }
+
+    /// Registers the session observer (call once).
+    pub fn register_observer(&self) {
+        let proposals = self.deps.proposals.clone();
+        let passkeys = self.deps.passkeys.clone();
+        // A direct switch from one unlocked vault to another emits only `StateChanged(Unlocked)`
+        // with a new path: a proposal made for the old vault must not be taken into the new one.
+        let open_path: Mutex<Option<String>> = Mutex::new(None);
+        self.deps
+            .session
+            .add_observer(Arc::new(move |e: &SessionEvent| {
+                if let SessionEvent::StateChanged(status) = e {
+                    let mut open = open_path.lock().unwrap_or_else(PoisonError::into_inner);
+                    if status.state != SessionState::Unlocked {
+                        *open = None;
+                        proposals.clear();
+                        passkeys.on_session_locked();
+                    } else {
+                        if open.is_some() && *open != status.vault_path {
+                            proposals.clear();
+                        }
+                        *open = status.vault_path.clone();
+                    }
+                }
+            }));
     }
 
     /// A context for calling a handler directly, past the gates.

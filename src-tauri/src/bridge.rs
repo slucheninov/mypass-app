@@ -230,9 +230,9 @@ impl BridgeUi for TauriBridgeUi {
         self.events.open_settings(Some("browser"));
     }
 
-    fn credential_filled(&self, id: Uuid) {
-        // Recents and usage counts; a failure (locked meanwhile, entry gone) is not the bridge's.
-        let _ = self.core.entry_touch(&id.simple().to_string());
+    fn credential_filled(&self, _id: Uuid) {
+        // The fill handler already marked the entry accessed (recents, usage count); touching it
+        // here too counted every fill twice. The hook stays for a future UI refresh.
     }
 }
 
@@ -322,7 +322,7 @@ pub fn start_bridge(
         pairing_window,
         focus,
     });
-    let service = BridgeService::new(BridgeDeps {
+    let service = BridgeService::new_unobserved(BridgeDeps {
         session: core.session.clone(),
         autolock: core.autolock.clone(),
         settings: core.settings.clone(),
@@ -356,6 +356,7 @@ pub fn start_bridge(
                 BridgeStartError::Thread(e.to_string())
             })?
     };
+    service.register_observer();
     // Registered only now that the server is up: a failed start leaves no observer behind (a
     // retry after `browser_reset_pairings` builds a fresh one, and the old one would leak).
     {

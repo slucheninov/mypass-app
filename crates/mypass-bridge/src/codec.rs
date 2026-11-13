@@ -65,6 +65,11 @@ impl FrameReader {
         }
     }
 
+    /// Changes the cap for frames not yet read (a connection raises it once the hello is done).
+    pub fn set_max(&mut self, max: usize) {
+        self.max = max;
+    }
+
     pub fn default_max() -> Self {
         Self::new(MAX_FRAME_BYTES)
     }

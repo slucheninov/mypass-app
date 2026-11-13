@@ -282,6 +282,9 @@ enum Flow {
 }
 
 /// Where a connection is in its handshake. Only `Authenticated` connections may idle.
+/// The frame cap of a connection that has not sent its hello yet.
+const PRE_HELLO_MAX_FRAME: usize = 4096;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum State {
     New,
@@ -302,7 +305,9 @@ fn serve(mut stream: TcpStream, shared: &Shared, accepted_at: Instant) {
     let Some(deadline) = accepted_at.checked_add(shared.cfg.first_frame_deadline) else {
         return;
     };
-    let mut reader = FrameReader::new(shared.cfg.max_frame);
+    // Until the hello is done the only legal frame is the hello itself, so a peer that has not
+    // proved anything can make the server buffer 4 KiB, not the full frame cap.
+    let mut reader = FrameReader::new(shared.cfg.max_frame.min(PRE_HELLO_MAX_FRAME));
     let mut state = State::New;
     // Authenticated connections: when the currently half-received frame began.
     let mut partial_since: Option<Instant> = None;
@@ -364,6 +369,9 @@ fn serve(mut stream: TcpStream, shared: &Shared, accepted_at: Instant) {
             ) {
                 return;
             }
+        }
+        if state != State::New {
+            reader.set_max(shared.cfg.max_frame);
         }
     }
 }

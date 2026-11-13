@@ -199,6 +199,30 @@ fn oversized_frame_gets_error_and_close() {
 }
 
 #[test]
+fn pre_hello_frame_cap_is_small_and_authenticated_cap_is_the_full_one() {
+    let (s, _, _) = start();
+    // Before the hello a 5000-byte claim (above 4 KiB, far below the 10 MiB cap) is refused.
+    let mut c = connect(&s);
+    c.write_all(&5000u32.to_le_bytes()).unwrap();
+    assert_eq!(
+        recv(&mut c).unwrap(),
+        r#"{"type":"error","message":"frame too large"}"#
+    );
+    assert!(eof(&mut c));
+    // After the hello the same size is fine.
+    let mut c = authed(&s);
+    let pad = "x".repeat(6000);
+    send(
+        &mut c,
+        &format!(
+            r#"{{"type":"list","token":"{}","pad":"{pad}"}}"#,
+            s.endpoint().token
+        ),
+    );
+    assert!(recv(&mut c).is_some());
+}
+
+#[test]
 fn frames_split_across_writes_and_pipelined_frames_both_work() {
     let (s, _, _) = start();
     let mut c = authed(&s);
