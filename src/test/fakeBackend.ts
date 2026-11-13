@@ -1,6 +1,6 @@
-// An in-memory stand-in for the Rust backend, installed with `mockIPC` (see render.ts). It is grown
-// task by task: a command no task has implemented yet throws `NotImplementedInFake(<name>)`, so a
-// test that needs one fails loudly instead of getting a silent default.
+// An in-memory stand-in for the Rust backend, installed with `mockIPC` (see render.ts). Every command
+// of bindings.ts has a handler; a wire name it does not know (an unknown command or plugin call)
+// throws `NotImplementedInFake(<name>)`, so a test never gets a silent default.
 //
 // The `handlers` object is typed against the generated `commands` of bindings.ts, so a command
 // added on the Rust side and missing here fails `pnpm check`; the key sets are also compared at
@@ -10,18 +10,25 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import type {
   ApiError,
   AttachmentMeta,
+  BackupFailure,
+  BackupItem,
+  CsvPreview,
   commands,
   DraftVersionDto,
   events,
   FieldRef,
   FoundVaultFileDto,
+  GeneratorHistoryItem,
   GroupNode_Serialize,
+  LoginItemStatus,
   OpenWarning,
   PickedFile,
   RecentVaultDto,
+  RulesSummary_Serialize,
   SessionState,
   SessionStatus_Serialize,
   Settings_Serialize,
+  ShortcutConflictEvent,
   TotpDto,
 } from "../lib/bindings";
 import {
@@ -73,12 +80,6 @@ export function apiError(code: ApiError["code"], message = ""): ApiError {
   return { code, message };
 }
 
-function notImplemented<K extends CommandName>(command: K): Handler<K> {
-  return () => {
-    throw new NotImplementedInFake(command);
-  };
-}
-
 export interface FakeBackendOptions {
   os?: string;
   deviceUnlockAvailable?: boolean;
@@ -127,6 +128,30 @@ export interface FakeState {
   drafts: Record<string, DraftVersionDto[]>;
   /** Like a draft key that cannot be created: `draft_save` answers `false` and stores nothing. */
   draftsAvailable: boolean;
+  /** Site rules by canonical host (lower case, no scheme, path or `www.`); `generator_rules_summary` and `generator_generate` read them. */
+  generatorRules: Record<string, RulesSummary_Serialize>;
+  /** The generator history, oldest first; a row keeps its password here like the vault's hidden group does. */
+  generatorHistory: (GeneratorHistoryItem & { password: string })[];
+  /** The backup files `backup_list` shows, newest first. */
+  backups: BackupItem[];
+  /** The last snapshot failure `backup_list` reports. */
+  backupFailure: BackupFailure | null;
+  /** A failure the next `backup_restore` throws (then it is cleared), e.g. `invalidInput` for a password mismatch. */
+  restoreFailure: ApiError["code"] | null;
+  /** What `settings_login_item_status` answers; `settings_update` of `launchAtLogin` flips enabled/disabled. */
+  loginItem: LoginItemStatus;
+  /** A system message the next `launchAtLogin` update fails with (code `internal`), like a refused registration. */
+  loginItemError: string | null;
+  /** A failure the next `settings_update` throws (then it is cleared). */
+  settingsFailure: ApiError["code"] | null;
+  /** What the next `import_csv_preview` shows, like the file chosen in the native dialog (`null` = cancelled). */
+  csvPreview: CsvPreview | null;
+  /** A failure the next `import_csv_preview` throws (then it is cleared), with the backend's English message. */
+  csvFailure: ApiError | null;
+  /** What the next `shortcut_conflicts_take` returns (and empties). */
+  shortcutConflicts: ShortcutConflictEvent[];
+  /** Ids `entry_touch` was called with, in order. */
+  touched: string[];
 }
 
 export interface FakeBackend {
@@ -163,7 +188,21 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     saveFailure: null,
     drafts: {},
     draftsAvailable: true,
+    generatorRules: {},
+    generatorHistory: [],
+    backups: [],
+    backupFailure: null,
+    restoreFailure: null,
+    loginItem: "disabled",
+    loginItemError: null,
+    settingsFailure: null,
+    csvPreview: null,
+    csvFailure: null,
+    touched: [],
+    shortcutConflicts: [],
   };
+  /** Like the Rust grant: set by a successful preview, spent by the next commit. */
+  let csvRemembered: CsvPreview | null = null;
   // The real backend emits its events as a side effect of a command; so does the fake.
   const publish = (event: EventName, payload: unknown) => void emit(kebab(event), payload ?? null);
   const requireUnlocked = () => {
@@ -236,6 +275,19 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     }
   };
   let groupSeq = 0;
+  let generatedSeq = 0;
+  let historySeq = 0;
+  /** The host a rules lookup keys on: what the user typed or pasted, reduced to its lower-case host. */
+  const canonicalHost = (raw: string) =>
+    raw.trim().toLowerCase().replace(/^[a-z][a-z0-9+.-]*:\/\//, "").replace(/[/?#].*$/, "").replace(/^www\./, "");
+  const rulesOf = (host: string | null | undefined): RulesSummary_Serialize | null =>
+    host ? (state.generatorRules[canonicalHost(host)] ?? null) : null;
+  const recordHistory = (value: string, url: string) => {
+    const title = canonicalHost(url) || url;
+    state.generatorHistory.push({ id: `gen-${++historySeq}`, url, title, created: 1_700_000_000_000 + historySeq * 1000, password: value });
+    if (state.generatorHistory.length > 30) state.generatorHistory.shift();
+    changed();
+  };
   let entrySeq = 0;
   /** Tokens `attachment_pick` handed out; `entry_save` swaps each for its file and spends it. */
   const pickedFiles = new Map<string, PickedFile>();
@@ -272,10 +324,21 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       os,
       deviceUnlockAvailable,
     }),
-    appOpenEntry: notImplemented("appOpenEntry"),
+    // Like Rust: a locked session or a missing entry does nothing; otherwise the main window shows
+    // and `OpenEntryEvent` goes out (the window calls are not modelled).
+    appOpenEntry: ({ id, edit }) => {
+      if (state.session.state !== "unlocked") return null;
+      if (!state.entries.some((e) => e.summary.id === id)) return null;
+      publish("openEntryEvent", { id, edit });
+      return null;
+    },
     appOpenSettings: () => null,
+    // Only the call log matters: the window and the quit flow live in Rust.
+    appQuit: () => null,
+    appShowMain: () => null,
     appRecordActivity: () => null,
-    appRevealBackups: notImplemented("appRevealBackups"),
+    // Only the call log matters: the file manager opens on the Rust side.
+    appRevealBackups: () => null,
     // Like Rust: the save dialog opens there; `false` means the user cancelled it.
     attachmentExport: ({ entryId, name }) => {
       requireUnlocked();
@@ -290,8 +353,23 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       for (const file of picked) pickedFiles.set(file.token, file);
       return picked;
     },
-    backupList: notImplemented("backupList"),
-    backupRestore: notImplemented("backupRestore"),
+    backupList: () => ({
+      items: structuredClone(state.backups),
+      lastFailure: structuredClone(state.backupFailure),
+      count: state.settings.backupCount,
+      interval: state.settings.backupInterval,
+    }),
+    // Like Rust: the vault is replaced and locked; a wrong-password backup is `invalidInput`.
+    backupRestore: ({ id }) => {
+      if (state.restoreFailure) {
+        const code = state.restoreFailure;
+        state.restoreFailure = null;
+        throw apiError(code);
+      }
+      if (!state.backups.some((b) => b.id === id)) throw apiError("notFound");
+      setSession({ ...sessionStatus("locked"), lockReason: "manual" });
+      return null;
+    },
     draftClear: ({ entryId }) => {
       requireUnlocked();
       delete state.drafts[entryId];
@@ -535,14 +613,94 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       if (!findEntry(id).summary.hasTotp) throw apiError("invalidInput");
       return { ...state.totp };
     },
-    entryTouch: notImplemented("entryTouch"),
-    generatorCopy: notImplemented("generatorCopy"),
-    generatorGenerate: notImplemented("generatorGenerate"),
-    generatorHistoryCopy: notImplemented("generatorHistoryCopy"),
-    generatorHistoryDelete: notImplemented("generatorHistoryDelete"),
-    generatorHistoryList: notImplemented("generatorHistoryList"),
-    generatorHistoryReveal: notImplemented("generatorHistoryReveal"),
-    generatorRulesSummary: notImplemented("generatorRulesSummary"),
+    entryTouch: ({ id }) => {
+      requireUnlocked();
+      findEntry(id);
+      state.touched.push(id);
+      return null;
+    },
+    // The value goes to the (fake) clipboard inside Rust; with a record URL the history is written first.
+    generatorCopy: ({ value, recordUrl }) => {
+      if (recordUrl !== null && recordUrl !== undefined) {
+        requireUnlocked();
+        recordHistory(value, recordUrl);
+      }
+      return null;
+    },
+    // Mirrors `resolve_options`: the length is clamped to the site bounds, forced classes switch on,
+    // excluded ones off; no class is `generatorNoClass`, every class excluded `generatorUnsatisfiable`.
+    // The value is deterministic (no RNG): it cycles the enabled classes so each one appears.
+    generatorGenerate: ({ req }) => {
+      const { options, host, recordUrl } = req as {
+        options: { length?: number; lowercase?: boolean; uppercase?: boolean; digits?: boolean; symbols?: boolean };
+        host?: string | null;
+        recordUrl?: string | null;
+      };
+      const rules = rulesOf(host);
+      const length = options.length ?? 20;
+      if (length < 8 || length > 64) throw apiError("invalidInput");
+      const pick = (name: "lowercase" | "uppercase" | "digits" | "symbols") => {
+        const own = options[name] ?? true;
+        return rules ? rules.forcedOn.includes(name) || (own && !rules.excluded.includes(name)) : own;
+      };
+      const asked = [options.lowercase ?? true, options.uppercase ?? true, options.digits ?? true, options.symbols ?? true];
+      if (!asked.some(Boolean) && !(rules && rules.forcedOn.length > 0)) throw apiError("generatorNoClass");
+      let effectiveLength = length;
+      if (rules?.minLength != null) effectiveLength = Math.max(effectiveLength, rules.minLength);
+      if (rules?.maxLength != null) effectiveLength = Math.min(effectiveLength, rules.maxLength);
+      const effective = {
+        length: effectiveLength,
+        lowercase: pick("lowercase"),
+        uppercase: pick("uppercase"),
+        digits: pick("digits"),
+        symbols: pick("symbols"),
+      };
+      const pools = [
+        effective.lowercase ? "abcdefghijkmnopqrstuvwxyz" : "",
+        effective.uppercase ? "ABCDEFGHJKLMNPQRSTUVWXYZ" : "",
+        effective.digits ? "23456789" : "",
+        effective.symbols ? "!#$%&*+=?@" : "",
+      ].filter((p) => p !== "");
+      if (pools.length === 0) throw apiError("generatorUnsatisfiable");
+      if (recordUrl !== null && recordUrl !== undefined) requireUnlocked();
+      const seq = ++generatedSeq;
+      let value = "";
+      for (let i = 0; i < effectiveLength; i++) {
+        const pool = pools[i % pools.length]!;
+        value += pool[(i * 7 + seq) % pool.length];
+      }
+      let historyId: string | null = null;
+      if (recordUrl !== null && recordUrl !== undefined) {
+        recordHistory(value, recordUrl);
+        historyId = state.generatorHistory[state.generatorHistory.length - 1]!.id;
+      }
+      return { value, effective, rules: structuredClone(rules), historyId };
+    },
+    generatorHistoryCopy: ({ id }) => {
+      requireUnlocked();
+      if (!state.generatorHistory.some((h) => h.id === id)) throw apiError("notFound");
+      return null;
+    },
+    generatorHistoryDelete: ({ id }) => {
+      requireUnlocked();
+      const at = state.generatorHistory.findIndex((h) => h.id === id);
+      if (at === -1) throw apiError("notFound");
+      state.generatorHistory.splice(at, 1);
+      changed();
+      return null;
+    },
+    // Newest first, without the password.
+    generatorHistoryList: () => {
+      requireUnlocked();
+      return state.generatorHistory.map(({ password: _password, ...item }) => item).reverse();
+    },
+    generatorHistoryReveal: ({ id }) => {
+      requireUnlocked();
+      const found = state.generatorHistory.find((h) => h.id === id);
+      if (!found) throw apiError("notFound");
+      return found.password;
+    },
+    generatorRulesSummary: ({ host }) => structuredClone(rulesOf(host)),
     groupCreate: ({ parentId, name, emoji }) => {
       requireUnlocked();
       const id = `group-new-${++groupSeq}`;
@@ -585,21 +743,67 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       changed();
       return null;
     },
-    importCsvCommit: notImplemented("importCsvCommit"),
-    importCsvPreview: notImplemented("importCsvPreview"),
+    // Like Rust: the file is chosen in a native dialog there; a failed preview forgets the earlier file.
+    importCsvPreview: () => {
+      requireUnlocked();
+      csvRemembered = null;
+      if (state.csvFailure) {
+        const failure = state.csvFailure;
+        state.csvFailure = null;
+        throw failure;
+      }
+      if (state.csvPreview === null) return null;
+      csvRemembered = structuredClone(state.csvPreview);
+      return structuredClone(state.csvPreview);
+    },
+    // The remembered file is spent by the commit; the fake writes one login per sample title (so a
+    // total beyond the five titles imports as many as the titles it knows).
+    importCsvCommit: ({ groupId }) => {
+      requireUnlocked();
+      const preview = csvRemembered;
+      csvRemembered = null;
+      if (!preview) throw apiError("invalidInput", "no CSV file was previewed");
+      if (groupId !== ROOT_GROUP_ID && !locate(groupId)) throw apiError("notFound");
+      for (const [index, title] of preview.sampleTitles.entries()) {
+        state.entries.push(
+          makeEntry({ id: `csv-${++entrySeq}-${index}`, title, groupId, modified: 1_700_000_000_000 + entrySeq }),
+        );
+      }
+      changed();
+      return { imported: preview.total, skipped: preview.skipped.length };
+    },
     platformKeyboardLayout: () => keyboardLayout,
     settingsGet: () => structuredClone(state.settings),
-    settingsLoginItemStatus: notImplemented("settingsLoginItemStatus"),
+    settingsLoginItemStatus: () => state.loginItem,
     settingsUpdate: ({ patch }) => {
+      if (state.settingsFailure) {
+        const code = state.settingsFailure;
+        state.settingsFailure = null;
+        throw apiError(code);
+      }
+      if (typeof patch.launchAtLogin === "boolean") {
+        if (state.loginItemError !== null) {
+          const message = state.loginItemError;
+          state.loginItemError = null;
+          throw apiError("internal", message);
+        }
+        if (state.loginItem === "enabled" || state.loginItem === "disabled") {
+          state.loginItem = patch.launchAtLogin ? "enabled" : "disabled";
+        }
+      }
       const defined = Object.entries(patch as Record<string, unknown>).filter(([, v]) => v !== null && v !== undefined);
       const next = { ...state.settings, ...Object.fromEntries(defined) } as Settings_Serialize;
       // Nested objects merge field by field, like the backend's patch.
       if (patch.generator) next.generator = { ...state.settings.generator, ...patch.generator };
+      // Like `Settings::normalize`: out-of-range numbers are clamped (the clipboard delay to a multiple of 5).
+      next.backupCount = Math.min(50, Math.max(1, next.backupCount));
+      next.clipboardClearSeconds = Math.floor((Math.min(120, Math.max(10, next.clipboardClearSeconds)) + 2) / 5) * 5;
       state.settings = next;
       publish("settingsChanged", structuredClone(state.settings));
       return structuredClone(state.settings);
     },
-    shortcutConflictsTake: notImplemented("shortcutConflictsTake"),
+    // Take-once like the Rust list: what the hotkey layer could not register at startup.
+    shortcutConflictsTake: () => state.shortcutConflicts.splice(0),
     sidebarGet: () => {
       requireUnlocked();
       return fixtureSidebar(state.entries, state.groups, state.recycleBinEnabled);

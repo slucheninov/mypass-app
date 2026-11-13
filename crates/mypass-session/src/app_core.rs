@@ -2068,6 +2068,16 @@ mod tests {
             ApiError::from(CsvImportError::MissingRequiredColumn("title".into())).message,
             "missing required column title"
         );
+        // The import dialog tells these causes apart by this English text (the code is the same
+        // `InvalidInput` for all of them), so a rewording must change the UI in the same commit.
+        assert_eq!(
+            ApiError::from(CsvImportError::NotUtf8).message,
+            "file is not valid UTF-8"
+        );
+        assert_eq!(
+            ApiError::from(CsvImportError::Empty).message,
+            "file is empty"
+        );
     }
 
     #[test]

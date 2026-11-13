@@ -49,9 +49,10 @@
     if (mine === recentsRequest) recents = list;
   }
 
+  // A primitive per locked stretch and vault: a save-state change replaces `session.status` only.
+  const recentsScope = $derived(session.status.state === "locked" ? (session.status.vaultPath ?? "") : null);
   $effect(() => {
-    if (session.status.state !== "locked") return;
-    void session.status.vaultPath;
+    if (recentsScope === null) return;
     void loadRecents();
   });
 

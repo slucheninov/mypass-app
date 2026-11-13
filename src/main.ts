@@ -31,5 +31,10 @@ if (target) {
   // Bootstrap after the first paint: a slow or failing backend never blocks the window. A failure
   // leaves the stores at their safe defaults.
   void loadPlatform();
-  void startStores({ entries: getCurrentWindow().label !== "settings" }).catch(() => {});
+  const label = getCurrentWindow().label;
+  // The sticky "Saving failed" toast is the main window's alone (unknown labels fall back to main).
+  void startStores({
+    entries: label !== "settings" && label !== "tray-panel",
+    saveToast: label !== "settings" && label !== "tray-panel",
+  }).catch(() => {});
 }

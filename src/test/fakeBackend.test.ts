@@ -38,7 +38,8 @@ describe("fake backend", () => {
       status: "ok",
       data: { version: expect.any(String), os: "windows", deviceUnlockAvailable: true },
     });
-    expect(fake.calls.map((c) => c.command)).toEqual(["appInfo"]);
+    // The main window's event bridge takes the startup hotkey conflicts when it mounts.
+    expect(fake.calls.map((c) => c.command)).toEqual(["appInfo", "shortcutConflictsTake"]);
   });
 
   it("platform_keyboard_layout_is_null_unless_configured", async () => {
@@ -50,7 +51,23 @@ describe("fake backend", () => {
 
   it("an unimplemented command fails loudly", async () => {
     renderWithBackend(MainApp, {}, createFakeBackend());
-    await expect(commands.backupList()).rejects.toThrow("NotImplementedInFake(backupList)");
+    await expect(invoke("plugin:never|called")).rejects.toThrow("NotImplementedInFake(plugin:never|called)");
+  });
+
+  it("the settings window commands: backups, login item status and clamped settings", async () => {
+    const fake = createFakeBackend({ session: "unlocked" });
+    renderWithBackend(MainApp, {}, fake);
+    fake.state.backups = [{ id: "backup-1.kdbx", created: 1000, size: 10 }];
+    expect(await commands.backupList()).toEqual({
+      status: "ok",
+      data: { items: fake.state.backups, lastFailure: null, count: 10, interval: "everySave" },
+    });
+    expect(await commands.settingsLoginItemStatus()).toEqual({ status: "ok", data: "disabled" });
+    await commands.settingsUpdate({ launchAtLogin: true });
+    expect(await commands.settingsLoginItemStatus()).toEqual({ status: "ok", data: "enabled" });
+    const updated = await commands.settingsUpdate({ backupCount: 99, clipboardClearSeconds: 33 });
+    expect(updated).toMatchObject({ status: "ok", data: { backupCount: 50, clipboardClearSeconds: 35 } });
+    expect(await commands.appRevealBackups()).toEqual({ status: "ok", data: null });
   });
 
   it("an unknown command or an unhandled plugin call throws and names itself", async () => {

@@ -12,6 +12,7 @@ export const commands = {
 	 *  synchronous command deadlocks on Windows.
 	 */
 	appOpenSettings: () => typedError<null, ApiError>(__TAURI_INVOKE("app_open_settings")),
+	appQuit: () => typedError<null, ApiError>(__TAURI_INVOKE("app_quit")),
 	/**  User activity in a window (resets the idle timer); a no-op while locked. */
 	appRecordActivity: () => typedError<null, ApiError>(__TAURI_INVOKE("app_record_activity")),
 	/**
@@ -19,6 +20,7 @@ export const commands = {
 	 *  no opener capability for it.
 	 */
 	appRevealBackups: () => typedError<null, ApiError>(__TAURI_INVOKE("app_reveal_backups")),
+	appShowMain: () => typedError<null, ApiError>(__TAURI_INVOKE("app_show_main")),
 	attachmentExport: (entryId: string, name: string) => typedError<boolean, ApiError>(__TAURI_INVOKE("attachment_export", { entryId, name })),
 	attachmentPick: () => typedError<PickedFile[], ApiError>(__TAURI_INVOKE("attachment_pick")),
 	backupList: () => typedError<BackupStatus_Serialize, ApiError>(__TAURI_INVOKE("backup_list")),

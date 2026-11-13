@@ -23,6 +23,7 @@
   import AddressForm from "./editors/AddressForm.svelte";
   import CardForm from "./editors/CardForm.svelte";
   import FilesForm from "./editors/FilesForm.svelte";
+  import Generator from "./Generator.svelte";
   import LoginForm from "./editors/LoginForm.svelte";
   import NotesForm from "./editors/NotesForm.svelte";
   import GroupPicker from "./GroupPicker.svelte";
@@ -204,7 +205,11 @@
     <TextField label={t("Title")} bind:value={model.title} bind:input={titleInput} error={titleError} />
 
     {#if model.entryType === "login"}
-      <LoginForm bind:model />
+      <LoginForm bind:model>
+        {#snippet generatorSlot({ onuse, host, recordUrl })}
+          <Generator {host} {recordUrl} {onuse} />
+        {/snippet}
+      </LoginForm>
     {:else if model.entryType === "address" && model.address}
       <AddressForm bind:address={model.address} />
     {:else if model.entryType === "card" && model.card}

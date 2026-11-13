@@ -146,7 +146,8 @@ fn run_tray_action(app: &AppHandle, action: TrayAction) {
                 let _ = app_open_settings(app).await;
             });
         }
-        TrayAction::Quit => app.exit(0),
+        // The one quit entry point, shared with the tray panel's `app_quit`.
+        TrayAction::Quit => crate::commands::app::request_quit(app),
     }
 }
 
@@ -352,7 +353,7 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
                 CloseAction::HideWindow => {
                     let _ = window.hide();
                 }
-                CloseAction::QuitApp => app.exit(0),
+                CloseAction::QuitApp => crate::commands::app::request_quit(app),
             }
         }
         (MAIN_WINDOW, WindowEvent::Focused(true)) => {

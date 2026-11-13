@@ -350,3 +350,15 @@ describe("accessibility", () => {
     await expectNoAxeViolations(locked.container);
   });
 });
+
+describe("recent vaults reload", () => {
+  it("a_save_state_change_does_not_reload_the_recent_vaults", async () => {
+    const { fake } = await renderMainApp({ session: "locked" });
+    await screen.findByLabelText("Master password");
+    await waitFor(() => expect(calls(fake, "vaultRecent").length).toBeGreaterThan(0));
+    const before = calls(fake, "vaultRecent").length;
+    await fake.emit("saveStateChanged", { state: "pending", message: null });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls(fake, "vaultRecent")).toHaveLength(before);
+  });
+});

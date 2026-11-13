@@ -13,7 +13,7 @@ export interface Toast {
 }
 
 /** How long a non-sticky toast stays. */
-export const TOAST_LIFETIME_MS = 5000;
+export const TOAST_LIFETIME_MS = 4000;
 
 class ToastStore {
   items = $state<Toast[]>([]);

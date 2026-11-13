@@ -3,8 +3,9 @@ import { api } from "./api";
 export type Os = "macos" | "windows" | "linux";
 
 /** Capability state from `app_info`; the defaults keep capability-gated UI hidden until loaded. */
-export const platform: { os: Os | null; deviceUnlockAvailable: boolean } = $state({
+export const platform: { os: Os | null; version: string | null; deviceUnlockAvailable: boolean } = $state({
   os: null,
+  version: null,
   deviceUnlockAvailable: false,
 });
 
@@ -17,6 +18,7 @@ export async function loadPlatform(): Promise<void> {
   try {
     const info = await api.appInfo();
     platform.os = narrowOs(info.os);
+    platform.version = info.version;
     platform.deviceUnlockAvailable = info.deviceUnlockAvailable;
   } catch {
     // Keep the defaults.

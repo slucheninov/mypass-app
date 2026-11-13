@@ -13,6 +13,7 @@
   role="switch"
   aria-checked={checked}
   aria-label={label}
+  aria-disabled={disabled ? "true" : undefined}
   {disabled}
   onclick={() => onchange(!checked)}
 >
