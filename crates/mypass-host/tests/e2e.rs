@@ -112,7 +112,7 @@ impl BridgeUi for RecordingUi {
 
 /// The app side: temp dir, vault session, bridge service, loopback server.
 struct App {
-    dir: tempfile::TempDir,
+    _dir: tempfile::TempDir,
     root: PathBuf,
     vault: PathBuf,
     session: VaultSession,
@@ -179,7 +179,7 @@ impl App {
         let handler: Handler = Arc::new(move |r| svc.handle(r));
         let server = LoopbackServer::start(cfg, endpoints, handler).unwrap();
         Self {
-            dir,
+            _dir: dir,
             root,
             vault,
             session,
@@ -190,7 +190,13 @@ impl App {
     }
 
     fn token(&self) -> String {
-        self.server.endpoint().token.clone()
+        // Read the record the host itself reads, not only the server's in-memory copy.
+        EndpointStore::new(Arc::new(shared_store(&paths(&self.root))))
+            .load()
+            .unwrap()
+            .expect("endpoint published")
+            .token
+            .clone()
     }
 
     fn spawn(&self) -> Host {
@@ -222,8 +228,8 @@ struct Host {
     child: Child,
     stdin: Option<ChildStdin>,
     frames: Receiver<Vec<u8>>,
-    reader: JoinHandle<Vec<u8>>,
-    stderr: JoinHandle<Vec<u8>>,
+    reader: Option<JoinHandle<Vec<u8>>>,
+    stderr: Option<JoinHandle<Vec<u8>>>,
     seen: Vec<String>,
 }
 
@@ -262,8 +268,8 @@ impl Host {
             child,
             stdin,
             frames,
-            reader,
-            stderr,
+            reader: Some(reader),
+            stderr: Some(stderr),
             seen: Vec::new(),
         }
     }
@@ -309,20 +315,30 @@ impl Host {
                 break s;
             }
             if Instant::now() >= deadline {
-                let _ = self.child.kill();
-                panic!("host did not exit");
+                panic!("host did not exit"); // `Drop` kills and reaps it
             }
             thread::sleep(Duration::from_millis(10));
         };
         assert!(status.success(), "host exit status {status:?}");
-        let leftover_stdout = self.reader.join().unwrap();
+        let leftover_stdout = self.reader.take().unwrap().join().unwrap();
         while let Ok(f) = self.frames.try_recv() {
             self.seen.push(String::from_utf8(f).unwrap());
         }
         Exit {
-            stdout_frames: self.seen,
-            stderr: self.stderr.join().unwrap(),
+            stdout_frames: std::mem::take(&mut self.seen),
+            stderr: self.stderr.take().unwrap().join().unwrap(),
             leftover_stdout,
+        }
+    }
+}
+
+impl Drop for Host {
+    /// Kills and reaps a child that is still running, so a panicking test never leaks a host.
+    fn drop(&mut self) {
+        drop(self.stdin.take());
+        if !matches!(self.child.try_wait(), Ok(Some(_))) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
         }
     }
 }
@@ -484,20 +500,46 @@ fn foreign_listener_on_stale_port_never_receives_token_or_request() {
     );
     // The squatter reads the host's hello, answers with a bogus proof, then records everything
     // until the host hangs up.
+    listener.set_nonblocking(true).unwrap();
+    let (tx, rx) = channel();
     let squatter = thread::spawn(move || {
-        let (mut s, _) = listener.accept().unwrap();
-        s.set_read_timeout(Some(WAIT)).unwrap();
-        let hello = read_frame(&mut s, MAX_FRAME_BYTES).unwrap().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut s = loop {
+            match listener.accept() {
+                Ok((s, _)) => break s,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        let _ = tx.send(None);
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => {
+                    let _ = tx.send(None);
+                    return;
+                }
+            }
+        };
+        s.set_nonblocking(false).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        let Ok(Some(hello)) = read_frame(&mut s, MAX_FRAME_BYTES) else {
+            let _ = tx.send(None);
+            return;
+        };
         let bogus = json!({"type":"helloAck","proof":"AAAA"}).to_string();
         let _ = s.write_all(&encode_frame(bogus.as_bytes()).unwrap());
         let mut rest = Vec::new();
         let _ = s.read_to_end(&mut rest);
-        (hello, rest)
+        let _ = tx.send(Some((hello, rest)));
     });
     let mut h = Host::spawn(&root);
     not_running(&h.call(json!({"type":"getCredentials","url":"https://github.com"})));
     h.finish();
-    let (hello, rest) = squatter.join().unwrap();
+    let (hello, rest) = rx
+        .recv_timeout(WAIT)
+        .expect("the squatter finished in time")
+        .expect("the host connected to the squatter and sent a hello");
+    squatter.join().unwrap();
     let v: Value = serde_json::from_slice(&hello).unwrap();
     assert_eq!(v["type"], "hello");
     assert!(
@@ -615,7 +657,9 @@ fn sixteen_hosts_hold_the_cap_and_the_seventeenth_is_refused_until_a_slot_frees(
     let mut seventeenth = app.spawn();
     not_running(&seventeenth.call(get_credentials(&secret)));
     seventeenth.finish();
-    assert_eq!(app.server.active_connections(), 16);
+    wait_until("the refused connection to be gone", || {
+        app.server.active_connections() == 16
+    });
 
     // One of the 16 leaves; its slot frees and a new host is served.
     held.pop().unwrap().finish();
@@ -679,7 +723,6 @@ fn create_entry_persists_through_save_pipeline() {
     wait_until("the autosave", || {
         vault_has_title(&app.vault, "Created By Extension")
     });
-    let _ = &app.dir;
 }
 
 #[test]
