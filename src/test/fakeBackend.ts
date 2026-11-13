@@ -7,12 +7,27 @@
 // run time (fakeBackend.test.ts). There are no command counts anywhere.
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC } from "@tauri-apps/api/mocks";
-import type { ApiError, commands, events, SessionState, SessionStatus_Serialize, Settings_Serialize } from "../lib/bindings";
+import type {
+  ApiError,
+  commands,
+  events,
+  FoundVaultFileDto,
+  GroupNode_Serialize,
+  OpenWarning,
+  RecentVaultDto,
+  SessionState,
+  SessionStatus_Serialize,
+  Settings_Serialize,
+} from "../lib/bindings";
 import {
+  BIN_GROUP_ID,
   FIXTURE_MASTER_PASSWORD,
+  PERSONAL_GROUP_ID,
+  ROOT_GROUP_ID,
   defaultSettings,
   detailOf,
   fixtureEntries,
+  fixtureGroups,
   fixtureSidebar,
   listEntries,
   sessionStatus,
@@ -78,7 +93,19 @@ export interface FakeState {
   session: SessionStatus_Serialize;
   settings: Settings_Serialize;
   entries: FixtureEntry[];
+  /** The group tree below the root (the recycle bin last); `group_*` commands edit it. */
+  groups: GroupNode_Serialize[];
   masterPassword: string;
+  /** What `vault_open_warnings` answers for every path (default none). */
+  openWarnings: OpenWarning[];
+  /** The recent-vaults list `vault_recent` returns; `vault_forget` and a successful open/create edit it. */
+  recents: RecentVaultDto[];
+  /** What `vault_find_files` returns (default none). */
+  foundFiles: FoundVaultFileDto[];
+  /** Paths `vault_create` refuses with `alreadyExists`. */
+  existingFiles: string[];
+  /** The vault's `RecycleBinEnabled` flag, reported by `sidebar_get`; when false a delete purges. */
+  recycleBinEnabled: boolean;
 }
 
 export interface FakeBackend {
@@ -101,7 +128,13 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     session: sessionStatus(opts.session ?? "locked"),
     settings: defaultSettings(),
     entries: fixtureEntries(),
+    groups: fixtureGroups(),
     masterPassword: FIXTURE_MASTER_PASSWORD,
+    openWarnings: [],
+    recents: [],
+    foundFiles: [],
+    existingFiles: [],
+    recycleBinEnabled: true,
   };
   // The real backend emits its events as a side effect of a command; so does the fake.
   const publish = (event: EventName, payload: unknown) => void emit(kebab(event), payload ?? null);
@@ -113,10 +146,67 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     if (!found) throw apiError("notFound");
     return found;
   };
+  // Group tree helpers (independent of the app's own, so a client bug cannot hide behind them).
+  const locate = (id: string, nodes: GroupNode_Serialize[] = state.groups): { node: GroupNode_Serialize; siblings: GroupNode_Serialize[] } | null => {
+    for (const node of nodes) {
+      if (node.id === id) return { node, siblings: nodes };
+      const inside = locate(id, node.children);
+      if (inside) return inside;
+    }
+    return null;
+  };
+  const subtreeIds = (node: GroupNode_Serialize): string[] => [node.id, ...node.children.flatMap(subtreeIds)];
+  /** The list a new child of `parentId` goes into; the top level keeps the recycle bin last. */
+  const childrenOf = (parentId: string | null): GroupNode_Serialize[] => {
+    if (parentId === null || parentId === ROOT_GROUP_ID) return state.groups;
+    const parent = locate(parentId);
+    if (!parent) throw apiError("notFound");
+    return parent.node.children;
+  };
+  const place = (list: GroupNode_Serialize[], node: GroupNode_Serialize) => {
+    const bin = list.findIndex((g) => g.isRecycleBin);
+    list.splice(bin === -1 ? list.length : bin, 0, node);
+  };
+  const sendToBin = (entry: FixtureEntry) => {
+    entry.summary.groupId = BIN_GROUP_ID;
+    entry.model.groupId = BIN_GROUP_ID;
+    entry.summary.inRecycleBin = true;
+  };
+  /** Like `Database::delete_entry`: purges when the bin is disabled or the entry is already in it. */
+  const deleteLikeBackend = (entry: FixtureEntry) => {
+    if (!state.recycleBinEnabled || entry.summary.inRecycleBin) {
+      state.entries.splice(state.entries.indexOf(entry), 1);
+    } else {
+      sendToBin(entry);
+    }
+  };
+  const changed = () => publish("vaultChanged", null);
+  let groupSeq = 0;
+
   const setSession = (next: SessionStatus_Serialize) => {
     state.session = next;
     publish("sessionChanged", structuredClone(next));
     return structuredClone(next);
+  };
+
+  const fileNameOf = (path: string) => path.split(/[\\/]/).pop() ?? path;
+  const rememberRecent = (path: string) => {
+    state.recents = [
+      { path, fileName: fileNameOf(path), exists: true },
+      ...state.recents.filter((r) => r.path !== path),
+    ];
+  };
+  // Opening or creating a vault unlocks it straight away, like the real backend.
+  const openVault = (path: string, name: string) => {
+    rememberRecent(path);
+    return setSession({
+      state: "unlocked",
+      vaultPath: path,
+      vaultName: name,
+      lockReason: null,
+      fileStatus: { kind: "connected", size: 4096, modified: 1_700_000_000_000 },
+      save: { state: "idle", message: null },
+    });
   };
 
   const handlers = {
@@ -126,7 +216,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       deviceUnlockAvailable,
     }),
     appOpenEntry: notImplemented("appOpenEntry"),
-    appOpenSettings: notImplemented("appOpenSettings"),
+    appOpenSettings: () => null,
     appRecordActivity: () => null,
     appRevealBackups: notImplemented("appRevealBackups"),
     attachmentExport: notImplemented("attachmentExport"),
@@ -136,13 +226,33 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     draftClear: notImplemented("draftClear"),
     draftSave: notImplemented("draftSave"),
     draftVersions: notImplemented("draftVersions"),
-    entryCopy: notImplemented("entryCopy"),
-    entryDelete: notImplemented("entryDelete"),
+    // The value goes to the (fake) clipboard inside Rust and never reaches the webview.
+    entryCopy: ({ id, field }) => {
+      requireUnlocked();
+      findEntry(id);
+      if (field.kind !== "password" && field.kind !== "username" && field.kind !== "url") {
+        throw new NotImplementedInFake(`entryCopy(${field.kind})`);
+      }
+      return null;
+    },
+    entryDelete: ({ id }) => {
+      requireUnlocked();
+      deleteLikeBackend(findEntry(id));
+      changed();
+      return null;
+    },
     entryEditModel: ({ id }) => {
       requireUnlocked();
       return structuredClone(findEntry(id).model);
     },
-    entryEmptyBin: notImplemented("entryEmptyBin"),
+    entryEmptyBin: () => {
+      requireUnlocked();
+      const before = state.entries.length;
+      state.entries = state.entries.filter((e) => !e.summary.inRecycleBin);
+      const count = before - state.entries.length;
+      if (count > 0) changed();
+      return count;
+    },
     entryGet: ({ id }) => {
       requireUnlocked();
       return detailOf(findEntry(id));
@@ -151,22 +261,72 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     entryHistoryRestore: notImplemented("entryHistoryRestore"),
     entryList: ({ query }) => {
       requireUnlocked();
-      return listEntries(state.entries, query);
+      return listEntries(state.entries, query, state.groups);
     },
-    entryMove: notImplemented("entryMove"),
-    entryNewModel: notImplemented("entryNewModel"),
-    entryPurge: notImplemented("entryPurge"),
-    entryRecent: notImplemented("entryRecent"),
+    entryMove: ({ id, groupId }) => {
+      requireUnlocked();
+      const found = findEntry(id);
+      if (groupId !== ROOT_GROUP_ID && !locate(groupId)) throw apiError("notFound");
+      found.summary.groupId = groupId;
+      found.model.groupId = groupId;
+      found.summary.inRecycleBin = locate(groupId)?.node.isRecycleBin ?? false;
+      changed();
+      return null;
+    },
+    entryNewModel: ({ entryType, groupId }) => {
+      requireUnlocked();
+      return {
+        id: null,
+        entryType,
+        groupId: groupId ?? PERSONAL_GROUP_ID,
+        title: "",
+        favorite: false,
+        username: "",
+        password: "",
+        urls: [],
+        uriMatchMode: "domain",
+        totp: "",
+        notes: "",
+        address: null,
+        card: null,
+        customFields: [],
+        attachments: [],
+        attachmentOps: [],
+      };
+    },
+    entryPurge: ({ id }) => {
+      requireUnlocked();
+      state.entries.splice(state.entries.indexOf(findEntry(id)), 1);
+      changed();
+      return null;
+    },
+    // The fixture has no access times, so "recently used" is "recently modified".
+    entryRecent: ({ limit }) => {
+      requireUnlocked();
+      return state.entries
+        .filter((e) => !e.summary.inRecycleBin)
+        .sort((a, b) => b.modified - a.modified)
+        .slice(0, limit)
+        .map((e) => structuredClone(e.summary));
+    },
     entryRestore: notImplemented("entryRestore"),
     entryReveal: ({ id, field }) => {
       requireUnlocked();
       const { model } = findEntry(id);
       if (field.kind === "password") return model.password;
       if (field.kind === "username") return model.username;
+      if (field.kind === "url") return model.urls[0] ?? "";
       throw new NotImplementedInFake(`entryReveal(${field.kind})`);
     },
     entrySave: notImplemented("entrySave"),
-    entrySetFavorite: notImplemented("entrySetFavorite"),
+    entrySetFavorite: ({ id, favorite }) => {
+      requireUnlocked();
+      const found = findEntry(id);
+      found.summary.favorite = favorite;
+      found.model.favorite = favorite;
+      changed();
+      return null;
+    },
     entryTotp: notImplemented("entryTotp"),
     entryTouch: notImplemented("entryTouch"),
     generatorCopy: notImplemented("generatorCopy"),
@@ -176,10 +336,48 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     generatorHistoryList: notImplemented("generatorHistoryList"),
     generatorHistoryReveal: notImplemented("generatorHistoryReveal"),
     generatorRulesSummary: notImplemented("generatorRulesSummary"),
-    groupCreate: notImplemented("groupCreate"),
-    groupDelete: notImplemented("groupDelete"),
-    groupMove: notImplemented("groupMove"),
-    groupUpdate: notImplemented("groupUpdate"),
+    groupCreate: ({ parentId, name, emoji }) => {
+      requireUnlocked();
+      const id = `group-new-${++groupSeq}`;
+      place(childrenOf(parentId), { id, name, emoji, count: 0, isRecycleBin: false, children: [] });
+      changed();
+      return id;
+    },
+    groupDelete: ({ id }) => {
+      requireUnlocked();
+      const found = locate(id);
+      if (!found) throw apiError("notFound");
+      // Like `delete_group_removed`: the bin itself is not a group that can be deleted.
+      if (found.node.isRecycleBin) throw apiError("invalidInput");
+      // Like the backend: the group's items are moved to the recycle bin, then the group goes.
+      const gone = subtreeIds(found.node);
+      for (const e of [...state.entries]) if (gone.includes(e.summary.groupId)) deleteLikeBackend(e);
+      found.siblings.splice(found.siblings.indexOf(found.node), 1);
+      changed();
+      return null;
+    },
+    groupMove: ({ id, parentId }) => {
+      requireUnlocked();
+      const found = locate(id);
+      if (!found) throw apiError("notFound");
+      if (found.node.isRecycleBin) throw apiError("invalidInput");
+      // A group cannot go into itself or into its own subtree.
+      if (subtreeIds(found.node).includes(parentId)) throw apiError("invalidInput");
+      const target = childrenOf(parentId);
+      found.siblings.splice(found.siblings.indexOf(found.node), 1);
+      place(target, found.node);
+      changed();
+      return null;
+    },
+    groupUpdate: ({ id, name, emoji }) => {
+      requireUnlocked();
+      const found = locate(id);
+      if (!found) throw apiError("notFound");
+      found.node.name = name;
+      found.node.emoji = emoji;
+      changed();
+      return null;
+    },
     importCsvCommit: notImplemented("importCsvCommit"),
     importCsvPreview: notImplemented("importCsvPreview"),
     platformKeyboardLayout: () => keyboardLayout,
@@ -197,19 +395,29 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     shortcutConflictsTake: notImplemented("shortcutConflictsTake"),
     sidebarGet: () => {
       requireUnlocked();
-      return fixtureSidebar(state.entries);
+      return fixtureSidebar(state.entries, state.groups, state.recycleBinEnabled);
     },
-    vaultCreate: notImplemented("vaultCreate"),
-    vaultFindFiles: notImplemented("vaultFindFiles"),
-    vaultForget: notImplemented("vaultForget"),
+    vaultCreate: ({ path, password, name }) => {
+      if (state.existingFiles.includes(path)) throw apiError("alreadyExists");
+      state.masterPassword = password;
+      return openVault(path, name);
+    },
+    vaultFindFiles: () => structuredClone(state.foundFiles),
+    vaultForget: ({ path }) => {
+      state.recents = state.recents.filter((r) => r.path !== path);
+      return null;
+    },
     vaultLock: () => {
       if (state.session.state === "noVault") return null;
       setSession({ ...state.session, state: "locked", lockReason: "manual" });
       return null;
     },
-    vaultOpen: notImplemented("vaultOpen"),
-    vaultOpenWarnings: notImplemented("vaultOpenWarnings"),
-    vaultRecent: notImplemented("vaultRecent"),
+    vaultOpen: ({ path, password }) => {
+      if (password !== state.masterPassword) throw apiError("wrongPassword");
+      return openVault(path, fileNameOf(path).replace(/\.kdbx$/i, ""));
+    },
+    vaultOpenWarnings: () => structuredClone(state.openWarnings),
+    vaultRecent: () => structuredClone(state.recents),
     vaultStatus: () => structuredClone(state.session),
     vaultUnlock: ({ password }) => {
       if (state.session.state === "noVault") throw apiError("noVault");

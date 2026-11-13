@@ -137,10 +137,12 @@ describe("no_other_html_sinks", () => {
 
 describe("no_secret_sinks", () => {
   it("web storage and the document title are not used", () => {
-    // The future preferences module may be added to this allow-list when it lands.
+    // `src/lib/prefs.ts` is the one module that wraps web storage (layout preferences only).
     const bad = offenders(
       sourceFiles(SOURCE_EXTS),
-      (f) => /\b(localStorage|sessionStorage)\b/.test(f.text) || /document\.title\s*=/.test(f.text),
+      (f) =>
+        (f.path !== "src/lib/prefs.ts" && /\b(localStorage|sessionStorage)\b/.test(f.text)) ||
+        /document\.title\s*=/.test(f.text),
     );
     expect(bad).toEqual([]);
   });

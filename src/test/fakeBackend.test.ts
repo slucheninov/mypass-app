@@ -49,7 +49,7 @@ describe("fake backend", () => {
 
   it("an unimplemented command fails loudly", async () => {
     renderWithBackend(MainApp, {}, createFakeBackend());
-    await expect(commands.vaultFindFiles()).rejects.toThrow("NotImplementedInFake(vaultFindFiles)");
+    await expect(commands.backupList()).rejects.toThrow("NotImplementedInFake(backupList)");
   });
 
   it("an unknown command or an unhandled plugin call throws and names itself", async () => {
@@ -79,5 +79,25 @@ describe("fake backend", () => {
     await fake.emit("vaultChanged", null);
     un();
     expect(seen).toEqual([null]);
+  });
+
+  it("fake_entry_delete_and_group_delete_match_the_backend", async () => {
+    const fake = createFakeBackend({ session: "unlocked" });
+    renderWithBackend(MainApp, {}, fake);
+    const inBin = (id: string) => fake.state.entries.find((e) => e.summary.id === id)?.summary.inRecycleBin;
+    // A live entry goes to the bin, an entry already there is purged.
+    expect(await commands.entryDelete("e-github")).toEqual({ status: "ok", data: null });
+    expect(inBin("e-github")).toBe(true);
+    await commands.entryDelete("e-github");
+    expect(inBin("e-github")).toBeUndefined();
+    // With the bin disabled a delete purges at once.
+    fake.state.recycleBinEnabled = false;
+    await commands.entryDelete("e-gitlab");
+    expect(inBin("e-gitlab")).toBeUndefined();
+    expect(fake.state.entries.some((e) => e.summary.id === "e-gitlab")).toBe(false);
+    // The recycle bin is not a group that can be deleted or moved: invalid input, like Rust.
+    const bin = fake.state.groups.find((g) => g.isRecycleBin)?.id ?? "";
+    expect(await commands.groupDelete(bin)).toMatchObject({ status: "error", error: { code: "invalidInput" } });
+    expect(await commands.groupMove(bin, "")).toMatchObject({ status: "error", error: { code: "invalidInput" } });
   });
 });

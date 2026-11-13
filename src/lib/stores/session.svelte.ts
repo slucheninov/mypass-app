@@ -24,6 +24,9 @@ class SessionStore {
   /** Incremented once whenever an unlocked session stops being unlocked. */
   lockEpoch = $state(0);
 
+  /** A vault file chosen to be opened; `MainApp` shows the password sheet for it (`OpenVaultSheet`). */
+  pendingOpenPath = $state<string | null>(null);
+
   #listeners = new Set<Listener>();
   #unlisten: (() => void)[] = [];
   /** Bumped by every event, so a slower `vault_status` answer never overwrites a newer event. */
@@ -74,10 +77,38 @@ class SessionStore {
   }
 
   async unlock(password: string): Promise<void> {
+    await this.#transition(() => api.vaultUnlock(password));
+  }
+
+  /** Opens the vault at `path` (unlocking it). The password is passed through, never stored. */
+  async open(path: string, password: string): Promise<void> {
+    await this.#transition(() => api.vaultOpen(path, password));
+  }
+
+  /** Creates a vault at `path` and opens it. The password is passed through, never stored. */
+  async create(path: string, password: string, name: string): Promise<void> {
+    await this.#transition(() => api.vaultCreate(path, password, name));
+  }
+
+  async #transition(call: () => Promise<SessionStatus_Serialize>): Promise<void> {
     const seq = ++this.#seq;
-    const status = await api.vaultUnlock(password);
+    const status = await call();
     // An event that arrived meanwhile is newer than this answer; it already applied the state.
     if (seq === this.#seq || status.state === this.status.state) this.#apply(status);
+  }
+
+  /**
+   * Starts opening another vault: an unlocked session is locked first (the backend flushes before
+   * it locks, and `vault_lock` does not fail), then `pendingOpenPath` makes `MainApp` show the
+   * password sheet. The caller has already run `confirmOpen(path)` (the open guard).
+   */
+  async openAnother(path: string): Promise<void> {
+    if (this.status.state === "unlocked") await this.lock();
+    this.pendingOpenPath = path;
+  }
+
+  clearPendingOpen(): void {
+    this.pendingOpenPath = null;
   }
 
   async lock(): Promise<void> {
@@ -96,6 +127,7 @@ class SessionStore {
     this.status = { ...INITIAL };
     this.loaded = false;
     this.lockEpoch = 0;
+    this.pendingOpenPath = null;
     this.#seq = 0;
   }
 

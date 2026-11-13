@@ -1,6 +1,8 @@
 // In-memory vault content for the fake backend and for store tests. The fixture login carries a
 // password (`FIXTURE_LOGIN_PASSWORD`) so tests can prove it never reaches a store.
 import type {
+  AddressDto,
+  AttachmentMeta,
   Category,
   CategoryCount_Serialize,
   EntryDetailDto_Serialize,
@@ -23,6 +25,7 @@ export const ROOT_GROUP_ID = "group-root";
 export const PERSONAL_GROUP_ID = "group-personal";
 export const WORK_GROUP_ID = "group-work";
 export const BIN_GROUP_ID = "group-bin";
+export const BANKING_GROUP_ID = "group-banking";
 
 export interface FixtureEntry {
   summary: EntrySummary;
@@ -30,7 +33,7 @@ export interface FixtureEntry {
   modified: number;
 }
 
-interface EntrySpec {
+export interface EntrySpec {
   id: string;
   title: string;
   subtitle?: string;
@@ -42,10 +45,16 @@ interface EntrySpec {
   flags?: SecurityFlag[];
   password?: string;
   urls?: string[];
+  username?: string;
+  notes?: string;
+  address?: AddressDto;
+  attachments?: AttachmentMeta[];
+  hasPasskey?: boolean;
   modified: number;
 }
 
-function entry(spec: EntrySpec): FixtureEntry {
+/** One entry of the fake vault; the summary and the edit model are kept consistent. */
+export function makeEntry(spec: EntrySpec): FixtureEntry {
   const entryType = spec.entryType ?? "login";
   const groupId = spec.groupId ?? PERSONAL_GROUP_ID;
   const favorite = spec.favorite ?? false;
@@ -58,8 +67,8 @@ function entry(spec: EntrySpec): FixtureEntry {
       entryType,
       favorite,
       hasTotp: spec.hasTotp ?? false,
-      hasPasskey: false,
-      attachmentCount: 0,
+      hasPasskey: spec.hasPasskey ?? false,
+      attachmentCount: spec.attachments?.length ?? 0,
       modified: spec.modified,
       groupId,
       inRecycleBin: spec.inRecycleBin ?? false,
@@ -71,16 +80,16 @@ function entry(spec: EntrySpec): FixtureEntry {
       groupId,
       title: spec.title,
       favorite,
-      username: spec.subtitle ?? "",
+      username: spec.username ?? spec.subtitle ?? "",
       password: spec.password ?? "",
       urls: spec.urls ?? [],
       uriMatchMode: "domain",
       totp: "",
-      notes: "",
-      address: null,
+      notes: spec.notes ?? "",
+      address: spec.address ?? null,
       card: null,
       customFields: [],
-      attachments: [],
+      attachments: spec.attachments ?? [],
       attachmentOps: [],
     },
   };
@@ -88,7 +97,7 @@ function entry(spec: EntrySpec): FixtureEntry {
 
 export function fixtureEntries(): FixtureEntry[] {
   return [
-    entry({
+    makeEntry({
       id: "e-github",
       title: "GitHub",
       subtitle: "octo",
@@ -98,7 +107,7 @@ export function fixtureEntries(): FixtureEntry[] {
       urls: ["https://github.com"],
       modified: 1_700_000_300_000,
     }),
-    entry({
+    makeEntry({
       id: "e-gitlab",
       title: "GitLab",
       subtitle: "octo-lab",
@@ -108,9 +117,9 @@ export function fixtureEntries(): FixtureEntry[] {
       flags: ["weak"],
       modified: 1_700_000_200_000,
     }),
-    entry({ id: "e-visa", title: "Visa", entryType: "card", modified: 1_700_000_100_000 }),
-    entry({ id: "e-notes", title: "Server notes", entryType: "notes", modified: 1_700_000_000_000 }),
-    entry({
+    makeEntry({ id: "e-visa", title: "Visa", entryType: "card", modified: 1_700_000_100_000 }),
+    makeEntry({ id: "e-notes", title: "Server notes", entryType: "notes", modified: 1_700_000_000_000 }),
+    makeEntry({
       id: "e-old",
       title: "Old forum",
       subtitle: "legacy",
@@ -148,19 +157,67 @@ function inScope(e: EntrySummary, scope: Scope): boolean {
   }
 }
 
-/** The list the backend would return for a query: scope filter, text search, sort. */
-export function listEntries(entries: FixtureEntry[], query: EntryQuery): EntrySummary[] {
-  const needle = query.search.trim().toLowerCase();
-  const rows = entries
-    .filter((e) => inScope(e.summary, query.scope))
-    .filter(
-      (e) =>
-        needle === "" ||
-        [e.summary.title, e.summary.subtitle, ...e.model.urls].some((s) => s.toLowerCase().includes(needle)),
+function groupById(nodes: GroupNode_Serialize[], id: string): GroupNode_Serialize | null {
+  for (const node of nodes) {
+    if (node.id === id) return node;
+    const inside = groupById(node.children, id);
+    if (inside) return inside;
+  }
+  return null;
+}
+
+function subtreeOf(node: GroupNode_Serialize): string[] {
+  return [node.id, ...node.children.flatMap(subtreeOf)];
+}
+
+/**
+ * The one search predicate of the backend (`queries::entry_matches`, in-app flavour): a
+ * case-insensitive substring over title, username, every URL, notes (the note body is the same
+ * field here), the group name, the 14 address fields of ADDRESS entries only, and attachment
+ * names. Never passwords, TOTP, card data or custom values.
+ */
+export function entryMatches(e: FixtureEntry, groupName: string, search: string): boolean {
+  const needle = search.toLowerCase();
+  if (needle === "") return true;
+  const hit = (text: string) => text.toLowerCase().includes(needle);
+  const { model } = e;
+  if (hit(model.title) || hit(model.username) || hit(model.notes) || hit(groupName)) return true;
+  if (model.urls.some(hit)) return true;
+  if (e.summary.entryType === "address" && model.address && Object.values(model.address).some((v) => hit(v))) {
+    return true;
+  }
+  return model.attachments.some((a) => hit(a.name));
+}
+
+/**
+ * The list the backend would return for a query (`queries::list_entries`): a category scope
+ * searches inside the category; a group scope covers the group's subtree, but with a search it
+ * covers the whole vault (never the bin unless the group is in the bin); sorted by lower-cased
+ * title or by newest modification.
+ */
+export function listEntries(
+  entries: FixtureEntry[],
+  query: EntryQuery,
+  groups: GroupNode_Serialize[] = fixtureGroups(),
+): EntrySummary[] {
+  const searching = query.search !== "";
+  const nameOf = (id: string) => groupById(groups, id)?.name ?? "";
+  let scoped: FixtureEntry[];
+  if (query.scope.kind === "group") {
+    const target = groupById(groups, query.scope.groupId);
+    if (!target) return [];
+    const bin = groups.find((g) => g.isRecycleBin);
+    const inBin = bin ? subtreeOf(bin).includes(target.id) : false;
+    const subtree = subtreeOf(target);
+    scoped = entries.filter(
+      (e) => (inBin || !e.summary.inRecycleBin) && (searching || subtree.includes(e.summary.groupId)),
     );
-  rows.sort((a, b) =>
-    query.sort === "title" ? a.summary.title.localeCompare(b.summary.title) : b.modified - a.modified,
-  );
+  } else {
+    scoped = entries.filter((e) => inScope(e.summary, query.scope));
+  }
+  const rows = scoped.filter((e) => entryMatches(e, nameOf(e.summary.groupId), query.search));
+  const key = (e: FixtureEntry) => e.summary.title.toLowerCase();
+  rows.sort((a, b) => (query.sort === "title" ? (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0) : b.modified - a.modified));
   return rows.map((e) => structuredClone(e.summary));
 }
 
@@ -177,25 +234,45 @@ const CATEGORIES: Category[] = [
   "deleted",
 ];
 
-export function fixtureSidebar(entries: FixtureEntry[]): Sidebar_Serialize {
+/** The group tree below the root: Personal (with a nested Banking), Work, and the recycle bin last. Counts are filled by `fixtureSidebar`. */
+export function fixtureGroups(): GroupNode_Serialize[] {
+  const group = (
+    id: string,
+    name: string,
+    emoji: string | null,
+    children: GroupNode_Serialize[] = [],
+    isRecycleBin = false,
+  ): GroupNode_Serialize => ({ id, name, emoji, count: 0, isRecycleBin, children });
+  return [
+    group(PERSONAL_GROUP_ID, "Personal", null, [group(BANKING_GROUP_ID, "Banking", "\u{1F3E6}")]),
+    group(WORK_GROUP_ID, "Work", "\u{1F4BC}"),
+    group(BIN_GROUP_ID, "Bin", null, [], true),
+  ];
+}
+
+/** A copy of the tree with every `count` set to the entries in that group's whole subtree. */
+function counted(nodes: GroupNode_Serialize[], summaries: EntrySummary[]): { nodes: GroupNode_Serialize[]; total: number } {
+  let total = 0;
+  const out = nodes.map((node) => {
+    const inner = counted(node.children, summaries);
+    const own = summaries.filter((e) => e.groupId === node.id).length;
+    total += own + inner.total;
+    return { ...node, count: own + inner.total, children: inner.nodes };
+  });
+  return { nodes: out, total };
+}
+
+export function fixtureSidebar(
+  entries: FixtureEntry[],
+  groups: GroupNode_Serialize[] = fixtureGroups(),
+  recycleBinEnabled = true,
+): Sidebar_Serialize {
   const summaries = entries.map((e) => e.summary);
   const categories: CategoryCount_Serialize[] = CATEGORIES.map((category) => ({
     category,
     count: category === "security" ? null : summaries.filter((e) => inScope(e, { kind: "category", category })).length,
   }));
-  const group = (id: string, name: string, isRecycleBin = false): GroupNode_Serialize => ({
-    id,
-    name,
-    emoji: null,
-    count: summaries.filter((e) => e.groupId === id).length,
-    isRecycleBin,
-    children: [],
-  });
-  return {
-    categories,
-    rootGroupId: ROOT_GROUP_ID,
-    groups: [group(PERSONAL_GROUP_ID, "Personal"), group(WORK_GROUP_ID, "Work"), group(BIN_GROUP_ID, "Bin", true)],
-  };
+  return { categories, rootGroupId: ROOT_GROUP_ID, groups: counted(groups, summaries).nodes, recycleBinEnabled };
 }
 
 export function detailOf(e: FixtureEntry): EntryDetailDto_Serialize {

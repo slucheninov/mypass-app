@@ -77,6 +77,15 @@ class ToastStore {
     const detail = errorDetail(e);
     this.push("error", text, detail ? { sticky: true, detail } : {});
   }
+
+  /** Runs `work` and shows a failure as a toast; the one "run and report" helper of the screens. */
+  async guard(work: () => Promise<unknown>): Promise<void> {
+    try {
+      await work();
+    } catch (e) {
+      this.reportError(e);
+    }
+  }
 }
 
 export const toasts = new ToastStore();

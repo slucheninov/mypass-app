@@ -10,13 +10,14 @@ import { textSnippet } from "../../test/snippets";
 import { renderWithBackend } from "../../test/render";
 import { mockWindows } from "@tauri-apps/api/mocks";
 import { contrast } from "../../test/contrast";
+import { clampToViewport } from "./menu";
 import { AVATAR_PALETTE, avatarColor, avatarLetter } from "./avatar";
 import Avatar from "./Avatar.svelte";
 import Button from "./Button.svelte";
 import ContextMenu from "./ContextMenu.svelte";
 import FieldRow from "./FieldRow.svelte";
 import Icon from "./Icon.svelte";
-import { ICON_NAMES } from "./icons";
+import { ICON_NAMES, ICON_PATHS } from "./icons";
 import Segmented from "./Segmented.svelte";
 import Select from "./Select.svelte";
 import SplitPane from "./SplitPane.svelte";
@@ -364,7 +365,8 @@ describe("SplitPane", () => {
 
 describe("Icon", () => {
   it("icon_names_all_render_svg", () => {
-    expect(ICON_NAMES.length).toBe(27);
+    expect(ICON_NAMES.length).toBe(Object.keys(ICON_PATHS).length);
+    expect(ICON_PATHS.warning).not.toBe(ICON_PATHS.security);
     for (const name of ICON_NAMES) {
       const { container, unmount } = render(Icon, { props: { name } });
       const svg = container.querySelector("svg");
@@ -476,5 +478,133 @@ describe("interactions", () => {
     const cls = screen.getByRole("button", { name: "Go" }).className;
     expect(cls).toContain("primary");
     expect(cls).toContain("extra");
+  });
+});
+
+describe("menu placement and focus", () => {
+  const rectOf = (width: number, height: number, left = 0, top = 0) =>
+    ({ width, height, left, top, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) }) as DOMRect;
+
+  it("clamp_to_viewport_keeps_the_box_inside_with_a_margin", () => {
+    expect(clampToViewport(10, 20, 100, 50, 1024, 768)).toEqual({ x: 10, y: 20 });
+    expect(clampToViewport(1000, 750, 200, 100, 1024, 768)).toEqual({ x: 820, y: 664 });
+    expect(clampToViewport(-30, -5, 100, 50, 1024, 768)).toEqual({ x: 4, y: 4 });
+    // A box larger than the window starts at the margin.
+    expect(clampToViewport(300, 300, 2000, 2000, 1024, 768)).toEqual({ x: 4, y: 4 });
+  });
+
+  it("context_menu_is_moved_inside_the_viewport", async () => {
+    const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(rectOf(200, 100));
+    try {
+      render(ContextMenu, {
+        props: { items: [{ id: "a", label: "Alpha" }], onselect: vi.fn(), onclose: vi.fn(), x: window.innerWidth - 10, y: window.innerHeight - 10 },
+      });
+      const holder = screen.getByRole("menu").parentElement as HTMLElement;
+      await waitFor(() => expect(holder.style.left).toBe(`${window.innerWidth - 204}px`));
+      expect(holder.style.top).toBe(`${window.innerHeight - 104}px`);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("context_menu_is_visible_only_once_placed_and_follows_a_resize", async () => {
+    let rect = rectOf(200, 100);
+    const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(() => rect);
+    const width = window.innerWidth;
+    try {
+      render(ContextMenu, { props: { items: [{ id: "a", label: "Alpha" }], onselect: vi.fn(), onclose: vi.fn(), x: 500, y: 10 } });
+      const holder = screen.getByRole("menu").parentElement as HTMLElement;
+      expect(holder.style.visibility).toBe("visible");
+      expect(holder.style.left).toBe("500px");
+      Object.defineProperty(window, "innerWidth", { value: 400, configurable: true });
+      await fireEvent(window, new Event("resize"));
+      await waitFor(() => expect(holder.style.left).toBe("196px"));
+    } finally {
+      Object.defineProperty(window, "innerWidth", { value: width, configurable: true });
+      spy.mockRestore();
+    }
+  });
+
+  it("context_menu_escape_restores_focus_to_the_opener", async () => {
+    const user = userEvent.setup();
+    const opener = document.body.appendChild(document.createElement("button"));
+    opener.focus();
+    const onclose = vi.fn();
+    render(ContextMenu, { props: { items: [{ id: "a", label: "Alpha" }], onselect: vi.fn(), onclose, x: 0, y: 0 } });
+    expect(document.activeElement).toBe(screen.getByRole("menuitem", { name: "Alpha" }));
+    await user.keyboard("{Escape}");
+    expect(onclose).toHaveBeenCalled();
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
+  });
+
+  it("context_menu_choice_restores_focus_before_the_handler_runs", async () => {
+    const user = userEvent.setup();
+    const opener = document.body.appendChild(document.createElement("button"));
+    opener.focus();
+    let focusedWhenChosen: Element | null = null;
+    const onselect = vi.fn(() => (focusedWhenChosen = document.activeElement));
+    render(ContextMenu, { props: { items: [{ id: "a", label: "Alpha" }], onselect, onclose: vi.fn(), x: 0, y: 0 } });
+    await user.keyboard("{Enter}");
+    expect(onselect).toHaveBeenCalledWith("a");
+    expect(focusedWhenChosen).toBe(opener);
+    opener.remove();
+  });
+
+  it("an_explicit_opener_wins_over_the_focused_element", async () => {
+    const user = userEvent.setup();
+    const a = document.body.appendChild(document.createElement("button"));
+    const b = document.body.appendChild(document.createElement("button"));
+    a.focus();
+    render(ContextMenu, { props: { items: [{ id: "x", label: "X" }], onselect: vi.fn(), onclose: vi.fn(), x: 0, y: 0, opener: b } });
+    await user.keyboard("{Escape}");
+    expect(document.activeElement).toBe(b);
+    a.remove();
+    b.remove();
+  });
+
+  it("a_click_elsewhere_does_not_pull_focus_back", async () => {
+    const user = userEvent.setup();
+    const opener = document.body.appendChild(document.createElement("button"));
+    const other = document.body.appendChild(document.createElement("input"));
+    opener.focus();
+    render(ContextMenu, { props: { items: [{ id: "a", label: "Alpha" }], onselect: vi.fn(), onclose: vi.fn(), x: 0, y: 0 } });
+    await user.click(other);
+    expect(document.activeElement).toBe(other);
+    opener.remove();
+    other.remove();
+  });
+
+  it("menu_separator_is_drawn_and_skipped_by_the_keyboard", async () => {
+    const user = userEvent.setup();
+    const onselect = vi.fn();
+    render(ContextMenu, {
+      props: {
+        items: [{ id: "a", label: "Alpha" }, { id: "s", label: "", separator: true }, { id: "b", label: "Beta" }],
+        onselect,
+        onclose: vi.fn(),
+        x: 0,
+        y: 0,
+      },
+    });
+    expect(screen.getByRole("separator")).toBeTruthy();
+    expect(screen.getAllByRole("menuitem")).toHaveLength(2);
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(onselect).toHaveBeenCalledWith("b");
+  });
+
+  it("dropdown_menu_shifts_left_when_it_would_leave_the_window", async () => {
+    const user = userEvent.setup();
+    render(MenuHarness, { props: { onselect: vi.fn() } });
+    const spy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue(rectOf(180, 100, window.innerWidth - 60, 40));
+    try {
+      await user.click(screen.getByRole("button", { name: "Actions" }));
+      const popup = (await screen.findByRole("menu")).parentElement as HTMLElement;
+      expect(popup.style.left).toBe("-124px");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
