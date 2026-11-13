@@ -24,8 +24,9 @@ On Windows, run `cargo` commands from PowerShell and `scripts/*.sh` from Git Bas
 | `mypass-core` | implemented | TOTP, generator and password rules, Public Suffix List, entry matcher, merge engine |
 | `repo-guards` | implemented | Test-only guard tests for the workspace, CI, docs and scripts (never shipped) |
 | `mypass-platform` | in progress (stage 2a) | OS glue behind traits (system events, secure clipboard, secret stores, device unlock, native host registrar, launch at login, keyboard layout) and `AppPaths`; fakes behind the `test-util` feature, `Unsupported` fallbacks where a platform body has not landed |
-| `mypass-session` | scaffold (stage 2a) | Vault session, settings, scheduling and the command facade; no Tauri dependency |
-| `src-tauri` (`mypass-app`) | scaffold (stage 2a) | The Tauri 2 app shell and the typed IPC bindings (`src/lib/bindings.ts`, generated) |
+| `mypass-session` | in progress (stage 2a) | Vault session, settings, scheduling and the command facade; no Tauri dependency |
+| `src/` (Svelte UI) | implemented (stage 2b) | The webview UI: typed API wrapper, stores, i18n, design kit, screens and the three windows (main, settings, tray panel), with its Vitest suites |
+| `src-tauri` (`mypass-app`) | in progress (stage 2a) | The Tauri 2 app shell and the typed IPC bindings (`src/lib/bindings.ts`, generated) |
 | `mypass-bridge`, `mypass-host`, `extension/` | planned | Browser bridge, native messaging host and the Chromium extension |
 
 ## Build and check

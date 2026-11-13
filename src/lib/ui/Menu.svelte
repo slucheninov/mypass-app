@@ -57,8 +57,11 @@
     <div class="popup" use:fitInViewport>
       <MenuList
         {items}
-        onselect={(id) => {
-          void close(true);
+        onselect={async (id) => {
+          // Focus goes back to the trigger BEFORE the action runs: an action that opens a dialog
+          // then captures the trigger as its opener and moves focus inside, instead of the menu
+          // taking focus back from the dialog afterwards.
+          await close(true);
           onselect(id);
         }}
         onclose={() => void close(true)}

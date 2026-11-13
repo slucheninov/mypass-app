@@ -104,6 +104,8 @@ export interface FakeState {
   /** The group tree below the root (the recycle bin last); `group_*` commands edit it. */
   groups: GroupNode_Serialize[];
   masterPassword: string;
+  /** Vaults a test registers by path: `vault_open` of one loads its own content and password. */
+  vaults: Record<string, { entries: FixtureEntry[]; groups: GroupNode_Serialize[]; masterPassword?: string }>;
   /** What `vault_open_warnings` answers for every path (default none). */
   openWarnings: OpenWarning[];
   /** The recent-vaults list `vault_recent` returns; `vault_forget` and a successful open/create edit it. */
@@ -176,6 +178,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     entries: fixtureEntries(),
     groups: fixtureGroups(),
     masterPassword: FIXTURE_MASTER_PASSWORD,
+    vaults: {},
     openWarnings: [],
     recents: [],
     foundFiles: [],
@@ -811,6 +814,9 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     vaultCreate: ({ path, password, name }) => {
       if (state.existingFiles.includes(path)) throw apiError("alreadyExists");
       state.masterPassword = password;
+      // A new vault is empty: the fixture content belongs to the vault that was open before.
+      state.entries = [];
+      state.groups = fixtureGroups().filter((g) => g.isRecycleBin);
       return openVault(path, name);
     },
     vaultFindFiles: () => structuredClone(state.foundFiles),
@@ -823,9 +829,31 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       setSession({ ...state.session, state: "locked", lockReason: "manual" });
       return null;
     },
+    // Like Rust, opening loads THAT file: the path already open keeps its state (its own password
+    // applies), a registered path brings its own content and password, and any other path is the
+    // default fixture vault with the fixture password. The password is always checked against the
+    // vault being opened, never the previous one; a refused open changes nothing. Leaving a vault
+    // writes its current state back, so reopening it later finds its edits.
     vaultOpen: ({ path, password }) => {
-      if (password !== state.masterPassword) throw apiError("wrongPassword");
-      return openVault(path, fileNameOf(path).replace(/\.kdbx$/i, ""));
+      const name = fileNameOf(path).replace(/\.kdbx$/i, "");
+      if (path === state.session.vaultPath) {
+        if (password !== state.masterPassword) throw apiError("wrongPassword");
+        return openVault(path, name);
+      }
+      const own = state.vaults[path];
+      const expected = own?.masterPassword ?? FIXTURE_MASTER_PASSWORD;
+      if (password !== expected) throw apiError("wrongPassword");
+      if (state.session.vaultPath) {
+        state.vaults[state.session.vaultPath] = {
+          entries: structuredClone(state.entries),
+          groups: structuredClone(state.groups),
+          masterPassword: state.masterPassword,
+        };
+      }
+      state.masterPassword = expected;
+      state.entries = own ? structuredClone(own.entries) : fixtureEntries();
+      state.groups = own ? structuredClone(own.groups) : fixtureGroups();
+      return openVault(path, name);
     },
     vaultOpenWarnings: () => structuredClone(state.openWarnings),
     vaultRecent: () => structuredClone(state.recents),
