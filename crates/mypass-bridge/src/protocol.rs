@@ -4,8 +4,8 @@
 //! Swift app, so the extension keeps working unchanged: camelCase names, optional fields omitted
 //! (never `null`), and the Swift decoding defaults kept as `serde(default)`.
 //!
-//! Secrets never reach `Debug` output: `Debug` for the requests, the responses and the history item
-//! goes through the JSON form and redacts every secret-bearing key.
+//! Secrets never reach `Debug` output: `Debug` for the requests and responses prints the message tag
+//! only, and the address and history item types hide their values.
 
 use std::fmt;
 
@@ -79,29 +79,29 @@ pub enum Request {
     CreateEntry {
         token: String,
         entry_type: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "null_as_default")]
         title: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "null_as_default")]
         username: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "null_as_default")]
         password: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "null_as_default")]
         url: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "null_as_default")]
         card_number: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "null_as_default")]
         cardholder_name: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "null_as_default")]
         expiry: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "null_as_default")]
         cvv: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "null_as_default")]
         notes: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "null_as_default")]
         favorite: bool,
-        #[serde(default, rename = "match")]
+        #[serde(default, rename = "match", deserialize_with = "null_as_default")]
         r#match: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "null_as_default")]
         otp: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pairing: Option<String>,
@@ -212,7 +212,7 @@ pub enum Request {
         request_id: i64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         entry_id: Option<String>,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "null_as_default")]
         replace: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pairing: Option<String>,
@@ -246,9 +246,9 @@ pub enum Request {
     },
     RecordGeneratedPassword {
         token: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "null_as_default")]
         password: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "null_as_default")]
         url: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         created_at: Option<f64>,
@@ -262,7 +262,7 @@ pub enum Request {
     },
     DeleteGeneratedPassword {
         token: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "null_as_default")]
         id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pairing: Option<String>,
@@ -270,9 +270,6 @@ pub enum Request {
 }
 
 /// A response from the app. It never carries the endpoint token.
-// The address variant is large, but responses are short-lived values built per request; boxing it
-// would change the public shape the handlers construct.
-#[allow(clippy::large_enum_variant)]
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "type",
@@ -290,7 +287,7 @@ pub enum Response {
         credentials: Vec<ExtensionCredentialSummary>,
     },
     Address {
-        address: ExtensionAddress,
+        address: Box<ExtensionAddress>,
     },
     Credential {
         username: String,
@@ -310,7 +307,7 @@ pub enum Response {
         unlocked: bool,
         paired: bool,
         attach_allowed: bool,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "null_as_default")]
         enabled: bool,
     },
     PasskeyProxyEnabled {
@@ -377,7 +374,7 @@ pub struct ExtensionCredentialSummary {
 }
 
 /// An address entry as the extension fills it into a form.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtensionAddress {
     pub id: String,
@@ -453,23 +450,14 @@ pub enum ExtensionScanState {
     NotChecked,
 }
 
-/// JSON keys whose values are secrets or vault content and never appear in `Debug` output.
-fn is_secret_key(key: &str) -> bool {
-    matches!(
-        key,
-        "token"
-            | "pairing"
-            | "password"
-            | "value"
-            | "secret"
-            | "totp"
-            | "code"
-            | "cvv"
-            | "cardNumber"
-            | "notes"
-            | "requestDetailsJson"
-            | "responseJson"
-    ) || key.starts_with("otp")
+/// Swift decodes the defaulted fields with `decodeIfPresent ?? default`, so an explicit JSON `null`
+/// is the default too; serde's plain `default` would reject it.
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 struct Redacted;
@@ -480,52 +468,36 @@ impl fmt::Debug for Redacted {
     }
 }
 
-/// Replaces the value of every secret key, at any depth, with a marker string.
-fn redact(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(map) => {
-            for (key, val) in map.iter_mut() {
-                if is_secret_key(key) {
-                    *val = serde_json::Value::String("<redacted>".to_owned());
-                } else {
-                    redact(val);
-                }
-            }
-        }
-        serde_json::Value::Array(items) => items.iter_mut().for_each(redact),
-        _ => {}
+/// The message tag in `PascalCase` (`fillCredential` -> `FillCredential`).
+fn message_tag<T: Serialize>(value: &T) -> String {
+    let tag = serde_json::to_value(value)
+        .ok()
+        .and_then(|v| v.get("type").and_then(|t| t.as_str().map(str::to_owned)))
+        .unwrap_or_default();
+    let mut chars = tag.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => "Unknown".to_owned(),
     }
 }
 
-/// Prints a serialisable value as `Tag { key: value, .. }` with the secret keys redacted.
-fn debug_redacted<T: Serialize>(value: &T, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    let Ok(mut json) = serde_json::to_value(value) else {
-        return f.write_str("<unprintable>");
-    };
-    redact(&mut json);
-    let serde_json::Value::Object(map) = json else {
-        return f.write_str("<unprintable>");
-    };
-    let tag = map.get("type").and_then(|t| t.as_str()).unwrap_or("Item");
-    let mut out = f.debug_struct(tag);
-    for (key, val) in &map {
-        if key == "type" {
-            continue;
-        }
-        out.field(key, val);
-    }
-    out.finish()
-}
-
+// `Debug` is an allow-list of exactly one thing, the message tag: no field value is ever printed, so
+// a new field can never leak through a log line.
 impl fmt::Debug for Request {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        debug_redacted(self, f)
+        write!(f, "Request::{} {{ .. }}", message_tag(self))
     }
 }
 
 impl fmt::Debug for Response {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        debug_redacted(self, f)
+        write!(f, "Response::{} {{ .. }}", message_tag(self))
+    }
+}
+
+impl fmt::Debug for ExtensionAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExtensionAddress").finish_non_exhaustive()
     }
 }
 

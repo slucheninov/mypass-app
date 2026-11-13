@@ -303,7 +303,11 @@ fn request_cases() -> Vec<(Request, &'static str)> {
 #[test]
 fn every_request_case_has_golden_json() {
     let cases = request_cases();
-    assert_eq!(cases.len(), 29);
+    assert_eq!(
+        cases.len(),
+        variant_count("Request"),
+        "a Request variant has no golden case"
+    );
     for (request, golden) in cases {
         let golden_value: Value = serde_json::from_str(golden).unwrap();
         let encoded = serde_json::to_value(&request).unwrap();
@@ -320,6 +324,7 @@ fn every_request_case_has_golden_json() {
 fn request_types_are_distinct_and_match_the_tags() {
     let set: BTreeSet<&str> = REQUEST_TYPES.iter().copied().collect();
     assert_eq!(set.len(), 29);
+    assert_eq!(set.len(), variant_count("Request"));
     let tags: BTreeSet<String> = request_cases()
         .iter()
         .map(|(r, _)| {
@@ -567,35 +572,22 @@ fn address() -> ExtensionAddress {
 }
 
 fn response_samples() -> Vec<Response> {
-    let sample = |r: &Response| -> Response {
-        // Exhaustive: a new variant is a compile error here.
-        match r {
-            Response::Locked
-            | Response::PairingRequired
-            | Response::PairingStarted
-            | Response::Paired { .. }
-            | Response::CredentialList { .. }
-            | Response::Address { .. }
-            | Response::Credential { .. }
-            | Response::Totp { .. }
-            | Response::SaveProposalAccepted
-            | Response::UnlockPresented
-            | Response::UnlockNotNeeded
-            | Response::PasskeyProxyStatus { .. }
-            | Response::PasskeyProxyEnabled { .. }
-            | Response::PasskeyCreatePending { .. }
-            | Response::PasskeyCreateComplete { .. }
-            | Response::PasskeyGetPending { .. }
-            | Response::PasskeyGetComplete { .. }
-            | Response::PasskeyCancelled { .. }
-            | Response::GeneratedPassword { .. }
-            | Response::EntryCreated
-            | Response::Acknowledged
-            | Response::PasswordHistory { .. }
-            | Response::Error { .. } => r.clone(),
-        }
-    };
-    response_cases().iter().map(|(r, _)| sample(r)).collect()
+    response_cases().into_iter().map(|(r, _)| r).collect()
+}
+
+/// Counts the variants of a protocol enum by scanning the source, so a variant added without a
+/// golden case fails the coverage tests below.
+fn variant_count(name: &str) -> usize {
+    let src = include_str!("../src/protocol.rs");
+    let start = src.find(&format!("pub enum {name} {{")).unwrap();
+    src[start..]
+        .lines()
+        .skip(1)
+        .take_while(|l| *l != "}")
+        .filter(|l| {
+            l.starts_with("    ") && l.chars().nth(4).is_some_and(|c| c.is_ascii_uppercase())
+        })
+        .count()
 }
 
 fn response_cases() -> Vec<(Response, Value)> {
@@ -616,7 +608,9 @@ fn response_cases() -> Vec<(Response, Value)> {
                 {"id":"e1","title":"Example","username":"u","hasTotp":true,"hasPasskey":false,"url":"https://example.com","entryType":"Login","identifiers":["+1"]}]}),
         ),
         (
-            Response::Address { address: address() },
+            Response::Address {
+                address: Box::new(address()),
+            },
             json!({"type":"address","address":{"id":"a1","label":"Home","fullName":"Ada Lovelace","givenName":"Ada","familyName":"Lovelace","organization":"Org","addressLine1":"1 Main St","addressLine2":"Apt 2","city":"London","region":"LDN","postalCode":"N1","countryCode":"GB","countryName":"United Kingdom","phone":"+44","email":"a@example.com"}}),
         ),
         (
@@ -746,13 +740,15 @@ fn every_response_case_has_golden_json() {
         let decoded: Response = serde_json::from_value(golden.clone()).unwrap();
         assert_eq!(decoded, response, "decode {golden}");
     }
-    // Every variant is covered: the exhaustive match in `response_samples` pins the list, and the
-    // tags below must be distinct.
     let tags: BTreeSet<String> = response_cases()
         .iter()
         .map(|(_, g)| g["type"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(tags.len(), 23);
+    assert_eq!(
+        tags.len(),
+        variant_count("Response"),
+        "a Response variant has no golden case"
+    );
 }
 
 #[test]
@@ -865,38 +861,124 @@ fn diagnostics_report_enums_use_kebab_strings_and_reject_unknown() {
 }
 
 #[test]
-fn debug_output_redacts_token_and_secrets() {
-    let fill = Request::FillCredential {
-        token: s("tok-secret"),
-        id: s("e1"),
-        url: s("https://x.example"),
-        pairing: so("tok-pair"),
+fn explicit_null_decodes_as_the_default() {
+    let r: Request = serde_json::from_str(
+        r#"{"type":"createEntry","token":"t","entryType":"Login","title":null,"favorite":null,"match":null,"otp":null}"#,
+    )
+    .unwrap();
+    let Request::CreateEntry {
+        title,
+        favorite,
+        r#match,
+        otp,
+        ..
+    } = r
+    else {
+        panic!("wrong variant");
     };
-    let save = Request::ProposeSaveLogin {
-        token: s("tok-2"),
-        url: s("https://x.example"),
-        username: s("u"),
-        password: s("hunter2"),
-        pairing: None,
-    };
-    let paired = Response::Paired { secret: s("abc") };
-    let history = Response::PasswordHistory {
-        entries: vec![ExtensionPasswordHistoryItem {
-            id: s("h"),
-            password: s("hunter3"),
+    assert_eq!(
+        (title.as_str(), favorite, r#match.as_str(), otp.as_str()),
+        ("", false, "", "")
+    );
+    let r: Request = serde_json::from_str(
+        r#"{"type":"recordGeneratedPassword","token":"t","password":null,"url":null}"#,
+    )
+    .unwrap();
+    assert!(
+        matches!(r, Request::RecordGeneratedPassword { ref password, .. } if password.is_empty())
+    );
+    let r: Request = serde_json::from_str(
+        r#"{"type":"passkeyCreateConfirm","token":"t","requestId":1,"replace":null}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        r,
+        Request::PasskeyCreateConfirm { replace: false, .. }
+    ));
+    let r: Request =
+        serde_json::from_str(r#"{"type":"deleteGeneratedPassword","token":"t","id":null}"#)
+            .unwrap();
+    assert!(matches!(r, Request::DeleteGeneratedPassword { ref id, .. } if id.is_empty()));
+}
+
+#[test]
+fn debug_output_prints_the_tag_only() {
+    let requests = vec![
+        Request::FillCredential {
+            token: s("tok-secret"),
+            id: s("entry-id-1"),
             url: s("https://x.example"),
-            created_at: 1.0,
-        }],
-    };
-    let item = ExtensionPasswordHistoryItem {
-        id: s("h"),
-        password: s("hunter4"),
-        url: s("u"),
-        created_at: 1.0,
-    };
-    let text = format!("{fill:?} {save:?} {paired:?} {history:?} {item:?}");
-    for secret in ["tok-", "hunter", "abc"] {
-        assert!(!text.contains(secret), "{secret} leaked: {text}");
+            pairing: so("tok-pair"),
+        },
+        Request::ProposeSaveLogin {
+            token: s("tok-2"),
+            url: s("https://x.example"),
+            username: s("alice-user"),
+            password: s("hunter2"),
+            pairing: None,
+        },
+        Request::CompletePairing {
+            token: s("tok-3"),
+            code: s("987654"),
+        },
+        Request::ProposeSaveTotp {
+            token: s("tok-4"),
+            url: s("https://x.example"),
+            otpauth_or_secret: s("JBSWY3DPEHPK3PXP"),
+            entry_id: None,
+            pairing: None,
+        },
+    ];
+    let responses = vec![
+        Response::Paired { secret: s("abc") },
+        Response::Address {
+            address: Box::new(address()),
+        },
+        Response::CredentialList {
+            credentials: vec![summary(vec![s("+1555")])],
+        },
+        Response::Credential {
+            username: s("alice-user"),
+            password: s("hunter2"),
+            totp: so("112233"),
+            urls: vec![],
+        },
+        Response::PasswordHistory {
+            entries: vec![ExtensionPasswordHistoryItem {
+                id: s("h"),
+                password: s("hunter3"),
+                url: s("https://x.example"),
+                created_at: 1.0,
+            }],
+        },
+    ];
+    let mut text = String::new();
+    for r in &requests {
+        text.push_str(&format!("{r:?} "));
     }
-    assert!(text.contains("e1"));
+    for r in &responses {
+        text.push_str(&format!("{r:?} "));
+    }
+    text.push_str(&format!("{:?}", address()));
+    assert!(text.contains("Request::FillCredential { .. }"));
+    assert!(text.contains("Response::Paired { .. }"));
+    for leak in [
+        "tok-",
+        "hunter",
+        "abc",
+        "alice",
+        "987654",
+        "JBSWY",
+        "112233",
+        "Lovelace",
+        "a@example.com",
+        "1 Main",
+        "+44",
+        "+1555",
+        "entry-id-1",
+        "x.example",
+        "Example",
+    ] {
+        assert!(!text.contains(leak), "{leak} leaked: {text}");
+    }
 }
