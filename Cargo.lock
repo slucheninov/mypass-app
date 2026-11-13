@@ -2580,6 +2580,8 @@ version = "0.1.0"
 dependencies = [
  "mypass-bridge",
  "mypass-platform",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

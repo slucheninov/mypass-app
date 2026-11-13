@@ -22,11 +22,17 @@ pub const MAX_OUTBOUND_FRAME_BYTES: usize = 1024 * 1024;
 /// [`MAX_OUTBOUND_FRAME_BYTES`] (or one whose length does not fit a `u32`) is an error and nothing
 /// is written.
 pub fn encode_frame(payload: &[u8]) -> Result<Vec<u8>, FrameError> {
+    encode_frame_capped(payload, MAX_OUTBOUND_FRAME_BYTES)
+}
+
+/// Like [`encode_frame`] with a caller-chosen cap, for a hop whose limit is not Chromium's (the
+/// host's request frames to the app).
+pub fn encode_frame_capped(payload: &[u8], max: usize) -> Result<Vec<u8>, FrameError> {
     let too_large = || FrameError::TooLarge {
         claimed: payload.len(),
-        max: MAX_OUTBOUND_FRAME_BYTES,
+        max,
     };
-    if payload.len() > MAX_OUTBOUND_FRAME_BYTES {
+    if payload.len() > max {
         return Err(too_large());
     }
     let len = u32::try_from(payload.len()).map_err(|_| too_large())?;

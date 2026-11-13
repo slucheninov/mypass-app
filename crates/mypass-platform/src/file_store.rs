@@ -185,7 +185,7 @@ impl FileSecretStore {
 
 /// The store `Platform.shared_secrets` uses: `AppPaths::secrets_shared`, owner checked against the
 /// home folder.
-pub(crate) fn shared_store(paths: &crate::AppPaths) -> FileSecretStore {
+pub fn shared_store(paths: &crate::AppPaths) -> FileSecretStore {
     FileSecretStore::new(paths.secrets_shared.clone(), paths.home().to_path_buf())
 }
 

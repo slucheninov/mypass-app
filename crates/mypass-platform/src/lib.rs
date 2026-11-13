@@ -28,7 +28,7 @@ pub use clipboard::{ClipboardStamp, SecureClipboard};
 pub use device_unlock::{DeviceUnlock, DeviceUnlockAvailability, DeviceUnlockMode};
 pub use error::{PlatformError, PlatformResult};
 pub use events::{Subscription, SystemEvent, SystemEvents};
-pub use file_store::FileSecretStore;
+pub use file_store::{shared_store, FileSecretStore};
 pub use host_registrar::{
     BrowserRegistration, HostRegistrationReport, NativeHostRegistrar, RegistrationState,
 };

@@ -14,6 +14,7 @@ pub mod pairing;
 #[cfg(feature = "server")]
 pub mod passkeys;
 pub mod protocol;
+pub mod relay;
 #[cfg(feature = "server")]
 pub mod server;
 #[cfg(feature = "server")]

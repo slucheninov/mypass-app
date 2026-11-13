@@ -440,9 +440,12 @@ fn send(stream: &mut TcpStream, reply: &HelloReply) -> bool {
         HelloReply::Ack(h) => serde_json::to_vec(h),
         HelloReply::Resp(r) => serde_json::to_vec(r),
     };
-    let Ok(json) = json else { return false };
+    // A response can carry passwords, so the serialised bytes and the frame are wiped on drop.
+    let Ok(json) = json.map(Zeroizing::new) else {
+        return false;
+    };
     let framed = match encode_frame(&json) {
-        Ok(f) => f,
+        Ok(f) => Zeroizing::new(f),
         Err(_) => {
             let Ok(small) = serde_json::to_vec(&Response::Error {
                 message: "response too large".into(),
@@ -450,7 +453,7 @@ fn send(stream: &mut TcpStream, reply: &HelloReply) -> bool {
                 return false;
             };
             match encode_frame(&small) {
-                Ok(f) => f,
+                Ok(f) => Zeroizing::new(f),
                 Err(_) => return false,
             }
         }
