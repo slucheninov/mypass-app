@@ -35,4 +35,6 @@ uuid = { workspace = true, features = ["serde"] }
 zeroize.workspace = true
 
 [dev-dependencies]
+secrecy.workspace = true
+tempfile.workspace = true
 mypass-platform = { path = "../mypass-platform", features = ["test-util"] }

@@ -8,10 +8,20 @@ pub mod diagnostics;
 pub mod endpoint;
 pub mod gating;
 #[cfg(feature = "server")]
+pub(crate) mod handlers;
+#[cfg(feature = "server")]
 pub mod pairing;
+#[cfg(feature = "server")]
+pub mod passkeys;
 pub mod protocol;
 #[cfg(feature = "server")]
 pub mod server;
+#[cfg(feature = "server")]
+pub mod service;
+#[cfg(feature = "server")]
+pub mod ui;
+#[cfg(feature = "server")]
+pub mod views;
 
 /// The native messaging host name registered with every browser.
 pub const HOST_NAME: &str = "com.mypass.chromehost";
