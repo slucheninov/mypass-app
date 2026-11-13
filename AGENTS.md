@@ -49,7 +49,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `scripts/test-extension.sh` | Runs every `extension/tests/*.test.js` suite in its own node process (`--list` prints them); part of the `js` part |
 | `scripts/convert-xcstrings.mjs` | One-time converter of the old app's String Catalogs; its output (`src/lib/i18n/locales/{en,uk,ru}.json`, `src-tauri/resources/macos/*.lproj/InfoPlist.strings`) is then the hand-edited source of truth |
 | `.github/` | Workflows (`ci.yml`, `codeql.yml`), Dependabot config, issue forms, pull request template |
-| `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts) and the Stage 2b UI walk-through |
+| `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts) the Stage 2b UI walk-through and the Stage 3 browser bridge checklist (M1 to M14) |
 | `docs/implementation/ROADMAP.md` | The only tracked document under `docs/`: unfinished work |
 | `LICENSE`, `THIRD_PARTY_NOTICES.md` | Apache-2.0 and the notices for vendored data and linked crates |
 
@@ -253,7 +253,8 @@ change is done.
   port never receives the token; unauthenticated connections have an absolute deadline. The gate order is quitting,
   locked, then pairing; gating `match`es stay exhaustive (no wildcard arm), so a new request type is a compile error
   until it is classified. Residual risk: a process of the same user can read the endpoint file and request pairing
-  (pairing still needs the code shown in the app), or replace the host copy the manifests point at; stage 5 moves
+  (pairing still needs the code shown in the app), and by rewriting the endpoint record or replacing the host copy the manifests point at
+  it can capture the extension's pairing secret and then read every credential, the same exposure as the extension's own `chrome.storage`; stage 5 closes it, it is not optional hardening, and moves
   the endpoint into a Keychain item that trusts only the signed host and points the manifests at the host inside the
   bundle (ROADMAP). The earlier idea of a shared Keychain access group was dropped.
 - **Signing.** The stable team `W645B93PPQ` arrives in stage 5. Never sign ad-hoc: it breaks the

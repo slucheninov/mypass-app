@@ -23,10 +23,10 @@ On Windows, run `cargo` commands from PowerShell and `scripts/*.sh` from Git Bas
 | `mypass-kdbx` | implemented | KDBX4 engine: format pipeline, model, database API, vault file |
 | `mypass-core` | implemented | TOTP, generator and password rules, Public Suffix List, entry matcher, merge engine |
 | `repo-guards` | implemented | Test-only guard tests for the workspace, CI, docs and scripts (never shipped) |
-| `mypass-platform` | in progress (stage 2a) | OS glue behind traits (system events, secure clipboard, secret stores, device unlock, native host registrar, launch at login, keyboard layout) and `AppPaths`; fakes behind the `test-util` feature, `Unsupported` fallbacks where a platform body has not landed |
-| `mypass-session` | in progress (stage 2a) | Vault session, settings, scheduling and the command facade; no Tauri dependency |
+| `mypass-platform` | implemented | OS glue behind traits (system events, secure clipboard, secret stores, device unlock, native host registrar, launch at login, keyboard layout) and `AppPaths`; fakes behind the `test-util` feature, `Unsupported` fallbacks where a platform body has not landed |
+| `mypass-session` | implemented | Vault session, settings, scheduling and the command facade; no Tauri dependency |
 | `src/` (Svelte UI) | implemented (stage 2b) | The webview UI: typed API wrapper, stores, i18n, design kit, screens and the three windows (main, settings, tray panel), with its Vitest suites |
-| `src-tauri` (`mypass-app`) | in progress (stage 2a) | The Tauri 2 app shell and the typed IPC bindings (`src/lib/bindings.ts`, generated) |
+| `src-tauri` (`mypass-app`) | implemented | The Tauri 2 app shell and the typed IPC bindings (`src/lib/bindings.ts`, generated) |
 | `mypass-bridge`, `mypass-host` | implemented | Browser bridge (protocol, loopback server, pairing) and the native messaging host; `scripts/build-host.sh` builds the host and `scripts/dev-app.sh` runs the app with it |
 | `extension/` | implemented | The Chromium extension (Manifest V3 JavaScript) with its Node suites, run by `scripts/test-extension.sh` |
 

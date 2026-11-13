@@ -77,6 +77,13 @@ Last updated: 2026-11-13
   running bridge revokes one browser at a time, so an error midway leaves a partial reset.
 - [ ] Before any `connectNative` use: host handshake lazily on the first frame, reconnect with a fresh
   handshake, never resend a frame already written.
+- [ ] `mypass-host` dev-dependencies enable `mypass-bridge` with the `server` feature, so `cargo test`
+  and `cargo build --workspace` produce a `mypass-host` with the vault crates linked; the shipped
+  binary (`cargo build -p mypass-host` in `scripts/build-host.sh`) does not. Check the shipped
+  binary's dependency tree in CI, and let the e2e suite use that binary.
+- [ ] A failed `LoopbackServer::start` (for example a `secrets/shared` folder with group or other
+  bits) shows `listening: false` with no reason and no action in the Browser pane; surface an
+  "endpoint store unusable" state.
 
 ## Stage 4 passkeys
 
@@ -108,6 +115,9 @@ Last updated: 2026-11-13
 
 - [ ] Windows bodies of every `mypass-platform` trait (DPAPI secret stores, lock and suspend events;
   the clipboard history exclusion already ships through `arboard`).
+- [ ] The Browser pane reports a broken pairing list on Windows only because `UnsupportedSecretStore`
+  fails `PairingManager::new`; map `PlatformError::Unsupported` to a separate "not available on this
+  platform" state until the DPAPI store lands.
 - [ ] Native messaging host registration through the registry, Windows shell behaviour and zip
   packaging.
 - [ ] Windows jobs in CI and the release workflow, and the Windows-only integration suite behind
