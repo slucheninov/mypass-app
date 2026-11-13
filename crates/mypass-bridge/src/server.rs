@@ -298,7 +298,10 @@ fn serve(mut stream: TcpStream, shared: &Shared, accepted_at: Instant) {
         return;
     }
     let _ = stream.set_nodelay(true);
-    let deadline = accepted_at + shared.cfg.first_frame_deadline;
+    // An overflowing deadline closes the connection at once instead of panicking.
+    let Some(deadline) = accepted_at.checked_add(shared.cfg.first_frame_deadline) else {
+        return;
+    };
     let mut reader = FrameReader::new(shared.cfg.max_frame);
     let mut state = State::New;
     // Authenticated connections: when the currently half-received frame began.

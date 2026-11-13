@@ -93,9 +93,20 @@ fn list(token: &str) -> String {
     format!(r#"{{"type":"searchEntries","token":"{token}","query":"x"}}"#)
 }
 
+/// True only for a real close: end of stream, or a reset or abort. A read timeout (the connection
+/// is still open) or any other error is a failure.
 fn eof(c: &mut TcpStream) -> bool {
     let mut b = [0u8; 1];
-    matches!(c.read(&mut b), Ok(0) | Err(_))
+    match c.read(&mut b) {
+        Ok(0) => true,
+        Ok(_) => false,
+        Err(e) => matches!(
+            e.kind(),
+            std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::BrokenPipe
+        ),
+    }
 }
 
 fn wait_until(mut f: impl FnMut() -> bool) {
@@ -210,8 +221,7 @@ fn seventeenth_connection_is_closed_unread() {
     let held: Vec<TcpStream> = (0..16).map(|_| connect(&s)).collect();
     wait_until(|| s.active_connections() == 16);
     let mut extra = connect(&s);
-    let mut b = [0u8; 1];
-    assert!(matches!(extra.read(&mut b), Ok(0) | Err(_)));
+    assert!(eof(&mut extra));
     assert_eq!(s.active_connections(), 16);
     drop(held);
     wait_until(|| s.active_connections() == 0);
