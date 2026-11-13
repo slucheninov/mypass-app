@@ -586,8 +586,22 @@ mod tests {
     /// behind the fake port. The loop keeps running after a prevented exit, so its thread is
     /// left to die with the test process.
     fn drive_exit_requested(world: &World, answer: bool, dirty: bool) -> mpsc::Receiver<String> {
+        drive_exit_requested_with_app(world, answer, dirty).0
+    }
+
+    type SharedApp = Arc<std::sync::Mutex<Option<tauri::AppHandle<tauri::test::MockRuntime>>>>;
+
+    /// [`drive_exit_requested`] that also hands back the app handle once it exists, so a test can
+    /// raise a second `ExitRequested`.
+    fn drive_exit_requested_with_app(
+        world: &World,
+        answer: bool,
+        dirty: bool,
+    ) -> (mpsc::Receiver<String>, SharedApp) {
         let (tx, rx) = mpsc::channel();
         let core = Arc::new(world.core.clone());
+        let shared: SharedApp = Arc::new(std::sync::Mutex::new(None));
+        let thread_handle = shared.clone();
         std::thread::spawn(move || {
             let app = mock_builder()
                 .build(mock_context(noop_assets()))
@@ -597,11 +611,11 @@ mod tests {
             let flag = EditorDirty::default();
             flag.set(dirty);
             app.manage(flag);
-            let handle = Arc::new(std::sync::Mutex::new(Some(app.handle().clone())));
+            *thread_handle.lock().expect("handle lock") = Some(app.handle().clone());
             app.manage::<Arc<dyn QuitPort>>(Arc::new(FakePort {
                 answer,
                 calls: tx,
-                app: handle,
+                app: thread_handle,
             }));
             WebviewWindowBuilder::new(&app, MAIN_WINDOW, WebviewUrl::App("index.html".into()))
                 .build()
@@ -617,7 +631,7 @@ mod tests {
                 on_run_event(app, &event);
             });
         });
-        rx
+        (rx, shared)
     }
 
     fn next(rx: &mpsc::Receiver<String>) -> String {
@@ -670,11 +684,26 @@ mod tests {
     fn exit_requested_smoke_dirty_editor_and_cancel_stays_untouched_and_shows_the_window() {
         let w = open_world();
         w.login("Saved by the final flush");
-        let rx = drive_exit_requested(&w, false, true);
+        let (rx, app) = drive_exit_requested_with_app(&w, false, true);
         assert_eq!(next(&rx), "discard?");
         assert_eq!(next(&rx), "show main");
         // Nothing else happened: no exit, and the session was never closed.
         assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
+        assert!(!w.core.is_quitting());
+        // The gate is open again: a second quit attempt starts the flow and asks again.
+        let handle = app
+            .lock()
+            .expect("handle lock")
+            .clone()
+            .expect("the app handle is set");
+        // The mock runtime cannot `exit`; closing the last window again raises `ExitRequested` again.
+        let window =
+            WebviewWindowBuilder::new(&handle, "second", WebviewUrl::App("index.html".into()))
+                .build()
+                .expect("the second window builds");
+        window.as_ref().window().close().expect("close is queued");
+        assert_eq!(next(&rx), "discard?");
+        assert_eq!(next(&rx), "show main");
         assert!(!w.core.is_quitting());
     }
 

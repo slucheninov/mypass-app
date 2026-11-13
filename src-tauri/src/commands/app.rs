@@ -102,9 +102,20 @@ pub fn app_quit(app: AppHandle) -> Result<(), ApiError> {
 /// discarding them. Advisory: the flag only decides whether the prompt shows.
 #[tauri::command]
 #[specta::specta]
-pub fn app_set_editor_dirty(dirty: bool, flag: State<'_, EditorDirty>) -> Result<(), ApiError> {
-    flag.set(dirty);
+pub fn app_set_editor_dirty(
+    dirty: bool,
+    webview: tauri::Webview,
+    flag: State<'_, EditorDirty>,
+) -> Result<(), ApiError> {
+    if accepts_editor_report(webview.label()) {
+        flag.set(dirty);
+    }
     Ok(())
+}
+
+/// Only the main window has an editor; reports from the tray panel and settings are ignored.
+pub fn accepts_editor_report(label: &str) -> bool {
+    label == MAIN_WINDOW
 }
 
 /// Reveals the vault's backup folder in the file manager. Called from Rust, so the webview needs
@@ -145,6 +156,13 @@ mod tests {
     use super::*;
     use crate::shell::FakeWindowOps;
     use crate::testing::{open_world, world};
+
+    #[test]
+    fn only_the_main_window_may_report_the_editor_state() {
+        assert!(accepts_editor_report(MAIN_WINDOW));
+        assert!(!accepts_editor_report(SETTINGS_WINDOW));
+        assert!(!accepts_editor_report("tray-panel"));
+    }
 
     #[test]
     fn app_info_reports_the_app_version() {

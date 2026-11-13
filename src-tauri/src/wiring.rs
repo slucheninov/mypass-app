@@ -119,11 +119,14 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let grants = FileGrants::default();
     let reset = GrantsReset::new(grants.clone());
     let refresher = tray_refresher(&handle, core.clone());
+    let editor_dirty = crate::state::EditorDirty::default();
+    let observer_dirty = editor_dirty.clone();
     let observer_handle = handle.clone();
     let observer_refresher = refresher.clone();
     core.session
         .add_observer(Arc::new(move |event: &SessionEvent| {
             reset.on_event(event);
+            observer_dirty.on_event(event);
             emit(&observer_handle, outgoing(event));
             match tray_reaction(event) {
                 TrayReaction::HideNow => {
@@ -146,7 +149,7 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     ));
     app.manage(conflicts);
     app.manage(ExitGate::default());
-    app.manage(crate::state::EditorDirty::default());
+    app.manage(editor_dirty);
     app.manage::<Arc<dyn QuitPort>>(Arc::new(TauriQuitPort(handle.clone())));
     app.manage(AppState(core.clone()));
     app.manage(ShellState {
