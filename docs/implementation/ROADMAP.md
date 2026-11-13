@@ -69,6 +69,11 @@ Last updated: 2026-11-13
 - [ ] `mypass-bridge`: the browser protocol, loopback server, per-launch token and pairing.
 - [ ] `mypass-host`: the native messaging host, with Keychain secret sharing between app and host and
   self-registration of native messaging manifests for all Chromium browsers.
+- [ ] Host-shared Keychain secret: trust only the host binary inside the signed app bundle,
+  verified against a code requirement pinned to the team (`anchor apple generic and certificate
+  leaf[subject.OU] = "W645B93PPQ"` plus the host identifier) before building the access list; never
+  trust a path under Application Support. Delete-then-add on write; a crash in between only loses
+  the per-launch endpoint.
 - [ ] The extension moved into this repository as `extension/` with its Node suites running in CI.
 - [ ] Browser settings pane with pairing and save proposals.
 
@@ -84,10 +89,6 @@ Last updated: 2026-11-13
 - [ ] iCloud Drive as a primary vault location with conflict merging and migration.
 - [ ] "Also sync to folder" secondary destination (`mypass-sync`).
 - [ ] Touch ID and device-password unlock, launch at login, and the daily update check.
-- [ ] Keychain secret shared with the native host: `shared_secrets` already trusts the app and
-  `AppPaths::host_exe` through a `SecAccess` list, but a trusted application matches by code
-  signature, so with the stable team `W645B93PPQ` signing both binaries, verify that the host reads
-  the item without a prompt (the ignored tests only cover the test binary trusting itself).
 - [ ] Signed macOS packaging with a stable team (DMG, extension zip, checksums, tag-driven release
   workflow).
 - [ ] Manual checklist against a copy of the owner's vault and the cutover checklist from the old

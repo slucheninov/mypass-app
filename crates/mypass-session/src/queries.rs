@@ -912,7 +912,11 @@ mod tests {
 
     #[test]
     fn autofill_scope_matches_only_title_username_and_urls() {
-        let s = sample_database();
+        let mut s = sample_database();
+        let a = s.a;
+        s.db.find_entry_mut(a)
+            .unwrap()
+            .set_field("Notes", "plain keepass note", true);
         let hits = |text: &str| {
             ids(&list_entries(
                 &s.db,
@@ -928,6 +932,7 @@ mod tests {
         assert_eq!(hits("gh.example"), [simple(s.a)]);
         // Notes, group name, address fields and attachment names do not.
         assert!(hits("secret note").is_empty());
+        assert!(hits("plain keepass note").is_empty());
         assert!(hits("docs").is_empty());
         assert!(hits("khreshchatyk").is_empty());
         assert!(hits("a.txt").is_empty());

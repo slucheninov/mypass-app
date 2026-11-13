@@ -2,15 +2,13 @@
 
 //!
 //! Every stub is a one-line `Unsupported` body, so a later stage replaces a body, never a
-//! signature. macOS uses the device unlock, host registrar and launch-at-login stubs
+//! signature. macOS uses the host-shared secret store, device unlock, host registrar and launch-at-login stubs
 //! until stages 3 and 5; Windows uses all of them until stage 6.
 
-#[cfg(any(not(target_os = "macos"), test))]
-use crate::SecretStore;
 use crate::{
     BrowserRegistration, DeviceUnlock, DeviceUnlockAvailability, DeviceUnlockMode,
     HostRegistrationReport, LaunchAtLogin, LoginItemStatus, NativeHostRegistrar, PlatformError,
-    PlatformResult,
+    PlatformResult, SecretStore,
 };
 use secrecy::SecretString;
 use std::path::Path;
@@ -34,12 +32,10 @@ impl SystemEvents for UnsupportedSystemEvents {
     }
 }
 
-/// No secret store on this platform yet (Windows stage 6; macOS uses the Keychain).
+/// No secret store on this platform yet (macOS: the host-shared store, stage 3; Windows: stage 6).
 #[derive(Debug, Default)]
-#[cfg(any(not(target_os = "macos"), test))]
 pub(crate) struct UnsupportedSecretStore;
 
-#[cfg(any(not(target_os = "macos"), test))]
 impl SecretStore for UnsupportedSecretStore {
     fn set(&self, _: &str, _: &str, _: &[u8]) -> PlatformResult<()> {
         Err(PlatformError::Unsupported("secret store"))
