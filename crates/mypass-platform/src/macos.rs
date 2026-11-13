@@ -554,10 +554,12 @@ mod tests {
     #[test]
     fn keyboard_layout_off_main_without_a_run_loop_is_unknown_not_a_deadlock() {
         // libtest never runs a test on the main thread and nothing pumps the main queue here, so
-        // the hop times out and reports "unknown".
+        // the hop times out and reports "unknown". A deadlock never returns, so the bound is a
+        // generous ceiling far above `MAIN_THREAD_WAIT`: a tight multiple of it flaked whenever a
+        // loaded machine delayed the waiting thread's wake-up.
         let started = std::time::Instant::now();
         assert_eq!(MacKeyboardLayout.current(), Ok(None));
-        assert!(started.elapsed() < MAIN_THREAD_WAIT * 4);
+        assert!(started.elapsed() < Duration::from_secs(30));
     }
 
     #[test]

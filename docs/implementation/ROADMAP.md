@@ -58,8 +58,6 @@ Last updated: 2026-11-13
 - [ ] Reserved hotkeys are refused in the UI only; move the check into the backend hotkey parser.
 - [ ] CSV import error causes are matched by their English message; add separate error codes
   (`csvMissingColumn`, `csvNotUtf8`, `csvEmpty`) instead.
-- [ ] Flaky test `keyboard_layout_off_main_without_a_run_loop_is_unknown_not_a_deadlock` in
-  `mypass-platform` (timing; failed once in two full runs): make it deterministic.
 - [ ] Prune unused legacy catalog keys (418 at the time of writing) once stage 3 has ported its screens.
 - [ ] npm dependencies are bumped by hand (exact pins); add an npm ecosystem with grouping to
   Dependabot, with the same cooldown as cargo.
