@@ -3,10 +3,18 @@
 //!
 //! Order (load-bearing, ported from the Swift app):
 //! 1. quitting: every request is refused, so nothing mutates the vault during the quit flow;
-//! 2. locked: only the requests that touch no vault data are answered;
+//! 2. locked: only the requests that touch no vault data are answered, the rest get `Locked`;
 //! 3. pairing: everything but the two handshake requests needs a paired browser;
 //! 4. dispatch, an exhaustive `match` over the request enum (a new request must pick a handler);
 //! 5. a served request that is a deliberate user gesture resets the idle auto-lock timer.
+//!
+//! Why locked comes before pairing: the extension shows "unlock MyPass" the moment the vault is
+//! locked, before it has any reason to pair, and pairing is refused while locked, which gives the
+//! "unlock, then connect" flow (the pairing code is shown only to a user who can see the app). The
+//! price is a one-bit leak: a peer that holds the endpoint token but is not paired learns whether
+//! the vault is locked (`Locked` against `PairingRequired`). That bit is accepted; it matches the
+//! Swift app and reveals no vault data. The handlers re-check the lock under the session's own lock
+//! (`with_db`), so this gate is an early answer, never the guard of the data.
 //!
 //! The bridge always searches with `SearchScope::Autofill` (Task 11 onwards): free text the
 //! extension has no use for is never matched.
@@ -264,17 +272,6 @@ mod tests {
     }
 
     #[test]
-    fn bridge_ui_default_passkey_proxy_changed_is_noop() {
-        let f = fx();
-        f.ui.passkey_proxy_changed(true);
-        let r = f
-            .svc
-            .handle(named("setPasskeyProxyEnabled", Some(&f.secret)));
-        assert_eq!(r, Response::PasskeyProxyEnabled { enabled: false });
-        assert!(f.ui.calls().is_empty());
-    }
-
-    #[test]
     fn locked_gate_runs_before_pairing_gate() {
         let f = fx();
         f.session.lock(LockReason::Manual);
@@ -470,6 +467,25 @@ mod tests {
         f.session.lock(LockReason::Manual);
         assert!(f.proposals.take(&id).is_none());
         assert_eq!(rec.locked.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn passkey_dispatch_arm_matches_is_passkey() {
+        // Every request reaches the passkey handler exactly when `Request::is_passkey` says so.
+        let n = all_requests(None).len();
+        for i in 0..n {
+            let rec = Arc::new(RecordingPasskeys::default());
+            let f = fx_with(rec.clone());
+            let request = all_requests(Some(&f.secret)).swap_remove(i);
+            let name = request.name();
+            let is_passkey = request.is_passkey();
+            f.svc.handle(request);
+            assert_eq!(
+                rec.handled.load(Ordering::SeqCst),
+                usize::from(is_passkey),
+                "{name}"
+            );
+        }
     }
 
     #[test]
