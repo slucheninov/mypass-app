@@ -70,6 +70,8 @@ Last updated: 2026-11-13
   manifests for all Chromium browsers.
 - [ ] The extension moved into this repository as `extension/` with its Node suites running in CI.
 - [ ] Browser settings pane with pairing and save proposals.
+- [ ] Before any `connectNative` use: host handshake lazily on the first frame, reconnect with a fresh
+  handshake, never resend a frame already written.
 
 ## Stage 4 passkeys
 

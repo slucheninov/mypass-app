@@ -27,7 +27,7 @@ pub fn encode_frame(payload: &[u8]) -> Result<Vec<u8>, FrameError> {
 
 /// Like [`encode_frame`] with a caller-chosen cap, for a hop whose limit is not Chromium's (the
 /// host's request frames to the app).
-pub fn encode_frame_capped(payload: &[u8], max: usize) -> Result<Vec<u8>, FrameError> {
+pub(crate) fn encode_frame_capped(payload: &[u8], max: usize) -> Result<Vec<u8>, FrameError> {
     let too_large = || FrameError::TooLarge {
         claimed: payload.len(),
         max,

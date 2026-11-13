@@ -9,8 +9,11 @@
 //! extension sent) and is forwarded; a reader thread copies response frames to stdout.
 //!
 //! Output discipline: stdout carries frames only, nothing here prints, and no diagnostic names the
-//! token, a request or a response. Buffers that hold requests or responses are wiped on drop
-//! (`Zeroizing`); the serde value tree built while injecting the token is the one place that is not.
+//! token, a request or a response. The buffers that hold whole frames are wiped on drop
+//! (`Zeroizing`). Accepted residual: the serde value tree built while injecting the token, the
+//! reallocation copies of `read_to_end` and `to_vec`, and the token copy inside that tree are not
+//! wiped. The host lives for one message, and the endpoint decision (R1) already accepts that code
+//! running as the same user can read the token.
 
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpStream};
@@ -170,10 +173,10 @@ fn handshake(stream: &mut TcpStream, token: &str, timeout: Duration) -> bool {
     {
         return false;
     }
-    let mut reader = DeadlineReader {
-        stream,
-        deadline: Instant::now() + timeout,
+    let Some(deadline) = Instant::now().checked_add(timeout) else {
+        return false;
     };
+    let mut reader = DeadlineReader { stream, deadline };
     let Ok(Some(reply)) = read_frame(&mut reader, HANDSHAKE_MAX_FRAME) else {
         return false;
     };
@@ -211,12 +214,12 @@ fn pump<W: Write + Send + 'static>(
     let unexpected = {
         let mut st = shared.lock();
         st.closed = true;
-        !st.closing
+        // Only a request in flight is owed an answer; an idle close is not announced.
+        !st.closing && st.count > 0
     };
     shared.changed.notify_all();
     if unexpected {
-        // Tell the extension, so it reconnects; the app may have quit or the server may have
-        // closed an idle connection.
+        // Tell the extension its request will not be answered; the app may have quit.
         write_out(out, &error_frame(APP_NOT_RUNNING));
     }
 }
@@ -230,7 +233,9 @@ fn teardown(stream: &TcpStream, shared: &Shared, pump: JoinHandle<()>) {
 
 /// Waits until every request has its response, the app closed, or `limit` ran out.
 fn drain(shared: &Shared, limit: Duration) {
-    let deadline = Instant::now() + limit;
+    let Some(deadline) = Instant::now().checked_add(limit) else {
+        return;
+    };
     let mut st = shared.lock();
     while st.count > 0 && !st.closed {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -248,6 +253,11 @@ fn drain(shared: &Shared, limit: Duration) {
 /// Runs the relay until stdin closes, the framing breaks, or the app goes away.
 ///
 /// `endpoint` of `None` (no record, or one the store refused) answers `app_not_running` at once.
+///
+/// One-shot assumption: the handshake is eager (it runs before the first stdin frame) and the
+/// connection is never re-established. The server closes a connection that sends no authenticated
+/// request within its first-frame deadline (10 s by default), so this suits a host that serves one
+/// message (`sendNativeMessage`), not a long-lived `connectNative` port.
 pub fn run_relay<R: Read, W: Write + Send + 'static>(
     mut stdin: R,
     stdout: W,
@@ -282,7 +292,13 @@ pub fn run_relay<R: Read, W: Write + Send + 'static>(
     });
     let pump_handle = {
         let (out, shared, max) = (Arc::clone(&out), Arc::clone(&shared), opts.max_frame);
-        thread::spawn(move || pump(read_half, &out, &shared, max))
+        thread::Builder::new()
+            .name("relay-pump".into())
+            .spawn(move || pump(read_half, &out, &shared, max))
+    };
+    let Ok(pump_handle) = pump_handle else {
+        let _ = stream.shutdown(Shutdown::Both);
+        return not_running(&out);
     };
 
     let outcome = loop {

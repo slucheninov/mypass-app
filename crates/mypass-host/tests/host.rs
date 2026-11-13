@@ -49,6 +49,22 @@ fn run(root: &Path, input: &[u8]) -> (bool, Vec<u8>, Vec<u8>) {
     (out.status.success(), out.stdout, out.stderr)
 }
 
+/// A loopback listener standing in for the app, so a record that points at it would be dialled if
+/// the store accepted it. Non-blocking: `assert_no_connection` polls it after the host exited.
+fn live_listener() -> TcpListener {
+    let l = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    l.set_nonblocking(true).unwrap();
+    l
+}
+
+fn assert_no_connection(l: &TcpListener) {
+    match l.accept() {
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+        Ok(_) => panic!("the host connected to a record the store must have refused"),
+        Err(e) => panic!("accept failed: {e}"),
+    }
+}
+
 fn assert_not_running(root: &Path) {
     let (ok, stdout, stderr) = run(root, &frame_of(r#"{"type":"getStatus"}"#));
     assert!(ok, "exit code must be 0");
@@ -75,27 +91,32 @@ fn missing_record_is_app_not_running_with_exit_zero() {
 }
 
 #[test]
-fn malformed_record_is_app_not_running() {
+fn malformed_record_pointing_at_a_live_listener_is_not_dialled() {
     let tmp = tempfile::tempdir().unwrap();
-    let p = paths(tmp.path());
-    let store = shared_store(&p);
+    let live = live_listener();
+    let port = live.local_addr().unwrap().port();
+    let store = shared_store(&paths(tmp.path()));
+    // Valid JSON and a live port, but an empty token: the record is invalid.
+    let record = format!(r#"{{"port":{port},"token":"","pid":1,"startedAt":1}}"#);
     mypass_platform::SecretStore::set(
         &store,
         mypass_bridge::endpoint::ENDPOINT_SERVICE,
         mypass_bridge::endpoint::ENDPOINT_ACCOUNT,
-        b"{not json",
+        record.as_bytes(),
     )
     .unwrap();
     assert_not_running(tmp.path());
+    assert_no_connection(&live);
 }
 
 #[cfg(unix)]
 #[test]
-fn wrong_mode_record_is_app_not_running() {
+fn wrong_mode_record_pointing_at_a_live_listener_is_not_dialled() {
     use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::tempdir().unwrap();
+    let live = live_listener();
     let ep = Endpoint {
-        port: 9,
+        port: live.local_addr().unwrap().port(),
         token: generate_token(),
         pid: 1,
         started_at: 1,
@@ -107,6 +128,7 @@ fn wrong_mode_record_is_app_not_running() {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
     }
     assert_not_running(tmp.path());
+    assert_no_connection(&live);
 }
 
 #[test]
