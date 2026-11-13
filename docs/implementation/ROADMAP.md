@@ -41,8 +41,6 @@ Last updated: 2026-11-13
   custom dialog would let Cancel be the default.
 - [ ] Manual: confirm that Cmd+Q and logout/restart raise `ExitRequested` on macOS, and session end
   on Windows (checklist in `RUN.md`).
-- [ ] Before Stage 3: the browser-bridge search predicate still matches notes and address fields;
-  change its boolean to a scope enum so the bridge searches only what autofill needs.
 - [ ] `secondaryFolder` in settings is a string from the webview; whatever later reads it (Stage 5
   sync) must treat it as untrusted.
 - [ ] Tray panel position uses the panel window's scale factor; use the scale factor of the monitor

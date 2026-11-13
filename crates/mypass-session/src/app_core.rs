@@ -473,8 +473,8 @@ impl AppCore {
     }
 
     pub fn entry_list(&self, query: EntryQuery) -> Result<Vec<EntrySummary>, ApiError> {
-        // In-app search also matches attachment names; the bridge passes `false`.
-        self.read(|db| Ok(queries::list_entries(db, &query, true)))
+        // In-app search covers everything visible; the bridge uses `SearchScope::Autofill`.
+        self.read(|db| Ok(queries::list_entries(db, &query, queries::SearchScope::App)))
     }
 
     pub fn entry_recent(&self, limit: u32) -> Result<Vec<EntrySummary>, ApiError> {

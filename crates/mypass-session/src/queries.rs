@@ -188,28 +188,35 @@ fn contains_ci(haystack: &str, needle_lower: &str) -> bool {
     haystack.to_lowercase().contains(needle_lower)
 }
 
-/// The one search predicate: a case-insensitive substring over what the user can see in the
-/// detail pane. Searched: title, username, every URL (the `URL` field, the `KP2A_URL` array and
-/// any `KP2A_URL*` field), the KeePass notes, `MyPass.NotesBody`, the group name, the 14 address
-/// fields of ADDRESS entries only, and attachment names when `include_attachment_names`. Never
-/// searched: passwords, TOTP secrets, card number, CVV, protected custom values. The bridge
-/// passes `false` so a query cannot probe file names it cannot otherwise see.
-pub fn entry_matches(
-    entry: &Entry,
-    group_name: &str,
-    query: &str,
-    include_attachment_names: bool,
-) -> bool {
+/// Which fields a search looks at. Never searched in any scope: passwords, TOTP secrets, card
+/// number, CVV, protected custom values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchScope {
+    /// The in-app search: everything the user can see in the detail pane. Title, username, every
+    /// URL, the KeePass notes, `MyPass.NotesBody`, the group name, the 14 address fields of
+    /// ADDRESS entries only, and attachment names.
+    App,
+    /// The stage 3 browser bridge (`searchEntries`). Only what picking a login to autofill needs:
+    /// title, username and every URL (the `URL` field, the `KP2A_URL` array and any `KP2A_URL*`
+    /// field). Notes, the group name, address fields and attachment names are never matched, so a
+    /// page-adjacent query cannot probe free text or file names the extension has no use for.
+    Autofill,
+}
+
+/// The one search predicate: a case-insensitive substring, over the fields `scope` allows.
+pub fn entry_matches(entry: &Entry, group_name: &str, query: &str, scope: SearchScope) -> bool {
     if query.is_empty() {
         return true;
     }
     let q = query.to_lowercase();
     let hit = |s: &str| contains_ci(s, &q);
+    let app = scope == SearchScope::App;
     if hit(entry.title())
         || hit(entry.field("UserName").unwrap_or(""))
-        || hit(entry.field("Notes").unwrap_or(""))
-        || hit(entry.field(NOTES_BODY).unwrap_or(""))
-        || hit(group_name)
+        || (app
+            && (hit(entry.field("Notes").unwrap_or(""))
+                || hit(entry.field(NOTES_BODY).unwrap_or(""))
+                || hit(group_name)))
     {
         return true;
     }
@@ -233,6 +240,9 @@ pub fn entry_matches(
     {
         return true;
     }
+    if !app {
+        return false;
+    }
     if entry.entry_type() == EntryType::Address
         && entry.fields.iter().any(|f| {
             f.key
@@ -243,7 +253,7 @@ pub fn entry_matches(
     {
         return true;
     }
-    include_attachment_names && entry.attachments.iter().any(|a| hit(&a.name))
+    entry.attachments.iter().any(|a| hit(&a.name))
 }
 
 fn address_of(entry: &Entry) -> AddressDto {
@@ -340,12 +350,8 @@ fn summary(item: &Item<'_>, audit: &Audit) -> EntrySummary {
 ///
 /// A category scope searches inside the category; a group scope with a non-empty search searches
 /// the whole vault (like the old app), and never the bin unless the group is in the bin.
-/// `include_attachment_names` is `true` for the in-app command and `false` for the stage 3 bridge.
-pub fn list_entries(
-    db: &Database,
-    q: &EntryQuery,
-    include_attachment_names: bool,
-) -> Vec<EntrySummary> {
+/// `scope` is `SearchScope::App` for the in-app command and `SearchScope::Autofill` for the stage 3 bridge.
+pub fn list_entries(db: &Database, q: &EntryQuery, scope: SearchScope) -> Vec<EntrySummary> {
     let walked = walk(db);
     let audit = Audit::new(&walked.items);
     let searching = !q.search.is_empty();
@@ -380,12 +386,7 @@ pub fn list_entries(
         }
     };
     for item in selected {
-        if entry_matches(
-            item.entry,
-            item.group_name,
-            &q.search,
-            include_attachment_names,
-        ) {
+        if entry_matches(item.entry, item.group_name, &q.search, scope) {
             out.push(summary(item, &audit));
         }
     }
@@ -731,7 +732,11 @@ mod tests {
     }
 
     fn search_ids(s: &Sample, text: &str) -> Vec<String> {
-        ids(&list_entries(&s.db, &cat(Category::All, text), true))
+        ids(&list_entries(
+            &s.db,
+            &cat(Category::All, text),
+            SearchScope::App,
+        ))
     }
 
     #[test]
@@ -758,8 +763,8 @@ mod tests {
         let root = s.db.root_id();
         s.db.meta.recycle_bin_uuid = Some(root);
         assert_eq!(bin_id(&s.db), None);
-        assert!(list_entries(&s.db, &cat(Category::Deleted, ""), true).is_empty());
-        let all = list_entries(&s.db, &cat(Category::All, ""), true);
+        assert!(list_entries(&s.db, &cat(Category::Deleted, ""), SearchScope::App).is_empty());
+        let all = list_entries(&s.db, &cat(Category::All, ""), SearchScope::App);
         assert!(all.iter().all(|e| !e.in_recycle_bin));
         assert!(ids(&all).contains(&simple(s.a)));
         assert!(!entry_detail(&s.db, s.a).unwrap().in_recycle_bin);
@@ -787,7 +792,7 @@ mod tests {
     #[test]
     fn deleted_lists_bin_only() {
         let s = sample_database();
-        let list = list_entries(&s.db, &cat(Category::Deleted, ""), true);
+        let list = list_entries(&s.db, &cat(Category::Deleted, ""), SearchScope::App);
         assert_eq!(ids(&list), [simple(s.g)]);
         assert!(list[0].in_recycle_bin);
     }
@@ -802,7 +807,7 @@ mod tests {
             Category::Security,
             Category::Codes,
         ] {
-            assert!(!ids(&list_entries(&s.db, &cat(c, ""), true)).contains(&h));
+            assert!(!ids(&list_entries(&s.db, &cat(c, ""), SearchScope::App)).contains(&h));
         }
         assert!(!search_ids(&s, "Generated").contains(&h));
         let q = EntryQuery {
@@ -812,7 +817,7 @@ mod tests {
             search: String::new(),
             sort: SortKey::Title,
         };
-        assert!(list_entries(&s.db, &q, true).is_empty());
+        assert!(list_entries(&s.db, &q, SearchScope::App).is_empty());
         assert!(!ids(&recent_entries(&s.db, 50)).contains(&h));
         // Recognised by the marker as well, whatever the UUID.
         let mut db = fast_database("m");
@@ -822,7 +827,7 @@ mod tests {
         let gid = grp.uuid;
         db.add_group(root, grp, NOW).unwrap();
         db.add_entry(gid, entry("x"), NOW).unwrap();
-        assert!(list_entries(&db, &cat(Category::All, ""), true).is_empty());
+        assert!(list_entries(&db, &cat(Category::All, ""), SearchScope::App).is_empty());
     }
 
     #[test]
@@ -853,7 +858,12 @@ mod tests {
         assert_eq!(search_ids(&s, "gh.example"), [simple(s.a)]);
         let mut e = entry("Field style");
         e.set_field("KP2A_URL_1", "https://third.example", false);
-        assert!(entry_matches(&e, "", "third.example", false));
+        assert!(entry_matches(
+            &e,
+            "",
+            "third.example",
+            SearchScope::Autofill
+        ));
     }
 
     #[test]
@@ -876,8 +886,51 @@ mod tests {
     fn app_search_finds_attachment_names_bridge_does_not() {
         let s = sample_database();
         let q = cat(Category::All, "a.txt");
-        assert_eq!(ids(&list_entries(&s.db, &q, true)), [simple(s.a)]);
-        assert!(list_entries(&s.db, &q, false).is_empty());
+        assert_eq!(
+            ids(&list_entries(&s.db, &q, SearchScope::App)),
+            [simple(s.a)]
+        );
+        assert!(list_entries(&s.db, &q, SearchScope::Autofill).is_empty());
+    }
+
+    #[test]
+    fn app_scope_matches_notes_group_and_address_fields() {
+        let s = sample_database();
+        let hits = |text: &str| {
+            ids(&list_entries(
+                &s.db,
+                &cat(Category::All, text),
+                SearchScope::App,
+            ))
+        };
+        assert_eq!(hits("secret note"), [simple(s.e)]);
+        assert_eq!(hits("khreshchatyk"), [simple(s.c)]);
+        assert_eq!(hits("docs"), [simple(s.e)]);
+        assert_eq!(hits("a.txt"), [simple(s.a)]);
+        assert_eq!(hits("github.com"), [simple(s.a)]);
+    }
+
+    #[test]
+    fn autofill_scope_matches_only_title_username_and_urls() {
+        let s = sample_database();
+        let hits = |text: &str| {
+            ids(&list_entries(
+                &s.db,
+                &cat(Category::All, text),
+                SearchScope::Autofill,
+            ))
+        };
+        // Title, username, URL and additional URLs still match.
+        assert_eq!(hits("GITHUB"), [simple(s.a)]);
+        // `c` also matches "ALICE" in the app scope, through a field autofill does not read.
+        assert_eq!(hits("ALICE"), [simple(s.a)]);
+        assert_eq!(hits("github.com"), [simple(s.a)]);
+        assert_eq!(hits("gh.example"), [simple(s.a)]);
+        // Notes, group name, address fields and attachment names do not.
+        assert!(hits("secret note").is_empty());
+        assert!(hits("docs").is_empty());
+        assert!(hits("khreshchatyk").is_empty());
+        assert!(hits("a.txt").is_empty());
     }
 
     #[test]
@@ -898,12 +951,14 @@ mod tests {
             ids(&list_entries(
                 &s.db,
                 &cat(Category::Deleted, "old login"),
-                true
+                SearchScope::App
             )),
             [simple(s.g)]
         );
         assert!(search_ids(&s, "old login").is_empty());
-        assert!(list_entries(&s.db, &cat(Category::Deleted, "github"), true).is_empty());
+        assert!(
+            list_entries(&s.db, &cat(Category::Deleted, "github"), SearchScope::App).is_empty()
+        );
     }
 
     #[test]
@@ -917,22 +972,30 @@ mod tests {
             sort: SortKey::Title,
         };
         assert_eq!(
-            titles(&list_entries(&s.db, &group(s.personal, ""), true)),
+            titles(&list_entries(
+                &s.db,
+                &group(s.personal, ""),
+                SearchScope::App
+            )),
             ["Home Address", "Journal", "Visa Card"]
         );
         assert_eq!(
-            titles(&list_entries(&s.db, &group(s.docs, ""), true)),
+            titles(&list_entries(&s.db, &group(s.docs, ""), SearchScope::App)),
             ["Journal"]
         );
         // Searching inside a group searches the whole vault, like the old app.
         assert_eq!(
-            ids(&list_entries(&s.db, &group(s.docs, "github"), true)),
+            ids(&list_entries(
+                &s.db,
+                &group(s.docs, "github"),
+                SearchScope::App
+            )),
             [simple(s.a)]
         );
         // The bin group lists its entries; a bad id lists nothing.
         let bin = s.db.meta.recycle_bin_uuid.unwrap();
         assert_eq!(
-            ids(&list_entries(&s.db, &group(bin, ""), true)),
+            ids(&list_entries(&s.db, &group(bin, ""), SearchScope::App)),
             [simple(s.g)]
         );
         let bad = EntryQuery {
@@ -942,7 +1005,7 @@ mod tests {
             search: String::new(),
             sort: SortKey::Title,
         };
-        assert!(list_entries(&s.db, &bad, true).is_empty());
+        assert!(list_entries(&s.db, &bad, SearchScope::App).is_empty());
     }
 
     #[test]
@@ -961,9 +1024,12 @@ mod tests {
             db.find_entry_mut(*id).unwrap().modified = Timestamp(modified);
         }
         let mut q = cat(Category::All, "");
-        assert_eq!(titles(&list_entries(&db, &q, true)), ["A", "b", "c"]);
+        assert_eq!(
+            titles(&list_entries(&db, &q, SearchScope::App)),
+            ["A", "b", "c"]
+        );
         q.sort = SortKey::Modified;
-        let list = list_entries(&db, &q, true);
+        let list = list_entries(&db, &q, SearchScope::App);
         assert_eq!(titles(&list), ["A", "c", "b"]);
         assert_eq!(list[0].modified, 300_000.0);
     }
@@ -971,7 +1037,7 @@ mod tests {
     #[test]
     fn subtitle_rules() {
         let s = sample_database();
-        let list = list_entries(&s.db, &cat(Category::All, ""), true);
+        let list = list_entries(&s.db, &cat(Category::All, ""), SearchScope::App);
         let sub = |id: Uuid| {
             list.iter()
                 .find(|x| x.id == simple(id))
@@ -993,14 +1059,14 @@ mod tests {
             NOW,
         )
         .unwrap();
-        let l = list_entries(&db, &cat(Category::All, ""), true);
+        let l = list_entries(&db, &cat(Category::All, ""), SearchScope::App);
         assert_eq!(l[0].subtitle, "www.example.com");
     }
 
     #[test]
     fn summary_fields() {
         let s = sample_database();
-        let list = list_entries(&s.db, &cat(Category::All, ""), true);
+        let list = list_entries(&s.db, &cat(Category::All, ""), SearchScope::App);
         let a = list.iter().find(|x| x.id == simple(s.a)).unwrap();
         assert!(a.favorite && a.has_totp && !a.has_passkey);
         assert_eq!(a.attachment_count, 1);
@@ -1135,7 +1201,7 @@ mod tests {
         let empty = add(login("empty", "u", "", "https://e.test"));
         let insecure = add(login("insecure", "u", "Str0ng!Passw0rd#1", "http://x.test"));
         let fine = add(login("fine", "u", "Str0ng!Passw0rd#2", "https://f.test"));
-        let list = list_entries(&db, &cat(Category::All, ""), true);
+        let list = list_entries(&db, &cat(Category::All, ""), SearchScope::App);
         let flags = |id: Uuid| {
             list.iter()
                 .find(|x| x.id == simple(id))
@@ -1158,7 +1224,7 @@ mod tests {
             let root = db.root_id();
             db.add_entry(root, login("x", "u", pw, "https://x.test"), NOW)
                 .unwrap();
-            list_entries(&db, &cat(Category::All, ""), true)[0]
+            list_entries(&db, &cat(Category::All, ""), SearchScope::App)[0]
                 .flags
                 .contains(&SecurityFlag::Weak)
         };
@@ -1182,7 +1248,7 @@ mod tests {
             NOW,
         )
         .unwrap();
-        let list = list_entries(&db, &cat(Category::Security, ""), true);
+        let list = list_entries(&db, &cat(Category::Security, ""), SearchScope::App);
         assert_eq!(titles(&list), ["weak"]);
     }
 
@@ -1296,7 +1362,7 @@ mod tests {
             EntryTypeDto::Address
         );
         assert_eq!(
-            list_entries(&db, &cat(Category::All, ""), true)[0].subtitle,
+            list_entries(&db, &cat(Category::All, ""), SearchScope::App)[0].subtitle,
             "Other \u{b7} Ann Lee"
         );
         assert_eq!(e_type(&db, id), mypass_core::entry_ext::EntryType::Address);
