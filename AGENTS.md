@@ -225,8 +225,10 @@ change is done.
   a Rust call (session observer, platform sink, menu, tray, window or run-event callback). Tray
   icon and menus are built in Rust only (no `core:tray`/`core:menu` permission). Work for the main
   thread is posted with `run_on_main_thread` and never awaited; callbacks that would lock hand the
-  lock to the scheduler (`lock_via_scheduler`). The quit flow (`on_exit_requested`: `begin_quit`
-  first, then `flush_blocking(5 s)`, then `quit_decision`, Cancel re-opens the session) runs on a
+  lock to the scheduler (`lock_via_scheduler`). The quit flow (first, when the main window reported a dirty
+  editor through `app_set_editor_dirty`, the Quit / Cancel prompt `confirm_discard_edits`, where
+  Cancel changes nothing and shows the main window; then `on_exit_requested`: `begin_quit`, then
+  `flush_blocking(5 s)`, then `quit_decision`, Cancel re-opens the session) runs on a
   worker because it blocks on a dialog: `ExitRequested` is always prevented and a confirmed exit
   calls `exit` again through `ExitGate`. The effect runner is called off the main thread under the
   settings gate and never takes it.
