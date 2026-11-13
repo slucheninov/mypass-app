@@ -14,6 +14,10 @@ pub enum PlatformError {
     /// The OS call failed; the text is the OS error description.
     #[error("platform error: {0}")]
     Failed(String),
+    /// A secret-store item kept reappearing while it was written: another process is planting or
+    /// writing the same item. Carries no secret.
+    #[error("the secret store item was modified by another process")]
+    SecretStoreTampered,
     /// The user dismissed the device-unlock prompt.
     #[error("cancelled by the user")]
     Cancelled,

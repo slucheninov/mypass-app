@@ -24,10 +24,9 @@ Last updated: 2026-11-13
 
 - [ ] `VaultFile`: reject non-regular files (FIFO/device symlink targets) at open and cap the
   encoded vault read size, once stage 2 fixes a size policy.
-- [ ] `mypass-platform` macOS bodies that still return `Unsupported`: Keychain secret stores (the
-  unlock key and the secret shared with the native host), device unlock (Touch ID and device
-  password), the native messaging host registrar and launch at login. System events, the concealed
-  clipboard and the keyboard layout already ship.
+- [ ] `mypass-platform` macOS bodies that still return `Unsupported`: device unlock (Touch ID and
+  device password), the native messaging host registrar and launch at login. System events, the
+  concealed clipboard, the keyboard layout and the Keychain secret stores already ship.
 
 ## Stage 2a follow-ups
 
@@ -41,8 +40,6 @@ Last updated: 2026-11-13
   custom dialog would let Cancel be the default.
 - [ ] Manual: confirm that Cmd+Q and logout/restart raise `ExitRequested` on macOS, and session end
   on Windows (checklist in `RUN.md`).
-- [ ] Before Stage 3: the browser-bridge search predicate still matches notes and address fields;
-  change its boolean to a scope enum so the bridge searches only what autofill needs.
 - [ ] `secondaryFolder` in settings is a string from the webview; whatever later reads it (Stage 5
   sync) must treat it as untrusted.
 - [ ] Tray panel position uses the panel window's scale factor; use the scale factor of the monitor
@@ -72,6 +69,11 @@ Last updated: 2026-11-13
 - [ ] `mypass-bridge`: the browser protocol, loopback server, per-launch token and pairing.
 - [ ] `mypass-host`: the native messaging host, with Keychain secret sharing between app and host and
   self-registration of native messaging manifests for all Chromium browsers.
+- [ ] Host-shared Keychain secret: trust only the host binary inside the signed app bundle,
+  verified against a code requirement pinned to the team (`anchor apple generic and certificate
+  leaf[subject.OU] = "W645B93PPQ"` plus the host identifier) before building the access list; never
+  trust a path under Application Support. Delete-then-add on write; a crash in between only loses
+  the per-launch endpoint.
 - [ ] The extension moved into this repository as `extension/` with its Node suites running in CI.
 - [ ] Browser settings pane with pairing and save proposals.
 

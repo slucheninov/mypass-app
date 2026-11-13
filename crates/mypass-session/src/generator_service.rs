@@ -259,7 +259,7 @@ mod tests {
     use super::*;
     use crate::dto::{Category, EntryQuery, Scope, SortKey};
     use crate::fields::GENERATOR_HISTORY_MARKER;
-    use crate::queries::{list_entries, sidebar};
+    use crate::queries::{list_entries, sidebar, SearchScope};
     use crate::scheduler::ManualScheduler;
     use crate::session::{SaveState, SessionDeps};
     use crate::settings::SettingsStore;
@@ -678,7 +678,7 @@ mod tests {
                         search: String::new(),
                         sort: SortKey::Title,
                     };
-                    assert!(list_entries(db, &q, true).is_empty());
+                    assert!(list_entries(db, &q, SearchScope::App).is_empty());
                 }
                 let q = EntryQuery {
                     scope: Scope::Category {
@@ -687,7 +687,7 @@ mod tests {
                     search: "example".into(),
                     sort: SortKey::Title,
                 };
-                assert!(list_entries(db, &q, true).is_empty());
+                assert!(list_entries(db, &q, SearchScope::App).is_empty());
                 assert!(credential_candidates(db, "https://example.com").is_empty());
             })
             .unwrap();

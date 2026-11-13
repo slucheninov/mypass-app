@@ -2,7 +2,7 @@
 
 //!
 //! Every stub is a one-line `Unsupported` body, so a later stage replaces a body, never a
-//! signature. macOS uses the secret store, device unlock, host registrar and launch-at-login stubs
+//! signature. macOS uses the host-shared secret store, device unlock, host registrar and launch-at-login stubs
 //! until stages 3 and 5; Windows uses all of them until stage 6.
 
 use crate::{
@@ -32,7 +32,7 @@ impl SystemEvents for UnsupportedSystemEvents {
     }
 }
 
-/// No secret store on this platform yet (macOS stage 3, Windows stage 6).
+/// No secret store on this platform yet (macOS: the host-shared store, stage 3; Windows: stage 6).
 #[derive(Debug, Default)]
 pub(crate) struct UnsupportedSecretStore;
 

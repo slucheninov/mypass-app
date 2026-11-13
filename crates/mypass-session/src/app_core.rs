@@ -128,6 +128,7 @@ impl From<PlatformError> for ApiError {
         match &e {
             PlatformError::Unsupported(what) => Self::new(C::Unsupported, *what),
             PlatformError::Failed(m) => Self::new(C::Internal, m.clone()),
+            PlatformError::SecretStoreTampered => Self::new(C::Internal, e.to_string()),
             PlatformError::Cancelled => Self::new(C::Cancelled, String::new()),
             PlatformError::Lockout => Self::new(C::Lockout, String::new()),
             PlatformError::Invalidated => Self::new(C::Invalidated, String::new()),
@@ -473,8 +474,8 @@ impl AppCore {
     }
 
     pub fn entry_list(&self, query: EntryQuery) -> Result<Vec<EntrySummary>, ApiError> {
-        // In-app search also matches attachment names; the bridge passes `false`.
-        self.read(|db| Ok(queries::list_entries(db, &query, true)))
+        // In-app search covers everything visible; the bridge uses `SearchScope::Autofill`.
+        self.read(|db| Ok(queries::list_entries(db, &query, queries::SearchScope::App)))
     }
 
     pub fn entry_recent(&self, limit: u32) -> Result<Vec<EntrySummary>, ApiError> {
@@ -1037,6 +1038,7 @@ mod tests {
                 ErrorCode::DeviceUnlockUnavailable,
             ),
             (PlatformError::Failed("x".into()), ErrorCode::Internal),
+            (PlatformError::SecretStoreTampered, ErrorCode::Internal),
         ];
         for (error, expected) in cases {
             assert_eq!(ApiError::from(error.clone()).code, expected, "{error:?}");
