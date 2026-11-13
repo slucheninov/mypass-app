@@ -372,14 +372,13 @@ mod tests {
                         let after_lock = locked.load(Ordering::SeqCst);
                         let r = svc.handle(named("listEntries", Some(&secret)));
                         let text = serde_json::to_string(&r).unwrap();
-                        match &r {
-                            // Either the list was read before the lock, or the vault answered Locked.
-                            Response::CredentialList { .. } => {
-                                assert!(!after_lock, "data after the lock: {text}");
-                                assert!(text.contains("SecretTitleXyz"));
-                            }
-                            Response::Locked => assert!(!text.contains("SecretTitleXyz")),
-                            other => panic!("unexpected answer {other:?}"),
+                        // Either the list was read before the lock, or the vault answered Locked.
+                        if let Response::CredentialList { .. } = &r {
+                            assert!(!after_lock, "data after the lock: {text}");
+                            assert!(text.contains("SecretTitleXyz"));
+                        } else {
+                            assert_eq!(r, Response::Locked, "{text}");
+                            assert!(!text.contains("SecretTitleXyz"));
                         }
                     }
                 })
