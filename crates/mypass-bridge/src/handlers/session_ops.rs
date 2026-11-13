@@ -19,7 +19,7 @@ use crate::pairing::StartOutcome;
 use crate::protocol::{BrowserDiagnosticsReport, Response};
 use crate::service::Ctx;
 use crate::ui::Proposal;
-use crate::views::{error, parse_wire_id};
+use crate::views::{error, pairing_error_response, parse_wire_id};
 
 const NOT_FOUND: &str = "entry not found or domain mismatch";
 const INVALID: &str = "invalid request";
@@ -114,8 +114,8 @@ pub(crate) fn complete_pairing(ctx: &Ctx<'_>, code: &str) -> Response {
             Response::Paired { secret }
         }
         Ok(None) => error("invalid_code"),
-        // The store failed: no detail (a path, a keychain status) goes to the extension.
-        Err(_) => error("internal error"),
+        // The store failed: a fixed message, no detail (a path, a keychain status).
+        Err(e) => pairing_error_response(&e),
     }
 }
 
@@ -275,6 +275,28 @@ mod tests {
             ("https://a.example/login", "alice", pw)
         );
         assert!(f.proposals.take(&id).is_none());
+    }
+
+    #[test]
+    fn a_3000_char_url_is_accepted_for_login_proposals() {
+        let f = fx();
+        let url = format!("https://a.example/?q={}", "x".repeat(2980));
+        let r = send(&f, |token, pairing| Request::ProposeSaveLogin {
+            token,
+            url,
+            username: "u".into(),
+            password: "pw".into(),
+            pairing,
+        });
+        assert_eq!(r, Response::SaveProposalAccepted);
+        let r = send(&f, |token, pairing| Request::ProposeSaveLogin {
+            token,
+            url: "x".repeat(MAX_URL_CHARS + 1),
+            username: "u".into(),
+            password: "pw".into(),
+            pairing,
+        });
+        assert_eq!(error_message(&r), "invalid request");
     }
 
     #[test]
@@ -570,7 +592,7 @@ mod tests {
     }
 
     #[test]
-    fn complete_pairing_store_failure_is_an_internal_error_without_detail() {
+    fn complete_pairing_store_limit_tells_the_user_to_revoke_a_browser() {
         let f = fx();
         // The fixture holds one browser; fill the store to its limit so `complete` fails.
         never_idle_lock(&f);
@@ -588,7 +610,35 @@ mod tests {
             }
         }
         let r = failure.expect("the paired list never filled up");
-        assert_eq!(error_message(&r), "internal error");
+        assert_eq!(
+            error_message(&r),
+            "too many paired browsers, revoke one in MyPass settings"
+        );
+    }
+
+    #[test]
+    fn wrong_codes_lead_to_pairing_throttled_from_start_pairing() {
+        let f = fx();
+        never_idle_lock(&f);
+        let mut throttled = false;
+        // Every start is spaced out, so only the failure budget can refuse it.
+        for _ in 0..40 {
+            f.sched.advance(START_MIN_INTERVAL);
+            let r = f.svc.handle(named("startPairing", None));
+            if r != Response::PairingStarted {
+                assert_eq!(error_message(&r), "pairing_throttled");
+                throttled = true;
+                break;
+            }
+            let code = last_arg(&f, "pairing_code");
+            let wrong = if code == "000000" { "000001" } else { "000000" };
+            for _ in 0..3 {
+                assert_eq!(error_message(&complete(&f, wrong)), "invalid_code");
+            }
+        }
+        assert!(throttled, "the failure budget never throttled a start");
+        // The throttle is not a way in: the active code was dropped with the budget.
+        assert_eq!(error_message(&complete(&f, "123456")), "invalid_code");
     }
 
     #[test]

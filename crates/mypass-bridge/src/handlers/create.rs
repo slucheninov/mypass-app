@@ -543,6 +543,16 @@ mod tests {
     }
 
     #[test]
+    fn a_3000_char_url_is_accepted() {
+        let f = fx();
+        let mut n = new("Login");
+        n.title = "Long".into();
+        n.url = format!("https://a.example/?q={}", "x".repeat(2980));
+        assert_eq!(create(&f, &n), Response::EntryCreated);
+        assert_eq!(created(&f, "Long").field("URL").unwrap().len(), n.url.len());
+    }
+
+    #[test]
     fn created_entries_go_to_the_root_never_the_bin_or_the_history_group() {
         let (f, _) = crate::testing::sample_fx();
         let mut n = new("Login");

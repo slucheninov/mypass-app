@@ -316,6 +316,14 @@ mod tests {
     }
 
     #[test]
+    fn a_3000_char_url_is_accepted_when_recording() {
+        let f = fx();
+        let url = format!("https://a.example/?q={}", "x".repeat(2980));
+        assert_eq!(send(&f, record("pw", &url, None)), Response::Acknowledged);
+        assert_eq!(history(&f)[0].url, url);
+    }
+
+    #[test]
     fn record_generated_password_empty_is_password_required() {
         let f = fx();
         for pw in ["", "   ", "\t\n"] {

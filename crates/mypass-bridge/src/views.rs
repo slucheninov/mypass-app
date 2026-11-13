@@ -140,7 +140,7 @@ pub fn session_error_response(e: &SessionError) -> Response {
 #[must_use]
 pub fn pairing_error_response(e: &PairingError) -> Response {
     match e {
-        PairingError::TooMany => error("too many paired browsers"),
+        PairingError::TooMany => error("too many paired browsers, revoke one in MyPass settings"),
         PairingError::Store(_) | PairingError::Corrupt => error("pairing is unavailable"),
     }
 }
@@ -163,6 +163,18 @@ mod tests {
         assert_eq!(parse_wire_id("0f1e2d3c4b5a69788796a5b4c3d2e1f0"), Some(id));
         assert_eq!(parse_wire_id("not an id"), None);
         assert_eq!(parse_wire_id(""), None);
+    }
+
+    #[test]
+    fn has_totp_is_true_for_an_unparseable_otp_like_the_codes_category() {
+        let mut e = Entry::new(mypass_kdbx::Timestamp(0));
+        e.set_field("Title", "T", false);
+        assert!(!summary(&e).has_totp);
+        e.set_field("otp", "not base32 !!", true);
+        assert!(e.totp().is_none());
+        assert!(summary(&e).has_totp);
+        e.set_field("otp", "", true);
+        assert!(!summary(&e).has_totp);
     }
 
     #[test]

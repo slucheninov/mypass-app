@@ -16,6 +16,8 @@ use crate::service::Ctx;
 use crate::views::{error, parse_wire_id, session_error_response};
 
 const ALLOWED_KEYS: [&str; 3] = ["Phone", "Email", "Login"];
+/// Most fields of one key family (`Phone`, `Phone 2`, ...) an extension can add to an entry.
+const MAX_IDENTIFIER_FIELDS_PER_KEY: usize = 20;
 const NOT_FOUND: &str = "entry not found or domain mismatch";
 
 /// The page rule of the extension: ignore case and every whitespace character.
@@ -49,8 +51,24 @@ fn already_present(entry: &Entry, needle: &str) -> bool {
             .any(|f| normalize(&f.value) == needle)
 }
 
+/// How many fields of the family `base`, `base 2`, `base 3`, ... the entry holds.
+fn family_size(entry: &Entry, base: &str) -> usize {
+    entry
+        .fields
+        .iter()
+        .filter(|f| {
+            f.key == base
+                || f.key
+                    .strip_prefix(base)
+                    .and_then(|rest| rest.strip_prefix(' '))
+                    .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        })
+        .count()
+}
+
 enum Plan {
     Skip,
+    Full,
     Username,
     Custom(String),
 }
@@ -80,6 +98,8 @@ pub(crate) fn add_entry_identifier(
                     Plan::Skip
                 } else if e.field("UserName").unwrap_or("").trim().is_empty() {
                     Plan::Username
+                } else if family_size(e, field_key) >= MAX_IDENTIFIER_FIELDS_PER_KEY {
+                    Plan::Full
                 } else {
                     Plan::Custom(next_key(e, field_key))
                 };
@@ -90,6 +110,8 @@ pub(crate) fn add_entry_identifier(
         };
         match plan {
             Plan::Skip => Ok((Response::Acknowledged, false)),
+            // The same answer as an invalid identifier: the extension shows its generic failure.
+            Plan::Full => Ok((error("identifier required"), false)),
             Plan::Username => {
                 let changed = db.update_entry(uuid, now, |e| {
                     let protected = e.fields.iter().any(|f| f.key == "UserName" && f.protected);
@@ -297,6 +319,40 @@ mod tests {
         let r = send(&f, add(Uuid::nil(), GITHUB, "555-0777", "Phone"));
         assert_eq!(error_message(&r), msg);
         assert_eq!(state(&f), SaveState::Idle);
+    }
+
+    #[test]
+    fn identifier_fields_per_key_are_capped() {
+        let (f, Ids { b, .. }) = sample_fx();
+        for n in 0..MAX_IDENTIFIER_FIELDS_PER_KEY {
+            let r = send(&f, add(b, EXAMPLE, &format!("555-{n:04}"), "Phone"));
+            assert_eq!(r, Response::Acknowledged, "{n}");
+        }
+        let r = send(&f, add(b, EXAMPLE, "555-9999", "Phone"));
+        assert_eq!(error_message(&r), "identifier required");
+        assert_eq!(custom(&entry(&f, b)).len(), MAX_IDENTIFIER_FIELDS_PER_KEY);
+        // Another key family and an already stored value still work.
+        assert_eq!(
+            send(&f, add(b, EXAMPLE, "a@example.com", "Email")),
+            Response::Acknowledged
+        );
+        assert_eq!(
+            send(&f, add(b, EXAMPLE, "555-0000", "Phone")),
+            Response::Acknowledged
+        );
+    }
+
+    #[test]
+    fn identifier_unreachable_entries_are_domain_mismatch() {
+        let (f, ids) = sample_fx();
+        let msg = "entry not found or domain mismatch";
+        // The bin (g), the generator history (h) and a `never` entry (never).
+        for id in [ids.g, ids.h, ids.never] {
+            let r = send(&f, add(id, GITHUB, "555-0888", "Phone"));
+            assert_eq!(error_message(&r), msg);
+        }
+        assert_eq!(state(&f), SaveState::Idle);
+        assert!(entry(&f, ids.never).history.is_empty());
     }
 
     #[test]
