@@ -25,3 +25,4 @@ mypass-core = { path = "../mypass-core", optional = true }
 mypass-kdbx = { path = "../mypass-kdbx", optional = true }
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
