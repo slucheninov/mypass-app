@@ -5,16 +5,18 @@
 //! signature. macOS uses the host-shared secret store, device unlock, host registrar and launch-at-login stubs
 //! until stages 3 and 5; Windows uses all of them until stage 6.
 
+#[cfg(any(not(target_os = "macos"), test))]
+use crate::SecretStore;
 use crate::{
     BrowserRegistration, DeviceUnlock, DeviceUnlockAvailability, DeviceUnlockMode,
     HostRegistrationReport, LaunchAtLogin, LoginItemStatus, NativeHostRegistrar, PlatformError,
-    PlatformResult, SecretStore,
+    PlatformResult,
 };
 use secrecy::SecretString;
 use std::path::Path;
 // Items used only off macOS (and by this module's tests on macOS).
 #[cfg(not(target_os = "macos"))]
-use crate::{AppPaths, Platform};
+use crate::{AppPaths, FileSecretStore, Platform};
 #[cfg(any(not(target_os = "macos"), test))]
 use crate::{KeyboardLayout, Subscription, SystemEvent, SystemEvents};
 #[cfg(any(not(target_os = "macos"), test))]
@@ -32,10 +34,12 @@ impl SystemEvents for UnsupportedSystemEvents {
     }
 }
 
-/// No secret store on this platform yet (macOS: the host-shared store, stage 3; Windows: stage 6).
+/// No secret store on this platform yet (Windows app-only store: stage 6).
 #[derive(Debug, Default)]
+#[cfg(any(not(target_os = "macos"), test))]
 pub(crate) struct UnsupportedSecretStore;
 
+#[cfg(any(not(target_os = "macos"), test))]
 impl SecretStore for UnsupportedSecretStore {
     fn set(&self, _: &str, _: &str, _: &[u8]) -> PlatformResult<()> {
         Err(PlatformError::Unsupported("secret store"))
@@ -269,12 +273,15 @@ impl ClipboardBackend for ArboardBackend {
 /// The platform of a target without a native implementation: `arboard` for the clipboard off
 /// macOS, `Unsupported` for everything else.
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn platform(_paths: &AppPaths) -> Platform {
+pub(crate) fn platform(paths: &AppPaths) -> Platform {
     Platform {
         events: Arc::new(UnsupportedSystemEvents),
         clipboard: Arc::new(HashingClipboard::new(ArboardBackend)),
         secrets: Arc::new(UnsupportedSecretStore),
-        shared_secrets: Arc::new(UnsupportedSecretStore),
+        shared_secrets: Arc::new(FileSecretStore::new(
+            paths.secrets_shared.clone(),
+            paths.home().to_path_buf(),
+        )),
         device_unlock: Arc::new(UnsupportedDeviceUnlock),
         host_registrar: Arc::new(UnsupportedHostRegistrar),
         launch_at_login: Arc::new(UnsupportedLaunchAtLogin),

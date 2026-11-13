@@ -24,12 +24,11 @@
 
 use crate::fallback::{
     UnsupportedDeviceUnlock, UnsupportedHostRegistrar, UnsupportedLaunchAtLogin,
-    UnsupportedSecretStore,
 };
 use crate::macos_keychain::MacKeychainSecretStore;
 use crate::{
-    AppPaths, ClipboardStamp, KeyboardLayout, Platform, PlatformError, PlatformResult,
-    SecureClipboard, Subscription, SystemEvent, SystemEvents,
+    AppPaths, ClipboardStamp, FileSecretStore, KeyboardLayout, Platform, PlatformError,
+    PlatformResult, SecureClipboard, Subscription, SystemEvent, SystemEvents,
 };
 use block2::RcBlock;
 use objc2::rc::{autoreleasepool, Retained};
@@ -66,14 +65,17 @@ pub(crate) const INPUT_SOURCE_CHANGED: &str =
 const MAIN_THREAD_WAIT: Duration = Duration::from_millis(500);
 
 /// The real macOS platform: events, clipboard, keyboard layout and the app-private Keychain store;
-/// `Unsupported` placeholders for the host-shared secret store and the host registrar (stage 3) and device unlock and launch at
-/// login (stage 5).
-pub(crate) fn platform(_paths: &AppPaths) -> Platform {
+/// the 0600 file store shared with the native host; `Unsupported` placeholders for the host registrar
+/// (stage 3) and device unlock and launch at login (stage 5).
+pub(crate) fn platform(paths: &AppPaths) -> Platform {
     Platform {
         events: Arc::new(MacSystemEvents),
         clipboard: Arc::new(MacClipboard::general()),
         secrets: Arc::new(MacKeychainSecretStore::app_only()),
-        shared_secrets: Arc::new(UnsupportedSecretStore),
+        shared_secrets: Arc::new(FileSecretStore::new(
+            paths.secrets_shared.clone(),
+            paths.home().to_path_buf(),
+        )),
         device_unlock: Arc::new(UnsupportedDeviceUnlock),
         host_registrar: Arc::new(UnsupportedHostRegistrar),
         launch_at_login: Arc::new(UnsupportedLaunchAtLogin),

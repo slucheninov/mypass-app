@@ -27,7 +27,8 @@ On Windows, run `cargo` commands from PowerShell and `scripts/*.sh` from Git Bas
 | `mypass-session` | in progress (stage 2a) | Vault session, settings, scheduling and the command facade; no Tauri dependency |
 | `src/` (Svelte UI) | implemented (stage 2b) | The webview UI: typed API wrapper, stores, i18n, design kit, screens and the three windows (main, settings, tray panel), with its Vitest suites |
 | `src-tauri` (`mypass-app`) | in progress (stage 2a) | The Tauri 2 app shell and the typed IPC bindings (`src/lib/bindings.ts`, generated) |
-| `mypass-bridge`, `mypass-host`, `extension/` | planned | Browser bridge, native messaging host and the Chromium extension |
+| `mypass-bridge`, `mypass-host` | in progress (stage 3) | Browser bridge and native messaging host |
+| `extension/` | planned | The Chromium extension |
 
 ## Build and check
 

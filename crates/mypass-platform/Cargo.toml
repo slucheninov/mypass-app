@@ -61,3 +61,6 @@ objc2-app-kit = { workspace = true, features = [
     "NSRunningApplication",
     "NSWorkspace",
 ] }
+
+[dev-dependencies]
+tempfile.workspace = true

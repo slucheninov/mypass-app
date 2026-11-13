@@ -2531,6 +2531,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mypass-bridge"
+version = "0.1.0"
+dependencies = [
+ "mypass-core",
+ "mypass-kdbx",
+ "mypass-platform",
+ "mypass-session",
+]
+
+[[package]]
 name = "mypass-core"
 version = "0.1.0"
 dependencies = [
@@ -2549,6 +2559,14 @@ dependencies = [
  "url",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "mypass-host"
+version = "0.1.0"
+dependencies = [
+ "mypass-bridge",
+ "mypass-platform",
 ]
 
 [[package]]
@@ -2590,6 +2608,7 @@ dependencies = [
  "secrecy",
  "security-framework",
  "sha2 0.11.1",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
