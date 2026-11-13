@@ -46,7 +46,6 @@ pub struct BridgeDeps {
 pub(crate) struct Ctx<'a> {
     pub deps: &'a BridgeDeps,
     /// The injected wall clock at the start of the request.
-    #[allow(dead_code)] // read by the handlers of Tasks 12 to 15
     pub now: SystemTime,
 }
 
@@ -75,6 +74,11 @@ impl BridgeService {
             }
         }));
         Arc::new(Self { deps })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn deps_for_test(&self) -> &BridgeDeps {
+        &self.deps
     }
 
     /// Answers one request. Never panics, never returns vault data to a locked, unpaired or
@@ -214,370 +218,12 @@ impl BridgeService {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
-    use crate::pairing::{PairedBrowserStore, PairingChallenge, StartOutcome};
-    use crate::passkeys::NotSupportedPasskeys;
-    use crate::protocol::{
-        BrowserDiagnosticsReport, ExtensionScanState, PermissionState, ProxyState, REQUEST_TYPES,
-    };
+    use crate::protocol::REQUEST_TYPES;
+    use crate::testing::*;
     use crate::ui::Proposal;
-    use mypass_kdbx::{Entry, PlainFileIo, Timestamp};
-    use mypass_platform::testing::InMemorySecretStore;
-    use mypass_session::scheduler::ManualScheduler;
-    use mypass_session::session::{LockReason, SessionDeps};
-    use mypass_session::settings::{IdleTimeout, SettingsPatch};
-    use mypass_session::testing::fast_database;
-    use secrecy::SecretString;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Mutex;
-    use std::time::{Duration, UNIX_EPOCH};
-    use uuid::Uuid;
+    use mypass_session::session::LockReason;
+    use std::sync::atomic::Ordering;
     use zeroize::Zeroizing;
-
-    /// Records every call; does not override `passkey_proxy_changed`.
-    #[derive(Default)]
-    struct RecordingUi {
-        calls: Mutex<Vec<String>>,
-    }
-
-    impl RecordingUi {
-        fn note(&self, s: &str) {
-            self.calls.lock().unwrap().push(s.to_owned());
-        }
-        fn calls(&self) -> Vec<String> {
-            self.calls.lock().unwrap().clone()
-        }
-    }
-
-    impl BridgeUi for RecordingUi {
-        fn pairing_code(&self, _c: &PairingChallenge) {
-            self.note("pairing_code");
-        }
-        fn pairing_finished(&self) {
-            self.note("pairing_finished");
-        }
-        fn save_login_proposal(&self, _id: &str, _url: &str, _username: &str) {
-            self.note("save_login_proposal");
-        }
-        fn save_totp_proposal(&self, _id: &str, _url: &str, _entry_id: Option<Uuid>) {
-            self.note("save_totp_proposal");
-        }
-        fn unlock_requested(&self) {
-            self.note("unlock_requested");
-        }
-        fn open_app_requested(&self) {
-            self.note("open_app_requested");
-        }
-        fn open_browser_settings_requested(&self) {
-            self.note("open_browser_settings_requested");
-        }
-        fn credential_filled(&self, _id: Uuid) {
-            self.note("credential_filled");
-        }
-    }
-
-    #[derive(Default)]
-    struct RecordingPasskeys {
-        handled: AtomicUsize,
-        locked: AtomicUsize,
-    }
-
-    impl PasskeyHandler for RecordingPasskeys {
-        fn handle(&self, _ctx: &PasskeyContext<'_>, _request: &Request) -> Response {
-            self.handled.fetch_add(1, Ordering::SeqCst);
-            Response::Acknowledged
-        }
-        fn on_session_locked(&self) {
-            self.locked.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-
-    struct Fx {
-        svc: Arc<BridgeService>,
-        session: VaultSession,
-        sched: Arc<ManualScheduler>,
-        ui: Arc<RecordingUi>,
-        proposals: Arc<ProposalStore>,
-        secret: String,
-        _dir: tempfile::TempDir,
-    }
-
-    fn fx_with(passkeys: Arc<dyn PasskeyHandler>) -> Fx {
-        let dir = tempfile::tempdir().unwrap();
-        let settings = SettingsStore::in_memory();
-        settings
-            .update(SettingsPatch {
-                auto_lock_idle_timeout: Some(IdleTimeout::OneMinute),
-                ..SettingsPatch::default()
-            })
-            .unwrap();
-        let sched = ManualScheduler::new(UNIX_EPOCH + Duration::from_secs(1_700_000_000));
-        let session = VaultSession::new(SessionDeps {
-            settings: settings.clone(),
-            scheduler: sched.clone(),
-            backups_root: dir.path().join("backups"),
-            file_io: Arc::new(PlainFileIo),
-        });
-        let autolock = AutoLock::new(session.clone(), settings.clone(), sched.clone());
-        let pairing = Arc::new(
-            PairingManager::new(
-                PairedBrowserStore::new(InMemorySecretStore::new()),
-                sched.clone(),
-            )
-            .unwrap(),
-        );
-        let secret = match pairing.start(Some("Chrome")) {
-            StartOutcome::Started(c) => pairing.complete(&c.code).unwrap().unwrap(),
-            StartOutcome::Throttled => panic!("throttled"),
-        };
-        let ui = Arc::new(RecordingUi::default());
-        let proposals = Arc::new(ProposalStore::new(sched.clone()));
-        let mut db = fast_database("Bridge Test");
-        let now = Timestamp::now();
-        let mut e = Entry::new(now);
-        e.set_field("Title", "SecretTitleXyz", false);
-        let root = db.root_id();
-        db.add_entry(root, e, now).unwrap();
-        let svc = BridgeService::new(BridgeDeps {
-            session: session.clone(),
-            autolock,
-            settings,
-            scheduler: sched.clone(),
-            pairing,
-            diagnostics: Arc::new(DiagnosticsStore::new()),
-            proposals: proposals.clone(),
-            ui: ui.clone(),
-            passkeys,
-        });
-        session
-            .create_vault_with(
-                &dir.path().join("v.kdbx"),
-                SecretString::from("pw".to_owned()),
-                db,
-            )
-            .unwrap();
-        Fx {
-            svc,
-            session,
-            sched,
-            ui,
-            proposals,
-            secret,
-            _dir: dir,
-        }
-    }
-
-    fn fx() -> Fx {
-        fx_with(Arc::new(NotSupportedPasskeys))
-    }
-
-    fn report() -> BrowserDiagnosticsReport {
-        BrowserDiagnosticsReport {
-            proxy_state: ProxyState::Disabled,
-            permission_state: PermissionState::NotGranted,
-            password_saving_enabled: None,
-            extension_scan_state: ExtensionScanState::NotChecked,
-            enabled_managers: vec![],
-        }
-    }
-
-    /// One of every request, in `REQUEST_TYPES` order.
-    fn all_requests(pairing: Option<&str>) -> Vec<Request> {
-        let t = || "tok".to_owned();
-        let p = || pairing.map(str::to_owned);
-        let s = || "x".to_owned();
-        vec![
-            Request::GetCredentials {
-                token: t(),
-                url: "https://a.example".into(),
-                pairing: p(),
-            },
-            Request::GetFavorites {
-                token: t(),
-                pairing: p(),
-            },
-            Request::ListEntries {
-                token: t(),
-                category: "all".into(),
-                pairing: p(),
-            },
-            Request::SearchEntries {
-                token: t(),
-                query: s(),
-                pairing: p(),
-            },
-            Request::CreateEntry {
-                token: t(),
-                entry_type: "Login".into(),
-                title: s(),
-                username: s(),
-                password: s(),
-                url: s(),
-                card_number: s(),
-                cardholder_name: s(),
-                expiry: s(),
-                cvv: s(),
-                notes: s(),
-                favorite: false,
-                r#match: s(),
-                otp: s(),
-                pairing: p(),
-            },
-            Request::FillAddress {
-                token: t(),
-                id: s(),
-                url: s(),
-                pairing: p(),
-            },
-            Request::FillCredential {
-                token: t(),
-                id: s(),
-                url: s(),
-                pairing: p(),
-            },
-            Request::GetTotp {
-                token: t(),
-                id: s(),
-                url: s(),
-                pairing: p(),
-            },
-            Request::ProposeSaveLogin {
-                token: t(),
-                url: s(),
-                username: s(),
-                password: s(),
-                pairing: p(),
-            },
-            Request::AddEntryIdentifier {
-                token: t(),
-                id: s(),
-                url: s(),
-                value: s(),
-                field_key: s(),
-                pairing: p(),
-            },
-            Request::ProposeSaveTotp {
-                token: t(),
-                url: s(),
-                otpauth_or_secret: s(),
-                entry_id: None,
-                pairing: p(),
-            },
-            Request::StartPairing {
-                token: t(),
-                browser: None,
-            },
-            Request::CompletePairing {
-                token: t(),
-                code: "000000".into(),
-            },
-            Request::RequestUnlock {
-                token: t(),
-                pairing: p(),
-            },
-            Request::LockVault {
-                token: t(),
-                pairing: p(),
-            },
-            Request::OpenApp {
-                token: t(),
-                pairing: p(),
-            },
-            Request::OpenBrowserSettings {
-                token: t(),
-                pairing: p(),
-            },
-            Request::ReportBrowserDiagnostics {
-                token: t(),
-                report: report(),
-                pairing: p(),
-            },
-            Request::GetPasskeyProxyStatus {
-                token: t(),
-                pairing: p(),
-            },
-            Request::SetPasskeyProxyEnabled {
-                token: t(),
-                enabled: true,
-                pairing: p(),
-            },
-            Request::PasskeyCreate {
-                token: t(),
-                request_id: 7,
-                request_details_json: "{}".into(),
-                origin_url: s(),
-                pairing: p(),
-            },
-            Request::PasskeyCreateConfirm {
-                token: t(),
-                request_id: 7,
-                entry_id: None,
-                replace: false,
-                pairing: p(),
-            },
-            Request::PasskeyGet {
-                token: t(),
-                request_id: 7,
-                request_details_json: "{}".into(),
-                origin_url: s(),
-                pairing: p(),
-            },
-            Request::PasskeyGetApprove {
-                token: t(),
-                request_id: 7,
-                entry_id: s(),
-                pairing: p(),
-            },
-            Request::PasskeyCancel {
-                token: t(),
-                request_id: -9,
-                pairing: p(),
-            },
-            Request::GeneratePassword {
-                token: t(),
-                domain: s(),
-                pairing: p(),
-            },
-            Request::RecordGeneratedPassword {
-                token: t(),
-                password: s(),
-                url: s(),
-                created_at: None,
-                pairing: p(),
-            },
-            Request::GetGeneratedPasswordHistory {
-                token: t(),
-                pairing: p(),
-            },
-            Request::DeleteGeneratedPassword {
-                token: t(),
-                id: s(),
-                pairing: p(),
-            },
-        ]
-    }
-
-    fn named(name: &str, pairing: Option<&str>) -> Request {
-        all_requests(pairing)
-            .into_iter()
-            .find(|r| r.name() == name)
-            .unwrap()
-    }
-
-    fn error_message(r: &Response) -> &str {
-        let Response::Error { message } = r else {
-            panic!("expected Error, got {r:?}");
-        };
-        message
-    }
-
-    /// Whether `act` reset the idle timer: 50 s idle, act, 50 s more; a one minute timeout still
-    /// has the session unlocked only when the timer was reset in between.
-    fn resets_timer(f: &Fx, act: impl FnOnce()) -> bool {
-        f.sched.advance(Duration::from_secs(50));
-        act();
-        f.sched.advance(Duration::from_secs(50));
-        f.session.is_unlocked()
-    }
 
     #[test]
     fn request_table_matches_wire_types() {
@@ -711,6 +357,12 @@ mod tests {
 
     #[test]
     fn lock_racing_requests_never_return_data_after_lock() {
+        // Sanity: while unlocked the request really returns the title, so the checks below bite.
+        let f = fx();
+        let r = f.svc.handle(named("listEntries", Some(&f.secret)));
+        assert!(serde_json::to_string(&r)
+            .unwrap()
+            .contains("SecretTitleXyz"));
         for _ in 0..200 {
             let f = fx();
             let locked = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -723,9 +375,14 @@ mod tests {
                         let after_lock = locked.load(Ordering::SeqCst);
                         let r = svc.handle(named("listEntries", Some(&secret)));
                         let text = serde_json::to_string(&r).unwrap();
-                        assert!(!text.contains("SecretTitleXyz"));
-                        if after_lock {
-                            assert_eq!(r, Response::Locked);
+                        match &r {
+                            // Either the list was read before the lock, or the vault answered Locked.
+                            Response::CredentialList { .. } => {
+                                assert!(!after_lock, "data after the lock: {text}");
+                                assert!(text.contains("SecretTitleXyz"));
+                            }
+                            Response::Locked => assert!(!text.contains("SecretTitleXyz")),
+                            other => panic!("unexpected answer {other:?}"),
                         }
                     }
                 })

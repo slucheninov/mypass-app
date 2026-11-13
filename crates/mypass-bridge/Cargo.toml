@@ -15,7 +15,7 @@ workspace = true
 default = ["server"]
 # The app-side server. The native messaging host builds with `default-features = false`, so it never
 # links the vault code (guard `host_links_no_vault_code`).
-server = ["dep:mypass-session", "dep:mypass-core", "dep:mypass-kdbx"]
+server = ["dep:mypass-session", "dep:mypass-core", "dep:mypass-kdbx", "dep:url"]
 
 [dependencies]
 # Not gated: the endpoint store and the relay need `SecretStore` and `AppPaths`.
@@ -31,6 +31,7 @@ serde_json.workspace = true
 sha2.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
+url = { workspace = true, optional = true }
 uuid = { workspace = true, features = ["serde"] }
 zeroize.workspace = true
 

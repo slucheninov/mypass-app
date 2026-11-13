@@ -256,7 +256,9 @@ pub fn entry_matches(entry: &Entry, group_name: &str, query: &str, scope: Search
     entry.attachments.iter().any(|a| hit(&a.name))
 }
 
-fn address_of(entry: &Entry) -> AddressDto {
+/// The 14 address fields of an entry, the label normalised to Home, Work or Other and an empty full
+/// name filled from the given and family names. Shared with the browser bridge.
+pub fn address_of(entry: &Entry) -> AddressDto {
     let get = |name: &str| {
         entry
             .field(&format!("{ADDRESS_PREFIX}{name}"))

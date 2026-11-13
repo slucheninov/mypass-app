@@ -18,6 +18,8 @@ pub mod protocol;
 pub mod server;
 #[cfg(feature = "server")]
 pub mod service;
+#[cfg(all(test, feature = "server"))]
+mod testing;
 #[cfg(feature = "server")]
 pub mod ui;
 #[cfg(feature = "server")]
