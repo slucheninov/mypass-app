@@ -219,7 +219,7 @@ change is done.
 - **Shell.** Decisions are plain functions, the Tauri glue is thin: `shell.rs` (settings effects, close
   and quit rules, login-item reconcile, `WindowOps`), `tray.rs` (menu model and ids), `hotkeys.rs`
   (plan, `HotkeyRegistry` seam), `lifecycle.rs` (platform events into auto-lock, the quit flow,
-  the external-change watcher, `ShellEffects`, tray refresh) and `i18n.rs` (the shared catalogs, `{0}`
+  the external-change watcher, `ShellEffects`, tray refresh) and `bridge.rs` (the browser bridge: pairing window and unlock-focus rules, start and quit, over the `BridgeEvents` seam; `commands/browser.rs` holds the `browser_*` commands) and `i18n.rs` (the shared catalogs, `{0}`
   substitution, English fallback) and `navigation.rs` (a webview may navigate only to the app's own origin); only `shell_runtime.rs` touches the runtime. Webviews hold
   `core:event:default`, so no Rust listener acts on a webview-emittable event: every trigger is
   a Rust call (session observer, platform sink, menu, tray, window or run-event callback). Tray

@@ -33,7 +33,7 @@ pub use events::{Subscription, SystemEvent, SystemEvents};
 pub use file_store::{shared_store, FileSecretStore};
 pub use host_registrar::{
     locate_bundled_host, manifest_json, BrowserRegistration, HostRegistrationReport, ManifestError,
-    NativeHostRegistrar, RegistrationState, EXTENSION_ID, HOST_NAME,
+    NativeHostRegistrar, RegistrationState, BUNDLED_HOST_FILE, EXTENSION_ID, HOST_NAME,
 };
 pub use keyboard_layout::KeyboardLayout;
 pub use launch_at_login::{LaunchAtLogin, LoginItemStatus};

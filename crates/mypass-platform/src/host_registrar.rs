@@ -63,11 +63,19 @@ pub trait NativeHostRegistrar: Send + Sync {
 pub const EXTENSION_ID: &str = "hjijbabodfldconmhdcdphlbgaajkejn";
 /// The native messaging host name the extension passes to `connectNative`.
 pub const HOST_NAME: &str = "com.mypass.chromehost";
-/// File name of the host binary on the running OS.
+/// File name of the host binary cargo builds (`mypass-host` package) on the running OS.
 #[cfg(windows)]
 const HOST_FILE: &str = "mypass-host.exe";
 #[cfg(not(windows))]
 const HOST_FILE: &str = "mypass-host";
+/// File name of the host as the app bundles it (the Tauri `externalBin` sidecar, staged by
+/// `scripts/build-host.sh`). It differs from [`HOST_FILE`] on purpose: tauri-build copies the
+/// sidecar to `<profile dir>/<this name>`, and a sidecar called `mypass-host` would replace cargo's
+/// own `mypass-host` output there. The installed copy and the manifest `path` keep `mypass-host`.
+#[cfg(windows)]
+pub const BUNDLED_HOST_FILE: &str = "mypass-native-host.exe";
+#[cfg(not(windows))]
+pub const BUNDLED_HOST_FILE: &str = "mypass-native-host";
 
 /// Why a manifest cannot be built.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -109,16 +117,25 @@ pub fn manifest_json(host_path: &Path) -> Result<String, ManifestError> {
     serde_json::to_string_pretty(&manifest).map_err(|_| ManifestError::NotUtf8)
 }
 
-/// The host binary shipped next to the running executable: `<exe dir>/mypass-host` (the macOS
-/// bundle's `Contents/MacOS`, or the Windows zip), else the cargo profile directory (`target/debug`),
-/// which is the parent when the executable is a test binary in `deps/`.
+/// The host binary shipped next to the running executable: `<exe dir>/mypass-native-host` (the
+/// macOS bundle's `Contents/MacOS`, or the Windows zip), else the cargo-built `mypass-host` in the
+/// same directory, else in the cargo profile directory (`target/debug`), which is the parent when
+/// the executable is a test binary in `deps/`. An EMPTY file (the build placeholder) is skipped, so
+/// a dev run finds the real cargo-built host behind it.
 pub fn locate_bundled_host(exe: &Path) -> Option<PathBuf> {
     let dir = exe.parent()?;
-    let mut candidates = vec![dir.join(HOST_FILE)];
+    let mut dirs = vec![dir];
     if dir.file_name().is_some_and(|n| n == "deps") {
-        candidates.extend(dir.parent().map(|p| p.join(HOST_FILE)));
+        dirs.extend(dir.parent());
     }
-    candidates.into_iter().find(|p| p.is_file())
+    let mut candidates = Vec::new();
+    for d in dirs {
+        candidates.push(d.join(BUNDLED_HOST_FILE));
+        candidates.push(d.join(HOST_FILE));
+    }
+    candidates
+        .into_iter()
+        .find(|p| std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.len() > 0))
 }
 
 #[cfg(test)]
@@ -165,11 +182,18 @@ mod tests {
     }
 
     #[test]
-    fn locate_bundled_host_prefers_exe_sibling() {
+    fn locate_bundled_host_prefers_the_bundled_sidecar_then_the_cargo_host() {
         let dir = tempfile::tempdir().unwrap();
         let macos = dir.path().join("Contents").join("MacOS");
         std::fs::create_dir_all(&macos).unwrap();
         std::fs::write(macos.join(HOST_FILE), b"x").unwrap();
+        std::fs::write(macos.join(BUNDLED_HOST_FILE), b"y").unwrap();
+        assert_eq!(
+            locate_bundled_host(&macos.join("mypass-app")),
+            Some(macos.join(BUNDLED_HOST_FILE))
+        );
+        // The empty build placeholder is skipped: the cargo-built host behind it is found.
+        std::fs::write(macos.join(BUNDLED_HOST_FILE), b"").unwrap();
         assert_eq!(
             locate_bundled_host(&macos.join("mypass-app")),
             Some(macos.join(HOST_FILE))

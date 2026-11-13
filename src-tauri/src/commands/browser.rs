@@ -239,19 +239,19 @@ pub fn proposal_take(
         model.urls = vec![url.to_owned()];
         Ok(model)
     };
-    match proposal {
+    let built = match &proposal {
         Proposal::Login {
             url,
             username,
             password,
         } => {
-            let mut model = new_login(&url)?;
-            model.username = username;
-            model.password = (*password).clone();
+            let mut model = new_login(url)?;
+            model.username = username.clone();
+            model.password = String::clone(password);
             Ok(model)
         }
         Proposal::Totp { url, otp, entry_id } => {
-            let existing = match entry_id {
+            let existing = match *entry_id {
                 Some(entry) => match core.entry_edit_model(&entry.simple().to_string()) {
                     Ok(model) => Some(model),
                     // The entry was deleted meanwhile: the secret still gets a new login.
@@ -262,12 +262,17 @@ pub fn proposal_take(
             };
             let mut model = match existing {
                 Some(model) => model,
-                None => new_login(&url)?,
+                None => new_login(url)?,
             };
-            model.totp = (*otp).clone();
+            model.totp = String::clone(otp);
             Ok(model)
         }
+    };
+    if built.is_err() {
+        // A failed read must not eat the proposal (it gets a new id; the webview shows the error).
+        handle.proposals.put(proposal);
     }
+    built
 }
 
 /// Forgets every paired browser, including when the stored list is unreadable (the bridge then
@@ -282,7 +287,12 @@ pub fn extension_folder_of(app: &AppHandle) -> Option<PathBuf> {
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf));
-    let dev_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent();
+    // The source checkout is a dev-build location only; a release never looks next to its build tree.
+    let dev_root = if cfg!(debug_assertions) {
+        Path::new(env!("CARGO_MANIFEST_DIR")).parent()
+    } else {
+        None
+    };
     crate::bridge::extension_folder(resources.as_deref(), exe_dir.as_deref(), dev_root)
 }
 
@@ -311,8 +321,10 @@ pub async fn browser_status(
 
 #[tauri::command]
 #[specta::specta]
-pub fn browser_revoke(state: State<'_, BridgeState>, id: String) -> Result<(), ApiError> {
-    revoke(&state, &id)
+pub async fn browser_revoke(state: State<'_, BridgeState>, id: String) -> Result<(), ApiError> {
+    // Async: the revoke touches the Keychain, which must not run on the main thread.
+    let state = state.inner().clone();
+    super::blocking(move || revoke(&state, &id)).await
 }
 
 #[tauri::command]
@@ -323,8 +335,9 @@ pub fn browser_pairing_cancel(state: State<'_, BridgeState>) -> Result<(), ApiEr
 
 #[tauri::command]
 #[specta::specta]
-pub fn browser_reset_pairings(state: State<'_, BridgeState>) -> Result<(), ApiError> {
-    reset_pairings(&state)
+pub async fn browser_reset_pairings(state: State<'_, BridgeState>) -> Result<(), ApiError> {
+    let state = state.inner().clone();
+    super::blocking(move || reset_pairings(&state)).await
 }
 
 #[tauri::command]

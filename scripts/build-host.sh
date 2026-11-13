@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Builds the native messaging host and stages it as the Tauri sidecar:
-#   src-tauri/binaries/mypass-host-<target triple>   (Tauri `externalBin` naming)
+#   src-tauri/binaries/mypass-native-host-<target triple>   (Tauri `externalBin` naming; not
+#   `mypass-host`, which would collide with cargo's own binary in the target directory)
 # Usage: scripts/build-host.sh [--release]
 #
 # Signing: when MYPASS_SIGNING_IDENTITY is set the staged binary is signed with it, passed to
@@ -56,7 +57,7 @@ EXE_SUFFIX=""
 case "$TRIPLE" in *windows*) EXE_SUFFIX=".exe" ;; esac
 SRC="$TARGET_DIR/$PROFILE_DIR/mypass-host$EXE_SUFFIX"
 DEST_DIR="$REPO_ROOT/src-tauri/binaries"
-DEST="$DEST_DIR/mypass-host-$TRIPLE$EXE_SUFFIX"
+DEST="$DEST_DIR/mypass-native-host-$TRIPLE$EXE_SUFFIX"
 
 if [[ ! -s "$SRC" ]]; then
   echo "Error: $SRC was not built." >&2

@@ -40,7 +40,7 @@
   "bundle": {
     "active": false,
     "externalBin": [
-      "binaries/mypass-host"
+      "binaries/mypass-native-host"
     ],
     "icon": [
       "icons/32x32.png",

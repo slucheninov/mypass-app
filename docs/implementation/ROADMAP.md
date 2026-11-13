@@ -34,7 +34,8 @@ Last updated: 2026-11-13
   command (`app_quit` and `app_show_main` included); add per-window command permissions through a
   `tauri_build` app manifest so the tray panel and settings window get only what they use. This
   includes the `browser_*` commands: `browser_proposal_take` returns a proposal's password, so only
-  the main window should be able to call it.
+  the main window should be able to call it, and `browser_status`, `browser_reset_pairings` and
+  `browser_revoke` belong to the main window alone.
 - [ ] Startup failure is reported only on stderr (invisible in a Windows release build and when
   launched from Finder); show a native dialog.
 - [ ] Quit-dialog default button: with tauri-plugin-dialog 2.8.4 a closed dialog is reported as the
@@ -94,7 +95,7 @@ Last updated: 2026-11-13
   between only loses the per-launch endpoint), then delete the file.
 - [ ] The native messaging manifests point at a host copy under Application Support, which a
   same-user process can replace (the same accepted risk as the 0600 endpoint file). Point the
-  manifests at the host inside the signed app bundle (`Contents/MacOS/mypass-host`, which Chrome
+  manifests at the host inside the signed app bundle (`Contents/MacOS/mypass-native-host`, the Tauri sidecar, named so it cannot replace cargo's `mypass-host`, which Chrome
   accepts as any absolute path) or verify the copy's signature before registering.
 - [ ] Signed macOS packaging with a stable team (DMG, extension zip, checksums, tag-driven release
   workflow).

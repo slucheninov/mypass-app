@@ -5,7 +5,7 @@
 //! start from `shell_runtime::start` once this has managed the state; the effect runner of
 //! [`ShellState`] is the real [`ShellEffects`] built here.
 
-use crate::bridge::{build_state, TauriBridgeEvents};
+use crate::bridge::{build_state, BridgeEvents, TauriBridgeEvents};
 use crate::events::{ClipboardClearedEvent, SaveStateChanged, SessionChanged, VaultChanged};
 use crate::files::{FileGrants, TauriFilePicker};
 use crate::hotkeys::ConflictGate;
@@ -162,8 +162,18 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         windows.clone(),
         Arc::new(TauriBridgeEvents(handle.clone())),
     );
-    let _ = bridge.start();
-    app.manage(bridge);
+    app.manage(bridge.clone());
+    // The start reads the pairing list from the Keychain and binds the port: never on the main
+    // thread, never in the setup hook. `listening: false` covers the gap; the worker emits
+    // `bridge_changed` when it is done.
+    let started_events = TauriBridgeEvents(handle.clone());
+    // A failed spawn leaves the bridge down (`listening: false`), like a failed start.
+    let _ = std::thread::Builder::new()
+        .name("mypass-bridge-start".into())
+        .spawn(move || {
+            let _ = bridge.start();
+            started_events.bridge_changed();
+        });
     app.manage(ShellState {
         picker: Arc::new(TauriFilePicker(handle)),
         grants,

@@ -125,8 +125,8 @@ impl PairingWindow {
     pub fn raise(&self) {
         let _ = self.windows.show(MAIN);
         let _ = self.windows.focus(MAIN);
-        self.raised.store(true, Ordering::SeqCst);
         let _ = self.windows.set_always_on_top(MAIN, true);
+        self.raised.store(true, Ordering::SeqCst);
     }
 
     pub fn lower(&self) {
@@ -171,6 +171,11 @@ impl BridgeUi for TauriBridgeUi {
     fn pairing_code(&self, _c: &PairingChallenge) {
         // The challenge itself reached the webview through the change hook.
         self.pairing_window.raise();
+        // A lock between the code's creation and this raise already ran its observer: do not leave
+        // the window pinned on top with no code to show.
+        if self.core.session.status().state != SessionState::Unlocked {
+            self.pairing.cancel();
+        }
         // Nothing notifies when a code simply runs out, so look again right after its deadline.
         let pairing = Arc::downgrade(&self.pairing);
         let events = Arc::clone(&self.events);
@@ -307,27 +312,8 @@ pub fn start_bridge(
             }
         }));
     }
-    {
-        // A lock ends the pairing (the code cannot be shown) and the unlock throttle.
-        let weak = Arc::downgrade(&pairing);
-        let window = Arc::clone(&pairing_window);
-        let focus = Arc::clone(&focus);
-        core.session
-            .add_observer(Arc::new(move |event: &SessionEvent| {
-                let SessionEvent::StateChanged(status) = event else {
-                    return;
-                };
-                if status.state == SessionState::Unlocked {
-                    focus.reset();
-                    return;
-                }
-                if let Some(pairing) = weak.upgrade() {
-                    pairing.cancel();
-                }
-                window.lower();
-            }));
-    }
-
+    let observer_window = Arc::clone(&pairing_window);
+    let observer_focus = Arc::clone(&focus);
     let ui = Arc::new(TauriBridgeUi {
         core: Arc::clone(core),
         events: Arc::clone(&events),
@@ -370,6 +356,28 @@ pub fn start_bridge(
                 BridgeStartError::Thread(e.to_string())
             })?
     };
+    // Registered only now that the server is up: a failed start leaves no observer behind (a
+    // retry after `browser_reset_pairings` builds a fresh one, and the old one would leak).
+    {
+        let weak = Arc::downgrade(&pairing);
+        let window = observer_window;
+        let focus = observer_focus;
+        core.session
+            .add_observer(Arc::new(move |event: &SessionEvent| {
+                let SessionEvent::StateChanged(status) = event else {
+                    return;
+                };
+                if status.state == SessionState::Unlocked {
+                    focus.reset();
+                    return;
+                }
+                // A lock ends the pairing (the code cannot be shown) and the unlock throttle.
+                if let Some(pairing) = weak.upgrade() {
+                    pairing.cancel();
+                }
+                window.lower();
+            }));
+    }
     Ok(BridgeHandle {
         server,
         service,
@@ -751,8 +759,9 @@ mod tests {
         handle.join_registration();
         assert_eq!(f.w.fake.host_registrar.register_calls(), 1);
         assert!(lock(&handle.registration).is_none());
+        f.w.core.vault_lock().unwrap();
         let reply = ask(&handle, &serde_json::json!({"type": "getFavorites"}));
-        assert_ne!(reply["type"], "");
+        assert_eq!(reply["type"], "locked");
     }
 
     #[test]
@@ -914,7 +923,6 @@ mod tests {
     fn open_app_shows_main_window_without_always_on_top() {
         let f = fixture(true);
         let secret = pair(&f);
-        f.windows.calls();
         let before = f.windows.calls().len();
         let r = f.handle().service.handle(Request::OpenApp {
             token: "t".into(),
