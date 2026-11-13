@@ -82,7 +82,7 @@ pub fn running_app_executables(bundle_id: &str) -> Vec<PathBuf> {
     return fallback::running_app_executables(bundle_id);
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
