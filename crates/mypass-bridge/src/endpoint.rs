@@ -1,7 +1,8 @@
 //! The endpoint record (port and token), the token generator and the hello proof.
 //!
-//! The app writes the record into the host-shared secret store (`Platform.shared_secrets`, a 0600
-//! file on macOS and Windows) once its loopback server is listening; the native messaging host
+//! The app writes the record into the host-shared secret store (`Platform.shared_secrets`, a file
+//! on macOS and Windows: mode 0600 on macOS, the per-user profile ACL on Windows, since mode bits
+//! mean nothing there) once its loopback server is listening; the native messaging host
 //! reads it and connects.
 //!
 //! Why the handshake exists: a crashed app leaves its record behind and another local process can
@@ -27,7 +28,11 @@ pub const ENDPOINT_SERVICE: &str = "com.mypass.extensionbridge.endpoint";
 pub const ENDPOINT_ACCOUNT: &str = "loopback";
 
 /// Domain separation prefix of the hello proof.
-const PROOF_DOMAIN: &[u8] = b"mypass-bridge-hello-v1";
+///
+/// The label names the role: this is the app proving itself to the host. A future reverse or mutual
+/// challenge (the host proving itself to the app) MUST use a different label, otherwise a peer could
+/// reflect one side's challenge back as the other side's proof.
+const PROOF_DOMAIN: &[u8] = b"mypass-bridge/hello/v1/app-proves-to-host";
 /// A real record is under 150 bytes; anything larger is hostile or corrupt.
 const MAX_RECORD_BYTES: usize = 4096;
 /// A generated token is 44 characters; the cap leaves room without accepting junk.
@@ -45,7 +50,7 @@ pub enum EndpointError {
 }
 
 /// Where the app's loopback server listens and the token that authenticates both ends.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Endpoint {
     /// Loopback TCP port.
@@ -59,6 +64,18 @@ pub struct Endpoint {
     #[serde(default)]
     pub started_at: i64,
 }
+
+/// The token is compared in constant time; an empty token is never equal to anything.
+impl PartialEq for Endpoint {
+    fn eq(&self, other: &Self) -> bool {
+        self.port == other.port
+            && self.pid == other.pid
+            && self.started_at == other.started_at
+            && tokens_equal(&self.token, &other.token)
+    }
+}
+
+impl Eq for Endpoint {}
 
 impl std::fmt::Debug for Endpoint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -87,6 +104,12 @@ impl Endpoint {
     }
 }
 
+/// The writer requires exactly what `generate_token` makes: 44 characters of base64 of 32 bytes.
+/// `load` stays lenient so older records still read.
+fn is_generated_token_shape(token: &str) -> bool {
+    token.len() == 44 && B64.decode(token).is_ok_and(|b| b.len() == 32)
+}
+
 /// A fresh token: 32 bytes from the OS CSPRNG, standard base64 (44 characters).
 #[must_use]
 pub fn generate_token() -> String {
@@ -103,7 +126,7 @@ fn random_b64<const N: usize>() -> String {
     let mut bytes = Zeroizing::new([0u8; N]);
     // `OsRng` panics if the OS entropy source fails, the same contract as the generator.
     rand::rngs::OsRng.fill_bytes(&mut *bytes);
-    B64.encode(*bytes)
+    B64.encode(bytes.as_slice())
 }
 
 /// Constant-time token comparison; empty or different lengths never match.
@@ -132,7 +155,7 @@ impl EndpointStore {
     /// # Errors
     /// `Invalid` for a record that would not read back, `Store` when the store fails.
     pub fn save(&self, e: &Endpoint) -> Result<(), EndpointError> {
-        if !e.is_valid() {
+        if !e.is_valid() || !is_generated_token_shape(&e.token) {
             return Err(EndpointError::Invalid);
         }
         let json = Zeroizing::new(serde_json::to_vec(e).map_err(|_| EndpointError::Invalid)?);
@@ -270,7 +293,7 @@ mod tests {
     #[test]
     fn clear_removes() {
         let (_, s) = store();
-        s.save(&ep(1, "t")).unwrap();
+        s.save(&ep(1, &generate_token())).unwrap();
         s.clear().unwrap();
         assert_eq!(s.load().unwrap(), None);
         s.clear().unwrap();
@@ -279,9 +302,10 @@ mod tests {
     #[test]
     fn overwrite_replaces_previous() {
         let (_, s) = store();
-        s.save(&ep(1, "a")).unwrap();
-        s.save(&ep(2, "b")).unwrap();
-        assert_eq!(s.load().unwrap(), Some(ep(2, "b")));
+        let (a, b) = (generate_token(), generate_token());
+        s.save(&ep(1, &a)).unwrap();
+        s.save(&ep(2, &b)).unwrap();
+        assert_eq!(s.load().unwrap(), Some(ep(2, &b)));
     }
 
     #[test]
@@ -354,6 +378,9 @@ mod tests {
         let (_, s) = store();
         assert_eq!(s.save(&ep(0, "t")), Err(EndpointError::Invalid));
         assert_eq!(s.save(&ep(1, "")), Err(EndpointError::Invalid));
+        assert_eq!(s.save(&ep(1, "t")), Err(EndpointError::Invalid));
+        let long = "a".repeat(44);
+        assert_eq!(s.save(&ep(1, &long)), Err(EndpointError::Invalid));
     }
 
     #[test]
@@ -372,7 +399,7 @@ mod tests {
         assert_eq!(p.len(), 64);
         assert!(p.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')));
         let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(b"tok").unwrap();
-        mac.update(b"mypass-bridge-hello-v1");
+        mac.update(b"mypass-bridge/hello/v1/app-proves-to-host");
         mac.update(b"nonce");
         let want: String = mac
             .finalize()
@@ -394,6 +421,28 @@ mod tests {
         assert!(!verify_proof("", "n1", &hello_proof("", "n1")));
         // A squatter that echoes the token or a guess does not pass.
         assert!(!verify_proof("tok", "n1", "tok"));
+    }
+
+    #[test]
+    fn nonces_differ_between_calls() {
+        assert_ne!(new_nonce(), new_nonce());
+    }
+
+    #[test]
+    fn replayed_proof_for_another_nonce_is_rejected() {
+        let token = generate_token();
+        let (a, b) = (new_nonce(), new_nonce());
+        let proof_a = hello_proof(&token, &a);
+        assert!(verify_proof(&token, &a, &proof_a));
+        assert!(!verify_proof(&token, &b, &proof_a));
+    }
+
+    #[test]
+    fn host_challenge_echoed_back_is_not_a_proof() {
+        let token = generate_token();
+        let nonce = new_nonce();
+        assert!(!verify_proof(&token, &nonce, &nonce));
+        assert!(!verify_proof(&token, &nonce, &token));
     }
 
     #[test]

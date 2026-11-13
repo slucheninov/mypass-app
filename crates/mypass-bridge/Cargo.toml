@@ -23,14 +23,14 @@ mypass-platform = { path = "../mypass-platform" }
 mypass-session = { path = "../mypass-session", optional = true }
 mypass-core = { path = "../mypass-core", optional = true }
 mypass-kdbx = { path = "../mypass-kdbx", optional = true }
-serde.workspace = true
-serde_json.workspace = true
-thiserror.workspace = true
 base64.workspace = true
 hmac.workspace = true
 rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 subtle.workspace = true
+thiserror.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
