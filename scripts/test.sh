@@ -3,7 +3,7 @@
 #
 #   scripts/test.sh [--ci] [--only rust|ui|js] [--no-js]
 #
-# Parts: rust (cargo test --workspace --no-fail-fast), ui (pnpm; the hook is filled by stage 2b), js
+# Parts: rust (cargo test --workspace --no-fail-fast), ui (pnpm install --frozen-lockfile, check, test, build), js
 # (the Node built-in suites of scripts/*.test.mjs, i.e. the i18n converter and catalog tests, plus the
 # extension suites once stage 3 adds scripts/test-extension.sh). Later stages fill the hook bodies
 # below and never change this command line.
@@ -85,8 +85,8 @@ else
   esac
 fi
 
-# A UI suite exists once package.json declares a `test` script. Until stage 2b, package.json only
-# carries the tooling pins, so there is nothing to run (and pnpm is not required).
+# A UI suite exists once package.json declares a `test` script (stage 2b). Without one there is
+# nothing to run and pnpm is not required.
 has_ui() { [[ -f package.json ]] && grep -q '"test"[[:space:]]*:' package.json; }
 has_node_suites() { compgen -G "scripts/*.test.mjs" >/dev/null; }
 has_js() { has_node_suites || [[ -f scripts/test-extension.sh ]]; }
@@ -101,7 +101,12 @@ need_tool() {
 # Preflight: only the tools of the selected parts, and a part only needs its tool once it exists.
 # A local run without node fails when JS suites exist, unless --no-js was given.
 [[ $want_rust -eq 1 ]] && need_tool cargo rust
-[[ $want_ui -eq 1 ]] && has_ui && need_tool pnpm ui
+# The ui part needs node and pnpm. In --ci a missing tool is a failure; locally run_ui says
+# `ui: NOT RUN` instead, so a machine without the JS toolchain can still run the rust part.
+if [[ $want_ui -eq 1 && $ci -eq 1 ]] && has_ui; then
+  need_tool node ui
+  need_tool pnpm ui
+fi
 [[ $want_js -eq 1 ]] && has_js && need_tool node js
 
 run_rust() {
@@ -121,18 +126,30 @@ run_rust() {
   cargo "${args[@]}"
 }
 
-# Stage 2b fills this hook with install, type-check and unit tests.
+# The frontend: a frozen install (the lockfile is the contract), svelte-check with warnings as
+# errors, the Vitest suites and a production build (the build is what `tauri build` bundles, so a
+# broken bundle must fail here and not in packaging).
 run_ui() {
   if [[ ! -f package.json ]]; then
     echo "ui: skipped (no package.json yet)"
     return 0
   fi
   if ! has_ui; then
-    echo "ui: NOT RUN (package.json has no test script yet; no UI suite exists until stage 2b)"
+    echo "ui: NOT RUN (package.json has no test script yet; no UI suite exists)"
     return 0
   fi
-  echo "error: package.json declares a test script but the ui hook of scripts/test.sh is not filled in yet" >&2
-  return 1
+  if [[ $ci -eq 0 ]] && ! { command -v node >/dev/null 2>&1 && command -v pnpm >/dev/null 2>&1; }; then
+    echo "ui: NOT RUN (node and pnpm are required for the UI suite and are not on PATH; install them or use --only rust)"
+    return 0
+  fi
+  echo "== ui: pnpm install --frozen-lockfile"
+  pnpm install --frozen-lockfile
+  echo "== ui: pnpm check"
+  pnpm check
+  echo "== ui: pnpm test"
+  pnpm test
+  echo "== ui: pnpm build"
+  pnpm build
 }
 
 # The Node suites need nothing but node itself (built-in test runner, no npm install). Stage 3 adds

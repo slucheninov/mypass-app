@@ -4,6 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.mypass.app",
   "build": {
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build",
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420"
   },
@@ -14,8 +16,8 @@
         "title": "MyPass",
         "width": 1080,
         "height": 720,
-        "minWidth": 760,
-        "minHeight": 480,
+        "minWidth": 820,
+        "minHeight": 520,
         "visible": false
       },
       {
@@ -31,7 +33,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; font-src 'self'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; font-src 'self'",
+      "devCsp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost ws://localhost:1420; font-src 'self'"
     }
   },
   "bundle": {

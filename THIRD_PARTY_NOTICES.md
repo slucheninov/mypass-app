@@ -725,3 +725,105 @@ into the shipped product.
 `pykeepass==4.2.0` (GPL-3.0) is CI-only test tooling, installed into the crosscompat job's
 Python environment, never linked into or shipped with MyPass. Optional local verification uses
 an external scratch venv. It is not a Cargo dependency. Upstream: https://github.com/libkeepass/pykeepass.
+
+## npm packages (user interface)
+
+This section is maintained by hand (the generated Cargo tables above are produced by
+`update_notices.py` and never contain npm packages). Versions are the exact pins of `package.json`
+and `pnpm-lock.yaml`; refresh the lists with `pnpm licenses list --prod` when a pin changes. Where a
+licence offers alternatives, MyPass selects MIT or Apache-2.0; in particular the MPL-2.0 alternative
+of DOMPurify is not selected.
+
+### Shipped in the frontend bundle once imported (`dependencies`)
+
+| Package | Version | Licence |
+|---|---|---|
+| `@tauri-apps/api` | 2.12.4 | Apache-2.0 OR MIT |
+| `@tauri-apps/plugin-dialog` | 2.8.4 | MIT OR Apache-2.0 |
+| `@tauri-apps/plugin-opener` | 2.7.2 | MIT OR Apache-2.0 |
+| `dompurify` | 3.4.17 | MPL-2.0 OR Apache-2.0 |
+| `intl-messageformat` | 12.1.4 | BSD-3-Clause |
+| `@formatjs/fast-memoize` (via `intl-messageformat`) | 3.1.7 | MIT |
+| `@formatjs/icu-messageformat-parser` (via `intl-messageformat`) | 3.5.22 | MIT |
+| `@formatjs/icu-skeleton-parser` (via `intl-messageformat`) | 2.1.12 | MIT |
+| `marked` | 18.1.1 | MIT |
+
+The Svelte runtime (`svelte` 5.57.3, MIT, a development dependency because the compiler runs at
+build time) is also copied into the bundle by the compiled components, together with the two
+runtime dependencies it imports from `svelte/internal`:
+
+| Package | Version | Licence |
+|---|---|---|
+| `clsx` (via `svelte`) | 2.1.1 | MIT |
+| `esm-env` (via `svelte`) | 1.2.2 | MIT |
+
+The other entries of Svelte's `dependencies` (`acorn`, `esrap`, `magic-string`, `devalue`, and so on)
+belong to the compiler or to server-side rendering and are not in the bundle.
+`@types/trusted-types` 2.0.7 (MIT) is a type-only dependency of DOMPurify and is not bundled.
+
+`intl-messageformat` is under the New BSD licence, which requires its notice to be reproduced with
+binary distributions:
+
+~~~~text
+Copyright (c) 2023, Oath Inc.
+
+Licensed under the terms of the New BSD license. See below for terms.
+
+Redistribution and use of this software in source and binary forms,
+with or without modification, are permitted provided that the following
+conditions are met:
+
+- Redistributions of source code must retain the above
+  copyright notice, this list of conditions and the
+  following disclaimer.
+
+- Redistributions in binary form must reproduce the above
+  copyright notice, this list of conditions and the
+  following disclaimer in the documentation and/or other
+  materials provided with the distribution.
+
+- Neither the name of Oath Inc. nor the names of its
+  contributors may be used to endorse or promote products
+  derived from this software without specific prior
+  written permission of Oath Inc.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+~~~~
+
+### Development tooling (`devDependencies`, never shipped)
+
+Used to build and test the frontend only; none of it is part of a MyPass artifact.
+
+| Package | Version | Licence |
+|---|---|---|
+| `@sveltejs/vite-plugin-svelte` | 6.2.4 | MIT |
+| `@tauri-apps/cli` | 2.12.4 | Apache-2.0 OR MIT |
+| `@testing-library/svelte` | 5.4.2 | MIT |
+| `@types/node` | 26.6.5 | MIT |
+| `jsdom` | 30.1.3 | MIT |
+| `svelte` | 5.57.3 | MIT |
+| `svelte-check` | 4.7.7 | MIT |
+| `typescript` | 5.9.3 | Apache-2.0 |
+| `vite` | 6.4.5 | MIT |
+| `vitest` | 3.2.7 | MIT |
+
+Their own transitive dependencies are listed in `pnpm-lock.yaml`.
+
+### Test-only npm packages (not shipped)
+
+These are `devDependencies` used by the component tests; nothing from them is in the bundle.
+
+| Package | Version | Licence |
+|---|---|---|
+| `axe-core` | 4.11.0 | MPL-2.0 |
+| `@testing-library/user-event` | 14.6.1 | MIT |

@@ -1,0 +1,121 @@
+/* Design tokens, resets and the dark variant ("A, calm native"). Baseline: Safari 16.4. */
+:root {
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --radius: 6px;
+  --sep: 1px solid var(--separator);
+
+  --accent: #2f6feb;
+  --accent-text: #ffffff;
+  --danger: #c8312b;
+  --danger-hover: #e81123;
+  --danger-hover-text: #ffffff;
+  --bg: #ffffff;
+  --sidebar-bg: #f5f5f7;
+  --list-bg: #fbfbfc;
+  --separator: #e3e3e6;
+  --text: #1d1d1f;
+  --text-2: #6e6e73;
+  --hover: rgba(0, 0, 0, 0.05);
+  --selected: rgba(47, 111, 235, 0.14);
+  --control-bg: #ffffff;
+  --control-border: #c9c9ce;
+  --overlay: rgba(0, 0, 0, 0.32);
+  --shadow: 0 8px 28px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.06);
+  color-scheme: light;
+}
+
+/* Dark follows the system only while no theme is forced. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --accent: #4c8dff;
+    --accent-text: #0b1220;
+    --danger: #ff6b63;
+    --bg: #1e1e20;
+    --sidebar-bg: #252528;
+    --list-bg: #212124;
+    --separator: #38383c;
+    --text: #f2f2f4;
+    --text-2: #9a9aa0;
+    --hover: rgba(255, 255, 255, 0.07);
+    --selected: rgba(76, 141, 255, 0.24);
+    --control-bg: #2a2a2d;
+    --control-border: #4a4a50;
+    --overlay: rgba(0, 0, 0, 0.55);
+    --shadow: 0 8px 28px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.08);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --accent: #4c8dff;
+  --accent-text: #0b1220;
+  --danger: #ff6b63;
+  --bg: #1e1e20;
+  --sidebar-bg: #252528;
+  --list-bg: #212124;
+  --separator: #38383c;
+  --text: #f2f2f4;
+  --text-2: #9a9aa0;
+  --hover: rgba(255, 255, 255, 0.07);
+  --selected: rgba(76, 141, 255, 0.24);
+  --control-bg: #2a2a2d;
+  --control-border: #4a4a50;
+  --overlay: rgba(0, 0, 0, 0.55);
+  --shadow: 0 8px 28px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+input,
+textarea,
+select,
+button {
+  font: inherit;
+  color: inherit;
+}
+
+input,
+textarea {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* One focus ring for every interactive element; keyboard focus only. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}
