@@ -29,29 +29,40 @@ use uuid::Uuid;
 #[derive(Default)]
 pub(crate) struct RecordingUi {
     calls: Mutex<Vec<String>>,
+    details: Mutex<Vec<String>>,
 }
 
 impl RecordingUi {
     fn note(&self, s: &str) {
         self.calls.lock().unwrap().push(s.to_owned());
+        self.details.lock().unwrap().push(s.to_owned());
+    }
+    /// A call with its arguments, space separated, as `details()` shows it.
+    fn note_with(&self, name: &str, args: &str) {
+        self.calls.lock().unwrap().push(name.to_owned());
+        self.details.lock().unwrap().push(format!("{name} {args}"));
     }
     pub(crate) fn calls(&self) -> Vec<String> {
         self.calls.lock().unwrap().clone()
     }
+    /// Every call as `name args...` (the pairing code and proposal ids included).
+    pub(crate) fn details(&self) -> Vec<String> {
+        self.details.lock().unwrap().clone()
+    }
 }
 
 impl BridgeUi for RecordingUi {
-    fn pairing_code(&self, _c: &PairingChallenge) {
-        self.note("pairing_code");
+    fn pairing_code(&self, c: &PairingChallenge) {
+        self.note_with("pairing_code", &c.code);
     }
     fn pairing_finished(&self) {
         self.note("pairing_finished");
     }
-    fn save_login_proposal(&self, _id: &str, _url: &str, _username: &str) {
-        self.note("save_login_proposal");
+    fn save_login_proposal(&self, id: &str, url: &str, username: &str) {
+        self.note_with("save_login_proposal", &format!("{id} {url} {username}"));
     }
-    fn save_totp_proposal(&self, _id: &str, _url: &str, _entry_id: Option<Uuid>) {
-        self.note("save_totp_proposal");
+    fn save_totp_proposal(&self, id: &str, url: &str, entry_id: Option<Uuid>) {
+        self.note_with("save_totp_proposal", &format!("{id} {url} {entry_id:?}"));
     }
     fn unlock_requested(&self) {
         self.note("unlock_requested");

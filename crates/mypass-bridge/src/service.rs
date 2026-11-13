@@ -21,8 +21,8 @@
 
 #![deny(clippy::wildcard_enum_match_arm)]
 
-use std::sync::Arc;
-use std::time::SystemTime;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
 
 use mypass_session::autolock::AutoLock;
 use mypass_session::scheduler::Scheduler;
@@ -55,10 +55,13 @@ pub(crate) struct Ctx<'a> {
     pub deps: &'a BridgeDeps,
     /// The injected wall clock at the start of the request.
     pub now: SystemTime,
+    /// Monotonic time of the last `requestUnlock` that was shown to the user (the debounce).
+    pub last_unlock_request: &'a Mutex<Option<Duration>>,
 }
 
 pub struct BridgeService {
     deps: BridgeDeps,
+    last_unlock_request: Mutex<Option<Duration>>,
 }
 
 impl std::fmt::Debug for BridgeService {
@@ -81,12 +84,20 @@ impl BridgeService {
                 }
             }
         }));
-        Arc::new(Self { deps })
+        Arc::new(Self {
+            deps,
+            last_unlock_request: Mutex::new(None),
+        })
     }
 
+    /// A context for calling a handler directly, past the gates.
     #[cfg(test)]
-    pub(crate) fn deps_for_test(&self) -> &BridgeDeps {
-        &self.deps
+    pub(crate) fn ctx_for_test(&self) -> Ctx<'_> {
+        Ctx {
+            deps: &self.deps,
+            now: self.deps.scheduler.wall_now(),
+            last_unlock_request: &self.last_unlock_request,
+        }
     }
 
     /// Answers one request. Never panics, never returns vault data to a locked, unpaired or
@@ -106,6 +117,7 @@ impl BridgeService {
         let ctx = Ctx {
             deps,
             now: deps.scheduler.wall_now(),
+            last_unlock_request: &self.last_unlock_request,
         };
         let response = Self::dispatch(&ctx, &request, unlocked);
         self.note_activity(&request, &response);

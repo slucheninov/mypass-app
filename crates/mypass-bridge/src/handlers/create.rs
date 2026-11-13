@@ -411,10 +411,7 @@ mod tests {
         n.title = "N".into();
         assert_eq!(create(&f, &n), Response::Locked);
         // The handler itself also answers Locked when the lock races the gate.
-        let ctx = crate::service::Ctx {
-            deps: f.svc.deps_for_test(),
-            now: std::time::UNIX_EPOCH,
-        };
+        let ctx = f.svc.ctx_for_test();
         let args = CreateEntryArgs {
             entry_type: "Notes",
             title: "N",
@@ -441,10 +438,7 @@ mod tests {
         n.title = "N".into();
         assert_eq!(msg(&create(&f, &n)), "MyPass is quitting");
         // Past the gate, `mutate` itself refuses.
-        let ctx = crate::service::Ctx {
-            deps: f.svc.deps_for_test(),
-            now: std::time::UNIX_EPOCH,
-        };
+        let ctx = f.svc.ctx_for_test();
         let args = CreateEntryArgs {
             entry_type: "Notes",
             title: "N",

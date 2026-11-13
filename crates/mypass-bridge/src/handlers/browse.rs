@@ -338,10 +338,7 @@ mod tests {
         // Called directly (no gate): the handlers rely on `with_db`, not on a snapshot.
         let (f, _) = sample_fx();
         f.session.lock(LockReason::Manual);
-        let ctx = Ctx {
-            deps: f.svc.deps_for_test(),
-            now: std::time::SystemTime::now(),
-        };
+        let ctx = f.svc.ctx_for_test();
         assert_eq!(
             get_credentials(&ctx, "https://github.com"),
             Response::Locked
