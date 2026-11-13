@@ -34,9 +34,18 @@ impl DiagnosticsStore {
         self.items.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Keeps `report` as the latest one of `browser_id`. The caller validates it first
-    /// (`BrowserDiagnosticsReport::is_valid`).
-    pub fn record(&self, report: BrowserDiagnosticsReport, browser_id: Uuid, received_at: i64) {
+    /// Keeps `report` as the latest one of `browser_id`. An invalid report
+    /// (`BrowserDiagnosticsReport::is_valid`) is ignored, the previous snapshot stays, and `false`
+    /// is returned.
+    pub fn record(
+        &self,
+        report: BrowserDiagnosticsReport,
+        browser_id: Uuid,
+        received_at: i64,
+    ) -> bool {
+        if !report.is_valid() {
+            return false;
+        }
         self.items().insert(
             browser_id,
             DiagnosticsSnapshot {
@@ -44,6 +53,7 @@ impl DiagnosticsStore {
                 received_at,
             },
         );
+        true
     }
 
     #[must_use]
@@ -137,6 +147,28 @@ mod tests {
         store.record(sample(), id, 43);
         assert_eq!(store.get(id).unwrap().received_at, 43);
         assert_eq!(store.all().len(), 1);
+    }
+
+    #[test]
+    fn record_ignores_invalid_reports_and_keeps_the_previous_snapshot() {
+        let store = DiagnosticsStore::new();
+        let id = Uuid::new_v4();
+        let mut bad = sample();
+        bad.enabled_managers = (0..21).map(|i| format!("M{i}")).collect();
+        assert!(!store.record(bad.clone(), id, 1));
+        assert_eq!(store.get(id), None);
+        assert!(store.record(sample(), id, 2));
+        assert!(!store.record(bad, id, 3));
+        assert_eq!(store.get(id).unwrap().received_at, 2);
+    }
+
+    #[test]
+    fn format_characters_in_manager_names_are_rejected() {
+        for name in ["Man\u{202E}ager", "Man\u{200B}ager", "\u{FEFF}Manager"] {
+            let mut r = sample();
+            r.enabled_managers = vec![name.into()];
+            assert!(!r.is_valid(), "{name:?}");
+        }
     }
 
     #[test]

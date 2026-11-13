@@ -428,6 +428,23 @@ const MAX_REPORTED_MANAGERS: usize = 20;
 /// Longest manager name, in characters.
 const MAX_MANAGER_NAME_CHARS: usize = 120;
 
+/// Unicode format characters (category Cf): soft hyphen, Arabic number signs, zero-width and
+/// bidirectional marks and overrides, word joiner and invisible operators, BOM, interlinear
+/// annotation, musical and tag characters. They render as nothing or reorder surrounding text.
+fn is_format_char(c: char) -> bool {
+    matches!(u32::from(c),
+        0x00AD | 0x0600..=0x0605 | 0x061C | 0x06DD | 0x070F | 0x08E2 | 0x180E
+        | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F
+        | 0xFEFF | 0xFFF9..=0xFFFB | 0x110BD | 0x110CD | 0x1BCA0..=0x1BCA3
+        | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
+}
+
+/// Control (Cc) or format (Cf) characters, which no name or label shown in the UI may contain.
+#[must_use]
+pub fn is_unsafe_text_char(c: char) -> bool {
+    c.is_control() || is_format_char(c)
+}
+
 impl BrowserDiagnosticsReport {
     /// Bounds and consistency rules of the Swift app: a hostile or buggy extension cannot push
     /// oversized, control-character or self-contradicting reports into the UI.
@@ -437,7 +454,7 @@ impl BrowserDiagnosticsReport {
             && self.enabled_managers.iter().all(|name| {
                 !name.trim().is_empty()
                     && name.chars().count() <= MAX_MANAGER_NAME_CHARS
-                    && !name.chars().any(char::is_control)
+                    && !name.chars().any(is_unsafe_text_char)
             })
             && (self.extension_scan_state == ExtensionScanState::Complete
                 || self.enabled_managers.is_empty())

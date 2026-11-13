@@ -28,6 +28,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::endpoint::{generate_token, tokens_equal};
+use crate::protocol::is_unsafe_text_char;
 
 /// How long a code stays valid.
 pub const PAIRING_CODE_TTL: Duration = Duration::from_secs(120);
@@ -178,6 +179,14 @@ impl PairedBrowserStore {
         find_by_secret(&self.list().unwrap_or_default(), secret)
     }
 
+    /// Writes `all` as the complete list, without reading the store first. The manager uses this:
+    /// once loaded, its in-memory list is the source of truth, so a store that lost the item (the
+    /// Keychain `set` is delete-then-add) is repaired by the next write instead of read back empty.
+    pub fn save(&self, all: &[PairedBrowser]) -> Result<(), PairingError> {
+        let _guard = lock(&self.write);
+        self.write_all(all)
+    }
+
     fn write_all(&self, all: &[PairedBrowser]) -> Result<(), PairingError> {
         let bytes = Zeroizing::new(serde_json::to_vec(all).map_err(|_| PairingError::Corrupt)?);
         self.secrets
@@ -244,6 +253,8 @@ struct State {
     last_start: Option<Duration>,
     /// Monotonic times of wrong attempts, oldest first, pruned to the daily window.
     failures: VecDeque<Duration>,
+    /// Set when the daily cap is reached; only a restart clears it (R7).
+    daily_latched: bool,
 }
 
 impl State {
@@ -265,8 +276,16 @@ impl State {
     }
 
     fn budget_spent(&self, now: Duration) -> bool {
-        self.failures_within(now, GLOBAL_FAILURE_WINDOW) >= GLOBAL_FAILURE_BUDGET as usize
-            || self.failures_within(now, DAILY_FAILURE_WINDOW) >= DAILY_FAILURE_CAP as usize
+        self.daily_latched
+            || self.failures_within(now, GLOBAL_FAILURE_WINDOW) >= GLOBAL_FAILURE_BUDGET as usize
+    }
+
+    /// Records a wrong attempt and latches the daily cap when it is reached.
+    fn record_failure(&mut self, now: Duration) {
+        self.failures.push_back(now);
+        if self.failures_within(now, DAILY_FAILURE_WINDOW) >= DAILY_FAILURE_CAP as usize {
+            self.daily_latched = true;
+        }
     }
 }
 
@@ -391,7 +410,7 @@ impl PairingManager {
                 st.active = None;
                 label
             } else {
-                st.failures.push_back(now);
+                st.record_failure(now);
                 let spent = st.budget_spent(now);
                 if expired || spent || wrong >= PAIRING_MAX_ATTEMPTS {
                     st.active = None;
@@ -410,15 +429,13 @@ impl PairingManager {
             created_at: self.wall_secs(),
             secret_hash: sha256_hex(&secret),
         };
-        let result = {
-            let _m = lock(&self.mutate);
-            self.store.add(browser.clone()).map(|()| {
-                self.cache
-                    .write()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .push(browser);
-            })
-        };
+        let result = self.apply(|list| {
+            if list.len() >= MAX_PAIRED_BROWSERS {
+                return Err(PairingError::TooMany);
+            }
+            list.push(browser);
+            Ok(())
+        });
         self.notify();
         result.map(|()| Some(secret))
     }
@@ -473,27 +490,47 @@ impl PairingManager {
             .clone()
     }
 
-    /// Revokes a browser. On a store error nothing changes, in the store or in memory.
+    /// Revokes a browser. On a store error the in-memory list is unchanged and the error returned.
     pub fn revoke(&self, id: Uuid) -> Result<(), PairingError> {
-        {
-            let _m = lock(&self.mutate);
-            self.store.remove(id)?;
-            self.cache
-                .write()
-                .unwrap_or_else(PoisonError::into_inner)
-                .retain(|b| b.id != id);
-        }
+        self.apply(|list| {
+            list.retain(|b| b.id != id);
+            Ok(())
+        })?;
         self.notify();
+        Ok(())
+    }
+
+    /// Changes the list: edits a copy of the in-memory list and persists the WHOLE copy (never a
+    /// re-read of the store plus the change). On success the copy becomes the list. On failure the
+    /// in-memory list stays as it was, one attempt is made to put the previous list back into the
+    /// store (the Keychain `set` deletes before it adds, so a failed add can leave nothing there),
+    /// and the next successful change persists everything again.
+    fn apply(
+        &self,
+        change: impl FnOnce(&mut Vec<PairedBrowser>) -> Result<(), PairingError>,
+    ) -> Result<(), PairingError> {
+        let _m = lock(&self.mutate);
+        let before = self.list();
+        let mut after = before.clone();
+        change(&mut after)?;
+        if after == before {
+            return Ok(());
+        }
+        if let Err(e) = self.store.save(&after) {
+            let _ = self.store.save(&before);
+            return Err(e);
+        }
+        *self.cache.write().unwrap_or_else(PoisonError::into_inner) = after;
         Ok(())
     }
 }
 
-/// A label is shown in the UI: trimmed, free of control characters, capped; empty means default.
+/// A label is shown in the UI: trimmed, free of control and format characters, capped; empty means default.
 fn sanitize_label(raw: Option<&str>) -> String {
     let cleaned: String = raw
         .unwrap_or("")
         .chars()
-        .filter(|c| !c.is_control())
+        .filter(|c| !is_unsafe_text_char(*c))
         .take(MAX_LABEL_CHARS)
         .collect();
     let trimmed = cleaned.trim();
@@ -746,7 +783,7 @@ mod tests {
     }
 
     #[test]
-    fn daily_cap_outlasts_the_ten_minute_window() {
+    fn daily_cap_latches_until_restart() {
         let (s, _m, m) = manager();
         // One challenge of 5 wrong per 10-minute window never trips the 15-per-10-minutes budget,
         // but 10 of them reach the daily cap of 50.
@@ -758,8 +795,178 @@ mod tests {
             s.advance(GLOBAL_FAILURE_WINDOW);
         }
         assert_eq!(m.start(None), StartOutcome::Throttled);
+        // Neither the passing of the window nor of a month releases it: a restart does.
         s.advance(DAILY_FAILURE_WINDOW);
-        assert!(matches!(m.start(None), StartOutcome::Started(_)));
+        assert_eq!(m.start(None), StartOutcome::Throttled);
+        s.advance(DAILY_FAILURE_WINDOW * 30);
+        assert_eq!(m.start(None), StartOutcome::Throttled);
+        let (_s2, _m2, fresh) = manager();
+        assert!(matches!(fresh.start(None), StartOutcome::Started(_)));
+    }
+
+    #[test]
+    fn correct_code_fails_after_the_budget_is_spent() {
+        let (s, _m, m) = manager();
+        for _ in 0..2 {
+            burn_challenge(&s, &m);
+        }
+        let c = started(&m);
+        for _ in 0..5 {
+            m.complete(&wrong_code(&c)).unwrap();
+        }
+        assert_eq!(m.start(None), StartOutcome::Throttled);
+        assert!(m.complete(&c.code).unwrap().is_none());
+        assert!(m.list().is_empty());
+    }
+
+    #[test]
+    fn correct_code_after_budget_spent_mid_challenge_is_refused() {
+        let (s, _m, m) = manager();
+        for _ in 0..2 {
+            burn_challenge(&s, &m);
+        }
+        let c = started(&m);
+        for _ in 0..4 {
+            m.complete(&wrong_code(&c)).unwrap();
+        }
+        assert!(m.complete(&wrong_code(&c)).unwrap().is_none());
+        assert!(m.complete(&c.code).unwrap().is_none());
+    }
+
+    #[test]
+    fn setting_the_wall_clock_back_does_not_reset_a_window() {
+        let (s, _m, m) = manager();
+        for _ in 0..3 {
+            burn_challenge(&s, &m);
+        }
+        assert_eq!(m.start(None), StartOutcome::Throttled);
+        s.set_wall_clock(UNIX_EPOCH);
+        assert_eq!(m.start(None), StartOutcome::Throttled);
+        s.set_wall_clock(UNIX_EPOCH + Duration::from_secs(10_000_000));
+        assert_eq!(m.start(None), StartOutcome::Throttled);
+        // The start interval and the code lifetime also follow the monotonic clock.
+        let (s, _m, m) = manager();
+        let c = started(&m);
+        s.jump_wall_clock(PAIRING_CODE_TTL * 10);
+        assert_eq!(m.start(None), StartOutcome::Throttled);
+        s.set_wall_clock(UNIX_EPOCH);
+        assert!(m.complete(&c.code).unwrap().is_some());
+    }
+
+    #[test]
+    fn wrong_length_and_non_digit_codes_are_rejected() {
+        for bad in [
+            "",
+            "12345",
+            "1234567",
+            "abcdef",
+            "12 34 5x",
+            "\u{0661}\u{0662}\u{0663}\u{0664}\u{0665}\u{0666}",
+        ] {
+            let (_s, _m, m) = manager();
+            let c = started(&m);
+            assert_ne!(bad, c.code);
+            assert!(m.complete(bad).unwrap().is_none(), "{bad:?}");
+            assert!(m.list().is_empty());
+        }
+        let (_s, _m, m) = manager();
+        let c = started(&m);
+        assert!(m.complete(&format!("{}0", c.code)).unwrap().is_none());
+        assert!(m.complete(&c.code[..5]).unwrap().is_none());
+    }
+
+    #[test]
+    fn format_characters_are_dropped_from_labels() {
+        let (_s, _m, m) = manager();
+        assert!(matches!(
+            m.start(Some("Br\u{202E}a\u{200B}ve")),
+            StartOutcome::Started(c) if c.browser == "Brave"
+        ));
+        let (_s, _m, m) = manager();
+        assert!(matches!(
+            m.start(Some("\u{200B}\u{FEFF}")),
+            StartOutcome::Started(c) if c.browser == "Chromium browser"
+        ));
+    }
+
+    /// Like the Keychain store: `set` deletes the item first, and can fail after that.
+    struct DeleteThenFail {
+        inner: Arc<InMemorySecretStore>,
+        fail_set: AtomicBool,
+    }
+
+    impl SecretStore for DeleteThenFail {
+        fn set(&self, s: &str, a: &str, v: &[u8]) -> mypass_platform::PlatformResult<()> {
+            self.inner.delete(s, a)?;
+            if self.fail_set.load(Ordering::SeqCst) {
+                return Err(PlatformError::Failed("add failed".into()));
+            }
+            self.inner.set(s, a, v)
+        }
+        fn get(&self, s: &str, a: &str) -> mypass_platform::PlatformResult<Option<Vec<u8>>> {
+            self.inner.get(s, a)
+        }
+        fn delete(&self, s: &str, a: &str) -> mypass_platform::PlatformResult<()> {
+            self.inner.delete(s, a)
+        }
+    }
+
+    #[test]
+    fn failed_write_then_successful_write_loses_no_paired_browser() {
+        let mem = InMemorySecretStore::new();
+        let fake = Arc::new(DeleteThenFail {
+            inner: mem.clone(),
+            fail_set: AtomicBool::new(false),
+        });
+        let (sched, m) = {
+            let sched = manual();
+            let m =
+                PairingManager::new(PairedBrowserStore::new(fake.clone()), sched.clone()).unwrap();
+            (sched, m)
+        };
+        let c = started(&m);
+        let s1 = m.complete(&c.code).unwrap().unwrap();
+
+        // The write fails after the item was deleted: the store is now empty.
+        sched.advance(START_MIN_INTERVAL);
+        let c = started(&m);
+        fake.fail_set.store(true, Ordering::SeqCst);
+        assert!(m.complete(&c.code).is_err());
+        assert!(mem.get(PAIRING_SERVICE, PAIRING_ACCOUNT).unwrap().is_none());
+        assert!(
+            m.is_authorized(Some(&s1)),
+            "memory still has the first browser"
+        );
+        assert_eq!(m.list().len(), 1);
+
+        // The next successful write persists the whole in-memory list, not "empty store + change".
+        fake.fail_set.store(false, Ordering::SeqCst);
+        sched.advance(START_MIN_INTERVAL);
+        let c = started(&m);
+        let s3 = m.complete(&c.code).unwrap().unwrap();
+        let reloaded = PairingManager::new(PairedBrowserStore::new(mem.clone()), manual()).unwrap();
+        assert_eq!(reloaded.list().len(), 2);
+        assert!(reloaded.is_authorized(Some(&s1)));
+        assert!(reloaded.is_authorized(Some(&s3)));
+    }
+
+    #[test]
+    fn failed_write_is_followed_by_one_restore_attempt() {
+        let mem = InMemorySecretStore::new();
+        let flaky = Flaky::new(mem.clone());
+        let m = PairingManager::new(PairedBrowserStore::new(flaky.clone()), manual()).unwrap();
+        let c = started(&m);
+        m.complete(&c.code).unwrap().unwrap();
+        let sets = flaky.sets.load(Ordering::SeqCst);
+        flaky.fail_set.store(true, Ordering::SeqCst);
+        let id = m.list()[0].id;
+        assert!(m.revoke(id).is_err());
+        assert_eq!(
+            flaky.sets.load(Ordering::SeqCst),
+            sets + 2,
+            "write plus restore"
+        );
+        assert_eq!(m.list().len(), 1);
     }
 
     #[test]
