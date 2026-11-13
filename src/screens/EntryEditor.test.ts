@@ -279,6 +279,20 @@ describe("editor dirty report", () => {
     await waitFor(() => expect(reported(fake)).toEqual([true, false]));
   });
 
+  it("reports_false_when_discard_replaces_the_dirty_editor_with_a_clean_one", async () => {
+    const fake = backendWith();
+    await openNew(fake, "login");
+    await user().type(field("Title"), "unsaved");
+    await waitFor(() => expect(reported(fake)).toEqual([true]));
+    navigation.requestOpenEditor(await api.entryNewModel("card", null));
+    const dialog = await screen.findByRole("dialog", { name: "Discard changes?" });
+    await user().click(within(dialog).getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(navigation.editModel?.entryType).toBe("card"));
+    await waitFor(() => expect(reported(fake)).toEqual([true, false]));
+    // The replacement editor is clean, so nothing more goes out.
+    expect(reported(fake)).toEqual([true, false]);
+  });
+
   it("a_clean_editor_reports_nothing_when_closed", async () => {
     const fake = backendWith();
     await openNew(fake, "login");

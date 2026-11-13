@@ -293,6 +293,9 @@ describe("journeys", () => {
     await waitFor(() => expect(body()).toContain(FIXTURE_LOGIN_PASSWORD));
     await user.click(within(pane()).getByRole("button", { name: "Edit" }));
     await user.type(await screen.findByLabelText("Notes"), "typed-in-vault-a");
+    // The backend's quit flow learns about the unsaved editor, and about its end on the switch.
+    const reportedDirty = () => calls(fake, "appSetEditorDirty").map((c) => c.args.dirty);
+    await waitFor(() => expect(reportedDirty()).toEqual([true]));
     await user.type(screen.getByRole("searchbox", { name: "Search" }), "git");
     const switched = { ...fake.state.session, vaultPath: "/vaults/B.kdbx", vaultName: "B" };
     fake.state.entries = structuredClone(fake.state.vaults["/vaults/B.kdbx"]!.entries);
@@ -308,6 +311,7 @@ describe("journeys", () => {
     expect(navigation.editModel).toBeNull();
     expect((screen.getByRole("searchbox", { name: "Search" }) as HTMLInputElement).value).toBe("");
     expect(entries.searchText).toBe("");
+    await waitFor(() => expect(reportedDirty()).toEqual([true, false]));
   });
 
   it("journey_large_type_and_exclusive_reveal", async () => {
