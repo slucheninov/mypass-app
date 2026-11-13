@@ -97,6 +97,11 @@ describe("no_remote_urls_in_sources", () => {
   const ALLOWED = [
     "https://github.com/slucheninov/mypass-app",
     "https://www.apache.org/licenses/LICENSE-2.0",
+    // The official help pages of the Browser help sheet (the settings capability opens exactly these hosts).
+    "https://support.google.com/chrome/answer/",
+    "https://bitwarden.com/help/",
+    "https://support.1password.com/",
+    "https://support.apple.com/en-us/",
   ];
   const URL_RE = /https?:\/\/[A-Za-z0-9]/g;
 

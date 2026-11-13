@@ -203,6 +203,14 @@
     </div>
   </header>
 
+  {#if navigation.editorSource === "browser"}
+    <!-- A save proposal from the browser: nothing is stored until Save; Dismiss is the same as Cancel. -->
+    <div class="banner" data-testid="proposal-banner">
+      <span>{t("Saving from your browser")}</span>
+      <Button variant="plain" disabled={saving} onclick={cancel}>{t("Dismiss")}</Button>
+    </div>
+  {/if}
+
   {#if formError}<p class="form-error" role="alert" tabindex="-1">{formError}</p>{/if}
 
   <div class="body">
@@ -278,6 +286,19 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
+  }
+  .banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0 0 12px;
+    padding: 6px 10px;
+    border: var(--sep);
+    border-radius: var(--radius);
+    background: var(--list-bg);
+    color: var(--text-2);
+    font-size: 13px;
   }
   .form-error {
     margin: 0 0 12px;

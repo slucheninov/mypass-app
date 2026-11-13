@@ -459,7 +459,10 @@ mod tests {
                     assert!(!permission.starts_with("core:window:allow-set-"));
                 }
                 if permission == "opener:allow-open-url" {
-                    assert_eq!(id, "main", "only main may open URLs");
+                    assert!(
+                        id == "main" || id == "settings",
+                        "only main and settings may open URLs"
+                    );
                 }
             }
         }
@@ -498,7 +501,37 @@ mod tests {
             [
                 "core:event:default",
                 "dialog:allow-open",
-                "dialog:allow-save"
+                "dialog:allow-save",
+                "opener:allow-open-url"
+            ]
+        );
+    }
+
+    /// The settings window opens only the four official help hosts, https only.
+    #[test]
+    fn settings_opener_scope_is_the_four_help_hosts() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities/settings.json");
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        let opener = json["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["identifier"] == "opener:allow-open-url")
+            .unwrap();
+        let urls: Vec<&str> = opener["allow"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["url"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            urls,
+            [
+                "https://support.google.com/*",
+                "https://bitwarden.com/*",
+                "https://support.1password.com/*",
+                "https://support.apple.com/*"
             ]
         );
     }

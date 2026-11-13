@@ -2,9 +2,11 @@
   // The settings window: a pane list on the left, the chosen pane on the right. The last pane is
   // remembered through `prefs` (layout preferences only, storage failures ignored). Every pane
   // reads and writes through the one `settings` store; nothing is rendered until it has loaded.
-  import { tick } from "svelte";
+  import { onMount, tick } from "svelte";
+  import { events } from "../lib/bindings";
   import { t } from "../lib/i18n/index.svelte";
   import { readPref, writePref } from "../lib/prefs";
+  import { listenTo } from "../lib/stores/browser.svelte";
   import { settings } from "../lib/stores/settings.svelte";
   import ToastHost from "../lib/ui/ToastHost.svelte";
   import About from "./settings/About.svelte";
@@ -40,8 +42,25 @@
     return PANES.find((p) => p === stored) ?? "General";
   }
 
-  let current = $state<Pane>(remembered());
+  /** The pane a name asks for (`browser`, `Browser`), or null. */
+  function paneNamed(name: string | null | undefined): Pane | null {
+    const wanted = (name ?? "").toLowerCase();
+    return PANES.find((p) => p.toLowerCase() === wanted) ?? null;
+  }
+
+  // A window opened for one pane (`index.html#/settings/browser`, R18) starts there; a window that
+  // is already open is told by `SettingsPaneEvent`. Neither changes the remembered pane.
+  const hashPane = paneNamed(/^#\/settings\/([a-z]+)$/i.exec(window.location.hash)?.[1]);
+
+  let current = $state<Pane>(hashPane ?? remembered());
   let list: HTMLElement | undefined = $state();
+
+  onMount(() =>
+    listenTo(events.settingsPaneEvent, ({ pane }) => {
+      const next = paneNamed(pane);
+      if (next) current = next;
+    }),
+  );
 
   function choose(pane: Pane) {
     current = pane;
