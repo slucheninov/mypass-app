@@ -4,7 +4,11 @@
 // written into the wrong document.
 //
 // Either argument missing, or either argument not a URL, is a non-match.
-// Comparison is hostname only — scheme and port are ignored, on purpose.
+// The page must be https: the app offers credentials only on https pages (AGENTS.md, Domain
+// matching), so a same-host https -> http navigation between the request and the fill must not
+// pass, or the credential would be written into an http document. The message URL must carry
+// the same scheme as the page, so http on both sides is refused too. The hostname is compared
+// case-insensitively; the port is still ignored.
 //
 // background-loader.js loads this with importScripts before background.js.
 // content.js reaches it because manifest.json lists this file in the content
@@ -13,9 +17,10 @@
 function hostnameMatches(messageUrl, pageUrl) {
   if (!messageUrl || !pageUrl) return false;
   try {
-    const messageHost = new URL(messageUrl).hostname.toLowerCase();
-    const pageHost = new URL(pageUrl).hostname.toLowerCase();
-    return messageHost === pageHost;
+    const message = new URL(messageUrl);
+    const page = new URL(pageUrl);
+    if (page.protocol !== 'https:' || message.protocol !== page.protocol) return false;
+    return message.hostname.toLowerCase() === page.hostname.toLowerCase();
   } catch (e) {
     return false;
   }

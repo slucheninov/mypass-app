@@ -210,7 +210,7 @@ function buildApplyFillMessage(credentialResponse, requestUrl) {
 // (unscoped) call was a broadcast with exactly one possible recipient. With all_frames
 // EVERY frame has that listener: a tab-wide broadcast hands the decrypted password to
 // every subframe at once. A subframe sharing the top page's hostname passes content.js's
-// hostnameMatches check (which compares hostname only — not scheme, not port), has no
+// hostnameMatches check (which compares hostname only, and requires an https page with the message's scheme; the port is ignored), has no
 // pending fill target, and falls through to findLoginForm()/findOtpField(), writing the
 // password into a field the user never chose. frameId: 0 keeps the credential in the one
 // document the popup was actually acting on.

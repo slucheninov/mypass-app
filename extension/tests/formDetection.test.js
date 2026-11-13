@@ -227,3 +227,31 @@ assert.strictEqual(higherScoreWins.getAttribute('id'), 'higher-score', 'combined
 
 console.log('formDetection.test.js: OTP boundary tests OK');
 console.log('formDetection.test.js: findOtpField OK');
+
+// Scheme rule: the page must be https and carry the message URL's scheme; the port is ignored.
+assert.strictEqual(
+  hostnameMatches('https://example.com/login', 'http://example.com/login'),
+  false,
+  'an https -> http downgrade on the same host must not match'
+);
+assert.strictEqual(
+  hostnameMatches('http://example.com/login', 'http://example.com/login'),
+  false,
+  'http on both sides must not match: the page is not https'
+);
+assert.strictEqual(
+  hostnameMatches('http://example.com/login', 'https://example.com/login'),
+  false,
+  'a message URL whose scheme differs from the page must not match'
+);
+assert.strictEqual(
+  hostnameMatches('https://example.com:8443/login', 'https://example.com/account'),
+  true,
+  'the port is ignored'
+);
+assert.strictEqual(
+  hostnameMatches('https://Example.COM/', 'https://example.com/'),
+  true,
+  'the hostname compares case-insensitively'
+);
+console.log('formDetection.test.js: hostnameMatches scheme rule OK');
