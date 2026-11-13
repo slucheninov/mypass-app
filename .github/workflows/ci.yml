@@ -120,9 +120,8 @@ jobs:
         run: bash scripts/test.sh --ci --only rust
 
   # The JavaScript part of scripts/test.sh: the i18n converter and catalog completeness tests plus the
-  # Chromium extension suites (scripts/test-extension.sh)
-  # (Node built-in runner, no dependencies, so nothing to install). Linux only: nothing here is
-  # platform specific.
+  # Chromium extension suites (scripts/test-extension.sh). Node built-in runner, no dependencies, so
+  # nothing to install. Linux only: nothing here is platform specific.
   js:
     runs-on: ubuntu-latest
     timeout-minutes: 10

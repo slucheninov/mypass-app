@@ -6,6 +6,8 @@
 # --list prints the discovered suite files (one per line, nothing else). Without it the script
 # prints `N suites, M failed` and exits non-zero when any suite failed.
 set -euo pipefail
+# The glob order is the suite order; pin it to byte order so it never depends on the locale.
+export LC_ALL=C
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"

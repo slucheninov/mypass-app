@@ -152,8 +152,8 @@ run_ui() {
   pnpm build
 }
 
-# The Node suites need nothing but node itself (built-in test runner, no npm install). Stage 3 adds
-# scripts/test-extension.sh for the extension suites.
+# The Node suites need nothing but node itself (built-in test runner, no npm install). The extension suites
+# run through scripts/test-extension.sh.
 run_js() {
   if ! has_js; then
     echo "js: skipped (no JavaScript suites yet)"

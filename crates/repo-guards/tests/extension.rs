@@ -87,14 +87,7 @@ fn copied_suites_reference_no_old_repo_paths() {
 
 #[test]
 fn extension_list_count_matches_glob() {
-    if std::process::Command::new("node")
-        .arg("--version")
-        .output()
-        .is_err()
-    {
-        println!("skipped: node is not on PATH");
-        return;
-    }
+    // `--list` runs before the script's node preflight and needs no node.
     let out = match bash_command()
         .args(["scripts/test-extension.sh", "--list"])
         .current_dir(repo_root())
