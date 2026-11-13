@@ -4,7 +4,7 @@
 its tests pass, or, for manual-only items, once the manual check has actually been walked. History
 lives in `git log`, not here.
 
-Last updated: 2026-11-10
+Last updated: 2026-11-12
 
 ---
 
@@ -24,13 +24,29 @@ Last updated: 2026-11-10
 
 - [ ] `VaultFile`: reject non-regular files (FIFO/device symlink targets) at open and cap the
   encoded vault read size, once stage 2 fixes a size policy.
-- [ ] `mypass-platform`: OS glue behind traits (lock and sleep events, concealed clipboard, secret
-  stores, launch at login, keyboard layout).
-- [ ] `mypass-session`: the unlocked vault session with debounced atomic saves, concurrent-write
-  merge, backups, auto-lock, clipboard clear, note drafts, entry and group operations, generator
-  history, CSV import and `.kdbx` discovery.
-- [ ] Typed Tauri command and event surface with generated TypeScript bindings, and the i18n catalog
-  pipeline.
+- [ ] `mypass-platform` macOS bodies that still return `Unsupported`: Keychain secret stores (the
+  unlock key and the secret shared with the native host), device unlock (Touch ID and device
+  password), the native messaging host registrar and launch at login. System events, the concealed
+  clipboard and the keyboard layout already ship.
+
+## Stage 2a follow-ups
+
+- [ ] Per-window command access: every window (main, settings, tray panel) can call every app
+  command; add per-window command permissions through a `tauri_build` app manifest so the tray panel
+  and settings window get only what they use.
+- [ ] Startup failure is reported only on stderr (invisible in a Windows release build and when
+  launched from Finder); show a native dialog.
+- [ ] Quit-dialog default button: with tauri-plugin-dialog 2.8.4 a closed dialog is reported as the
+  cancel-slot button, so "Quit anyway" has to be the first (Return) button for Esc to never quit; a
+  custom dialog would let Cancel be the default.
+- [ ] Manual: confirm that Cmd+Q and logout/restart raise `ExitRequested` on macOS, and session end
+  on Windows (checklist in `RUN.md`).
+- [ ] Before Stage 3: the browser-bridge search predicate still matches notes and address fields;
+  change its boolean to a scope enum so the bridge searches only what autofill needs.
+- [ ] `secondaryFolder` in settings is a string from the webview; whatever later reads it (Stage 5
+  sync) must treat it as untrusted.
+- [ ] Tray panel position uses the panel window's scale factor; use the scale factor of the monitor
+  that holds the tray icon (mixed-DPI setups).
 
 ## Stage 2b UI
 
