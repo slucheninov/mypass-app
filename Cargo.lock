@@ -2581,9 +2581,14 @@ name = "mypass-host"
 version = "0.1.0"
 dependencies = [
  "mypass-bridge",
+ "mypass-core",
+ "mypass-kdbx",
  "mypass-platform",
+ "mypass-session",
+ "secrecy",
  "serde_json",
  "tempfile",
+ "uuid",
 ]
 
 [[package]]

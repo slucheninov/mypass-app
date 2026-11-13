@@ -21,5 +21,14 @@ mypass-bridge = { path = "../mypass-bridge", default-features = false }
 mypass-platform = { path = "../mypass-platform" }
 
 [dev-dependencies]
+# The e2e tests run the real server and session in-process; only the test build links them, the
+# shipped host (`[dependencies]` above) never does (guard `host_links_no_vault_code`).
+mypass-bridge = { path = "../mypass-bridge" }
+mypass-core = { path = "../mypass-core" }
+mypass-kdbx = { path = "../mypass-kdbx" }
+mypass-platform = { path = "../mypass-platform", features = ["test-util"] }
+mypass-session = { path = "../mypass-session" }
+secrecy.workspace = true
+uuid.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
