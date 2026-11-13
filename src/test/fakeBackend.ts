@@ -9,15 +9,20 @@ import { emit } from "@tauri-apps/api/event";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type {
   ApiError,
+  AttachmentMeta,
   commands,
+  DraftVersionDto,
   events,
+  FieldRef,
   FoundVaultFileDto,
   GroupNode_Serialize,
   OpenWarning,
+  PickedFile,
   RecentVaultDto,
   SessionState,
   SessionStatus_Serialize,
   Settings_Serialize,
+  TotpDto,
 } from "../lib/bindings";
 import {
   BIN_GROUP_ID,
@@ -26,6 +31,8 @@ import {
   ROOT_GROUP_ID,
   defaultSettings,
   detailOf,
+  changedKeys,
+  makeEntry,
   fixtureEntries,
   fixtureGroups,
   fixtureSidebar,
@@ -106,6 +113,20 @@ export interface FakeState {
   existingFiles: string[];
   /** The vault's `RecycleBinEnabled` flag, reported by `sidebar_get`; when false a delete purges. */
   recycleBinEnabled: boolean;
+  /** What `entry_totp` answers (and `entry_reveal`/`entry_copy` resolve a `totp` field to). */
+  totp: TotpDto;
+  /** Makes `attachment_export` answer `false`, like a cancelled save dialog. */
+  exportCancelled: boolean;
+  /** What the window plugin's `is_minimized` answers (only reachable after `mockWindows`). */
+  minimized: boolean;
+  /** What the next `attachment_pick` answers, like the files chosen in the native dialog (empty = cancelled). */
+  pickResult: PickedFile[];
+  /** A failure the next `entry_save` throws (then it is cleared), e.g. `invalidInput`. */
+  saveFailure: ApiError["code"] | null;
+  /** Saved note versions per entry id, newest last. */
+  drafts: Record<string, DraftVersionDto[]>;
+  /** Like a draft key that cannot be created: `draft_save` answers `false` and stores nothing. */
+  draftsAvailable: boolean;
 }
 
 export interface FakeBackend {
@@ -135,6 +156,13 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     foundFiles: [],
     existingFiles: [],
     recycleBinEnabled: true,
+    totp: { code: "123456", secondsRemaining: 12, period: 30 },
+    exportCancelled: false,
+    minimized: false,
+    pickResult: [],
+    saveFailure: null,
+    drafts: {},
+    draftsAvailable: true,
   };
   // The real backend emits its events as a side effect of a command; so does the fake.
   const publish = (event: EventName, payload: unknown) => void emit(kebab(event), payload ?? null);
@@ -181,7 +209,36 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     }
   };
   const changed = () => publish("vaultChanged", null);
+  /** The value behind a field reference, as the backend would copy or reveal it. */
+  const secretOf = (entry: FixtureEntry, field: FieldRef): string => {
+    const { model } = entry;
+    switch (field.kind) {
+      case "password":
+        return model.password;
+      case "username":
+        return model.username;
+      case "url":
+        return model.urls[0] ?? "";
+      case "notesBody":
+        return model.notes;
+      case "cardNumber":
+        return model.card?.number ?? "";
+      case "cardCvv":
+        return model.card?.cvv ?? "";
+      case "totp":
+        if (!entry.summary.hasTotp) throw apiError("invalidInput");
+        return state.totp.code;
+      case "custom": {
+        const found = model.customFields.find((f) => f.key === field.key);
+        if (!found) throw apiError("notFound");
+        return found.value;
+      }
+    }
+  };
   let groupSeq = 0;
+  let entrySeq = 0;
+  /** Tokens `attachment_pick` handed out; `entry_save` swaps each for its file and spends it. */
+  const pickedFiles = new Map<string, PickedFile>();
 
   const setSession = (next: SessionStatus_Serialize) => {
     state.session = next;
@@ -219,20 +276,45 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     appOpenSettings: () => null,
     appRecordActivity: () => null,
     appRevealBackups: notImplemented("appRevealBackups"),
-    attachmentExport: notImplemented("attachmentExport"),
-    attachmentPick: notImplemented("attachmentPick"),
+    // Like Rust: the save dialog opens there; `false` means the user cancelled it.
+    attachmentExport: ({ entryId, name }) => {
+      requireUnlocked();
+      if (!findEntry(entryId).model.attachments.some((a) => a.name === name)) throw apiError("notFound");
+      return !state.exportCancelled;
+    },
+    // Like Rust: the native dialog opens there; the webview only gets single-use tokens back.
+    attachmentPick: () => {
+      requireUnlocked();
+      const picked = structuredClone(state.pickResult);
+      state.pickResult = [];
+      for (const file of picked) pickedFiles.set(file.token, file);
+      return picked;
+    },
     backupList: notImplemented("backupList"),
     backupRestore: notImplemented("backupRestore"),
-    draftClear: notImplemented("draftClear"),
-    draftSave: notImplemented("draftSave"),
-    draftVersions: notImplemented("draftVersions"),
+    draftClear: ({ entryId }) => {
+      requireUnlocked();
+      delete state.drafts[entryId];
+      return null;
+    },
+    // `false` is "no draft key": nothing is stored and the editor works without drafts.
+    draftSave: ({ entryId, notes }) => {
+      requireUnlocked();
+      if (!state.draftsAvailable) return false;
+      const list = (state.drafts[entryId] ??= []);
+      list.push({ id: `draft-${list.length + 1}-${entryId}`, savedAt: Date.now(), notes });
+      if (list.length > 10) list.shift();
+      return true;
+    },
+    // Newest first, like the backend.
+    draftVersions: ({ entryId }) => {
+      requireUnlocked();
+      return structuredClone(state.drafts[entryId] ?? []).reverse();
+    },
     // The value goes to the (fake) clipboard inside Rust and never reaches the webview.
     entryCopy: ({ id, field }) => {
       requireUnlocked();
-      findEntry(id);
-      if (field.kind !== "password" && field.kind !== "username" && field.kind !== "url") {
-        throw new NotImplementedInFake(`entryCopy(${field.kind})`);
-      }
+      secretOf(findEntry(id), field);
       return null;
     },
     entryDelete: ({ id }) => {
@@ -257,8 +339,43 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       requireUnlocked();
       return detailOf(findEntry(id));
     },
-    entryHistory: notImplemented("entryHistory"),
-    entryHistoryRestore: notImplemented("entryHistoryRestore"),
+    // Newest first; `changedFields` names what the next newer version (or the entry) changed.
+    entryHistory: ({ id }) => {
+      requireUnlocked();
+      const found = findEntry(id);
+      return [...found.history].reverse().map((v, index) => {
+        const newer = found.history[found.history.length - index] ?? { model: found.model };
+        return {
+          index,
+          modified: v.modified,
+          title: v.model.title,
+          changedFields: v.changedFields ?? changedKeys(v.model, newer.model),
+        };
+      });
+    },
+    // Like `editing::restore_history`: the current state is snapshotted first (the restore is
+    // undoable), then the version's content replaces it; the group and the favourite stay.
+    entryHistoryRestore: ({ id, index }) => {
+      requireUnlocked();
+      const found = findEntry(id);
+      const old = found.history[found.history.length - 1 - index];
+      if (!Number.isInteger(index) || index < 0 || !old) throw apiError("notFound");
+      found.history.push({ modified: found.modified, model: structuredClone(found.model) });
+      found.model = {
+        ...structuredClone(old.model),
+        id: found.model.id,
+        groupId: found.model.groupId,
+        favorite: found.model.favorite,
+      };
+      found.summary.title = found.model.title;
+      found.summary.subtitle = found.model.username;
+      found.summary.hasTotp = found.model.totp !== "";
+      found.summary.attachmentCount = found.model.attachments.length;
+      found.modified += 1;
+      found.summary.modified = found.modified;
+      changed();
+      return null;
+    },
     entryList: ({ query }) => {
       requireUnlocked();
       return listEntries(state.entries, query, state.groups);
@@ -275,6 +392,22 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     },
     entryNewModel: ({ entryType, groupId }) => {
       requireUnlocked();
+      const blankAddress = {
+        label: "Home",
+        fullName: "",
+        givenName: "",
+        familyName: "",
+        organization: "",
+        addressLine1: "",
+        addressLine2: "",
+        city: "",
+        region: "",
+        postalCode: "",
+        countryCode: "",
+        countryName: "",
+        phone: "",
+        email: "",
+      };
       return {
         id: null,
         entryType,
@@ -284,11 +417,11 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         username: "",
         password: "",
         urls: [],
-        uriMatchMode: "domain",
+        uriMatchMode: "registrable-domain",
         totp: "",
         notes: "",
-        address: null,
-        card: null,
+        address: entryType === "address" ? blankAddress : null,
+        card: entryType === "card" ? { holder: "", number: "", expiry: "", cvv: "" } : null,
         customFields: [],
         attachments: [],
         attachmentOps: [],
@@ -309,16 +442,86 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         .slice(0, limit)
         .map((e) => structuredClone(e.summary));
     },
-    entryRestore: notImplemented("entryRestore"),
+    // Like `editing::restore_entry`: only a bin entry, into `groupId` (the root when null; the real
+    // backend does not remember the group an entry came from either).
+    entryRestore: ({ id, groupId }) => {
+      requireUnlocked();
+      const found = findEntry(id);
+      if (!found.summary.inRecycleBin) throw apiError("invalidInput");
+      const target = groupId ?? ROOT_GROUP_ID;
+      if (target !== ROOT_GROUP_ID && (!locate(target) || locate(target)?.node.isRecycleBin)) {
+        throw apiError(locate(target) ? "invalidInput" : "notFound");
+      }
+      found.summary.groupId = target;
+      found.model.groupId = target;
+      found.summary.inRecycleBin = false;
+      changed();
+      return null;
+    },
     entryReveal: ({ id, field }) => {
       requireUnlocked();
-      const { model } = findEntry(id);
-      if (field.kind === "password") return model.password;
-      if (field.kind === "username") return model.username;
-      if (field.kind === "url") return model.urls[0] ?? "";
-      throw new NotImplementedInFake(`entryReveal(${field.kind})`);
+      return secretOf(findEntry(id), field);
     },
-    entrySave: notImplemented("entrySave"),
+    // Creates (no id) or replaces the entry like `Database::save_entry`: the title is trimmed (an
+    // address with none takes its label), attachment ops are applied in order with the real limits
+    // (8 files, 5 MB each), and a token is spent when it is swapped for its file.
+    entrySave: ({ model }) => {
+      requireUnlocked();
+      if (state.saveFailure) {
+        const code = state.saveFailure;
+        state.saveFailure = null;
+        throw apiError(code);
+      }
+      let attachments: AttachmentMeta[] = structuredClone(model.attachments);
+      for (const op of model.attachmentOps) {
+        if (op.kind === "remove") {
+          attachments = attachments.filter((a) => a.name !== op.name);
+          continue;
+        }
+        const file = pickedFiles.get(op.path);
+        if (!file) throw apiError("invalidInput");
+        if ((file.size ?? 0) > 5 * 1024 * 1024) throw apiError("limitExceeded");
+        attachments.push({ name: file.name, size: file.size });
+      }
+      if (attachments.length > 8) throw apiError("limitExceeded");
+      for (const op of model.attachmentOps) if (op.kind === "add") pickedFiles.delete(op.path);
+      const title =
+        model.entryType === "address" && model.title.trim() === "" ? (model.address?.label ?? "") : model.title.trim();
+      const saved = { ...structuredClone(model), title, attachments, attachmentOps: [] };
+      const found = model.id ? findEntry(model.id) : null;
+      if (found) {
+        // Every save of an existing entry snapshots the previous state into its history.
+        found.history.push({ modified: found.modified, model: structuredClone(found.model) });
+        found.model = saved;
+        found.summary.title = title;
+        found.summary.favorite = model.favorite;
+        found.summary.subtitle = model.username;
+        found.summary.groupId = model.groupId;
+        // Like `save_entry`: a save into another group moves the entry, out of the bin too.
+        found.summary.inRecycleBin = locate(model.groupId)?.node.isRecycleBin ?? false;
+        found.summary.attachmentCount = attachments.length;
+        found.summary.hasTotp = model.totp !== "";
+        found.modified += 1;
+        found.summary.modified = found.modified;
+        changed();
+        return found.summary.id;
+      }
+      const created = makeEntry({
+        id: `e-new-${++entrySeq}`,
+        title,
+        entryType: model.entryType,
+        groupId: model.groupId,
+        favorite: model.favorite,
+        hasTotp: model.totp !== "",
+        modified: Date.now(),
+      });
+      created.model = { ...saved, id: created.summary.id };
+      created.summary.subtitle = model.username;
+      created.summary.attachmentCount = attachments.length;
+      state.entries.push(created);
+      changed();
+      return created.summary.id;
+    },
     entrySetFavorite: ({ id, favorite }) => {
       requireUnlocked();
       const found = findEntry(id);
@@ -327,7 +530,11 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       changed();
       return null;
     },
-    entryTotp: notImplemented("entryTotp"),
+    entryTotp: ({ id }) => {
+      requireUnlocked();
+      if (!findEntry(id).summary.hasTotp) throw apiError("invalidInput");
+      return { ...state.totp };
+    },
     entryTouch: notImplemented("entryTouch"),
     generatorCopy: notImplemented("generatorCopy"),
     generatorGenerate: notImplemented("generatorGenerate"),
@@ -430,7 +637,10 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     (Object.keys(handlers) as CommandName[]).map((name) => [snake(name), name]),
   );
   const calls: FakeCall[] = [];
-  const pluginHandlers: Record<string, (payload: unknown) => unknown> = { ...opts.plugins };
+  const pluginHandlers: Record<string, (payload: unknown) => unknown> = {
+    "plugin:window|is_minimized": () => state.minimized,
+    ...opts.plugins,
+  };
 
   return {
     handlers,

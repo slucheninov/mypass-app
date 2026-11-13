@@ -11,6 +11,7 @@
   import { lockGuard } from "../lib/lock-guard";
   import { entries } from "../lib/stores/entries.svelte";
   import { navigation } from "../lib/stores/navigation.svelte";
+  import { webUrl } from "../lib/web-url";
   import { toasts } from "../lib/stores/toasts.svelte";
   import Avatar from "../lib/ui/Avatar.svelte";
   import Button from "../lib/ui/Button.svelte";
@@ -35,6 +36,7 @@
   let menu = $state<{ x: number; y: number; id: string } | null>(null);
   let confirming = $state<{ kind: "purge"; id: string } | { kind: "empty" } | null>(null);
   let moving = $state<string | null>(null);
+  let restoring = $state<string | null>(null);
   // The menu closes before `onselect` runs, so the entry it was opened for is kept here too.
   let menuEntryId: string | null = null;
 
@@ -127,19 +129,21 @@
   const openWebsite = (id: string) =>
     guard(async () => {
       const raw = await api.entryReveal(id, { kind: "url" });
-      let url: URL | null = null;
-      try {
-        url = new URL(raw);
-      } catch {
-        url = null;
-      }
       // Only web pages are ever handed to the system; `javascript:`, `file:` and friends are not.
-      if (!url || (url.protocol !== "https:" && url.protocol !== "http:")) {
+      const url = webUrl(raw);
+      if (url === null) {
         toasts.push("error", t("Invalid input"));
         return;
       }
-      await openUrl(url.href);
+      await openUrl(url);
     });
+
+  /**
+   * The entry the editor has open. Deleting, moving or restoring it from the list would be undone
+   * by the editor's Save (the backend moves an entry to the editor's group, which brings a
+   * binned one back), so the list refuses those actions until the editor closes.
+   */
+  const isBeingEdited = (id: string) => navigation.editModel?.id === id;
 
   const toggleFavorite = (entry: EntrySummary) => guard(() => api.entrySetFavorite(entry.id, !entry.favorite));
 
@@ -164,6 +168,7 @@
    * already in the bin, or a vault whose bin is disabled) asks first.
    */
   function requestDelete(entry: EntrySummary) {
+    if (isBeingEdited(entry.id)) return;
     if (entry.inRecycleBin || !binEnabled) confirming = { kind: "purge", id: entry.id };
     else void remove(entry, false);
   }
@@ -255,20 +260,28 @@
     const entry = menu ? byId(menu.id) : undefined;
     if (!entry) return [];
     const login = entry.entryType === "login";
+    const edited = isBeingEdited(entry.id);
     return [
       { id: "username", label: t("Copy username"), icon: "copy", disabled: !login },
       { id: "password", label: t("Copy password"), icon: "copy", disabled: !login },
       { id: "website", label: t("Open website"), icon: "link", disabled: !login },
       { id: "sep-1", label: "", separator: true },
       { id: "favorite", label: entry.favorite ? t("Remove from Favorites") : t("Add to Favorites"), icon: "star" },
-      // A bin entry is brought back with Restore (the detail pane), not moved.
-      { id: "move", label: t("Move to…"), icon: "folder", disabled: entry.inRecycleBin },
+      // A bin entry is brought back with Restore, not moved.
+      ...(entry.inRecycleBin
+        ? [
+            { id: "restore", label: t("Restore"), icon: "undo" as const, disabled: edited },
+            { id: "restore-to", label: t("Restore to…"), icon: "folder" as const, disabled: edited },
+          ]
+        : []),
+      { id: "move", label: t("Move to…"), icon: "folder", disabled: entry.inRecycleBin || edited },
       { id: "sep-2", label: "", separator: true },
       {
         id: "delete",
         label: entry.inRecycleBin || !binEnabled ? t("Delete permanently") : t("Delete"),
         icon: "trash",
         danger: true,
+        disabled: edited,
       },
     ];
   });
@@ -292,10 +305,28 @@
       case "move":
         moving = entry.id;
         break;
+      case "restore":
+        void restore(entry.id, null);
+        break;
+      case "restore-to":
+        restoring = entry.id;
+        break;
       case "delete":
         requestDelete(entry);
         break;
     }
+  }
+
+  async function restore(id: string, groupId: string | null) {
+    await guard(() => api.entryRestore(id, groupId));
+    await tick();
+    listbox?.focus();
+  }
+
+  function restoreTo(groupId: string) {
+    const id = restoring;
+    restoring = null;
+    if (id !== null) void restore(id, groupId);
   }
 
   async function moveTo(groupId: string) {
@@ -346,7 +377,7 @@
           id={rowId(entry.id)}
           tabindex="-1"
           aria-selected={entry.id === selectedId}
-          draggable={!entry.inRecycleBin}
+          draggable={!entry.inRecycleBin && !isBeingEdited(entry.id)}
           onclick={() => {
             // The listbox keeps focus, so aria-activedescendant is announced for the clicked row.
             listbox?.focus();
@@ -404,6 +435,13 @@
     {/snippet}
   </Modal>
 {/if}
+
+<GroupPicker
+  open={restoring !== null}
+  title={t("Choose a group")}
+  onpick={restoreTo}
+  onclose={() => (restoring = null)}
+/>
 
 <GroupPicker
   open={moving !== null}

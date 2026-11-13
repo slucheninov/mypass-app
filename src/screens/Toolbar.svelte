@@ -54,16 +54,19 @@
     await toasts.guard(async () => {
       const model = await api.entryNewModel(id as EntryTypeDto, currentGroup());
       // A lock that landed meanwhile must not leave an editor behind for the next unlock.
-      if (unchanged()) navigation.openEditor(model);
+      if (unchanged()) navigation.requestOpenEditor(model);
     });
   }
 
-  function importItem(id: string) {
+  async function importItem(id: string) {
     if (id === "csv") onimportcsv?.();
-    else void openVaultFromDialog();
+    // Opening another vault locks this one first: a dirty editor is asked about before anything happens.
+    else if (await navigation.confirmLeave()) await openVaultFromDialog();
   }
 
   async function lock() {
+    // User-initiated: unsaved edits are asked about first (background locks never are).
+    if (!(await navigation.confirmLeave())) return;
     await toasts.guard(() => session.lock());
   }
 
@@ -93,7 +96,7 @@
   </div>
   <span class="spacer" data-tauri-drag-region></span>
   <SaveIndicator />
-  <Menu items={importItems} onselect={importItem} label={t("Import")}>
+  <Menu items={importItems} onselect={(id) => void importItem(id)} label={t("Import")}>
     {#snippet trigger()}<Icon name="import" />{/snippet}
   </Menu>
   <IconButton icon="lock" label={t("Lock")} onclick={() => void lock()} />

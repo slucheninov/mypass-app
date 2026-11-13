@@ -53,4 +53,31 @@ describe("secrets in the stores", () => {
     await vi.waitFor(() => expect(session.status.state).toBe("locked"));
     expect(everything()).not.toContain(FIXTURE_LOGIN_PASSWORD);
   });
+
+  it("a_pending_edit_model_is_a_store_held_secret_that_keep_editing_and_lock_remove", async () => {
+    const fake = createFakeBackend({ session: "unlocked" });
+    fake.install();
+    stop = await startStores();
+    await vi.waitFor(() => expect(entries.items.length).toBe(4));
+
+    // A dirty blank editor is open and a full edit model (password included) waits to replace it.
+    navigation.openEditor(await api.entryNewModel("login", null));
+    navigation.editorDirty = () => true;
+    navigation.requestOpenEditor(await api.entryEditModel("e-github"));
+    expect(navigation.pendingModel).not.toBeNull();
+    expect(everything()).toContain(FIXTURE_LOGIN_PASSWORD);
+
+    // Keep editing drops the request (the editor does exactly this).
+    navigation.pendingModel = null;
+    expect(everything()).not.toContain(FIXTURE_LOGIN_PASSWORD);
+
+    // A lock while the request waits drops it too.
+    navigation.requestOpenEditor(await api.entryEditModel("e-github"));
+    expect(everything()).toContain(FIXTURE_LOGIN_PASSWORD);
+    await fake.emit("sessionChanged", sessionStatus("locked"));
+    await vi.waitFor(() => expect(session.status.state).toBe("locked"));
+    expect(navigation.pendingModel).toBeNull();
+    expect(everything()).not.toContain(FIXTURE_LOGIN_PASSWORD);
+    navigation.editorDirty = null;
+  });
 });
