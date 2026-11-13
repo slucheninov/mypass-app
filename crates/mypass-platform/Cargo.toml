@@ -35,6 +35,7 @@ arboard.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2.workspace = true
+core-foundation.workspace = true
 security-framework.workspace = true
 objc2.workspace = true
 objc2-foundation = { workspace = true, features = [

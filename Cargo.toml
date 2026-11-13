@@ -80,6 +80,8 @@ objc2-app-kit = { version = "0.3.2", default-features = false }
 block2 = "0.6.2"
 # Keychain secret store (macOS only).
 security-framework = { version = "3.7.0", default-features = false }
+# `CFData` for the add-only `ItemAddOptions` call of the Keychain store.
+core-foundation = "0.10.1"
 # `image-data` (default) would pull the `image` crate; only text is ever written.
 arboard = { version = "3.7.0", default-features = false }
 chacha20poly1305 = "0.11.0"
