@@ -110,8 +110,9 @@ jobs are independent and run in parallel, so the wall-clock time is the slowest 
 - Every cargo job restores `Swatinem/rust-cache` with `cache-on-failure`, and the workflow sets
   `CARGO_PROFILE_DEV_DEBUG=line-tables-only` for smaller, faster builds.
 - `changes` is a cheap path filter that gates the crosscompat job.
-- `crosscompat` runs on Ubuntu with Python 3.12 and CI-only `pykeepass==4.2.0`: Rust writes /
-  Python reads, then Python writes / Rust reads. It is path-gated on pull requests through
+- `crosscompat` runs on Ubuntu with Python 3.12 and CI-only `pykeepass==4.2.0`, installed in one step
+  from `crates/mypass-core/tests/crosscompat/requirements.txt` (the single pin list of the job's Python
+  packages): Rust writes / Python reads, then Python writes / Rust reads. It is path-gated on pull requests through
   `changes.outputs.crosscompat` and always runs on main pushes and manual dispatch.
   The env-gated Rust test prints a skip locally unless `MYPASS_PYKEEPASS_VAULT` is set.
   It also runs the passkey oracle (`crates/mypass-core/tests/crosscompat/passkey_oracle_check.sh`, packages

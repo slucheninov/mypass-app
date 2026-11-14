@@ -195,9 +195,9 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
-      - name: Install independent test oracle
-        run: python -m pip install pykeepass==4.2.0
-      - name: Install passkey oracle packages
+      # One install, one source of pins: the requirements file covers pykeepass for the KDBX
+      # round trip and fido2, cryptography and pykeepass for the passkey oracle.
+      - name: Install independent test oracles
         run: python -m pip install -r crates/mypass-core/tests/crosscompat/requirements.txt
       - name: Rust writes, pykeepass reads
         run: |
