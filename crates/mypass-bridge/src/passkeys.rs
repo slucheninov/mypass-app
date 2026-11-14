@@ -22,6 +22,8 @@
 
 #![deny(clippy::wildcard_enum_match_arm)]
 
+pub mod candidates;
+mod create;
 pub mod errors;
 pub mod pending;
 
@@ -176,11 +178,16 @@ impl PasskeyHandler for PasskeyService {
                 }
             }
             // The toggle first, before any parsing (see the module docs).
-            Request::PasskeyCreate { request_id, .. } => {
+            Request::PasskeyCreate {
+                request_id,
+                request_details_json,
+                origin_url,
+                ..
+            } => {
                 if !toggle_on() {
                     return create_error(*request_id, NOT_ALLOWED, TURNED_OFF);
                 }
-                create_error(*request_id, NOT_ALLOWED, NOT_SUPPORTED)
+                create::handle_create(self, ctx, *request_id, request_details_json, origin_url)
             }
             Request::PasskeyGet { request_id, .. } => {
                 if !toggle_on() {
@@ -190,12 +197,17 @@ impl PasskeyHandler for PasskeyService {
             }
             // Phase two re-checks the toggle too: "off" set in the app's Settings window does not
             // clear the table, so a ceremony started before it must not complete after it.
-            Request::PasskeyCreateConfirm { request_id, .. } => {
+            Request::PasskeyCreateConfirm {
+                request_id,
+                entry_id,
+                replace,
+                ..
+            } => {
                 if !toggle_on() {
                     self.pending().remove_both(*request_id);
                     return create_error(*request_id, NOT_ALLOWED, TURNED_OFF);
                 }
-                create_error(*request_id, NOT_ALLOWED, NOT_SUPPORTED)
+                create::handle_confirm(self, ctx, *request_id, entry_id.as_deref(), *replace)
             }
             Request::PasskeyGetApprove { request_id, .. } => {
                 if !toggle_on() {

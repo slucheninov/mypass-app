@@ -388,8 +388,9 @@ fn locked_app_answers_locked_to_passkey_create_even_when_toggle_off() {
 }
 
 #[test]
-fn ceremony_arms_answer_a_placeholder_error_until_implemented() {
+fn ceremony_arms_answer_a_not_allowed_error_for_bad_or_unknown_ceremonies() {
     let (f, _svc) = passkey_fx();
+    // `named` carries `{}` as the request details and an id nothing is pending for.
     for (name, complete_kind) in [
         ("passkeyCreate", "create"),
         ("passkeyCreateConfirm", "create"),

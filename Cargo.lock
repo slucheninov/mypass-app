@@ -2673,11 +2673,13 @@ name = "mypass-bridge"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "ciborium",
  "hmac",
  "mypass-core",
  "mypass-kdbx",
  "mypass-platform",
  "mypass-session",
+ "p256",
  "rand 0.8.8",
  "secrecy",
  "serde",

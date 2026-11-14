@@ -130,6 +130,11 @@ pub(crate) fn passkey_fx() -> (Fx, Arc<PasskeyService>) {
     e.set_field("Title", "SecretTitleXyz", false);
     let root = db.root_id();
     db.add_entry(root, e, now).unwrap();
+    passkey_fx_with_db(db)
+}
+
+/// [`passkey_fx`] over `db`.
+pub(crate) fn passkey_fx_with_db(db: mypass_kdbx::Database) -> (Fx, Arc<PasskeyService>) {
     let mut service = None;
     let f = fx_build(db, |sched, ui| {
         let s = PasskeyService::new(sched, ui);
