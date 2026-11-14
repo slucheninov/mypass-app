@@ -5,6 +5,7 @@
 //! `test-util` feature) holds the fakes every other crate's tests build on.
 
 mod clipboard;
+mod coordinated;
 mod device_unlock;
 mod error;
 mod events;
@@ -23,6 +24,8 @@ mod macos_device_unlock;
 #[cfg(unix)]
 mod macos_host_install;
 #[cfg(target_os = "macos")]
+mod macos_icloud;
+#[cfg(target_os = "macos")]
 mod macos_keychain;
 #[cfg(target_os = "macos")]
 mod macos_login_item;
@@ -34,6 +37,10 @@ mod secrets;
 pub mod testing;
 
 pub use clipboard::{ClipboardStamp, SecureClipboard};
+pub use coordinated::{
+    coordinated_files, map_download_status, Accessor, ChangeCallback, ConflictVersion,
+    CoordinatedFiles, DownloadState, UnsupportedCoordinatedFiles,
+};
 pub use device_unlock::{DeviceUnlock, DeviceUnlockAvailability, DeviceUnlockMode};
 pub use error::{PlatformError, PlatformResult};
 pub use events::{Subscription, SystemEvent, SystemEvents};

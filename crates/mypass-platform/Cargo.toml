@@ -10,8 +10,9 @@ publish = false
 
 # The only member with its own lint tables (guard `workspace_lints_forbid_unsafe`): an exact copy
 # of `[workspace.lints]` except `unsafe_code = "deny"` instead of `forbid`, because the macOS glue
-# calls Objective-C and Carbon. `deny` can be lifted per module; only `src/macos.rs` does so
-# (guard `unsafe_only_in_allow_listed_modules`). Keep these tables in sync with the workspace.
+# calls Objective-C, Carbon and Security. `deny` can be lifted per module; only the allow-listed
+# macOS glue files do so (guard `unsafe_only_in_allow_listed_modules`, list in AGENTS.md). Keep
+# these tables in sync with the workspace.
 [lints.rust]
 unsafe_code = "deny"
 
@@ -54,6 +55,10 @@ objc2-foundation = { workspace = true, features = [
     "NSDistributedNotificationCenter",
     "NSEnumerator",
     "NSError",
+    "NSFileCoordinator",
+    "NSFileManager",
+    "NSFilePresenter",
+    "NSFileVersion",
     "NSNotification",
     "NSObject",
     "NSOperation",
@@ -61,6 +66,7 @@ objc2-foundation = { workspace = true, features = [
     "NSString",
     "NSThread",
     "NSURL",
+    "NSValue",
 ] }
 objc2-app-kit = { workspace = true, features = [
     "std",

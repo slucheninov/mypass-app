@@ -14,7 +14,10 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+mod coordinated_files;
 pub mod device_unlock_contract;
+
+pub use coordinated_files::{CoordinatedOp, FakeCoordinatedFiles};
 
 /// Locks a fake's state; a poisoned lock (a panicking test thread) still yields the data.
 fn lock<T: ?Sized>(m: &Mutex<T>) -> MutexGuard<'_, T> {
