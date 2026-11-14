@@ -13,6 +13,11 @@ impl Timestamp {
     pub fn parse_iso8601(s: &str) -> Option<Self> {
         crate::format::xml::time::iso(s)
     }
+    /// Formats as `YYYY-MM-DDTHH:MM:SSZ`, the form [`Timestamp::parse_iso8601`] reads; `None`
+    /// outside years 1 to 9999, which that form cannot express.
+    pub fn to_iso8601(self) -> Option<String> {
+        crate::format::xml::time::iso_string(self)
+    }
     pub fn now() -> Self {
         match SystemTime::now().duration_since(UNIX_EPOCH) {
             Ok(d) => Self(i64::try_from(d.as_secs()).unwrap_or(i64::MAX)),
@@ -458,5 +463,40 @@ mod iso_tests {
         );
         assert_eq!(Timestamp::parse_iso8601("2023-02-31T00:00:00Z"), None);
         assert_eq!(Timestamp::parse_iso8601("garbage"), None);
+    }
+
+    #[test]
+    fn to_iso8601_formats_and_round_trips() {
+        assert_eq!(
+            Timestamp(1_700_000_000).to_iso8601().as_deref(),
+            Some("2023-11-14T22:13:20Z")
+        );
+        assert_eq!(
+            Timestamp(0).to_iso8601().as_deref(),
+            Some("1970-01-01T00:00:00Z")
+        );
+        assert_eq!(
+            Timestamp(-1).to_iso8601().as_deref(),
+            Some("1969-12-31T23:59:59Z")
+        );
+        assert_eq!(
+            Timestamp(951_782_400).to_iso8601().as_deref(),
+            Some("2000-02-29T00:00:00Z")
+        );
+        let first = Timestamp::parse_iso8601("0001-01-01T00:00:00Z").unwrap();
+        let last = Timestamp::parse_iso8601("9999-12-31T23:59:59Z").unwrap();
+        assert_eq!(first.to_iso8601().as_deref(), Some("0001-01-01T00:00:00Z"));
+        assert_eq!(last.to_iso8601().as_deref(), Some("9999-12-31T23:59:59Z"));
+        assert_eq!(Timestamp(first.0 - 1).to_iso8601(), None);
+        assert_eq!(Timestamp(last.0 + 1).to_iso8601(), None);
+        assert_eq!(Timestamp(i64::MAX).to_iso8601(), None);
+        assert_eq!(Timestamp(i64::MIN).to_iso8601(), None);
+        // Every day across several leap cycles, at a non-zero time of day.
+        let mut t = Timestamp::parse_iso8601("1895-01-01T01:02:03Z").unwrap().0;
+        while t < Timestamp::parse_iso8601("2105-01-01T00:00:00Z").unwrap().0 {
+            let s = Timestamp(t).to_iso8601().unwrap();
+            assert_eq!(Timestamp::parse_iso8601(&s), Some(Timestamp(t)), "{s}");
+            t += 86_400;
+        }
     }
 }
