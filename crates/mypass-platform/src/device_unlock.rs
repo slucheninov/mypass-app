@@ -4,7 +4,7 @@
 //! [`DeviceUnlockMode::Biometrics`]; Mac password only, or both -> [`DeviceUnlockMode::AccountPassword`],
 //! whose OS policy offers Touch ID first.
 
-use crate::PlatformResult;
+use crate::{PlatformError, PlatformResult};
 use secrecy::SecretString;
 
 /// How the device proves the user is present.
@@ -50,4 +50,12 @@ pub trait DeviceUnlock: Send + Sync {
     ) -> PlatformResult<SecretString>;
     /// Removes every mode's enrolment of `vault_id`.
     fn forget(&self, vault_id: &str) -> PlatformResult<()>;
+    /// Asks the device owner to prove presence (showing `reason`), with the policy that offers
+    /// biometrics and falls back to the account password. Needs no Keychain item and no
+    /// enrolment; returns no secret. The passkey ceremonies call it before every phase two
+    /// (stage 5). Platforms without a body report `DeviceUnlockUnavailable`.
+    fn verify_presence(&self, reason: &str) -> PlatformResult<()> {
+        let _ = reason;
+        Err(PlatformError::DeviceUnlockUnavailable)
+    }
 }

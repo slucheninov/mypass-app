@@ -206,6 +206,9 @@ struct DeviceUnlockState {
     enrolled: HashMap<(DeviceUnlockModeKey, String), SecretString>,
     fail_next: Option<PlatformError>,
     evaluations: usize,
+    enrolls: usize,
+    fail_next_presence: Option<PlatformError>,
+    presence_checks: usize,
 }
 
 /// `DeviceUnlockMode` as a map key (the public enum does not derive `Hash`).
@@ -226,7 +229,8 @@ impl From<DeviceUnlockMode> for DeviceUnlockModeKey {
 
 /// [`DeviceUnlock`] that stores the secret per `(mode, vault_id)`. `unlock` of a non-enrolled pair
 /// returns `Err(Invalidated)`; with `Unavailable` every call but `availability` fails with
-/// `DeviceUnlockUnavailable`.
+/// `DeviceUnlockUnavailable`. `verify_presence` succeeds without any enrolment and is counted
+/// apart from the `unlock` evaluations.
 pub struct FakeDeviceUnlock {
     availability: DeviceUnlockAvailability,
     state: Mutex<DeviceUnlockState>,
@@ -257,6 +261,21 @@ impl FakeDeviceUnlock {
         lock(&self.state).evaluations
     }
 
+    /// Number of successful `enroll` calls (a re-enrolment re-captures the biometric state).
+    pub fn enroll_count(&self) -> usize {
+        lock(&self.state).enrolls
+    }
+
+    /// The next `verify_presence` fails with `e` (and still counts as a presence check).
+    pub fn fail_next_presence(&self, e: PlatformError) {
+        lock(&self.state).fail_next_presence = Some(e);
+    }
+
+    /// Number of `verify_presence` calls (each one is a prompt on a real device).
+    pub fn presence_count(&self) -> usize {
+        lock(&self.state).presence_checks
+    }
+
     fn check_available(&self) -> PlatformResult<()> {
         match self.availability {
             DeviceUnlockAvailability::Unavailable => Err(PlatformError::DeviceUnlockUnavailable),
@@ -285,9 +304,9 @@ impl DeviceUnlock for FakeDeviceUnlock {
     ) -> PlatformResult<()> {
         self.check_available()?;
         let copy = SecretString::from(secret.expose_secret().to_owned());
-        lock(&self.state)
-            .enrolled
-            .insert((mode.into(), vault_id.to_owned()), copy);
+        let mut s = lock(&self.state);
+        s.enrolled.insert((mode.into(), vault_id.to_owned()), copy);
+        s.enrolls += 1;
         Ok(())
     }
 
@@ -314,6 +333,16 @@ impl DeviceUnlock for FakeDeviceUnlock {
         lock(&self.state).enrolled.retain(|(_, v), _| v != vault_id);
         Ok(())
     }
+
+    fn verify_presence(&self, _reason: &str) -> PlatformResult<()> {
+        self.check_available()?;
+        let mut s = lock(&self.state);
+        s.presence_checks += 1;
+        match s.fail_next_presence.take() {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
 }
 
 impl std::fmt::Debug for FakeDeviceUnlock {
@@ -323,6 +352,7 @@ impl std::fmt::Debug for FakeDeviceUnlock {
             .field("availability", &self.availability)
             .field("enrolled", &s.enrolled.len())
             .field("evaluations", &s.evaluations)
+            .field("presence_checks", &s.presence_checks)
             .finish()
     }
 }
