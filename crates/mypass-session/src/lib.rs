@@ -17,6 +17,7 @@ pub mod generator_service;
 pub mod queries;
 pub mod saving;
 pub mod scheduler;
+pub mod secondary;
 pub mod session;
 pub mod settings;
 pub mod shortcut;
@@ -27,6 +28,7 @@ pub use app_core::{ApiError, AppCore, AppPaths, ErrorCode, Platform};
 pub use backups::{BackupFailure, BackupItem, BackupStatus};
 pub use drafts::DraftVersionDto;
 pub use dto::*;
+pub use secondary::{SecondaryError, SecondaryStatus, SecondarySync, SecondaryUnavailable};
 pub use session::{LockReason, SaveState, SaveStatus, SessionState, SessionStatus};
 pub use settings::{
     BackupInterval, GeneratorOptionsDto, IdleTimeout, Language, RequireAccountPasswordWindow,

@@ -822,6 +822,20 @@ impl VaultSession {
         }
     }
 
+    /// Like [`VaultSession::with_db_and_password`], but first waits until no write or check is in
+    /// flight, and also hands over the vault path. While `f` runs under the session lock no
+    /// primary write can start, so the secondary sync never overlaps a save (and `lock` waits).
+    pub(crate) fn with_idle_db_and_password<R>(
+        &self,
+        f: impl FnOnce(&Database, &SecretString, Option<&Path>) -> R,
+    ) -> Result<R, SessionError> {
+        let inner = self.wait_idle(lock(&self.0.inner));
+        match (&inner.db, &inner.password) {
+            (Some(db), Some(p)) => Ok(f(db, p, inner.path.as_deref())),
+            _ => Err(inner.not_unlocked()),
+        }
+    }
+
     /// Flushes, writes the current database to `new_path` through `io` (`AlreadyExists` when the
     /// target exists), reopens the session there and records the new path in the settings. The
     /// old file is left untouched. Refused while quitting.

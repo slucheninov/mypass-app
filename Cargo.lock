@@ -2848,6 +2848,7 @@ dependencies = [
  "mypass-core",
  "mypass-kdbx",
  "mypass-platform",
+ "mypass-sync",
  "rand 0.8.8",
  "secrecy",
  "serde",

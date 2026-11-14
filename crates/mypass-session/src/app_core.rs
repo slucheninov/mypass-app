@@ -34,6 +34,7 @@ use crate::editing;
 use crate::generator_service;
 use crate::queries;
 use crate::scheduler::{lock, Scheduler, ThreadScheduler};
+use crate::secondary::{SecondaryStatus, SecondarySync};
 use crate::session::{
     GeneratorRulesError, LockReason, SessionDeps, SessionError, SessionStatus, VaultSession,
 };
@@ -171,6 +172,13 @@ impl ProcessLookup for NoOtherProcesses {
     }
 }
 
+/// The worker schedulers of [`AppCore::assemble`] (one shared `ManualScheduler` in tests).
+struct Schedulers {
+    main: Arc<dyn Scheduler>,
+    clipboard: Arc<dyn Scheduler>,
+    sync: Arc<dyn Scheduler>,
+}
+
 fn parse_id(id: &str) -> Result<Uuid, SessionError> {
     Uuid::parse_str(id).map_err(|_| SessionError::InvalidInput("malformed id".into()))
 }
@@ -186,6 +194,8 @@ pub struct AppCore {
     pub unlock_requests: UnlockRequestState,
     /// Device unlock (status, enrolment, the explicit prompt); observes the session.
     pub device_unlock: DeviceUnlockService,
+    /// Secondary-folder sync (status, `sync_now`, disconnect); observes the session.
+    pub secondary: SecondarySync,
     platform: Platform,
     scheduler: Arc<dyn Scheduler>,
     paths: AppPaths,
@@ -201,19 +211,25 @@ impl AppCore {
     /// timers. Two schedulers, not one: the session, auto-lock and unlock-request timers share
     /// one, and the clipboard clear has its own, so a vault write that hangs on a stuck drive
     /// cannot hold back the clearing of a copied password. (A single scheduler would otherwise
-    /// serve every service: the services only need the `Scheduler` trait.)
+    /// serve every service: the services only need the `Scheduler` trait.) The secondary-folder
+    /// sync gets a third worker for the same reason: a slow sync folder never delays the
+    /// autosave, auto-lock or unlock-request timers.
     pub fn new(paths: AppPaths, platform: Platform) -> Result<Self, ApiError> {
         let worker = |name: &str| {
             ThreadScheduler::new(name).map_err(|e| ApiError::new(ErrorCode::Io, e.to_string()))
         };
         let scheduler = worker("mypass-scheduler")?;
         let clipboard_scheduler = worker("mypass-clipboard")?;
+        let sync_scheduler = worker("mypass-sync")?;
         let settings = SettingsStore::load(paths.config_dir.join("settings.json"));
         Ok(Self::assemble(
             paths,
             platform,
-            scheduler,
-            clipboard_scheduler,
+            Schedulers {
+                main: scheduler,
+                clipboard: clipboard_scheduler,
+                sync: sync_scheduler,
+            },
             settings,
         ))
     }
@@ -225,16 +241,25 @@ impl AppCore {
         scheduler: Arc<dyn Scheduler>,
         settings: SettingsStore,
     ) -> Self {
-        Self::assemble(paths, platform, scheduler.clone(), scheduler, settings)
+        let schedulers = Schedulers {
+            main: scheduler.clone(),
+            clipboard: scheduler.clone(),
+            sync: scheduler,
+        };
+        Self::assemble(paths, platform, schedulers, settings)
     }
 
     fn assemble(
         paths: AppPaths,
         platform: Platform,
-        scheduler: Arc<dyn Scheduler>,
-        clipboard_scheduler: Arc<dyn Scheduler>,
+        schedulers: Schedulers,
         settings: SettingsStore,
     ) -> Self {
+        let Schedulers {
+            main: scheduler,
+            clipboard: clipboard_scheduler,
+            sync: sync_scheduler,
+        } = schedulers;
         let session = VaultSession::new(SessionDeps {
             settings: settings.clone(),
             scheduler: scheduler.clone(),
@@ -256,8 +281,12 @@ impl AppCore {
             unlock_requests.clone(),
             &paths,
         );
+        let secondary =
+            SecondarySync::new(session.clone(), settings.clone(), sync_scheduler, &paths);
+        secondary.attach();
         Self {
             backups: session.backups(),
+            secondary,
             unlock_requests,
             device_unlock,
             session,
@@ -885,6 +914,23 @@ impl AppCore {
             self.draft_store(&vault_id, [0u8; 32])?.clear_all();
         }
         Ok(restored?)
+    }
+
+    // ---- secondary folder sync ----
+
+    /// The secondary-folder sync status (`off` when no folder is configured).
+    pub fn sync_status(&self) -> Result<SecondaryStatus, ApiError> {
+        Ok(self.secondary.status())
+    }
+
+    /// Syncs the secondary folder now; `Locked` / `NoVault` unless a vault is open.
+    pub fn sync_now(&self) -> Result<SecondaryStatus, ApiError> {
+        self.secondary.sync_now()
+    }
+
+    /// Stops syncing and forgets the folder; the copy in it is left as it is.
+    pub fn sync_disconnect_secondary(&self) -> Result<(), ApiError> {
+        self.secondary.disconnect()
     }
 
     // ---- CSV import ----
@@ -2220,5 +2266,42 @@ mod tests {
             ErrorCode::Locked
         );
         assert!(!out.exists());
+    }
+
+    #[test]
+    fn sync_commands_report_off_sync_and_disconnect() {
+        let f = fx_open();
+        assert_eq!(f.core.sync_status().unwrap(), SecondaryStatus::Off);
+        assert_eq!(f.core.sync_now().unwrap(), SecondaryStatus::Off);
+        let folder = f.dir.path().join("secondary");
+        std::fs::create_dir_all(&folder).unwrap();
+        f.core
+            .settings
+            .set_secondary_folder(Some(folder.to_string_lossy().into_owned()))
+            .unwrap();
+        f.core.secondary.rearm();
+        let status = f.core.sync_now().unwrap();
+        assert!(
+            matches!(status, SecondaryStatus::Idle { last_sync: Some(_) }),
+            "{status:?}"
+        );
+        assert!(folder.join("v.kdbx").is_file());
+        f.core.sync_disconnect_secondary().unwrap();
+        assert_eq!(f.core.sync_status().unwrap(), SecondaryStatus::Off);
+        assert_eq!(f.core.settings.get().secondary_folder, None);
+        assert!(folder.join("v.kdbx").is_file(), "the copy is left in place");
+    }
+
+    #[test]
+    fn sync_now_while_locked_is_locked() {
+        let f = fx_open();
+        let folder = f.dir.path().join("secondary");
+        std::fs::create_dir_all(&folder).unwrap();
+        f.core
+            .settings
+            .set_secondary_folder(Some(folder.to_string_lossy().into_owned()))
+            .unwrap();
+        f.core.vault_lock().unwrap();
+        assert_eq!(code(f.core.sync_now()), ErrorCode::Locked);
     }
 }
