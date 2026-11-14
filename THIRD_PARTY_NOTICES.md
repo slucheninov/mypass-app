@@ -327,6 +327,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `objc2-encode` | 4.1.0 | MIT |
 | `objc2-exception-helper` | 0.1.1 | Zlib OR Apache-2.0 OR MIT |
 | `objc2-foundation` | 0.3.2 | MIT |
+| `objc2-local-authentication` | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | `objc2-quartz-core` | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | `objc2-ui-kit` | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | `objc2-user-notifications` | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
