@@ -948,7 +948,12 @@ export type SecondaryError =
 /**  The copy kept changing while it was synced. */
 "remoteBusy" | 
 /**  A read, write or checkpoint failure. */
-"io";
+"io" | 
+/**
+ *  The copy is synced, but changes in the folder are not noticed: the folder watcher could
+ *  not start. It is retried with a growing delay.
+ */
+"watchFailed";
 
 /**  What the Settings sync pane shows (the `SyncStatusChanged` event payload). */
 export type SecondaryStatus = SecondaryStatus_Serialize | SecondaryStatus_Deserialize;

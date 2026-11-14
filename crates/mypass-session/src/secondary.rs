@@ -12,20 +12,37 @@
 //!   timer is cancelled and the watcher stopped, so nothing armed for one vault runs for another.
 //! - **The folder is untrusted (R7).** It is checked before every run: it must be absolute and an
 //!   existing directory, and the copy in it must not be the primary file itself (the primary's own
-//!   folder, through any alias). Anything else is `Unavailable { invalidFolder }`; a missing
-//!   folder is `Unavailable { folderMissing }`. The setting changes only through the sync commands.
-//! - **Ordering with the primary save pipeline.** A run waits until no primary write is in flight
-//!   and then holds the session lock for the whole engine call, through
-//!   `VaultSession::with_db_and_password` semantics: the password is borrowed in place and never
-//!   cloned out of the session (R37), no primary write can start meanwhile, and `lock` waits for
-//!   the run to end. The cost is that the UI waits for one sync (one or two KDF runs plus the
-//!   folder I/O) when it touches the session during a run.
-//! - **Adopting remote changes (the old "merge result discarded" bug).** A
-//!   `SyncResult::Merged` is merged INTO the live database inside `VaultSession::mutate_tracked`
-//!   (never a replacement, so an edit made while the engine ran is kept), the autosave then writes
-//!   it to the primary, and only after the adoption succeeded is the merge checkpoint committed.
-//!   An adoption that fails (vault locked or switched meanwhile) commits nothing: the next run
-//!   merges again instead of pushing blindly over remote-only changes.
+//!   folder, through any alias). Anything else (a file, a symlink loop, a path that cannot be
+//!   inspected) is `Unavailable { invalidFolder }`; only a path that does not exist (an unmounted
+//!   drive, a deleted folder) is `Unavailable { folderMissing }`, which is retried. The setting
+//!   changes only through the sync commands.
+//! - **No session lock during remote work.** A run takes a snapshot of the unlocked vault
+//!   (`VaultSession::sync_snapshot`: a clone of the database and a crate-private clone of the
+//!   password, a zeroizing `SecretString` that is never logged) together with the session's
+//!   incarnation, releases the session lock and runs the engine (folder I/O, one or two KDF
+//!   runs) outside it, so the UI, the autosave and `lock` never wait for a sync. Right before
+//!   every remote write the engine asks whether the arm and the incarnation are still current;
+//!   a lock, unlock, vault switch, relocation or quit in between cancels the run before it
+//!   writes.
+//! - **Adopting remote changes, then durability, then the checkpoint.** A `SyncResult::Merged` is
+//!   merged INTO the live database (never a replacement, so an edit made while the engine ran is
+//!   kept) inside one session-lock acquisition that first re-checks the incarnation; a changed
+//!   one discards the result (the re-arm that came with the change schedules the next run). The
+//!   synced content is then flushed to the primary file, and only once the session reports it
+//!   on disk (`VaultSession::durably_holds`) is the engine's checkpoint committed. The checkpoint
+//!   means "the copy holds nothing the primary file on disk lacks", so a crash at any point
+//!   before the commit only costs an idempotent re-merge on the next run, never a blind push
+//!   over remote-only changes. A primary that cannot be written leaves the checkpoint as it was
+//!   and retries after [`SECONDARY_RETRY`].
+//! - **Checkpoints are per vault and primary file.** Two copies of one vault (same root UUID) at
+//!   different paths keep separate checkpoints, because the promise is about one primary file.
+//! - **Reconciling without rewriting.** Arming and the retry timer use `SyncMode::PushIfChanged`:
+//!   an unlock with nothing new for the copy writes nothing. A completed save and `sync_now`
+//!   push, a watcher event only pulls.
+//! - **The watcher is part of the health.** A watcher that cannot start shows as
+//!   `Error { watchFailed }` (the data sync itself still runs) and is retried on the scheduler
+//!   from [`SECONDARY_WATCH_RETRY_MIN`], doubling up to [`SECONDARY_RETRY`]; once it runs, a
+//!   pull catches up on what it missed.
 //! - **Failures never touch the primary.** They become a [`SecondaryStatus`] only. Transient ones
 //!   (folder missing, read-only, timed out, an I/O error, a remote that kept changing) retry after
 //!   [`SECONDARY_RETRY`]; the rest (wrong password, not a vault, another vault...) wait for the
@@ -36,25 +53,29 @@
 //!
 //! Nothing here logs; statuses and errors carry codes only (R37).
 //!
-//! Locking discipline: the run gate (one run at a time) is taken before the session lock; the
-//! service's state lock is never held while calling the session, the scheduler's jobs or a
-//! watcher's `stop` (which joins the watcher thread, whose callback takes the state lock).
+//! Locking discipline: the run gate (one run at a time) is taken before the session lock and the
+//! session lock is held only for the snapshot, the adoption and the durability check, never
+//! across remote I/O; the service's state lock is never held while calling the session, the
+//! scheduler's jobs or a watcher's `stop` (which joins the watcher thread, whose callback takes
+//! the state lock).
 
 use crate::app_core::ApiError;
 use crate::saving::same_content;
 use crate::scheduler::{lock, Scheduler, TaskHandle};
-use crate::session::{SaveState, SessionError, SessionEvent, VaultSession};
+use crate::session::{Durability, SaveState, SessionEvent, SyncSnapshot, VaultSession};
 use crate::settings::SettingsStore;
 use mypass_core::merge::merge;
 use mypass_kdbx::Database;
 use mypass_platform::AppPaths;
 use mypass_sync::{
-    EchoFilter, FileCheckpointStore, FolderWatcher, LocalFolderBackend, MergedRemote,
-    StorageBackend, StorageError, SyncCheckpoint, SyncCheckpointStore, SyncEngine, SyncError,
-    SyncMode, SyncResult, WATCH_DEBOUNCE,
+    EchoFilter, FileCheckpointStore, FolderWatcher, LocalFolderBackend, StorageBackend,
+    StorageError, SyncCheckpoint, SyncCheckpointStore, SyncEngine, SyncError, SyncMode, SyncResult,
+    WATCH_DEBOUNCE,
 };
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock, Weak};
@@ -64,10 +85,22 @@ use std::time::{Duration, UNIX_EPOCH};
 pub const SECONDARY_PUSH_DEBOUNCE: Duration = Duration::from_secs(2);
 /// Delay before a transient secondary failure (folder missing, read-only...) is retried.
 pub const SECONDARY_RETRY: Duration = Duration::from_secs(300);
+/// First delay before a folder watcher that failed to start is tried again; it doubles on every
+/// further failure, up to [`SECONDARY_RETRY`].
+pub const SECONDARY_WATCH_RETRY_MIN: Duration = Duration::from_secs(5);
 /// Folder under `AppPaths::data_dir` that holds one checkpoint folder per vault id.
 pub const SYNC_STATE_DIR: &str = "sync";
-/// The checkpoint file of the secondary folder, in `<data_dir>/sync/<vault_id>/`.
-pub const SECONDARY_CHECKPOINT_FILE: &str = "secondary.json";
+/// How many flushes a run tries while edits keep arriving before it leaves the checkpoint for
+/// the next run.
+const DURABLE_TRIES: usize = 3;
+
+/// The checkpoint file of the secondary folder for one primary file, in
+/// `<data_dir>/sync/<vault_id>/`: `secondary-<first 16 hex digits of SHA-256(primary path)>.json`.
+pub fn secondary_checkpoint_file(primary: &Path) -> String {
+    let digest = Sha256::digest(primary.as_os_str().as_encoded_bytes());
+    let hex: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
+    format!("secondary-{hex}.json")
+}
 
 /// Why the secondary folder cannot be used right now (a localisable code).
 #[derive(Serialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug)]
@@ -105,6 +138,9 @@ pub enum SecondaryError {
     RemoteBusy,
     /// A read, write or checkpoint failure.
     Io,
+    /// The copy is synced, but changes in the folder are not noticed: the folder watcher could
+    /// not start. It is retried with a growing delay.
+    WatchFailed,
 }
 
 /// What the Settings sync pane shows (the `SyncStatusChanged` event payload).
@@ -190,14 +226,16 @@ enum RunKind {
     Retry,
     /// `sync_now`.
     Now,
+    /// The retry of a folder watcher that failed to start (a pull once it runs).
+    Watch,
 }
 
 impl RunKind {
     fn mode(self) -> SyncMode {
-        if self == RunKind::Pull {
-            SyncMode::Pull
-        } else {
-            SyncMode::Push
+        match self {
+            RunKind::Pull | RunKind::Watch => SyncMode::Pull,
+            RunKind::Push | RunKind::Now => SyncMode::Push,
+            RunKind::Arm | RunKind::Retry => SyncMode::PushIfChanged,
         }
     }
 }
@@ -231,6 +269,7 @@ enum Slot {
     Pull,
     Retry,
     Arm,
+    Watch,
 }
 
 #[derive(Default)]
@@ -240,6 +279,7 @@ struct Jobs {
     pull: Option<(u64, TaskHandle)>,
     retry: Option<(u64, TaskHandle)>,
     arm: Option<(u64, TaskHandle)>,
+    watch: Option<(u64, TaskHandle)>,
 }
 
 impl Jobs {
@@ -249,6 +289,7 @@ impl Jobs {
             Slot::Pull => &mut self.pull,
             Slot::Retry => &mut self.retry,
             Slot::Arm => &mut self.arm,
+            Slot::Watch => &mut self.watch,
         }
     }
 
@@ -259,7 +300,7 @@ impl Jobs {
     }
 
     fn cancel_all(&mut self) {
-        for slot in [Slot::Push, Slot::Pull, Slot::Retry, Slot::Arm] {
+        for slot in [Slot::Push, Slot::Pull, Slot::Retry, Slot::Arm, Slot::Watch] {
             self.cancel(slot);
         }
     }
@@ -275,6 +316,10 @@ struct State {
     /// The last save state seen, to detect a completed save (Pending or Saving, then Idle).
     last_save: SaveState,
     jobs: Jobs,
+    /// The watcher of the current arm could not start (shown as `Error { watchFailed }`).
+    watch_failed: bool,
+    /// The delay before the next watcher retry.
+    watch_backoff: Duration,
 }
 
 /// What one run came to.
@@ -282,6 +327,9 @@ enum Outcome {
     Synced,
     /// The vault was locked, closed or switched meanwhile: nothing to report.
     Stale,
+    /// Synced, but the primary file could not be brought up to date, so the checkpoint was
+    /// left as it was; retried.
+    Deferred,
     Unavailable(SecondaryUnavailable),
     Failed(SyncError),
 }
@@ -291,9 +339,24 @@ enum Outcome {
 pub(crate) struct Probe {
     /// Engine calls made (a run that stops at the echo check makes none).
     pub(crate) engine_runs: std::sync::atomic::AtomicUsize,
-    /// Runs between the engine call and the adoption of a merge (test-only).
-    #[allow(clippy::type_complexity)]
-    pub(crate) before_adopt: Mutex<Option<Box<dyn FnMut() + Send>>>,
+    /// Runs between the engine call and the adoption of a merge.
+    pub(crate) before_adopt: Hook,
+    /// Runs inside the engine call, right before each remote write (outside the session lock).
+    pub(crate) during_engine: Hook,
+    /// Runs after the adoption, before the primary is flushed.
+    pub(crate) before_durable: Hook,
+    /// Runs after the primary is durable, before the checkpoint is committed.
+    pub(crate) before_commit: Hook,
+}
+
+#[cfg(test)]
+pub(crate) type Hook = Mutex<Option<Box<dyn FnMut() + Send>>>;
+
+#[cfg(test)]
+fn run_hook(hook: &Hook) {
+    if let Some(f) = lock(hook).as_mut() {
+        f();
+    }
 }
 
 struct Shared {
@@ -324,10 +387,6 @@ impl std::fmt::Debug for SecondarySync {
             .field("armed", &st.armed.is_some())
             .finish_non_exhaustive()
     }
-}
-
-fn vault_id_of(db: &Database) -> String {
-    db.root_id().simple().to_string()
 }
 
 impl SecondarySync {
@@ -373,6 +432,8 @@ impl SecondarySync {
                 last_sync: None,
                 last_save: SaveState::Idle,
                 jobs: Jobs::default(),
+                watch_failed: false,
+                watch_backoff: SECONDARY_WATCH_RETRY_MIN,
             }),
             run_gate: Mutex::new(()),
             observers: RwLock::new(Vec::new()),
@@ -437,8 +498,10 @@ impl SecondarySync {
     pub fn disconnect(&self) -> Result<(), ApiError> {
         let _gate = lock(&self.0.run_gate);
         self.0.settings.set_secondary_folder(None)?;
-        if let Some(vault_id) = self.0.session.vault_id() {
-            let path = self.checkpoint_path(&vault_id);
+        if let (Some(vault_id), Some(primary)) =
+            (self.0.session.vault_id(), self.0.session.vault_path())
+        {
+            let path = self.checkpoint_path(&vault_id, &primary);
             if path.exists() {
                 // Best effort: a stale checkpoint only allows writing over a copy that is exactly
                 // what this device wrote last.
@@ -473,6 +536,8 @@ impl SecondarySync {
             }
             st.epoch = st.epoch.wrapping_add(1);
             st.jobs.cancel_all();
+            st.watch_failed = false;
+            st.watch_backoff = SECONDARY_WATCH_RETRY_MIN;
             let old = st.armed.take();
             if let Some(key) = desired {
                 st.armed = Some(Armed {
@@ -506,11 +571,11 @@ impl SecondarySync {
         })
     }
 
-    fn checkpoint_path(&self, vault_id: &str) -> PathBuf {
+    fn checkpoint_path(&self, vault_id: &str, primary: &Path) -> PathBuf {
         self.0
             .sync_root
             .join(vault_id)
-            .join(SECONDARY_CHECKPOINT_FILE)
+            .join(secondary_checkpoint_file(primary))
     }
 
     fn on_session_event(&self, event: &SessionEvent) {
@@ -568,13 +633,36 @@ impl SecondarySync {
         self.schedule(&mut st, Slot::Pull, Duration::ZERO, RunKind::Pull);
     }
 
-    /// Starts the watcher of the current arm when none runs.
-    fn ensure_watcher(&self, epoch: u64, dir: &Path, file_name: &str) {
+    /// Starts the watcher of the current arm when none runs, and records whether one runs: a
+    /// failure shows in the status and arms the watcher retry (with a growing delay).
+    fn watch_folder(&self, epoch: u64, dir: &Path, file_name: &str) {
+        let watching = self.ensure_watcher(epoch, dir, file_name);
+        let mut st = lock(&self.0.state);
+        if st.epoch != epoch {
+            return;
+        }
+        if watching {
+            st.watch_failed = false;
+            st.watch_backoff = SECONDARY_WATCH_RETRY_MIN;
+            st.jobs.cancel(Slot::Watch);
+        } else {
+            st.watch_failed = true;
+            if st.jobs.watch.is_none() {
+                let delay = st.watch_backoff;
+                st.watch_backoff = delay.saturating_mul(2).min(SECONDARY_RETRY);
+                self.schedule(&mut st, Slot::Watch, delay, RunKind::Watch);
+            }
+        }
+    }
+
+    /// Starts the watcher of the current arm when none runs. `false` only when it failed to
+    /// start (a stale epoch or a running watcher is `true`: nothing to report).
+    fn ensure_watcher(&self, epoch: u64, dir: &Path, file_name: &str) -> bool {
         {
             let st = lock(&self.0.state);
             match &st.armed {
                 Some(armed) if st.epoch == epoch && armed.watcher.is_none() => {}
-                _ => return,
+                _ => return true,
             }
         }
         let weak: Weak<Shared> = Arc::downgrade(&self.0);
@@ -583,10 +671,8 @@ impl SecondarySync {
                 SecondarySync(shared).on_remote_change(epoch);
             }
         });
-        // A failure leaves the folder unwatched; the run reports the folder's state and a retry
-        // tries the watcher again.
         let Ok(guard) = self.0.watch.watch(dir, file_name, callback) else {
-            return;
+            return false;
         };
         let unused = {
             let mut st = lock(&self.0.state);
@@ -602,6 +688,7 @@ impl SecondarySync {
         if let Some(guard) = unused {
             guard.stop();
         }
+        true
     }
 
     /// One sync of the current arm. Returns the status afterwards.
@@ -636,76 +723,123 @@ impl SecondarySync {
             Ok(backend) => Arc::new(backend),
             Err(e) => return self.finish(epoch, storage_outcome(e)),
         };
-        self.ensure_watcher(epoch, &dir, file_name);
-        if kind == RunKind::Pull {
+        self.watch_folder(epoch, &dir, file_name);
+        if matches!(kind, RunKind::Pull | RunKind::Watch) {
             if let Ok(Some(bytes)) = backend.read() {
                 if echo.is_echo(&SyncCheckpoint::of_bytes(&bytes, None)) {
-                    return self.status();
+                    return self.settle_watch_status(epoch);
                 }
             }
         }
         if let Some(status) = self.set_status_if(epoch, SecondaryStatus::Syncing) {
             self.notify(&status);
         }
+        // The vault switched between the arm check and here: not this arm's vault.
+        let snapshot = match self.0.session.sync_snapshot() {
+            Ok(s) if s.vault_id == key.vault_id && s.path == key.primary => s,
+            _ => return self.finish(epoch, Outcome::Stale),
+        };
         #[cfg(test)]
         self.0.probe.engine_runs.fetch_add(1, Ordering::SeqCst);
         let checkpoints = Arc::new(FileCheckpointStore::new(
-            self.checkpoint_path(&key.vault_id),
+            self.checkpoint_path(&key.vault_id, &key.primary),
         ));
         let engine = SyncEngine::new(backend, checkpoints).with_echo_filter(echo);
-        let synced = self
-            .0
-            .session
-            .with_idle_db_and_password(|db, password, path| {
-                // The vault switched between the arm check and here: not this arm's vault.
-                if vault_id_of(db) != key.vault_id || path != Some(key.primary.as_path()) {
-                    return None;
-                }
-                Some(engine.sync(db, password, kind.mode()))
-            });
-        let outcome = match synced {
-            Ok(Some(Ok(SyncResult::Merged(merged)))) => self.adopt(&engine, &key, *merged),
-            Ok(Some(Ok(result))) => match result.into_parts() {
-                (_, None) => Outcome::Synced,
-                (_, Some(pending)) => match engine.commit(pending) {
-                    Ok(()) => Outcome::Synced,
-                    Err(e) => Outcome::Failed(e),
-                },
-            },
-            Ok(Some(Err(e))) => Outcome::Failed(e),
-            Ok(None) | Err(_) => Outcome::Stale,
+        let still_current = || {
+            #[cfg(test)]
+            run_hook(&self.0.probe.during_engine);
+            self.is_current(epoch, snapshot.incarnation)
         };
+        // Outside the session lock: remote I/O and KDF runs never block the session.
+        let synced = engine.sync_checked(
+            &snapshot.db,
+            &snapshot.password,
+            kind.mode(),
+            &still_current,
+        );
+        let outcome = match synced {
+            Ok(result) => self.settle(&engine, &snapshot, result),
+            Err(SyncError::Cancelled) => Outcome::Stale,
+            Err(e) => Outcome::Failed(e),
+        };
+        drop(snapshot);
         self.finish(epoch, outcome)
     }
 
-    /// Merges the remote's changes into the LIVE database (edits made while the engine ran are
-    /// kept), then commits the merge checkpoint. A failed adoption commits nothing.
-    fn adopt(&self, engine: &SyncEngine, key: &ArmKey, merged: MergedRemote) -> Outcome {
-        let (remote, pending) = merged.into_parts();
+    /// Whether the arm of `epoch` and the session incarnation of the snapshot are both still
+    /// current (and the app is not quitting). Never holds the state lock while asking the
+    /// session.
+    fn is_current(&self, epoch: u64, incarnation: u64) -> bool {
+        let armed = {
+            let st = lock(&self.0.state);
+            st.epoch == epoch && st.armed.is_some()
+        };
+        armed && self.0.session.is_incarnation(incarnation)
+    }
+
+    /// Adopts a merge into the LIVE database (edits made while the engine ran are kept), makes
+    /// the synced content durable in the primary file, and only then commits the checkpoint.
+    /// A change of the open vault in between (lock, unlock, switch, relocation, quit) discards
+    /// the result and commits nothing, so the next run merges again.
+    fn settle(&self, engine: &SyncEngine, snapshot: &SyncSnapshot, result: SyncResult) -> Outcome {
+        let (merged, pending) = result.into_parts();
+        if let Some(remote) = &merged {
+            #[cfg(test)]
+            run_hook(&self.0.probe.before_adopt);
+            let adopted =
+                self.0
+                    .session
+                    .mutate_if_incarnation(snapshot.incarnation, |live, _now| {
+                        let next = merge(live, remote);
+                        if same_content(&next, live) {
+                            return Ok(((), false));
+                        }
+                        *live = next;
+                        Ok(((), true))
+                    });
+            if !matches!(adopted, Ok(Some(()))) {
+                return Outcome::Stale;
+            }
+        }
+        let Some(pending) = pending else {
+            return Outcome::Synced;
+        };
         #[cfg(test)]
-        if let Some(hook) = lock(&self.0.probe.before_adopt).as_mut() {
-            hook();
+        run_hook(&self.0.probe.before_durable);
+        let content = merged.as_ref().unwrap_or(&snapshot.db);
+        match self.make_durable(snapshot.incarnation, content) {
+            Durability::Durable => {}
+            Durability::Stale => return Outcome::Stale,
+            Durability::Unsaved | Durability::Missing => return Outcome::Deferred,
         }
-        let adopted = self.0.session.mutate_tracked(|live, _now| {
-            if vault_id_of(live) != key.vault_id {
-                return Err(SessionError::InvalidInput(
-                    "the vault changed during the sync".into(),
-                ));
-            }
-            let next = merge(live, &remote);
-            if same_content(&next, live) {
-                return Ok(((), false));
-            }
-            *live = next;
-            Ok(((), true))
-        });
-        match adopted {
-            Ok(()) => match engine.commit(pending) {
-                Ok(()) => Outcome::Synced,
-                Err(e) => Outcome::Failed(e),
-            },
-            Err(_) => Outcome::Stale,
+        #[cfg(test)]
+        run_hook(&self.0.probe.before_commit);
+        match engine.commit(pending) {
+            Ok(()) => Outcome::Synced,
+            Err(e) => Outcome::Failed(e),
         }
+    }
+
+    /// Flushes the primary until `content` is on disk, a few times while edits keep arriving.
+    fn make_durable(&self, incarnation: u64, content: &Database) -> Durability {
+        let mut found = Durability::Unsaved;
+        for _ in 0..DURABLE_TRIES {
+            if !self.0.session.is_incarnation(incarnation) {
+                return Durability::Stale;
+            }
+            if self.0.session.flush().is_err() {
+                // The save status shows the primary's failure; the checkpoint waits.
+                return match self.0.session.durably_holds(incarnation, content) {
+                    Durability::Stale => Durability::Stale,
+                    _ => Durability::Unsaved,
+                };
+            }
+            found = self.0.session.durably_holds(incarnation, content);
+            if found != Durability::Unsaved {
+                return found;
+            }
+        }
+        found
     }
 
     /// Records the outcome of a run of `epoch` (ignored when the service re-armed meanwhile),
@@ -721,6 +855,7 @@ impl SecondarySync {
             if st.epoch != epoch {
                 return st.status.clone();
             }
+            let deferred = matches!(outcome, Outcome::Deferred);
             let status = match outcome {
                 Outcome::Synced => {
                     st.last_sync = Some(LastSync {
@@ -732,13 +867,20 @@ impl SecondarySync {
                         last_sync: Some(now),
                     }
                 }
-                Outcome::Stale => SecondaryStatus::Idle {
+                Outcome::Stale | Outcome::Deferred => SecondaryStatus::Idle {
                     last_sync: last_sync_for(&st, Some(&key.vault_id), &key.folder),
                 },
                 Outcome::Unavailable(reason) => SecondaryStatus::Unavailable { reason },
                 Outcome::Failed(e) => failure_status(&e),
             };
-            if is_transient(&status) {
+            // A healthy-looking run never hides a folder that is not watched.
+            let status = match status {
+                SecondaryStatus::Idle { .. } if st.watch_failed => SecondaryStatus::Error {
+                    code: SecondaryError::WatchFailed,
+                },
+                other => other,
+            };
+            if deferred || is_transient(&status) {
                 self.schedule(&mut st, Slot::Retry, SECONDARY_RETRY, RunKind::Retry);
             } else {
                 st.jobs.cancel(Slot::Retry);
@@ -758,6 +900,33 @@ impl SecondarySync {
             self.notify(&status);
         }
         status
+    }
+
+    /// A run that made no engine call (an echo) leaves the status alone, except that a watcher
+    /// that runs again clears `watchFailed`.
+    fn settle_watch_status(&self, epoch: u64) -> SecondaryStatus {
+        let changed = {
+            let mut st = lock(&self.0.state);
+            let recovered = st.epoch == epoch
+                && !st.watch_failed
+                && st.status
+                    == (SecondaryStatus::Error {
+                        code: SecondaryError::WatchFailed,
+                    });
+            match st.armed.as_ref().map(|a| a.key.clone()) {
+                Some(key) if recovered => {
+                    let status = SecondaryStatus::Idle {
+                        last_sync: last_sync_for(&st, Some(&key.vault_id), &key.folder),
+                    };
+                    set_status(&mut st, status)
+                }
+                _ => None,
+            }
+        };
+        if let Some(status) = &changed {
+            self.notify(status);
+        }
+        self.status()
     }
 
     /// Sets the status when `epoch` is still current; returns it when it changed.
@@ -857,6 +1026,7 @@ fn failure_status(e: &SyncError) -> SecondaryStatus {
         SyncError::RemoteChangedDuringSync | SyncError::ConcurrentCopyKept => {
             SecondaryError::RemoteBusy
         }
+        // `Cancelled` never reaches here (a run maps it to a stale outcome).
         SyncError::Checkpoint(_) | SyncError::Encode(_) | SyncError::Cancelled => {
             SecondaryError::Io
         }
@@ -876,11 +1046,11 @@ pub(crate) fn validate_folder(
     if folder.is_empty() || !path.is_absolute() {
         return Err(SecondaryUnavailable::InvalidFolder);
     }
-    let meta = fs::metadata(path).map_err(|_| SecondaryUnavailable::FolderMissing)?;
+    let meta = fs::metadata(path).map_err(folder_error)?;
     if !meta.is_dir() {
         return Err(SecondaryUnavailable::InvalidFolder);
     }
-    let dir = fs::canonicalize(path).map_err(|_| SecondaryUnavailable::FolderMissing)?;
+    let dir = fs::canonicalize(path).map_err(folder_error)?;
     let primary = fs::canonicalize(primary).unwrap_or_else(|_| primary.to_path_buf());
     if let Some(parent) = primary.parent() {
         if dir == parent || same_node(&dir, parent) {
@@ -892,6 +1062,16 @@ pub(crate) fn validate_folder(
         return Err(SecondaryUnavailable::InvalidFolder);
     }
     Ok(dir)
+}
+
+/// Only a path that does not exist is a missing folder (retried: an unmounted drive comes back);
+/// anything else that keeps it from being inspected (a symlink loop, no permission) is invalid.
+fn folder_error(e: std::io::Error) -> SecondaryUnavailable {
+    if e.kind() == ErrorKind::NotFound {
+        SecondaryUnavailable::FolderMissing
+    } else {
+        SecondaryUnavailable::InvalidFolder
+    }
 }
 
 /// Whether two existing paths are the same file-system node (catches a case-insensitive alias

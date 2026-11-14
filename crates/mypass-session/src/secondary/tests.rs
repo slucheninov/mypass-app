@@ -3,9 +3,12 @@ use crate::app_core::ErrorCode;
 use crate::scheduler::ManualScheduler;
 use crate::session::{LockReason, SessionDeps};
 use crate::testing::fast_database;
+use mypass_kdbx::test_util::FailingFileIo;
 use mypass_kdbx::{Entry, PlainFileIo, Timestamp};
 use secrecy::SecretString;
-use std::sync::atomic::AtomicBool;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::mpsc;
 use std::time::SystemTime;
 use tempfile::TempDir;
 
@@ -23,6 +26,10 @@ fn start() -> SystemTime {
 #[derive(Default)]
 struct FakeWatch {
     watches: Mutex<Vec<(PathBuf, WatchCallback, Arc<AtomicBool>)>>,
+    /// The next this many starts fail (watch resources exhausted).
+    fail_next: AtomicUsize,
+    /// Every start attempt.
+    attempts: AtomicUsize,
 }
 
 struct FakeGuard(Arc<AtomicBool>);
@@ -40,8 +47,16 @@ impl FolderWatch for FakeWatch {
         _file_name: &str,
         on_change: WatchCallback,
     ) -> Result<Box<dyn WatchGuard>, StorageError> {
+        self.attempts.fetch_add(1, Ordering::SeqCst);
         if !dir.is_dir() {
             return Err(StorageError::Unavailable("missing".into()));
+        }
+        let failing = self
+            .fail_next
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok();
+        if failing {
+            return Err(StorageError::Io("no watch resources".into()));
         }
         let active = Arc::new(AtomicBool::new(true));
         self.watches
@@ -239,7 +254,9 @@ impl World {
             .data_dir
             .join(SYNC_STATE_DIR)
             .join(self.session.vault_id().unwrap())
-            .join(SECONDARY_CHECKPOINT_FILE)
+            .join(secondary_checkpoint_file(
+                &self.session.vault_path().unwrap(),
+            ))
     }
 
     fn idle_synced(&self) -> bool {
@@ -365,8 +382,7 @@ fn remote_change_merges_into_live_session_and_primary_file() {
     w.watch.fire();
     w.advance_ms(0);
     assert_eq!(w.live_titles(), v(&["B"]));
-    assert_eq!(w.primary_titles(), Vec::<String>::new());
-    w.advance(1);
+    // The run itself makes the merge durable in the primary before it commits its checkpoint.
     assert_eq!(
         w.primary_titles(),
         v(&["B"]),
@@ -738,5 +754,319 @@ fn status_serialises_with_a_state_tag() {
             code: SecondaryError::WrongPassword
         }),
         serde_json::json!({"state": "error", "code": "wrongPassword"})
+    );
+}
+
+impl World {
+    /// A crash and a restart: everything in memory is dropped without any further write, then a
+    /// new app (same data folders) opens the same primary file and arms.
+    fn restart(self) -> World {
+        let World {
+            tmp,
+            folder,
+            session,
+            sync,
+            scheduler,
+            ..
+        } = self;
+        drop(sync);
+        drop(session);
+        drop(scheduler);
+        let w = world_in(tmp, folder);
+        w.session.open_vault(&w.primary, pw()).unwrap();
+        w.advance_ms(0);
+        w
+    }
+
+    fn set_hook(&self, hook: &Hook, f: impl FnMut() + Send + 'static) {
+        let _ = self;
+        *hook.lock().unwrap_or_else(PoisonError::into_inner) = Some(Box::new(f));
+    }
+}
+
+/// D-2 crash points: the merge of a local "A" with the copy's "B" is on the copy, then the app
+/// dies at `point`. After a restart nothing is lost: "B" reaches the primary and both stay on
+/// the copy (an idempotent re-merge, never a blind push of the stale primary).
+fn crash_at(point: fn(&Probe) -> &Hook) {
+    let w = world();
+    w.open();
+    w.foreign_add("B");
+    w.set_hook(point(w.sync.probe()), || panic!("simulated crash"));
+    w.add("A");
+    w.advance(1);
+    let crashed = catch_unwind(AssertUnwindSafe(|| {
+        w.advance(SECONDARY_PUSH_DEBOUNCE.as_secs())
+    }));
+    assert!(crashed.is_err(), "the crash point was reached");
+    assert_eq!(w.remote_titles(), v(&["A", "B"]));
+    let w = w.restart();
+    assert_eq!(w.live_titles(), v(&["A", "B"]));
+    assert_eq!(w.primary_titles(), v(&["A", "B"]));
+    assert_eq!(w.remote_titles(), v(&["A", "B"]));
+    // The re-merge recorded a checkpoint again: an edit is now pushed plainly.
+    w.add("C");
+    w.advance(1 + SECONDARY_PUSH_DEBOUNCE.as_secs());
+    assert_eq!(w.remote_titles(), v(&["A", "B", "C"]));
+}
+
+#[test]
+fn crash_before_the_merge_is_adopted_loses_nothing() {
+    crash_at(|p| &p.before_adopt);
+}
+
+#[test]
+fn crash_before_the_adopted_merge_is_on_disk_loses_nothing() {
+    crash_at(|p| &p.before_durable);
+}
+
+#[test]
+fn crash_before_the_checkpoint_is_committed_loses_nothing() {
+    crash_at(|p| &p.before_commit);
+}
+
+/// D-2: a primary that cannot be written keeps the checkpoint as it was, so a restart (with the
+/// adopted entry lost from memory) merges the copy again instead of pushing over it.
+#[test]
+fn primary_write_failure_keeps_the_checkpoint_and_a_restart_merges_again() {
+    let w = world();
+    w.open();
+    let checkpoint = fs::read(w.checkpoint_file()).unwrap();
+    let io = Arc::new(FailingFileIo::new(Arc::new(PlainFileIo)));
+    io.fail_write_atomic(std::io::ErrorKind::PermissionDenied);
+    w.session.set_file_io(io);
+    w.foreign_add("B");
+    w.watch.fire();
+    w.advance_ms(0);
+    assert_eq!(w.live_titles(), v(&["B"]), "adopted in memory");
+    assert!(w.primary_titles().is_empty(), "not on disk");
+    assert_eq!(
+        fs::read(w.checkpoint_file()).unwrap(),
+        checkpoint,
+        "no checkpoint while the primary lacks the merge"
+    );
+    let w = w.restart();
+    assert_eq!(w.live_titles(), v(&["B"]));
+    assert_eq!(w.primary_titles(), v(&["B"]));
+    assert_eq!(w.remote_titles(), v(&["B"]));
+}
+
+/// D-1: the engine (remote I/O, KDF) runs without the session lock: an edit made from another
+/// thread in the middle of the engine call completes at once.
+#[test]
+fn the_session_stays_usable_while_the_engine_runs() {
+    let w = world();
+    w.open();
+    w.add("A");
+    let session = w.session.clone();
+    let mut once = true;
+    w.set_hook(&w.sync.probe().during_engine, move || {
+        if !std::mem::take(&mut once) {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let s = session.clone();
+        std::thread::spawn(move || {
+            let r = s.mutate(|db, now| {
+                add_to(db, "C", now);
+                Ok(())
+            });
+            let _ = tx.send(r.is_ok());
+        });
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(20)),
+            Ok(true),
+            "an edit during the engine call did not complete: the session lock is held"
+        );
+    });
+    w.sync.sync_now().unwrap();
+    assert_eq!(w.live_titles(), v(&["A", "C"]));
+    assert_eq!(w.remote_titles(), v(&["A"]));
+    w.advance(1 + SECONDARY_PUSH_DEBOUNCE.as_secs());
+    assert_eq!(w.remote_titles(), v(&["A", "C"]));
+}
+
+/// D-1 and D-3: a lock from another thread during the engine call completes at once, and the
+/// run then writes nothing and records nothing for the locked vault.
+#[test]
+fn lock_during_the_engine_call_is_not_blocked_and_cancels_the_write() {
+    let w = world();
+    w.open();
+    let checkpoint = fs::read(w.checkpoint_file()).unwrap();
+    let remote = w.remote_bytes();
+    w.add("A");
+    let session = w.session.clone();
+    let mut once = true;
+    w.set_hook(&w.sync.probe().during_engine, move || {
+        if !std::mem::take(&mut once) {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let s = session.clone();
+        std::thread::spawn(move || {
+            s.lock(LockReason::Manual);
+            let _ = tx.send(());
+        });
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(20)),
+            Ok(()),
+            "lock during the engine call did not complete: the session lock is held"
+        );
+    });
+    w.sync.sync_now().unwrap();
+    assert!(!w.session.is_unlocked());
+    assert_eq!(w.remote_bytes(), remote, "nothing written after the lock");
+    assert_eq!(fs::read(w.checkpoint_file()).unwrap(), checkpoint);
+    assert_eq!(w.primary_titles(), v(&["A"]), "the lock saved the edit");
+}
+
+/// D-3: a vault switched during the run (here a copy with the same root UUID) never receives
+/// the run's merge.
+#[test]
+fn merge_is_never_adopted_into_a_vault_switched_during_the_run() {
+    let w = world();
+    w.open();
+    w.foreign_add("B");
+    let copy = w.tmp.path().join("vaults").join("copy.kdbx");
+    fs::copy(&w.primary, &copy).unwrap();
+    let session = w.session.clone();
+    let settings = w.settings.clone();
+    let mut once = true;
+    w.set_hook(&w.sync.probe().before_adopt, move || {
+        if std::mem::take(&mut once) {
+            settings.set_secondary_folder(None).unwrap();
+            session.open_vault(&copy, pw()).unwrap();
+        }
+    });
+    w.watch.fire();
+    w.advance_ms(0);
+    assert_eq!(
+        w.session.vault_path().unwrap().file_name().unwrap(),
+        "copy.kdbx"
+    );
+    assert!(w.live_titles().is_empty(), "nothing adopted into the copy");
+    w.advance(5);
+    let copy_db = Database::open(
+        &fs::read(w.tmp.path().join("vaults").join("copy.kdbx")).unwrap(),
+        &pw(),
+    )
+    .unwrap();
+    assert!(titles(&copy_db).is_empty());
+}
+
+/// D-4: a watcher that cannot start shows in the status while the data still syncs, and is
+/// retried on the scheduler with a growing delay until it runs, without any local edit.
+#[test]
+fn watcher_start_failure_is_reported_and_retried_until_it_runs() {
+    let w = world();
+    w.watch.fail_next.store(2, Ordering::SeqCst);
+    w.open();
+    w.advance(SECONDARY_PUSH_DEBOUNCE.as_secs() + 1);
+    assert!(w.remote().exists(), "the data sync still ran");
+    assert_eq!(w.watch.active(), 0);
+    assert_eq!(
+        w.sync.status(),
+        SecondaryStatus::Error {
+            code: SecondaryError::WatchFailed
+        }
+    );
+    let attempts = w.watch.attempts.load(Ordering::SeqCst);
+    // Every failure doubles the delay: no attempt runs back to back.
+    w.advance(SECONDARY_WATCH_RETRY_MIN.as_secs() * 8);
+    assert_eq!(w.watch.active(), 1, "the watcher runs again");
+    assert!(w.watch.attempts.load(Ordering::SeqCst) <= attempts + 2);
+    assert!(w.idle_synced(), "{:?}", w.sync.status());
+    w.foreign_add("B");
+    w.watch.fire();
+    w.advance_ms(0);
+    assert_eq!(w.live_titles(), v(&["B"]));
+}
+
+#[test]
+fn watcher_retry_delay_doubles_up_to_the_retry_interval() {
+    let w = world();
+    w.watch.fail_next.store(usize::MAX, Ordering::SeqCst);
+    w.open();
+    w.advance(SECONDARY_PUSH_DEBOUNCE.as_secs() + 1);
+    let mut gaps = Vec::new();
+    let mut last = w.watch.attempts.load(Ordering::SeqCst);
+    let mut since = 0;
+    for _ in 0..(SECONDARY_RETRY.as_secs() * 3) {
+        w.advance(1);
+        since += 1;
+        let now = w.watch.attempts.load(Ordering::SeqCst);
+        if now != last {
+            gaps.push(since);
+            since = 0;
+            last = now;
+        }
+    }
+    let first = SECONDARY_WATCH_RETRY_MIN.as_secs();
+    assert!(gaps.len() >= 4, "{gaps:?}");
+    assert!(gaps[0] <= first * 2, "{gaps:?}");
+    for pair in gaps.windows(2) {
+        assert!(pair[1] >= pair[0], "{gaps:?}");
+    }
+    assert!(
+        gaps.iter().all(|g| *g <= SECONDARY_RETRY.as_secs()),
+        "{gaps:?}"
+    );
+}
+
+/// D-6: locking and unlocking with nothing new writes nothing to the copy; a change that
+/// reached the primary while locked is still pushed on unlock (positive control).
+#[test]
+fn unlock_with_nothing_new_does_not_rewrite_the_copy() {
+    let w = world();
+    w.open();
+    w.add("A");
+    w.advance(1 + SECONDARY_PUSH_DEBOUNCE.as_secs());
+    let before = w.remote_bytes();
+    w.session.lock(LockReason::Manual);
+    w.session.unlock(pw()).unwrap();
+    w.advance(1 + SECONDARY_PUSH_DEBOUNCE.as_secs());
+    assert_eq!(w.remote_bytes(), before, "no fresh encoding on unlock");
+    assert!(w.idle_synced());
+    w.session.lock(LockReason::Manual);
+    let mut db = Database::open(&fs::read(&w.primary).unwrap(), &pw()).unwrap();
+    add_to(&mut db, "C", Timestamp(1_700_000_900));
+    fs::write(&w.primary, db.save(&pw()).unwrap()).unwrap();
+    w.session.unlock(pw()).unwrap();
+    w.advance(1 + SECONDARY_PUSH_DEBOUNCE.as_secs());
+    assert_eq!(w.remote_titles(), v(&["A", "C"]));
+}
+
+/// D-2: two copies of one vault (same root UUID) keep separate checkpoints.
+#[test]
+fn checkpoint_is_per_primary_file() {
+    let a = secondary_checkpoint_file(Path::new("/Users/u/Vaults/main.kdbx"));
+    let b = secondary_checkpoint_file(Path::new("/Users/u/Backup/main.kdbx"));
+    assert_ne!(a, b);
+    assert!(a.starts_with("secondary-") && a.ends_with(".json"), "{a}");
+    assert_eq!(a.len(), "secondary-".len() + 16 + ".json".len());
+}
+
+/// D-5: only a path that does not exist is a missing folder; one that cannot be inspected is
+/// invalid (not retried).
+#[cfg(unix)]
+#[test]
+fn folder_that_cannot_be_inspected_is_invalid_not_missing() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let primary = tmp.path().join("vaults").join(FILE);
+    let looped = tmp.path().join("loop");
+    std::os::unix::fs::symlink(&looped, &looped).unwrap();
+    assert_eq!(
+        validate_folder(looped.to_str().unwrap(), &primary, FILE),
+        Err(SecondaryUnavailable::InvalidFolder)
+    );
+    let closed = tmp.path().join("closed");
+    fs::create_dir_all(closed.join("inner")).unwrap();
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o000)).unwrap();
+    let denied = validate_folder(closed.join("inner").to_str().unwrap(), &primary, FILE);
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(denied, Err(SecondaryUnavailable::InvalidFolder));
+    assert_eq!(
+        validate_folder(tmp.path().join("gone").to_str().unwrap(), &primary, FILE),
+        Err(SecondaryUnavailable::FolderMissing)
     );
 }

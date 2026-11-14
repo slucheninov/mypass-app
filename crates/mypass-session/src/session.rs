@@ -250,6 +250,37 @@ pub(crate) fn vault_name_for(db: &Database, path: &Path) -> Option<String> {
         .or_else(|| path.file_stem().map(|s| s.to_string_lossy().into_owned()))
 }
 
+/// A copy of the unlocked vault taken by [`VaultSession::sync_snapshot`]. The password is a
+/// `SecretString` (zeroized on drop) and the `Debug` output redacts everything.
+pub(crate) struct SyncSnapshot {
+    pub(crate) db: Database,
+    pub(crate) password: SecretString,
+    pub(crate) path: PathBuf,
+    pub(crate) vault_id: String,
+    pub(crate) incarnation: u64,
+}
+
+impl std::fmt::Debug for SyncSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SyncSnapshot")
+            .field("incarnation", &self.incarnation)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What [`VaultSession::durably_holds`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Durability {
+    /// On disk.
+    Durable,
+    /// Unsaved edits: flush and ask again.
+    Unsaved,
+    /// The live vault lacks part of the content (it was replaced by an external reload).
+    Missing,
+    /// The vault was locked, switched or relocated.
+    Stale,
+}
+
 pub(crate) struct Inner {
     pub(crate) path: Option<PathBuf>,
     pub(crate) vault_name: Option<String>,
@@ -291,6 +322,11 @@ pub(crate) struct Inner {
     /// edit from an untouched one when remote content is merged (see the saving module docs).
     /// Kept while locked, for the merge of kept edits on unlock.
     pub(crate) disk_meta: Option<Meta>,
+    /// Bumped whenever the open vault stops being the one a background task took a snapshot of:
+    /// every install (open, create, unlock, switch), lock and relocation. A task that snapshots
+    /// the session, works outside the lock and comes back (the secondary sync) acts only while
+    /// this is unchanged.
+    pub(crate) incarnation: u64,
 }
 
 impl Inner {
@@ -317,6 +353,7 @@ impl Inner {
             save_job_id: 0,
             snapshot_taken: false,
             disk_meta: None,
+            incarnation: 0,
         }
     }
 
@@ -368,6 +405,7 @@ impl Inner {
         self.cancel_save_job();
         self.first_write_of_session = true;
         self.fresh_file = false;
+        self.incarnation = self.incarnation.wrapping_add(1);
     }
 
     pub(crate) fn cancel_save_job(&mut self) {
@@ -739,6 +777,18 @@ impl VaultSession {
         &self,
         f: impl FnOnce(&mut Database, Timestamp) -> Result<(R, bool), SessionError>,
     ) -> Result<R, SessionError> {
+        match self.mutate_inner(None, f)? {
+            Some(r) => Ok(r),
+            // Unreachable: without an expected incarnation the edit always runs.
+            None => Err(SessionError::Locked),
+        }
+    }
+
+    fn mutate_inner<R>(
+        &self,
+        incarnation: Option<u64>,
+        f: impl FnOnce(&mut Database, Timestamp) -> Result<(R, bool), SessionError>,
+    ) -> Result<Option<R>, SessionError> {
         let now = self.now();
         let mut out = Outbox::default();
         let result = {
@@ -746,13 +796,16 @@ impl VaultSession {
             if inner.quitting {
                 return Err(SessionError::Quitting);
             }
+            if incarnation.is_some_and(|i| i != inner.incarnation) {
+                return Ok(None);
+            }
             let Some(db) = &inner.db else {
                 return Err(inner.not_unlocked());
             };
             let mut draft = db.clone();
             let (r, changed) = f(&mut draft, now)?;
             if !changed {
-                return Ok(r);
+                return Ok(Some(r));
             }
             inner.db = Some(draft);
             inner.dirty_gen = inner.dirty_gen.wrapping_add(1);
@@ -764,7 +817,7 @@ impl VaultSession {
             r
         };
         self.emit(out);
-        Ok(result)
+        Ok(Some(result))
     }
 
     /// An in-memory change that does NOT mark the session dirty (access times).
@@ -822,17 +875,63 @@ impl VaultSession {
         }
     }
 
-    /// Like [`VaultSession::with_db_and_password`], but first waits until no write or check is in
-    /// flight, and also hands over the vault path. While `f` runs under the session lock no
-    /// primary write can start, so the secondary sync never overlaps a save (and `lock` waits).
-    pub(crate) fn with_idle_db_and_password<R>(
-        &self,
-        f: impl FnOnce(&Database, &SecretString, Option<&Path>) -> R,
-    ) -> Result<R, SessionError> {
-        let inner = self.wait_idle(lock(&self.0.inner));
-        match (&inner.db, &inner.password) {
-            (Some(db), Some(p)) => Ok(f(db, p, inner.path.as_deref())),
+    /// A copy of the unlocked vault for work that runs outside the session lock (the secondary
+    /// sync: remote I/O and KDF runs). The password is a crate-private clone, like the one the
+    /// save pipeline takes; it is never logged and zeroized when the snapshot drops. Refused
+    /// while quitting.
+    pub(crate) fn sync_snapshot(&self) -> Result<SyncSnapshot, SessionError> {
+        let inner = lock(&self.0.inner);
+        if inner.quitting {
+            return Err(SessionError::Quitting);
+        }
+        match (&inner.db, &inner.password, &inner.path, &inner.vault_id) {
+            (Some(db), Some(password), Some(path), Some(vault_id)) => Ok(SyncSnapshot {
+                db: db.clone(),
+                password: password.clone(),
+                path: path.clone(),
+                vault_id: vault_id.clone(),
+                incarnation: inner.incarnation,
+            }),
             _ => Err(inner.not_unlocked()),
+        }
+    }
+
+    /// Whether the session still holds the vault of a snapshot taken at `incarnation` (not
+    /// locked, switched or relocated since) and is not quitting.
+    pub(crate) fn is_incarnation(&self, incarnation: u64) -> bool {
+        let inner = lock(&self.0.inner);
+        !inner.quitting && inner.db.is_some() && inner.incarnation == incarnation
+    }
+
+    /// [`VaultSession::mutate_tracked`] that runs only while the session still holds the vault
+    /// of `incarnation`; `Ok(None)` (nothing changed) otherwise. The check and the edit happen
+    /// under one acquisition of the session lock.
+    pub(crate) fn mutate_if_incarnation<R>(
+        &self,
+        incarnation: u64,
+        f: impl FnOnce(&mut Database, Timestamp) -> Result<(R, bool), SessionError>,
+    ) -> Result<Option<R>, SessionError> {
+        self.mutate_inner(Some(incarnation), f)
+    }
+
+    /// Whether `content` is on the local disk: the session still holds the vault of
+    /// `incarnation`, has no unsaved edit (so the live vault is what the last write put on disk)
+    /// and the live vault already holds everything in `content`. Waits for an in-flight write.
+    pub(crate) fn durably_holds(&self, incarnation: u64, content: &Database) -> Durability {
+        let inner = self.wait_idle(lock(&self.0.inner));
+        if inner.incarnation != incarnation {
+            return Durability::Stale;
+        }
+        let Some(live) = &inner.db else {
+            return Durability::Stale;
+        };
+        if inner.is_dirty() {
+            return Durability::Unsaved;
+        }
+        if crate::saving::same_content(&mypass_core::merge::merge(live, content), live) {
+            Durability::Durable
+        } else {
+            Durability::Missing
         }
     }
 
@@ -884,6 +983,7 @@ impl VaultSession {
             Ok((file, _)) => {
                 inner.path = Some(file.path().to_path_buf());
                 inner.file = Some(file);
+                inner.incarnation = inner.incarnation.wrapping_add(1);
                 Ok(())
             }
             Err(e) => {

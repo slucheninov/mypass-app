@@ -627,6 +627,7 @@ impl VaultSession {
             inner.db = None;
             inner.password = None;
             inner.file = None;
+            inner.incarnation = inner.incarnation.wrapping_add(1);
             inner.lock_reason = Some(reason);
             out.state_changed = true;
         }
