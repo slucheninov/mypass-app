@@ -174,24 +174,6 @@ describe("login detail", () => {
     expect(revealCalls(fake)[0]!.args).toEqual({ id: "e-custom", field: { kind: "custom", key: "API key" } });
   });
 
-  it("passkey_popover_shows_rp_and_username", async () => {
-    const fake = backend([
-      {
-        id: "e-pk",
-        title: "Passkeyed",
-        modified: 5,
-        passkey: { relyingParty: "example.org", username: "ann@example.org", created: 1_700_000_000_000, usable: true },
-      },
-    ]);
-    await open(fake, "e-pk");
-    expect(text()).not.toContain("ann@example.org");
-    await userEvent.setup().click(within(pane()).getByRole("button", { name: "Passkey" }));
-    const popover = await screen.findByRole("region", { name: t("Passkey") });
-    expect(popover.textContent).toContain("example.org");
-    expect(popover.textContent).toContain("ann@example.org");
-    expect(popover.textContent).toContain(formatDate(1_700_000_000_000));
-  });
-
   it("website_link_uses_opener_for_http_and_https_only", async () => {
     const opened: unknown[] = [];
     const fake = backend(

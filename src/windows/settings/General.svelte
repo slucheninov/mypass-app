@@ -125,6 +125,21 @@
     />
   </Row>
 
+  <Row label={t("Use MyPass for Chrome passkeys")}>
+    <Toggle
+      checked={settings.value.passkeyProxyEnabled}
+      label={t("Use MyPass for Chrome passkeys")}
+      onchange={(passkeyProxyEnabled) => send({ passkeyProxyEnabled })}
+    />
+    {#snippet hint()}
+      {settings.value?.passkeyProxyEnabled
+        ? t(
+            "Reopen the MyPass browser extension to apply this setting. Then use the website’s sign-in or create-passkey button and approve in MyPass. While MyPass handles passkeys, Chrome’s other passkey choices are unavailable.",
+          )
+        : t("Turn this on to save and use passkeys in MyPass. Reopen the browser extension after changing this setting.")}
+    {/snippet}
+  </Row>
+
   <HotkeyRow
     label={t("Lock hotkey")}
     value={settings.value.shortcutLock}
