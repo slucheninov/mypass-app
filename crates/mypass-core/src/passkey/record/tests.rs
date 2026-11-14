@@ -479,7 +479,7 @@ fn sec1_pem_is_accepted_on_read() {
 fn write_over_existing_passkey_keeps_unknown_kpex_fields() {
     let mut e = entry(&[("Title", "Example")]);
     sample().write(&mut e);
-    e.set_field("KPEX_PASSKEY_GENERATED_USER_ID", "generated", false);
+    e.set_field("KPEX_PASSKEY_FUTURE_FIELD", "kept", false);
     let replacement = PasskeyRecord {
         credential_id: vec![7; 32],
         user_handle: None,
@@ -488,7 +488,7 @@ fn write_over_existing_passkey_keeps_unknown_kpex_fields() {
         ..sample()
     };
     replacement.write(&mut e);
-    assert_eq!(e.field("KPEX_PASSKEY_GENERATED_USER_ID"), Some("generated"));
+    assert_eq!(e.field("KPEX_PASSKEY_FUTURE_FIELD"), Some("kept"));
     assert_eq!(e.field(PASSKEY_USER_HANDLE), None);
     assert_eq!(PasskeyRecord::read(&e), Some(replacement));
 }
@@ -568,5 +568,48 @@ fn undecodable_user_handle_reads_as_none_and_keeps_the_passkey() {
         let r = PasskeyRecord::read(&e).unwrap();
         assert_eq!(r.user_handle, None, "{bad:?}");
         assert_eq!(r.credential_id, vec![1, 2, 3, 4]);
+    }
+}
+
+#[test]
+fn legacy_generated_user_id_is_a_read_only_fallback_for_the_user_handle() {
+    let pem = A25_PKCS8;
+    let base = [
+        (PASSKEY_CREDENTIAL_ID, "AQIDBA"),
+        (PASSKEY_PRIVATE_KEY_PEM, pem),
+        (PASSKEY_RELYING_PARTY, "example.com"),
+    ];
+    // Only the legacy key: it is the user handle.
+    let mut fields = base.to_vec();
+    fields.push((PASSKEY_LEGACY_USER_HANDLE, "bGVnYWN5"));
+    let legacy = entry(&fields);
+    assert_eq!(
+        PasskeyRecord::read(&legacy).unwrap().user_handle.as_deref(),
+        Some(b"legacy".as_slice())
+    );
+    // Both: the current key wins.
+    fields.push((PASSKEY_USER_HANDLE, "Y3VycmVudA"));
+    let both = entry(&fields);
+    assert_eq!(
+        PasskeyRecord::read(&both).unwrap().user_handle.as_deref(),
+        Some(b"current".as_slice())
+    );
+    // An unreadable current key falls back to the legacy one.
+    let mut fields = base.to_vec();
+    fields.push((PASSKEY_USER_HANDLE, "!!"));
+    fields.push((PASSKEY_LEGACY_USER_HANDLE, "bGVnYWN5"));
+    let broken = entry(&fields);
+    assert_eq!(
+        PasskeyRecord::read(&broken).unwrap().user_handle.as_deref(),
+        Some(b"legacy".as_slice())
+    );
+    // Writing never keeps the legacy key, with or without a handle.
+    for handle in [Some(vec![9, 9, 9]), None] {
+        let mut e = legacy.clone();
+        let mut r = sample();
+        r.user_handle = handle.clone();
+        r.write(&mut e);
+        assert!(e.field(PASSKEY_LEGACY_USER_HANDLE).is_none());
+        assert_eq!(PasskeyRecord::read(&e).unwrap().user_handle, handle);
     }
 }

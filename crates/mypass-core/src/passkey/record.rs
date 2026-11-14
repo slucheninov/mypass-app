@@ -14,6 +14,8 @@
 //! | `KPEX_PASSKEY_FLAG_BE`, `KPEX_PASSKEY_FLAG_BS` | `"1"` or `"0"` | no |
 //! | `KPEX_PASSKEY_CREATED` | `YYYY-MM-DDTHH:MM:SSZ` (MyPass only; KeePassXC ignores it) | no |
 //!
+//! `KPEX_PASSKEY_GENERATED_USER_ID`, where early KeePassXC builds kept the user handle, is read as
+//! a fallback for a missing `KPEX_PASSKEY_USER_HANDLE` and never written.
 //! Reading is lenient (padded or standard-alphabet base64, SEC1 PEM, missing optional fields), so a
 //! passkey another tool wrote never silently disappears.
 
@@ -37,6 +39,10 @@ pub const PASSKEY_USERNAME: &str = "KPEX_PASSKEY_USERNAME";
 pub const PASSKEY_CREATED: &str = "KPEX_PASSKEY_CREATED";
 /// User handle, base64url.
 pub const PASSKEY_USER_HANDLE: &str = "KPEX_PASSKEY_USER_HANDLE";
+/// The user handle as early KeePassXC passkey builds (2.7.7) stored it, base64url. Read only, as
+/// the fallback when [`PASSKEY_USER_HANDLE`] is absent or unreadable; MyPass never writes it, and
+/// [`PasskeyRecord::write`] removes it so a replaced passkey cannot answer with a stale handle.
+pub const PASSKEY_LEGACY_USER_HANDLE: &str = "KPEX_PASSKEY_GENERATED_USER_ID";
 /// Backup-eligible flag.
 pub const PASSKEY_FLAG_BE: &str = "KPEX_PASSKEY_FLAG_BE";
 /// Backup-state flag.
@@ -113,10 +119,13 @@ impl PasskeyRecord {
                 .to_owned(),
             credential_id: Self::credential_id(e)?,
             private_key_pem: Zeroizing::new(e.field(PASSKEY_PRIVATE_KEY_PEM)?.to_owned()),
-            user_handle: e
-                .field(PASSKEY_USER_HANDLE)
-                .and_then(b64url::decode)
-                .filter(|h| !h.is_empty()),
+            user_handle: [PASSKEY_USER_HANDLE, PASSKEY_LEGACY_USER_HANDLE]
+                .into_iter()
+                .find_map(|key| {
+                    e.field(key)
+                        .and_then(b64url::decode)
+                        .filter(|h| !h.is_empty())
+                }),
             username: e.field(PASSKEY_USERNAME).map(str::to_owned),
             created: e.field(PASSKEY_CREATED).and_then(parse_created),
             flags: BackupFlags {
@@ -128,9 +137,10 @@ impl PasskeyRecord {
 
     /// Store this passkey on `e`. RELYING_PARTY, CREDENTIAL_ID, PRIVATE_KEY_PEM, FLAG_BE and
     /// FLAG_BS are always set; USER_HANDLE, USERNAME and CREATED are set when `Some` and removed
-    /// when `None` (so a replace never leaves a stale user handle). CREDENTIAL_ID, PRIVATE_KEY_PEM
-    /// and USER_HANDLE are protected, the rest are plain. Other `KPEX_PASSKEY_*` fields, ones a
-    /// newer KeePassXC may add, are left as they are.
+    /// when `None` (so a replace never leaves a stale user handle), and the legacy
+    /// `KPEX_PASSKEY_GENERATED_USER_ID` is always removed for the same reason. CREDENTIAL_ID,
+    /// PRIVATE_KEY_PEM and USER_HANDLE are protected, the rest are plain. Other `KPEX_PASSKEY_*`
+    /// fields, ones a newer KeePassXC may add, are left as they are.
     pub fn write(&self, e: &mut Entry) {
         e.set_field(PASSKEY_RELYING_PARTY, &self.rp_id, false);
         e.set_field(
@@ -143,6 +153,7 @@ impl PasskeyRecord {
             Some(h) => e.set_field(PASSKEY_USER_HANDLE, &b64url::encode(h), true),
             None => e.remove_field(PASSKEY_USER_HANDLE),
         }
+        e.remove_field(PASSKEY_LEGACY_USER_HANDLE);
         match &self.username {
             Some(name) => e.set_field(PASSKEY_USERNAME, name, false),
             None => e.remove_field(PASSKEY_USERNAME),
