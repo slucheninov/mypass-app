@@ -359,7 +359,7 @@ mod tests {
     #[test]
     fn local_folder_accepts_non_ascii_directory_and_file_name() {
         let d = tempfile::tempdir().unwrap();
-        // "Ключі 密码" and "Ключі 密码 vault.kdbx".
+        // Ukrainian "keys" and Chinese "password": the folder, and the file name built from it.
         let folder = "\u{41a}\u{43b}\u{44e}\u{447}\u{456} \u{5bc6}\u{7801}";
         let name = format!("{folder} vault.kdbx");
         let dir = d.path().join(folder);
