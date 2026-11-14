@@ -564,7 +564,7 @@
   "Remove icon": "Прибрати піктограму",
   "Remove passkey?": "Вилучити ключ доступу?",
   "Remove this passkey by editing the entry.": "Щоб вилучити цей ключ доступу, змініть запис.",
-  "Reopen the MyPass browser extension to apply this setting. Then use the website’s sign-in or create-passkey button and approve in MyPass. While MyPass handles passkeys, Chrome’s other passkey choices are unavailable.": "Знову відкрийте розширення MyPass для браузера, щоб застосувати цей параметр. Потім скористайтеся кнопкою входу або створення ключа доступу на вебсайті та підтвердьте дію в MyPass. Поки MyPass обробляє ключі доступу, інші варіанти ключів доступу в Chrome недоступні.",
+  "Reopen the MyPass browser extension to apply this setting. Then use the website’s sign-in or create-passkey button and approve in the MyPass browser extension. While MyPass handles passkeys, Chrome’s other passkey choices are unavailable.": "Знову відкрийте розширення MyPass для браузера, щоб застосувати цей параметр. Потім скористайтеся кнопкою входу або створення ключа доступу на вебсайті та підтвердьте дію в розширенні MyPass для браузера. Поки MyPass обробляє ключі доступу, інші варіанти ключів доступу в Chrome недоступні.",
   "Reopen the MyPass extension and choose Check this browser. Allow the read-only check when Chrome asks. Return to MyPass Settings → Browser to see the report and its receipt time.": "Знову відкрийте розширення MyPass і виберіть «Check this browser». Дозвольте перевірку лише для читання, коли Chrome запитає. Поверніться в «Параметри» → «Браузер» у MyPass, щоб побачити звіт і час його отримання.",
   "Repair": "Виправити",
   "Replace": "Замінити",

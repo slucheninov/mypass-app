@@ -564,7 +564,7 @@
   "Remove icon": "Убрать значок",
   "Remove passkey?": "Удалить ключ доступа?",
   "Remove this passkey by editing the entry.": "Чтобы удалить этот ключ доступа, измените запись.",
-  "Reopen the MyPass browser extension to apply this setting. Then use the website’s sign-in or create-passkey button and approve in MyPass. While MyPass handles passkeys, Chrome’s other passkey choices are unavailable.": "Снова откройте расширение MyPass для браузера, чтобы применить этот параметр. Затем воспользуйтесь кнопкой входа или создания ключа доступа на веб-сайте и подтвердите действие в MyPass. Пока MyPass обрабатывает ключи доступа, другие варианты ключей доступа в Chrome недоступны.",
+  "Reopen the MyPass browser extension to apply this setting. Then use the website’s sign-in or create-passkey button and approve in the MyPass browser extension. While MyPass handles passkeys, Chrome’s other passkey choices are unavailable.": "Снова откройте расширение MyPass для браузера, чтобы применить этот параметр. Затем воспользуйтесь кнопкой входа или создания ключа доступа на веб-сайте и подтвердите действие в расширении MyPass для браузера. Пока MyPass обрабатывает ключи доступа, другие варианты ключей доступа в Chrome недоступны.",
   "Reopen the MyPass extension and choose Check this browser. Allow the read-only check when Chrome asks. Return to MyPass Settings → Browser to see the report and its receipt time.": "Снова откройте расширение MyPass и выберите «Check this browser». Разрешите проверку только для чтения, когда Chrome спросит. Вернитесь в «Настройки» → «Браузер» в MyPass, чтобы увидеть отчёт и время его получения.",
   "Repair": "Исправить",
   "Replace": "Заменить",
