@@ -1,0 +1,95 @@
+{
+  "public_key_spki_der_b64url": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEYP7UuiVanTHJYet0xjVtaMBJuJI7Yfps5mliLmDyn7Z5A_4QCLi8maQa6elWKLxk8vGyDC1-n1F3o8KU1EYimQ",
+  "credential_id_hex": "101112131415161718191a1b1c1d1e1f",
+  "user_handle_hex": "757365722d68616e646c652d31323334",
+  "entries": {
+    "unpadded": {
+      "fields": [
+        {
+          "key": "Title",
+          "value": "example.com",
+          "protected": false
+        },
+        {
+          "key": "UserName",
+          "value": "alice@example.com",
+          "protected": false
+        },
+        {
+          "key": "URL",
+          "value": "https://example.com",
+          "protected": false
+        },
+        {
+          "key": "KPEX_PASSKEY_USERNAME",
+          "value": "alice@example.com",
+          "protected": false
+        },
+        {
+          "key": "KPEX_PASSKEY_CREDENTIAL_ID",
+          "value": "EBESExQVFhcYGRobHB0eHw",
+          "protected": true
+        },
+        {
+          "key": "KPEX_PASSKEY_PRIVATE_KEY_PEM",
+          "value": "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgya+p2EW6dRZrXCFX\nZ7HWk05Qw9s26JsSe4piKxIPZyGhRANCAARg/tS6JVqdMclh63TGNW1owEm4kjth\n+mzmaWIuYPKftnkD/hAIuLyZpBrp6VYovGTy8bIMLX6fUXejwpTURiKZ\n-----END PRIVATE KEY-----\n",
+          "protected": true
+        },
+        {
+          "key": "KPEX_PASSKEY_RELYING_PARTY",
+          "value": "example.com",
+          "protected": false
+        },
+        {
+          "key": "KPEX_PASSKEY_USER_HANDLE",
+          "value": "dXNlci1oYW5kbGUtMTIzNA",
+          "protected": true
+        }
+      ]
+    },
+    "padded": {
+      "fields": [
+        {
+          "key": "Title",
+          "value": "example.com",
+          "protected": false
+        },
+        {
+          "key": "UserName",
+          "value": "alice@example.com",
+          "protected": false
+        },
+        {
+          "key": "URL",
+          "value": "https://example.com",
+          "protected": false
+        },
+        {
+          "key": "KPEX_PASSKEY_USERNAME",
+          "value": "alice@example.com",
+          "protected": false
+        },
+        {
+          "key": "KPEX_PASSKEY_CREDENTIAL_ID",
+          "value": "EBESExQVFhcYGRobHB0eHw==",
+          "protected": true
+        },
+        {
+          "key": "KPEX_PASSKEY_PRIVATE_KEY_PEM",
+          "value": "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgya+p2EW6dRZrXCFX\nZ7HWk05Qw9s26JsSe4piKxIPZyGhRANCAARg/tS6JVqdMclh63TGNW1owEm4kjth\n+mzmaWIuYPKftnkD/hAIuLyZpBrp6VYovGTy8bIMLX6fUXejwpTURiKZ\n-----END PRIVATE KEY-----\n",
+          "protected": true
+        },
+        {
+          "key": "KPEX_PASSKEY_RELYING_PARTY",
+          "value": "example.com",
+          "protected": false
+        },
+        {
+          "key": "KPEX_PASSKEY_USER_HANDLE",
+          "value": "dXNlci1oYW5kbGUtMTIzNA==",
+          "protected": true
+        }
+      ]
+    }
+  }
+}

@@ -8,6 +8,12 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+default = []
+# Deterministic seams for known-answer tests (`passkey::perform_create_with`); never enabled by a
+# shipped crate.
+test-util = []
+
 [dependencies]
 idna.workspace = true
 mypass-kdbx = { path = "../mypass-kdbx" }
@@ -17,10 +23,12 @@ sha1.workspace = true
 sha2.workspace = true
 data-encoding.workspace = true
 zeroize.workspace = true
+getrandom.workspace = true
 rand.workspace = true
 url.workspace = true
 uuid.workspace = true
 thiserror.workspace = true
+p256.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
@@ -28,5 +36,7 @@ serde_json.workspace = true
 workspace = true
 
 [dev-dependencies]
+mypass-core = { path = ".", features = ["test-util"] }
 proptest.workspace = true
+ciborium.workspace = true
 secrecy.workspace = true

@@ -7,7 +7,8 @@
 
 use crate::commands::browser::PairingChallengeDto;
 use crate::events::{
-    BridgeChangedEvent, PairingChallengeEvent, ProposalEvent, ProposalKind, UnlockRequestedEvent,
+    BridgeChangedEvent, PairingChallengeEvent, ProposalEvent, ProposalKind, SettingsChanged,
+    UnlockRequestedEvent,
 };
 use crate::lifecycle::ExitOutcome;
 use crate::shell::WindowOps;
@@ -16,13 +17,13 @@ use mypass_bridge::endpoint::EndpointStore;
 use mypass_bridge::pairing::{
     PairedBrowserStore, PairingChallenge, PairingError, PairingManager, PAIRING_CODE_TTL,
 };
-use mypass_bridge::passkeys::NotSupportedPasskeys;
+use mypass_bridge::passkeys::PasskeyService;
 use mypass_bridge::server::{LoopbackServer, ServerConfig, ServerError};
 use mypass_bridge::service::{BridgeDeps, BridgeService};
 use mypass_bridge::ui::{BridgeUi, ProposalStore};
 use mypass_platform::{HostRegistrationReport, NativeHostRegistrar, SecretStore};
 use mypass_session::session::SessionEvent;
-use mypass_session::{AppCore, SessionState};
+use mypass_session::{AppCore, SessionState, Settings};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -82,6 +83,9 @@ pub trait BridgeEvents: Send + Sync {
     fn unlock_requested(&self);
     /// Opens the settings window, at `pane` when given.
     fn open_settings(&self, pane: Option<&str>);
+    /// The settings changed outside the settings commands (the extension's passkey toggle).
+    /// Broadcast to every window, as the `settings_update` command does.
+    fn settings_changed(&self, settings: Settings);
 }
 
 /// [`BridgeEvents`] over the real app.
@@ -103,6 +107,9 @@ impl BridgeEvents for TauriBridgeEvents {
     }
     fn open_settings(&self, pane: Option<&str>) {
         let _ = crate::commands::app::open_settings(&self.0, pane);
+    }
+    fn settings_changed(&self, settings: Settings) {
+        let _ = SettingsChanged(settings).emit(&self.0);
     }
 }
 
@@ -155,6 +162,8 @@ pub fn pairing_changed(
 pub struct TauriBridgeUi {
     core: Arc<AppCore>,
     events: Arc<dyn BridgeEvents>,
+    /// The settings gate of `settings_update` (`ShellState::settings_gate`).
+    settings_gate: Arc<Mutex<()>>,
     windows: Arc<dyn WindowOps>,
     pairing: Arc<PairingManager>,
     pairing_window: Arc<PairingWindow>,
@@ -234,6 +243,20 @@ impl BridgeUi for TauriBridgeUi {
         // The fill handler already marked the entry accessed (recents, usage count); touching it
         // here too counted every fill twice. The hook stays for a future UI refresh.
     }
+
+    fn passkey_proxy_changed(&self, _enabled: bool) {
+        // The whole stored snapshot, not just the flag: the settings store of every window
+        // replaces its copy with what `SettingsChanged` carries (one source of truth, no event
+        // of its own for this one field). Read and emitted under the gate `settings_update`
+        // holds for its read, write and emit, so the two emitters cannot interleave and leave a
+        // window with an older snapshot than the store (each one reads what is stored when it
+        // emits, in gate order). This runs on a bridge connection thread, never the main thread.
+        let _serial = self
+            .settings_gate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        self.events.settings_changed(self.core.settings.get());
+    }
 }
 
 /// Why the bridge did not start. The messages are for the developer; the webview only learns
@@ -286,6 +309,7 @@ pub fn start_bridge(
     core: &Arc<AppCore>,
     windows: Arc<dyn WindowOps>,
     events: Arc<dyn BridgeEvents>,
+    settings_gate: Arc<Mutex<()>>,
     bundled_host: Option<PathBuf>,
 ) -> Result<BridgeHandle, BridgeStartError> {
     let platform = core.platform();
@@ -314,9 +338,10 @@ pub fn start_bridge(
     }
     let observer_window = Arc::clone(&pairing_window);
     let observer_focus = Arc::clone(&focus);
-    let ui = Arc::new(TauriBridgeUi {
+    let ui: Arc<dyn BridgeUi> = Arc::new(TauriBridgeUi {
         core: Arc::clone(core),
         events: Arc::clone(&events),
+        settings_gate,
         windows,
         pairing: Arc::clone(&pairing),
         pairing_window,
@@ -326,12 +351,14 @@ pub fn start_bridge(
         session: core.session.clone(),
         autolock: core.autolock.clone(),
         settings: core.settings.clone(),
-        scheduler,
+        scheduler: Arc::clone(&scheduler),
         pairing: Arc::clone(&pairing),
         diagnostics: Arc::clone(&diagnostics),
         proposals: Arc::clone(&proposals),
-        ui,
-        passkeys: Arc::new(NotSupportedPasskeys),
+        ui: Arc::clone(&ui),
+        // The pending table is dropped on lock and on a vault switch by the observer that
+        // `register_observer` adds below, once the server is up.
+        passkeys: PasskeyService::new(Arc::clone(&scheduler), ui),
     });
     let handler_service = Arc::clone(&service);
     let server = LoopbackServer::start(
@@ -527,11 +554,13 @@ pub fn extension_folder(
         .find(|candidate| candidate.is_dir())
 }
 
-/// The production [`BridgeState`]: starts over `core` with the real windows and events.
+/// The production [`BridgeState`]: starts over `core` with the real windows and events, and the
+/// settings gate shared with `settings_update`.
 pub fn build_state(
     core: &Arc<AppCore>,
     windows: Arc<dyn WindowOps>,
     events: Arc<dyn BridgeEvents>,
+    settings_gate: Arc<Mutex<()>>,
 ) -> BridgeState {
     let bundled_host = std::env::current_exe()
         .ok()
@@ -545,6 +574,7 @@ pub fn build_state(
                 &core,
                 Arc::clone(&windows),
                 Arc::clone(&events),
+                Arc::clone(&settings_gate),
                 host.clone(),
             )
         })
@@ -572,6 +602,7 @@ pub(crate) mod test_support {
         pub challenges: Mutex<Vec<Option<PairingChallengeDto>>>,
         pub proposals: Mutex<Vec<ProposalEvent>>,
         pub panes: Mutex<Vec<Option<String>>>,
+        pub settings: Mutex<Vec<Settings>>,
     }
 
     impl RecordingEvents {
@@ -599,6 +630,10 @@ pub(crate) mod test_support {
             lock(&self.log).push("open_settings".into());
             lock(&self.panes).push(pane.map(str::to_owned));
         }
+        fn settings_changed(&self, settings: Settings) {
+            lock(&self.log).push("settings_changed".into());
+            lock(&self.settings).push(settings);
+        }
     }
 
     pub struct Fixture {
@@ -606,6 +641,8 @@ pub(crate) mod test_support {
         pub events: Arc<RecordingEvents>,
         pub windows: Arc<FakeWindowOps>,
         pub state: BridgeState,
+        /// The settings gate the bridge shares with `settings_update`.
+        pub settings_gate: Arc<Mutex<()>>,
     }
 
     impl Fixture {
@@ -630,16 +667,19 @@ pub(crate) mod test_support {
         let w = shared_world(open);
         let events = Arc::new(RecordingEvents::default());
         let windows = Arc::new(FakeWindowOps::default());
+        let settings_gate = Arc::new(Mutex::new(()));
         let starter = {
             let core = Arc::clone(&w.core);
             let windows: Arc<dyn WindowOps> = windows.clone();
             let events: Arc<dyn BridgeEvents> = events.clone();
             let host = bundled_host.clone();
+            let gate = Arc::clone(&settings_gate);
             Box::new(move || {
                 start_bridge(
                     &core,
                     Arc::clone(&windows),
                     Arc::clone(&events),
+                    Arc::clone(&gate),
                     host.clone(),
                 )
             })
@@ -655,6 +695,7 @@ pub(crate) mod test_support {
             events,
             windows,
             state,
+            settings_gate,
         }
     }
 
@@ -1084,5 +1125,147 @@ mod tests {
             pairing: Some(secret),
         });
         assert_eq!(*lock(&f.events.panes), [Some("browser".to_owned())]);
+    }
+
+    #[test]
+    fn bridge_deps_use_passkey_service() {
+        let f = fixture(true);
+        let secret = pair(&f);
+        let reply = ask(
+            &f.handle(),
+            &serde_json::json!({"type": "getPasskeyProxyStatus", "pairing": secret}),
+        );
+        assert_eq!(
+            reply,
+            serde_json::json!({
+                "type": "passkeyProxyStatus", "unlocked": true, "paired": true,
+                "attachAllowed": true, "enabled": true
+            })
+        );
+    }
+
+    #[test]
+    fn passkey_proxy_changed_event_emitted_once_when_extension_toggles() {
+        let f = fixture(true);
+        let secret = pair(&f);
+        let toggle = |enabled: bool| {
+            ask(
+                &f.handle(),
+                &serde_json::json!({
+                    "type": "setPasskeyProxyEnabled", "enabled": enabled, "pairing": secret
+                }),
+            )
+        };
+        // Already on: no change, no event.
+        assert_eq!(toggle(true)["enabled"], true);
+        assert_eq!(f.events.count("settings_changed"), 0);
+        assert_eq!(toggle(false)["enabled"], false);
+        assert_eq!(toggle(false)["enabled"], false);
+        assert_eq!(f.events.count("settings_changed"), 1);
+        {
+            // The full stored snapshot, the same one the settings commands emit.
+            let sent = lock(&f.events.settings);
+            assert!(!sent[0].passkey_proxy_enabled);
+            assert_eq!(sent[0], f.w.core.settings.get());
+        }
+        assert_eq!(toggle(true)["enabled"], true);
+        assert_eq!(f.events.count("settings_changed"), 2);
+        assert!(lock(&f.events.settings)[1].passkey_proxy_enabled);
+    }
+
+    #[test]
+    fn passkey_proxy_snapshot_is_emitted_under_the_settings_gate() {
+        let f = fixture(true);
+        let secret = pair(&f);
+        let handle = f.handle();
+        // A `settings_update` in progress holds the gate.
+        let held = f.settings_gate.lock().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let r = ask(
+                &handle,
+                &serde_json::json!({
+                    "type": "setPasskeyProxyEnabled", "enabled": false, "pairing": secret
+                }),
+            );
+            tx.send(r).unwrap();
+        });
+        // The toggle is stored but its snapshot waits for the gate. (A wrong implementation can
+        // only make this pass late, never fail spuriously.)
+        assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+        assert_eq!(f.events.count("settings_changed"), 0);
+        drop(held);
+        assert_eq!(rx.recv().unwrap()["enabled"], false);
+        worker.join().unwrap();
+        assert_eq!(f.events.count("settings_changed"), 1);
+        assert!(!lock(&f.events.settings)[0].passkey_proxy_enabled);
+    }
+
+    /// A create request as Chrome hands it over (origin in the proxy override, ES256 offered).
+    fn passkey_create(secret: &str, request_id: i64) -> Request {
+        let details = serde_json::json!({
+            "challenge": "MDEyMzQ1Njc4OWFiY2RlZi1jaGFsbGVuZ2U",
+            "rp": {"id": "example.com", "name": "Example"},
+            "user": {"id": "dXNlci0x", "name": "alice", "displayName": "Alice"},
+            "pubKeyCredParams": [{"type": "public-key", "alg": -7}],
+            "extensions": {"remoteDesktopClientOverride":
+                {"origin": "https://example.com", "sameOriginWithAncestors": true}},
+        });
+        Request::PasskeyCreate {
+            token: "t".into(),
+            request_id,
+            request_details_json: details.to_string(),
+            origin_url: "https://example.com".into(),
+            pairing: Some(secret.to_owned()),
+        }
+    }
+
+    fn passkey_confirm(secret: &str, request_id: i64) -> Request {
+        Request::PasskeyCreateConfirm {
+            token: "t".into(),
+            request_id,
+            entry_id: None,
+            replace: false,
+            pairing: Some(secret.to_owned()),
+        }
+    }
+
+    #[test]
+    fn passkey_pending_ceremony_is_dropped_by_a_lock_of_the_started_bridge() {
+        use mypass_bridge::protocol::Response;
+        let f = fixture(true);
+        let secret = pair(&f);
+        let service = f.handle().service.clone();
+        assert!(matches!(
+            service.handle(passkey_create(&secret, 1)),
+            Response::PasskeyCreatePending { .. }
+        ));
+        f.w.core.vault_lock().unwrap();
+        f.w.core.vault_unlock(crate::testing::pw("pw")).unwrap();
+        let Response::PasskeyCreateComplete {
+            response_json: None,
+            error: Some(e),
+            ..
+        } = service.handle(passkey_confirm(&secret, 1))
+        else {
+            panic!("the ceremony survived the lock");
+        };
+        assert_eq!(
+            (e.name.as_str(), e.message.as_str()),
+            ("NotAllowedError", "No pending request")
+        );
+        // Sanity: without a lock in between the same steps succeed.
+        assert!(matches!(
+            service.handle(passkey_create(&secret, 2)),
+            Response::PasskeyCreatePending { .. }
+        ));
+        assert!(matches!(
+            service.handle(passkey_confirm(&secret, 2)),
+            Response::PasskeyCreateComplete {
+                response_json: Some(_),
+                error: None,
+                ..
+            }
+        ));
     }
 }

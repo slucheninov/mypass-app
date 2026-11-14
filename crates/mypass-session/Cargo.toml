@@ -11,6 +11,10 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+# Test fixtures for other crates' tests (passkey entries); never enabled by a shipped build.
+test-util = []
+
 [dependencies]
 mypass-kdbx = { path = "../mypass-kdbx" }
 mypass-core = { path = "../mypass-core" }

@@ -3,12 +3,15 @@
   // one-time password, notes and custom fields. Title, group and favourite belong to the editor
   // shell. The Generator popover of a later task plugs in through `generatorSlot`, which receives
   // `onuse` (puts the chosen value into the password field) and the first website for the rules.
-  import { onMount, type Snippet } from "svelte";
+  import { onMount, tick, type Snippet } from "svelte";
   import type { EntryEditModel_Serialize } from "../../lib/bindings";
   import { t } from "../../lib/i18n/index.svelte";
   import { onWindowHidden } from "../../lib/secret.svelte";
   import { webUrl } from "../../lib/web-url";
   import Button from "../../lib/ui/Button.svelte";
+  import FieldRow from "../../lib/ui/FieldRow.svelte";
+  import Modal from "../../lib/ui/Modal.svelte";
+  import PasskeyPopover from "../PasskeyPopover.svelte";
   import IconButton from "../../lib/ui/IconButton.svelte";
   import TextField from "../../lib/ui/TextField.svelte";
   import CustomFields from "./CustomFields.svelte";
@@ -25,6 +28,8 @@
   let shown = $state(false);
   let generating = $state(false);
   let sheetOpen = $state(false);
+  let passkeyOpen = $state(false);
+  let confirmingRemoval = $state(false);
 
   // The plain-text password must not stay on screen when the window hides or minimises, like the
   // detail pane's reveals.
@@ -82,7 +87,55 @@
   </label>
 
   <CustomFields bind:fields={model.customFields} />
+
+  {#if model.passkey}
+    <!-- The key is never editable: Remove is deferred to Save (the key is unrecoverable once saved away). -->
+    <div role="group" aria-label={t("Passkey")}>
+      <FieldRow label={t("Passkey")}>
+        {#if model.removePasskey}
+          {t("Passkey will be removed when you save")}
+        {:else if !model.passkey.usable}
+          {t("Damaged passkey")}
+        {/if}
+        {#snippet actions()}
+          {#if model.passkey?.usable && model.id !== null}
+            <Button variant="plain" aria-label={t("Show passkey details")} aria-expanded={passkeyOpen} onclick={() => (passkeyOpen = !passkeyOpen)}>
+              {t("Show")}
+            </Button>
+          {/if}
+          {#if model.removePasskey}
+            <Button variant="plain" id="passkey-undo" onclick={() => (model.removePasskey = false)}>{t("Undo")}</Button>
+          {:else}
+            <Button variant="plain" onclick={() => (confirmingRemoval = true)}>{t("Remove")}</Button>
+          {/if}
+        {/snippet}
+      </FieldRow>
+      {#if passkeyOpen && model.id !== null && model.passkey.usable}
+        <PasskeyPopover entryId={model.id} context="editor" onclose={() => (passkeyOpen = false)} />
+      {/if}
+    </div>
+  {/if}
 </div>
+
+{#if confirmingRemoval}
+  <Modal open={true} title={t("Remove passkey?")} onclose={() => (confirmingRemoval = false)}>
+    <p>{t("The passkey is removed when you save. Earlier versions of this item in its history keep the old key.")}</p>
+    {#snippet footer()}
+      <Button onclick={() => (confirmingRemoval = false)}>{t("Cancel")}</Button>
+      <Button
+        variant="danger"
+        onclick={async () => {
+          model.removePasskey = true;
+          confirmingRemoval = false;
+          // The Remove button that opened this dialog is gone now, so the dialog's focus restore has no
+          // target; hand focus to Undo instead of letting it fall to the body.
+          await tick();
+          document.getElementById("passkey-undo")?.focus();
+        }}>{t("Remove")}</Button
+      >
+    {/snippet}
+  </Modal>
+{/if}
 
 {#if sheetOpen}
   <WebsitesSheet {model} onsave={() => void (sheetOpen = false)} oncancel={() => void (sheetOpen = false)} />

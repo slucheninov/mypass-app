@@ -4,7 +4,7 @@
 its tests pass, or, for manual-only items, once the manual check has actually been walked. History
 lives in `git log`, not here.
 
-Last updated: 2026-11-13
+Last updated: 2026-11-14
 
 ---
 
@@ -19,6 +19,12 @@ Last updated: 2026-11-13
   `RngCore`, `OsRng` and `rand::Error`, and the lockfile still carries `rand_core` 0.6 next to 0.10,
   so check that the RustCrypto crates agree on one trait set first. Update the generator tests
   (`BoundaryRng`) and `THIRD_PARTY_NOTICES.md` in the same change.
+- [ ] Zeroize protected field values in entry clones and history, not only when `Entry::set_field`
+  replaces or removes one. Today every such `String` is freed without a wipe, so a passkey private
+  key PEM (or password) can linger in freed memory: the old value `set_field` replaces, history
+  copies, and the full `Entry` clones the passkey confirm keeps for its undo
+  (`mypass-bridge/src/passkeys/create.rs`, `Undo.after` with the new key and, on Replace,
+  `Undo.before` with the old one), alive from the write until the confirm answers.
 
 ## Stage 2a backend
 
@@ -33,7 +39,8 @@ Last updated: 2026-11-13
 - [ ] Per-window command access: every window (main, settings, tray panel) can call every app
   command (`app_quit` and `app_show_main` included); add per-window command permissions through a
   `tauri_build` app manifest so the tray panel and settings window get only what they use. This
-  includes the `browser_*` commands: `browser_proposal_take` returns a proposal's password, so only
+  includes `entry_passkey_details` (it returns a passkey's credential id, so only the main window
+  should call it) and the `browser_*` commands: `browser_proposal_take` returns a proposal's password, so only
   the main window should be able to call it (and `browser_pairing_cancel`); `browser_status`,
   `browser_revoke`, `browser_reset_pairings`, `browser_reinstall_host` and
   `browser_show_extension_folder` are used by the Settings Browser pane, so they belong to the
@@ -87,10 +94,8 @@ Last updated: 2026-11-13
 
 ## Stage 4 passkeys
 
-- [ ] WebAuthn create and get ceremonies (ES256) through the extension, stored in
-  KeePassXC-compatible custom fields, with strict origin and relying-party validation and a
-  consent-gated flow.
-- [ ] Passkey UI: detail row, editor actions, Passkeys category and the app-side proxy toggle.
+- [ ] Manual: walk the Stage 4 passkey checklist in `RUN.md` (P1 to P13, on a public https demo site,
+  with a copy of the owner's vault and KeePassXC interop) and record the results in the PR.
 
 ## Stage 5 macOS release
 
@@ -102,6 +107,9 @@ Last updated: 2026-11-13
   (`anchor apple generic and certificate leaf[subject.OU] = "W645B93PPQ"` plus the host
   identifier); never trust a path under Application Support. Delete-then-add on write (a crash in
   between only loses the per-launch endpoint), then delete the file.
+  Until then a same-user process that captures the pairing secret can also write passkeys: it can
+  rewrite the passkey fields of any https entry it can name and churn entry history with
+  unbounded confirm calls (each Replace snapshots the entry, bounded only by HistoryMaxItems).
 - [ ] The native messaging manifests point at a host copy under Application Support, which a
   same-user process can replace (the same accepted risk as the 0600 endpoint file). Point the
   manifests at the host inside the signed app bundle (`Contents/MacOS/mypass-native-host`, the Tauri sidecar, named so it cannot replace cargo's `mypass-host`, which Chrome

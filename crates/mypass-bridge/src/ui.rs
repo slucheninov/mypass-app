@@ -9,7 +9,8 @@ use zeroize::Zeroizing;
 
 use crate::pairing::PairingChallenge;
 
-/// The complete UI surface of the bridge. Stage 4 adds no methods.
+/// The complete UI surface of the bridge. Passkey ceremonies need no UI call of their own (the
+/// consent is a click in the extension popup); only the toggle reaches the app's windows.
 pub trait BridgeUi: Send + Sync {
     fn pairing_code(&self, c: &PairingChallenge);
     fn pairing_finished(&self);
@@ -20,7 +21,8 @@ pub trait BridgeUi: Send + Sync {
     fn open_app_requested(&self);
     fn open_browser_settings_requested(&self);
     fn credential_filled(&self, id: Uuid);
-    /// Stage 3 never calls it; stage 4 overrides it and calls it from its handler.
+    /// The extension changed the app-side passkey toggle (`PasskeyService`, only on a real
+    /// change); the app re-emits its settings so open windows show the new value.
     fn passkey_proxy_changed(&self, _enabled: bool) {}
 }
 

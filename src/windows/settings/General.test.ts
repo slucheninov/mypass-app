@@ -230,3 +230,33 @@ describe("launch at login", () => {
     expect(fake.state.settings.launchAtLogin).toBe(false);
   });
 });
+
+describe("passkey proxy", () => {
+  const toggle = () => screen.getByRole("switch", { name: "Use MyPass for Chrome passkeys" });
+
+  it("settings_passkey_toggle_defaults_on_and_calls_settings_update", async () => {
+    const user = userEvent.setup();
+    const { fake } = await renderSettingsApp();
+    expect(toggle().getAttribute("aria-checked")).toBe("true");
+    await user.click(toggle());
+    expect(patches(fake)).toEqual([{ passkeyProxyEnabled: false }]);
+    await waitFor(() => expect(toggle().getAttribute("aria-checked")).toBe("false"));
+  });
+
+  it("settings_toggle_helper_text_switches_with_state", async () => {
+    const user = userEvent.setup();
+    await renderSettingsApp();
+    expect(screen.getByText(/^Reopen the MyPass browser extension to apply this setting/)).toBeTruthy();
+    await user.click(toggle());
+    await waitFor(() => expect(screen.getByText(/^Turn this on to save and use passkeys in MyPass/)).toBeTruthy());
+    expect(screen.queryByText(/^Reopen the MyPass browser extension to apply/)).toBeNull();
+  });
+
+  it("settings_toggle_follows_settings_changed_event", async () => {
+    const { fake } = await renderSettingsApp();
+    await fake.emit("settingsChanged", { ...fake.state.settings, passkeyProxyEnabled: false });
+    await waitFor(() => expect(toggle().getAttribute("aria-checked")).toBe("false"));
+    await fake.emit("settingsChanged", { ...fake.state.settings, passkeyProxyEnabled: true });
+    await waitFor(() => expect(toggle().getAttribute("aria-checked")).toBe("true"));
+  });
+});

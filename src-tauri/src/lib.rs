@@ -62,6 +62,7 @@ pub fn commands() -> Commands<tauri::Wry> {
         entry::entry_list,
         entry::entry_move,
         entry::entry_new_model,
+        entry::entry_passkey_details,
         entry::entry_purge,
         entry::entry_recent,
         entry::entry_restore,

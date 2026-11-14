@@ -21,13 +21,13 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | Crate | Status | Role |
 |---|---|---|
 | `mypass-kdbx` | implemented | KDBX4 engine: format pipeline, model, database API, vault file, `FileIo` seam |
-| `mypass-core` | implemented | Everything that consumes the model: TOTP, generator and password rules, Public Suffix List, entry matcher, merge engine |
+| `mypass-core` | implemented | Everything that consumes the model: TOTP, generator and password rules, Public Suffix List, entry matcher, merge engine, WebAuthn passkey ceremonies and the KeePassXC passkey record (`passkey`) |
 | `repo-guards` | implemented | Test-only (`publish = false`, never shipped): guard tests for the workspace, CI, docs and scripts |
 | `mypass-platform` | macOS bodies for events, clipboard, keyboard layout and Keychain; the hardened 0600 `FileSecretStore` is the host-shared store on macOS and, until DPAPI, Windows; the macOS native messaging host registrar (stage 3); device unlock and launch at login in stage 5; Windows in stage 6 | OS glue behind traits (system events, secure clipboard, secret stores, device unlock, native host registrar, launch at login, keyboard layout) and `AppPaths`; fakes behind the `test-util` feature, `Unsupported` fallbacks where a platform body has not landed |
 | `mypass-session` | implemented | Vault session, settings, scheduling and the `AppCore` command facade; no Tauri dependency |
 | `src/` (Svelte UI) | implemented (stage 2b) | The webview UI: typed API wrapper, stores (`src/lib/stores`), i18n, design kit, the screens (`src/screens`, `src/screens/editors`) and the windows (`src/windows`: main, settings, tray panel) |
 | `src-tauri` (package `mypass-app`, lib `mypass_app_lib`) | implemented | The Tauri 2 app shell: the typed commands and events (`tauri-specta`), capabilities, native file dialogs, plugins, tray, global hotkeys, single instance, quit flow, native-side i18n; a workspace member listed explicitly |
-| `mypass-bridge` | implemented | Browser bridge protocol, codec, endpoint, relay and loopback server (`server` feature, off for the host) |
+| `mypass-bridge` | implemented | Browser bridge protocol, codec, endpoint, relay and loopback server (`server` feature, off for the host); the passkey service (`passkeys`) |
 | `mypass-host` | implemented | Native messaging host binary; never links the session, core or KDBX crates |
 | `extension/` | implemented | The Chromium extension (Manifest V3 JavaScript, vendored `vendor/jsQR.js`), with its 41 Node suites in `extension/tests/`, run by `scripts/test-extension.sh` |
 
@@ -49,7 +49,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `scripts/test-extension.sh` | Runs every `extension/tests/*.test.js` suite in its own node process (`--list` prints them); part of the `js` part |
 | `scripts/convert-xcstrings.mjs` | One-time converter of the old app's String Catalogs; its output (`src/lib/i18n/locales/{en,uk,ru}.json`, `src-tauri/resources/macos/*.lproj/InfoPlist.strings`) is then the hand-edited source of truth |
 | `.github/` | Workflows (`ci.yml`, `codeql.yml`), Dependabot config, issue forms, pull request template |
-| `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts), the Stage 2b UI walk-through and the Stage 3 browser bridge checklist (M1 to M14) |
+| `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts), the Stage 2b UI walk-through and the Stage 3 browser bridge checklist (M1 to M14) and the Stage 4 passkey checklist (P1 to P13) |
 | `docs/implementation/ROADMAP.md` | The only tracked document under `docs/`: unfinished work |
 | `LICENSE`, `THIRD_PARTY_NOTICES.md` | Apache-2.0 and the notices for vendored data and linked crates |
 
@@ -60,7 +60,8 @@ vault file) is implemented.
 Stage 2a (the app backend behind the glass: `mypass-platform` macOS bodies, `mypass-session`, the Tauri shell with commands, events, capabilities, tray, hotkeys, single instance and the quit flow) is implemented; its open follow-ups are in `docs/implementation/ROADMAP.md`.
 Stage 2b (the Svelte UI: unlock, create and open, the three-pane shell, editors, history and bin, generator, settings window, CSV import, tray panel, themes, uk/ru/en) has landed; its manual checks live in `RUN.md`.
 Stage 3 (the browser bridge: `mypass-bridge`, the `mypass-host` native messaging host, the Settings Browser pane with pairing and save proposals, and the extension moved into `extension/` with its suites in CI) is implemented apart from the owner's manual checks, which live in `RUN.md`.
-Later stages (the rest of the app backend, passkeys, macOS release, Windows) are listed in `docs/implementation/ROADMAP.md`.
+Stage 4 (passkeys: the WebAuthn create and get ceremonies in `mypass_core::passkey`, the bridge `PasskeyService`, the app commands and toggle, and the passkey UI) is implemented apart from the owner's manual checks, which live in `RUN.md`.
+Later stages (the rest of the app backend, macOS release, Windows) are listed in `docs/implementation/ROADMAP.md`.
 
 ## Build, run, test
 
@@ -109,10 +110,18 @@ jobs are independent and run in parallel, so the wall-clock time is the slowest 
 - Every cargo job restores `Swatinem/rust-cache` with `cache-on-failure`, and the workflow sets
   `CARGO_PROFILE_DEV_DEBUG=line-tables-only` for smaller, faster builds.
 - `changes` is a cheap path filter that gates the crosscompat job.
-- `crosscompat` runs on Ubuntu with Python 3.12 and CI-only `pykeepass==4.2.0`: Rust writes /
-  Python reads, then Python writes / Rust reads. It is path-gated on pull requests through
+- `crosscompat` runs on Ubuntu with Python 3.12 and CI-only `pykeepass==4.2.0`, installed in one step
+  from `crates/mypass-core/tests/crosscompat/requirements.txt` (the single pin list of the job's Python
+  packages): Rust writes / Python reads, then Python writes / Rust reads. It is path-gated on pull requests through
   `changes.outputs.crosscompat` and always runs on main pushes and manual dispatch.
   The env-gated Rust test prints a skip locally unless `MYPASS_PYKEEPASS_VAULT` is set.
+  It also runs the passkey oracle (`crates/mypass-core/tests/crosscompat/passkey_oracle_check.sh`, packages
+  pinned in `crates/mypass-core/tests/crosscompat/requirements.txt`): the `write_passkey_vectors` example writes our
+  create and get responses and a vault; `python3 -I passkey_oracle.py` verifies them with Yubico `fido2`
+  (`register_complete`, `authenticate_complete`), `pykeepass` and `cryptography`, and writes a KeePassXC-style vault
+  that the env-gated `tests/passkey_pykeepass.rs` reads back. The oracle only verifies; the known-answer vectors are
+  pinned in `tests/passkey_vectors.rs`. Locally the script skips with a message when python or a package is absent;
+  with `CI=true` (always set in the job) a skip is a failure.
 - `js` runs on Ubuntu with Node from `.nvmrc` (`actions/setup-node`): `bash scripts/test.sh --ci
   --only js`, i.e. `node --test scripts/` (the xcstrings converter and the catalog completeness
   tests) and `scripts/test-extension.sh` (the extension suites); built-in runner, no dependencies, no package install. It always runs and must be `success`.
@@ -257,6 +266,41 @@ change is done.
   it can capture the extension's pairing secret and then read every credential, the same exposure as the extension's own `chrome.storage`; stage 5 closes it, it is not optional hardening, and moves
   the endpoint into a Keychain item that trusts only the signed host and points the manifests at the host inside the
   bundle (ROADMAP). The earlier idea of a shared Keychain access group was dropped.
+- **Passkeys.** `mypass_core::passkey` holds the pure parts: request parsing and origin validation (`https` only,
+  the rpId must be a registrable suffix of the origin host through the Public Suffix List, no IP literals, no
+  localhost exception, so passkeys never work on `localhost`), the ES256 ceremonies (`perform_create`,
+  `perform_get`; the key is a `PasskeySigningKey` that is neither `Clone` nor `Debug`), the hand-written emit-only CBOR
+  encoder and the KeePassXC-compatible `PasskeyRecord` (the `KPEX_PASSKEY_*` custom fields; the private key is a
+  PKCS#8 PEM in a protected field). One `has_passkey` predicate owned by core decides what counts as a passkey for the
+  category, counts and badges. The bridge `PasskeyService` (`mypass_bridge::passkeys`) runs two phases: phase one
+  (`passkeyCreate`, `passkeyGet`) only lists candidates and parks a pending item in the pending table (120 s TTL,
+  16 per kind, no key material); phase two (`passkeyCreateConfirm`, `passkeyGetApprove`) re-resolves everything inside
+  one session call. A lock bumps the service epoch, so a phase one that raced a lock never parks, and every phase two
+  starts with `vault_matches(db)` (the root UUID recorded in phase one) before any check or write. A create is durable
+  before the response (`flush`), and a failed flush rolls the entry back. The `passkey_proxy_enabled` setting (default
+  on) detaches the extension's WebAuthn proxy when off. Locking does not detach it: while MyPass is locked the
+  proxy stays as it was, and the bridge gate answers every passkey request `locked`, so the page gets
+  `NotAllowedError` "MyPass is locked".
+  - **Residual risks (owner-accepted, stage 5 closes the first two).**
+    1. User verification is "vault unlocked plus a click in the extension popup"; there is no in-app prompt and no
+       re-authentication per ceremony. A paired extension, or a same-user process holding the bridge token and the
+       pairing secret, can create passkeys for any site, replace the passkey of an entry and obtain sign-in assertions
+       for any stored relying party without the app showing anything. This extends the stage 3 residual to signing.
+    2. The authenticator data claims UV=1 even when the site asks for `required`, and `clientExtensionResults` answers
+       only `credProps`. The counter is always 0 and attestation is `none` (`packed` self-attestation for `direct`,
+       `indirect` and `enterprise`).
+    3. The pending table fails closed: an evicted or expired item answers `NotAllowedError`. Two copies of the same
+       vault share a root UUID, so `vault_matches` cannot tell them apart; the lock observer clears pending items on a
+       switch, which leaves only a narrow window.
+    4. Any get with no matching passkey answers `NotAllowedError` immediately, with or without `allowCredentials`,
+       while a get with a match waits for the user in the popup. The website itself sees that difference (an
+       immediate rejection against a promise that stays pending), without a user gesture, so a relying party can
+       silently probe whether this browser's MyPass holds a passkey for it and, with `allowCredentials`, test a
+       given credential id. Candidate rows reuse the stage 3 summaries (title, user name, non-protected fields); credential ids
+       and user handles never leave the entry.
+    5. While the proxy is attached, hardware keys and other providers are unavailable to Chrome, also while MyPass
+       is locked (the proxy stays attached and every request fails with "MyPass is locked"; only the toggle
+       detaches it), and a conflicting proxy-owning extension surfaces as `attachment-error`. Passkeys work only on `https` sites.
 - **Signing.** The stable team `W645B93PPQ` arrives in stage 5. Never sign ad-hoc: it breaks the
   Keychain access that guards the unlock key.
 - **Manual checks and the old app.** The manual checks of every stage live in `RUN.md` (Ukrainian). Never run the old

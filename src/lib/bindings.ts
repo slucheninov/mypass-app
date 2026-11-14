@@ -49,6 +49,11 @@ export const commands = {
 	entryList: (query: EntryQuery) => typedError<EntrySummary[], ApiError>(__TAURI_INVOKE("entry_list", { query })),
 	entryMove: (id: string, groupId: string) => typedError<null, ApiError>(__TAURI_INVOKE("entry_move", { id, groupId })),
 	entryNewModel: (entryType: EntryTypeDto, groupId: string | null) => typedError<EntryEditModel_Serialize, ApiError>(__TAURI_INVOKE("entry_new_model", { entryType, groupId })),
+	/**
+	 *  The passkey with its credential id, after the user's explicit click on the Passkey row;
+	 *  `null` when the entry has none. Never the private key or the user handle.
+	 */
+	entryPasskeyDetails: (id: string) => typedError<PasskeyDetails_Serialize | null, ApiError>(__TAURI_INVOKE("entry_passkey_details", { id })),
 	entryPurge: (id: string) => typedError<null, ApiError>(__TAURI_INVOKE("entry_purge", { id })),
 	entryRecent: (limit: number) => typedError<EntrySummary[], ApiError>(__TAURI_INVOKE("entry_recent", { limit })),
 	entryRestore: (id: string, groupId: string | null) => typedError<null, ApiError>(__TAURI_INVOKE("entry_restore", { id, groupId })),
@@ -444,6 +449,23 @@ export type EntryEditModel_Deserialize = {
 	customFields: CustomFieldEdit[],
 	attachments: AttachmentMeta[],
 	attachmentOps: AttachmentOp[],
+	/**
+	 *  The entry's passkey, for the read-only Passkey row; informational only, ignored on save.
+	 *  It never carries a `KPEX_PASSKEY_*` secret (no PEM, credential id or user handle).
+	 *  `serde(default)` keeps encrypted drafts stored before this field existed loadable.
+	 */
+	passkey?: PasskeyMeta_Deserialize | null,
+	/**
+	 *  Remove the passkey when this model is saved (every `KPEX_PASSKEY_*` field); the removal
+	 *  waits for the save, so cancelling the editor keeps the passkey.
+	 */
+	removePasskey?: boolean,
+	/**
+	 *  An opaque reference to the passkey this model was built with (not a `KPEX_PASSKEY_*`
+	 *  value). `remove_passkey` removes the stored passkey only while it still matches, so a
+	 *  passkey stored after the editor opened (a browser replace) is never removed unseen.
+	 */
+	passkeyRef?: string | null,
 };
 
 /**
@@ -467,6 +489,23 @@ export type EntryEditModel_Serialize = {
 	customFields: CustomFieldEdit[],
 	attachments: AttachmentMeta[],
 	attachmentOps: AttachmentOp[],
+	/**
+	 *  The entry's passkey, for the read-only Passkey row; informational only, ignored on save.
+	 *  It never carries a `KPEX_PASSKEY_*` secret (no PEM, credential id or user handle).
+	 *  `serde(default)` keeps encrypted drafts stored before this field existed loadable.
+	 */
+	passkey: PasskeyMeta_Serialize | null,
+	/**
+	 *  Remove the passkey when this model is saved (every `KPEX_PASSKEY_*` field); the removal
+	 *  waits for the save, so cancelling the editor keeps the passkey.
+	 */
+	removePasskey: boolean,
+	/**
+	 *  An opaque reference to the passkey this model was built with (not a `KPEX_PASSKEY_*`
+	 *  value). `remove_passkey` removes the stored passkey only while it still matches, so a
+	 *  passkey stored after the editor opened (a browser replace) is never removed unseen.
+	 */
+	passkeyRef: string | null,
 };
 
 export type EntryQuery = {
@@ -707,6 +746,44 @@ export type PairingChallengeEvent_Deserialize = PairingChallengeDto | null;
  */
 export type PairingChallengeEvent_Serialize = PairingChallengeDto | null;
 
+/**
+ *  The passkey of an entry as shown after an explicit click: [`PasskeyMeta`] plus the credential
+ *  id, which users compare with the relying party's list of keys. The credential id is public
+ *  (every assertion sends it); the private key PEM, the user handle and every other piece of key
+ *  material are never part of it.
+ */
+export type PasskeyDetails = PasskeyDetails_Serialize | PasskeyDetails_Deserialize;
+
+/**
+ *  The passkey of an entry as shown after an explicit click: [`PasskeyMeta`] plus the credential
+ *  id, which users compare with the relying party's list of keys. The credential id is public
+ *  (every assertion sends it); the private key PEM, the user handle and every other piece of key
+ *  material are never part of it.
+ */
+export type PasskeyDetails_Deserialize = {
+	relyingParty: string,
+	username: string,
+	/**  Unix milliseconds; absent for passkeys MyPass did not create. */
+	created?: number | null,
+	/**  Canonical unpadded base64url. */
+	credentialId: string,
+};
+
+/**
+ *  The passkey of an entry as shown after an explicit click: [`PasskeyMeta`] plus the credential
+ *  id, which users compare with the relying party's list of keys. The credential id is public
+ *  (every assertion sends it); the private key PEM, the user handle and every other piece of key
+ *  material are never part of it.
+ */
+export type PasskeyDetails_Serialize = {
+	relyingParty: string,
+	username: string,
+	/**  Unix milliseconds; absent for passkeys MyPass did not create. */
+	created: number | null,
+	/**  Canonical unpadded base64url. */
+	credentialId: string,
+};
+
 export type PasskeyMeta = PasskeyMeta_Serialize | PasskeyMeta_Deserialize;
 
 export type PasskeyMeta_Deserialize = {
@@ -714,6 +791,12 @@ export type PasskeyMeta_Deserialize = {
 	username: string,
 	/**  Unix milliseconds; absent for passkeys MyPass did not create. */
 	created?: number | null,
+	/**
+	 *  `false` for a damaged passkey: a private key with a missing or undecodable credential id.
+	 *  It cannot sign in anywhere and counts nowhere (category, badge, browser); it is shown only
+	 *  so the user can remove it. `serde(default)` keeps older stored drafts loadable.
+	 */
+	usable?: boolean,
 };
 
 export type PasskeyMeta_Serialize = {
@@ -721,6 +804,12 @@ export type PasskeyMeta_Serialize = {
 	username: string,
 	/**  Unix milliseconds; absent for passkeys MyPass did not create. */
 	created: number | null,
+	/**
+	 *  `false` for a damaged passkey: a private key with a missing or undecodable credential id.
+	 *  It cannot sign in anywhere and counts nowhere (category, badge, browser); it is shown only
+	 *  so the user can remove it. `serde(default)` keeps older stored drafts loadable.
+	 */
+	usable: boolean,
 };
 
 /**

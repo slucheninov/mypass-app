@@ -3,7 +3,7 @@
 //! test-only support code: helpers here unwrap and index freely, a guard must fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
-use repo_guards::read;
+use repo_guards::{read, rel_str, repo_root, tracked_files};
 use toml::{Table, Value};
 
 fn manifest(path: &str) -> Table {
@@ -69,4 +69,34 @@ fn host_links_no_vault_code() {
     }
     // The platform crate is needed by the ungated endpoint and relay code.
     assert!(!dep(&bridge, "mypass-platform").contains_key("optional"));
+}
+
+/// Stage 4 retired the stage 3 passkey placeholder: the app, the tests and the host e2e all run
+/// the real `PasskeyService`, so no tracked file may name the old type again.
+#[test]
+fn not_supported_passkeys_no_longer_exists() {
+    let Some(files) = tracked_files() else {
+        println!("skipped: not a git checkout");
+        return;
+    };
+    // Spelled in two halves so this guard does not match itself.
+    let needle = format!("{}{}", "NotSupported", "Passkeys");
+    let root = repo_root();
+    let mut offenders = Vec::new();
+    let mut scanned = 0;
+    for path in files {
+        // Deleted from the work tree but still in the index, or not text: nothing to scan.
+        let Ok(text) = std::fs::read_to_string(root.join(&path)) else {
+            continue;
+        };
+        scanned += 1;
+        if text.contains(&needle) {
+            offenders.push(rel_str(&path));
+        }
+    }
+    assert!(scanned > 100, "the scan saw only {scanned} files");
+    assert!(
+        offenders.is_empty(),
+        "{needle} is still named in {offenders:?}"
+    );
 }

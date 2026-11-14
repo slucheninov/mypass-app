@@ -1,0 +1,23 @@
+{
+  "allowCredentials": [
+    {
+      "id": "wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t8",
+      "transports": [
+        "hybrid",
+        "internal"
+      ],
+      "type": "public-key"
+    }
+  ],
+  "challenge": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8",
+  "extensions": {
+    "remoteDesktopClientOverride": {
+      "origin": "https://example.com",
+      "sameOriginWithAncestors": true
+    }
+  },
+  "hints": [],
+  "rpId": "example.com",
+  "timeout": 300000,
+  "userVerification": "preferred"
+}

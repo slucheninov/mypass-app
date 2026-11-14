@@ -1,0 +1,47 @@
+{
+  "attestation": "none",
+  "authenticatorSelection": {
+    "residentKey": "required",
+    "requireResidentKey": true,
+    "userVerification": "preferred"
+  },
+  "challenge": "EBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8",
+  "excludeCredentials": [
+    {
+      "id": "wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t8",
+      "transports": [
+        "hybrid",
+        "internal"
+      ],
+      "type": "public-key"
+    }
+  ],
+  "extensions": {
+    "credProps": true,
+    "remoteDesktopClientOverride": {
+      "origin": "https://example.com",
+      "sameOriginWithAncestors": true
+    }
+  },
+  "hints": [],
+  "pubKeyCredParams": [
+    {
+      "alg": -7,
+      "type": "public-key"
+    },
+    {
+      "alg": -257,
+      "type": "public-key"
+    }
+  ],
+  "rp": {
+    "id": "example.com",
+    "name": "Example"
+  },
+  "timeout": 300000,
+  "user": {
+    "displayName": "Alice",
+    "id": "oKGio6SlpqeoqaqrrK2urw",
+    "name": "alice@example.com"
+  }
+}

@@ -1,0 +1,5 @@
+# CI-only independent oracles (never shipped, never a Cargo dependency): the single pin list the
+# crosscompat job installs, for the KDBX round trip (pykeepass) and the passkey ceremonies.
+fido2==2.2.1
+cryptography==50.0.2
+pykeepass==4.2.0

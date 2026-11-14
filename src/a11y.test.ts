@@ -225,6 +225,18 @@ const SCENARIOS: Record<string, Scenario> = {
     await click(user, opener);
     return { dialog: "Websites", opener };
   },
+  "src/screens/editors/LoginForm.svelte#Remove passkey?": async (user) => {
+    await unlocked((f) =>
+      f.state.entries.push(
+        makeEntry({ id: "e-pk", title: "Passkeyed", modified: 5, passkey: { relyingParty: "example.org", username: "ann", created: null, usable: true } }),
+      ),
+    );
+    await selectEntry(user, /Passkeyed/);
+    await user.click(within(pane()).getByRole("button", { name: "Edit" }));
+    const opener = await screen.findByRole("button", { name: "Remove" });
+    await click(user, opener);
+    return { dialog: "Remove passkey?", opener };
+  },
   "src/screens/editors/NotesForm.svelte#Drafts": async (user) => {
     await unlocked((f) => (f.state.drafts["e-notes"] = [{ id: "d1", savedAt: 1_700_000_000_000, notes: "draft" }]));
     await selectEntry(user, /Server notes/);

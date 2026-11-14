@@ -94,6 +94,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `atk` | 0.18.2 | MIT |
 | `atk-sys` | 0.18.2 | MIT |
 | `atomic-waker` | 1.1.2 | Apache-2.0 OR MIT |
+| `base16ct` | 1.0.0 | Apache-2.0 OR MIT |
 | `base64` | 0.21.7 | MIT OR Apache-2.0 |
 | `base64` | 0.23.1 | MIT OR Apache-2.0 |
 | `base64ct` | 1.8.3 | Apache-2.0 OR MIT |
@@ -143,6 +144,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `crc32fast` | 1.5.4 | MIT OR Apache-2.0 |
 | `crossbeam-channel` | 0.5.17 | MIT OR Apache-2.0 |
 | `crossbeam-utils` | 0.8.23 | MIT OR Apache-2.0 |
+| `crypto-bigint` | 0.7.11 | Apache-2.0 OR MIT |
 | `crypto-common` | 0.1.7 | MIT OR Apache-2.0 |
 | `crypto-common` | 0.2.2 | MIT OR Apache-2.0 |
 | `cssparser` | 0.37.0 | MPL-2.0 |
@@ -155,6 +157,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `darling_macro` | 0.24.1 | MIT |
 | `data-encoding` | 2.11.1 | MIT |
 | `dbus` | 0.9.12 | Apache-2.0/MIT |
+| `der` | 0.8.3 | Apache-2.0 OR MIT |
 | `deranged` | 0.5.9 | MIT OR Apache-2.0 |
 | `derive_more` | 2.1.1 | MIT |
 | `derive_more-impl` | 2.1.1 | MIT |
@@ -173,6 +176,8 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `dtoa-short` | 0.3.5 | MPL-2.0 |
 | `dunce` | 1.0.5 | CC0-1.0 OR MIT-0 OR Apache-2.0 |
 | `dyn-clone` | 1.0.20 | MIT OR Apache-2.0 |
+| `ecdsa` | 0.17.0 | Apache-2.0 OR MIT |
+| `elliptic-curve` | 0.14.3 | Apache-2.0 OR MIT |
 | `embed_plist` | 1.2.2 | MIT OR Apache-2.0 |
 | `endi` | 1.1.1 | MIT |
 | `enumflags2` | 0.7.12 | MIT OR Apache-2.0 |
@@ -185,6 +190,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `event-listener-strategy` | 0.5.4 | Apache-2.0 OR MIT |
 | `fastrand` | 2.5.0 | Apache-2.0 OR MIT |
 | `fdeflate` | 0.3.7 | MIT OR Apache-2.0 |
+| `ff` | 0.14.0 | MIT/Apache-2.0 |
 | `field-offset` | 0.3.6 | MIT OR Apache-2.0 |
 | `flate2` | 1.1.11 | MIT OR Apache-2.0 |
 | `fnv` | 1.0.7 | Apache-2.0 / MIT |
@@ -222,6 +228,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `glob` | 0.3.4 | MIT OR Apache-2.0 |
 | `global-hotkey` | 0.8.0 | Apache-2.0 OR MIT |
 | `gobject-sys` | 0.18.0 | MIT |
+| `group` | 0.14.0 | MIT/Apache-2.0 |
 | `gtk` | 0.18.2 | MIT |
 | `gtk-sys` | 0.18.2 | MIT |
 | `gtk3-macros` | 0.18.2 | MIT |
@@ -295,6 +302,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `ndk-sys` | 0.6.0+11769913 | MIT OR Apache-2.0 |
 | `new_debug_unreachable` | 1.0.6 | MIT |
 | `num-conv` | 0.2.2 | MIT OR Apache-2.0 |
+| `num-traits` | 0.2.19 | MIT OR Apache-2.0 |
 | `num_enum` | 0.7.6 | BSD-3-Clause OR MIT OR Apache-2.0 |
 | `num_enum_derive` | 0.7.6 | BSD-3-Clause OR MIT OR Apache-2.0 |
 | `objc2` | 0.6.5 | MIT |
@@ -317,6 +325,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `open` | 5.4.5 | MIT |
 | `option-ext` | 0.2.0 | MPL-2.0 |
 | `ordered-stream` | 0.2.0 | MIT OR Apache-2.0 |
+| `p256` | 0.14.0 | Apache-2.0 OR MIT |
 | `pango` | 0.18.3 | MIT |
 | `pango-sys` | 0.18.0 | MIT |
 | `parking` | 2.2.1 | Apache-2.0 OR MIT |
@@ -324,6 +333,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `parking_lot_core` | 0.9.12 | MIT OR Apache-2.0 |
 | `password-hash` | 0.6.1 | MIT OR Apache-2.0 |
 | `paste` | 1.0.15 | MIT OR Apache-2.0 |
+| `pem-rfc7468` | 1.0.0 | Apache-2.0 OR MIT |
 | `percent-encoding` | 2.3.2 | MIT OR Apache-2.0 |
 | `phc` | 0.6.1 | Apache-2.0 OR MIT |
 | `phf` | 0.13.1 | MIT |
@@ -336,6 +346,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `phf_shared` | 0.14.0 | MIT |
 | `pin-project-lite` | 0.2.17 | Apache-2.0 OR MIT |
 | `piper` | 0.2.5 | MIT OR Apache-2.0 |
+| `pkcs8` | 0.11.0 | Apache-2.0 OR MIT |
 | `plist` | 1.10.3 | MIT |
 | `png` | 0.18.1 | MIT OR Apache-2.0 |
 | `polling` | 3.11.0 | Apache-2.0 OR MIT |
@@ -344,6 +355,8 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `powerfmt` | 0.2.1 | MIT OR Apache-2.0 |
 | `ppv-lite86` | 0.2.21 | MIT OR Apache-2.0 |
 | `precomputed-hash` | 0.1.1 | MIT |
+| `primefield` | 0.14.0 | Apache-2.0 OR MIT |
+| `primeorder` | 0.14.0 | Apache-2.0 OR MIT |
 | `proc-macro-crate` | 1.3.1 | MIT OR Apache-2.0 |
 | `proc-macro-crate` | 2.0.2 | MIT OR Apache-2.0 |
 | `proc-macro-crate` | 3.5.0 | MIT OR Apache-2.0 |
@@ -365,6 +378,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `regex-automata` | 0.4.18 | MIT OR Apache-2.0 |
 | `regex-syntax` | 0.8.11 | MIT OR Apache-2.0 |
 | `reqwest` | 0.13.5 | MIT OR Apache-2.0 |
+| `rfc6979` | 0.6.0 | Apache-2.0 OR MIT |
 | `rfd` | 0.17.2 | MIT |
 | `rustc-hash` | 2.1.3 | Apache-2.0 OR MIT |
 | `rustix` | 1.1.6 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
@@ -374,6 +388,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `schemars` | 0.8.22 | MIT |
 | `schemars_derive` | 0.8.22 | MIT |
 | `scopeguard` | 1.2.0 | MIT OR Apache-2.0 |
+| `sec1` | 0.8.1 | Apache-2.0 OR MIT |
 | `secrecy` | 0.10.3 | Apache-2.0 OR MIT |
 | `security-framework` | 3.7.0 | MIT OR Apache-2.0 |
 | `security-framework-sys` | 2.17.0 | MIT OR Apache-2.0 |
@@ -399,6 +414,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `sha2` | 0.10.9 | MIT OR Apache-2.0 |
 | `sha2` | 0.11.1 | MIT OR Apache-2.0 |
 | `signal-hook-registry` | 1.4.8 | MIT OR Apache-2.0 |
+| `signature` | 3.0.0 | Apache-2.0 OR MIT |
 | `simd-adler32` | 0.3.10 | MIT |
 | `siphasher` | 1.0.4 | MIT OR Apache-2.0 |
 | `slab` | 0.4.12 | MIT |
@@ -412,6 +428,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `specta-serde` | 0.0.13 | MIT |
 | `specta-typescript` | 0.0.13 | MIT |
 | `specta-util` | 0.0.13 | MIT |
+| `spki` | 0.8.1 | Apache-2.0 OR MIT |
 | `stable_deref_trait` | 1.2.1 | MIT OR Apache-2.0 |
 | `string_cache` | 0.11.0 | MIT OR Apache-2.0 |
 | `string_cache` | 0.9.0 | MIT OR Apache-2.0 |
@@ -538,6 +555,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `winnow` | 0.5.40 | MIT |
 | `winnow` | 1.0.5 | MIT |
 | `wit-bindgen` | 0.57.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| `wnaf` | 0.14.1 | Apache-2.0 OR MIT |
 | `writeable` | 0.6.4 | Unicode-3.0 |
 | `wry` | 0.57.2 | Apache-2.0 OR MIT |
 | `x11` | 2.21.0 | MIT |
@@ -582,10 +600,15 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `cfg-expr` | 0.15.8 | MIT OR Apache-2.0 |
 | `cfg_aliases` | 0.2.2 | MIT |
 | `chrono` | 0.4.45 | MIT OR Apache-2.0 |
+| `ciborium` | 0.2.2 | Apache-2.0 |
+| `ciborium-io` | 0.2.2 | Apache-2.0 |
+| `ciborium-ll` | 0.2.2 | Apache-2.0 |
 | `constant_time_eq` | 0.4.2 | CC0-1.0 OR MIT-0 OR Apache-2.0 |
 | `core_detect` | 1.0.0 | MIT/Apache-2.0 |
+| `crunchy` | 0.2.4 | MIT |
 | `embed-resource` | 3.0.12 | MIT |
 | `find-msvc-tools` | 0.1.15 | MIT OR Apache-2.0 |
+| `half` | 2.7.1 | MIT OR Apache-2.0 |
 | `hex-literal` | 1.1.0 | MIT OR Apache-2.0 |
 | `iana-time-zone` | 0.1.65 | MIT OR Apache-2.0 |
 | `iana-time-zone-haiku` | 0.1.2 | MIT OR Apache-2.0 |
@@ -595,7 +618,6 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `jiff-tzdb` | 0.1.9 | Unlicense OR MIT |
 | `jiff-tzdb-platform` | 0.1.3 | Unlicense OR MIT |
 | `keepass` | 0.17.0 | MIT |
-| `num-traits` | 0.2.19 | MIT OR Apache-2.0 |
 | `objc2-io-surface` | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | `phf_codegen` | 0.13.1 | MIT |
 | `phf_codegen` | 0.14.0 | MIT |
@@ -615,6 +637,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `schemars` | 0.9.0 | MIT |
 | `schemars` | 1.2.3 | MIT |
 | `serde_yaml_ng` | 0.10.0 | MIT |
+| `serdect` | 0.4.3 | Apache-2.0 OR MIT |
 | `shlex` | 2.0.1 | MIT OR Apache-2.0 |
 | `static_vcruntime` | 3.0.0 | MIT OR Apache-2.0 OR Zlib |
 | `string_cache_codegen` | 0.11.2 | MIT OR Apache-2.0 |
@@ -711,7 +734,7 @@ neither is linked or shipped. Fixture passwords and contents are documented in t
 
 `repo-guards` is a test-only workspace crate (`publish = false`) and is never shipped. The
 dev-only crates used by tests, the oracle and the repository guards (`proptest`, `keepass`, `toml`,
-`serde_yaml_ng`) are linked into test artifacts only, never shipped.
+`serde_yaml_ng`, `ciborium`) are linked into test artifacts only, never shipped.
 
 ### Test-only KDBX oracle
 
@@ -738,6 +761,16 @@ into the shipped product.
 `pykeepass==4.2.0` (GPL-3.0) is CI-only test tooling, installed into the crosscompat job's
 Python environment, never linked into or shipped with MyPass. Optional local verification uses
 an external scratch venv. It is not a Cargo dependency. Upstream: https://github.com/libkeepass/pykeepass.
+
+The passkey oracle (`crates/mypass-core/tests/crosscompat/passkey_oracle.py`, pins in
+`crates/mypass-core/tests/crosscompat/requirements.txt`) adds two more CI-only Python packages next
+to `pykeepass==4.2.0`, installed into the same crosscompat job environment and never linked into or
+shipped with MyPass:
+
+- `fido2==2.2.1` (Yubico python-fido2; BSD-2-Clause, Apache-2.0 or MPL-2.0, MyPass selects
+  BSD-2-Clause). Upstream: https://github.com/Yubico/python-fido2.
+- `cryptography==50.0.2` (Apache-2.0 OR BSD-3-Clause, MyPass selects BSD-3-Clause). Upstream:
+  https://github.com/pyca/cryptography.
 
 ## npm packages (user interface)
 

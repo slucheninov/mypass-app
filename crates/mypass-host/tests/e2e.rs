@@ -22,7 +22,7 @@ use mypass_bridge::codec::{encode_frame, read_frame, HEADER_LEN, MAX_FRAME_BYTES
 use mypass_bridge::diagnostics::DiagnosticsStore;
 use mypass_bridge::endpoint::{generate_token, Endpoint, EndpointStore};
 use mypass_bridge::pairing::{PairedBrowserStore, PairingChallenge, PairingManager};
-use mypass_bridge::passkeys::NotSupportedPasskeys;
+use mypass_bridge::passkeys::PasskeyService;
 use mypass_bridge::server::{Handler, LoopbackServer, ServerConfig};
 use mypass_bridge::service::{BridgeDeps, BridgeService};
 use mypass_bridge::ui::{BridgeUi, ProposalStore};
@@ -149,6 +149,7 @@ impl App {
             .unwrap(),
         );
         let ui = Arc::new(RecordingUi::default());
+        let passkeys = PasskeyService::new(sched.clone(), ui.clone());
         let svc = BridgeService::new(BridgeDeps {
             session: session.clone(),
             autolock,
@@ -158,7 +159,7 @@ impl App {
             diagnostics: Arc::new(DiagnosticsStore::new()),
             proposals: Arc::new(ProposalStore::new(sched.clone())),
             ui: ui.clone(),
-            passkeys: Arc::new(NotSupportedPasskeys),
+            passkeys,
         });
 
         let mut db = fast_database("E2E");
@@ -678,7 +679,7 @@ fn sixteen_hosts_hold_the_cap_and_the_seventeenth_is_refused_until_a_slot_frees(
 }
 
 #[test]
-fn passkey_status_is_disabled_placeholder_end_to_end() {
+fn passkey_status_and_ceremony_reach_the_passkey_service_end_to_end() {
     let app = App::start();
     let secret = app.pair();
     let mut h = app.spawn();
@@ -687,9 +688,28 @@ fn passkey_status_is_disabled_placeholder_end_to_end() {
         r,
         json!({
             "type":"passkeyProxyStatus","unlocked":true,"paired":true,
-            "attachAllowed":false,"enabled":false
+            "attachAllowed":true,"enabled":true
         })
     );
+    // A create through the real host is routed and kept pending (the full ceremony is pinned
+    // over TCP in `mypass-bridge/tests/passkey_server.rs`).
+    let details = json!({
+        "challenge":"MDEyMzQ1Njc4OWFiY2RlZi1jaGFsbGVuZ2U",
+        "rp":{"id":"github.com","name":"GitHub"},
+        "user":{"id":"dXNlci0x","name":"alice","displayName":"Alice"},
+        "pubKeyCredParams":[{"type":"public-key","alg":-7}],
+        "extensions":{"remoteDesktopClientOverride":
+            {"origin":"https://github.com","sameOriginWithAncestors":true}}
+    });
+    let r = h.call(json!({
+        "type":"passkeyCreate","requestId":5,"requestDetailsJson":details.to_string(),
+        "originUrl":"https://github.com","pairing":secret
+    }));
+    assert_eq!(r["type"], "passkeyCreatePending", "{r}");
+    assert_eq!(r["rpId"], "github.com");
+    assert_eq!(r["matches"][0]["title"], "GitHub");
+    let r = h.call(json!({"type":"passkeyCancel","requestId":5,"pairing":secret}));
+    assert_eq!(r, json!({"type":"passkeyCancelled","requestId":5}));
     h.finish();
 }
 

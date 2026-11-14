@@ -26,8 +26,8 @@ use crate::drafts::{self, DraftStore, DraftVersionDto};
 use crate::dto::{
     AppInfo, CsvPreview, EntryDetailDto, EntryEditModel, EntryQuery, EntrySummary, EntryTypeDto,
     FieldRef, FoundVaultFileDto, GenerateRequest, GeneratedPassword, GeneratorHistoryItem,
-    HistoryItem, ImportResult, LoginItemStatus, OpenEntryEvent, OpenWarning, RecentVaultDto,
-    RulesSummary, Sidebar, TotpDto,
+    HistoryItem, ImportResult, LoginItemStatus, OpenEntryEvent, OpenWarning, PasskeyDetails,
+    RecentVaultDto, RulesSummary, Sidebar, TotpDto,
 };
 use crate::editing;
 use crate::generator_service;
@@ -484,6 +484,12 @@ impl AppCore {
 
     pub fn entry_get(&self, id: &str) -> Result<EntryDetailDto, ApiError> {
         self.read(|db| queries::entry_detail(db, parse_id(id)?).ok_or(SessionError::NotFound))
+    }
+
+    /// The passkey of an entry with its credential id, after an explicit click; `None` when the
+    /// entry has no usable passkey. Never the private key or the user handle.
+    pub fn entry_passkey_details(&self, id: &str) -> Result<Option<PasskeyDetails>, ApiError> {
+        self.read(|db| queries::passkey_details(db, parse_id(id)?))
     }
 
     pub fn entry_totp(&self, id: &str) -> Result<TotpDto, ApiError> {
@@ -1092,6 +1098,7 @@ mod tests {
         call!("entry_recent", c, a => c.entry_recent(5));
         call!("entry_get", c, a => c.entry_get(&a.entry));
         call!("entry_totp", c, a => c.entry_totp(&a.entry));
+        call!("entry_passkey_details", c, a => c.entry_passkey_details(&a.entry));
         call!("entry_reveal", c, a => c.entry_reveal(&a.entry, FieldRef::Password));
         call!("entry_copy", c, a => c.entry_copy(&a.entry, FieldRef::Password));
         call!("entry_new_model", c, a => c.entry_new_model(EntryTypeDto::Login, None));
@@ -1605,6 +1612,73 @@ mod tests {
     }
 
     // ---- clipboard ----
+
+    /// An entry with a full passkey, saved straight into the session (the editor cannot add one).
+    fn passkey_entry(f: &Fx) -> String {
+        let id = f.login("Site", "hunter2");
+        let uuid = Uuid::parse_str(&id).unwrap();
+        f.core
+            .session
+            .mutate(|db, _| {
+                crate::testing::add_test_passkey(db.find_entry_mut(uuid).unwrap(), true);
+                Ok(())
+            })
+            .unwrap();
+        id
+    }
+
+    #[test]
+    fn passkey_details_none_for_entry_without_passkey_and_for_locked_vault() {
+        let f = fx_open();
+        let plain = f.login("Plain", "pw");
+        let with = passkey_entry(&f);
+        assert_eq!(f.core.entry_passkey_details(&plain).unwrap(), None);
+        let details = f.core.entry_passkey_details(&with).unwrap().unwrap();
+        assert_eq!(
+            details.credential_id,
+            crate::testing::TEST_PASSKEY_CREDENTIAL_ID
+        );
+        assert_eq!(
+            code(
+                f.core
+                    .entry_passkey_details(&Uuid::new_v4().simple().to_string())
+            ),
+            ErrorCode::NotFound
+        );
+        f.core.vault_lock().unwrap();
+        assert_eq!(code(f.core.entry_passkey_details(&with)), ErrorCode::Locked);
+    }
+
+    #[test]
+    fn passkey_fields_cannot_be_revealed_or_copied() {
+        let f = fx_open();
+        let id = passkey_entry(&f);
+        for key in [
+            crate::fields::PASSKEY_PRIVATE_KEY_PEM,
+            crate::fields::PASSKEY_CREDENTIAL_ID,
+            crate::fields::PASSKEY_USER_HANDLE,
+        ] {
+            let field = || FieldRef::Custom { key: key.into() };
+            assert_eq!(
+                code(f.core.entry_reveal(&id, field())),
+                ErrorCode::InvalidInput,
+                "{key}"
+            );
+            assert_eq!(
+                code(f.core.entry_copy(&id, field())),
+                ErrorCode::InvalidInput,
+                "{key}"
+            );
+        }
+        assert_eq!(f.fake.clipboard.contents(), None);
+        // And the detail DTO lists none of them as a custom field.
+        let detail = f.core.entry_get(&id).unwrap();
+        assert!(detail
+            .custom_fields
+            .iter()
+            .all(|c| !c.key.starts_with(crate::fields::PASSKEY_PREFIX)));
+        assert!(detail.passkey.is_some());
+    }
 
     #[test]
     fn entry_copy_puts_value_in_clipboard_and_returns_unit() {

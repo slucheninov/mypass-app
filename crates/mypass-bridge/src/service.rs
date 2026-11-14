@@ -72,7 +72,7 @@ impl std::fmt::Debug for BridgeService {
 
 impl BridgeService {
     /// Builds the service and registers the session observer that drops pending proposals and
-    /// tells the passkey handler when the vault stops being unlocked.
+    /// tells the passkey handler when the vault stops being unlocked or is switched.
     pub fn new(deps: BridgeDeps) -> Arc<Self> {
         let service = Self::new_unobserved(deps);
         service.register_observer();
@@ -94,13 +94,23 @@ impl BridgeService {
         let proposals = self.deps.proposals.clone();
         let passkeys = self.deps.passkeys.clone();
         // A direct switch from one unlocked vault to another emits only `StateChanged(Unlocked)`
-        // with a new path: a proposal made for the old vault must not be taken into the new one.
-        let open_path: Mutex<Option<String>> = Mutex::new(None);
+        // with a new path: a proposal made for the old vault must not be taken into the new one,
+        // and a pending passkey ceremony (its candidates are entry ids of the old vault) must not
+        // be confirmed or approved against the new one.
+        // Seeded with the vault already open at registration (the bridge can start, or restart,
+        // while a vault is unlocked), so the first switch after that is seen as a switch too.
+        // The seed is taken after the observer is in place and only when no event arrived in
+        // between, under the observer's own lock, so no switch can fall between the two.
+        // `.1` records that the observer has seen an event.
+        let open_path: Arc<Mutex<(Option<String>, bool)>> = Arc::new(Mutex::new((None, false)));
+        let observed = Arc::clone(&open_path);
         self.deps
             .session
             .add_observer(Arc::new(move |e: &SessionEvent| {
                 if let SessionEvent::StateChanged(status) = e {
-                    let mut open = open_path.lock().unwrap_or_else(PoisonError::into_inner);
+                    let mut guard = observed.lock().unwrap_or_else(PoisonError::into_inner);
+                    let (open, seen) = &mut *guard;
+                    *seen = true;
                     if status.state != SessionState::Unlocked {
                         *open = None;
                         proposals.clear();
@@ -108,11 +118,19 @@ impl BridgeService {
                     } else {
                         if open.is_some() && *open != status.vault_path {
                             proposals.clear();
+                            passkeys.on_session_locked();
                         }
-                        *open = status.vault_path.clone();
+                        open.clone_from(&status.vault_path);
                     }
                 }
             }));
+        let mut guard = open_path.lock().unwrap_or_else(PoisonError::into_inner);
+        if !guard.1 {
+            let status = self.deps.session.status();
+            if status.state == SessionState::Unlocked {
+                guard.0 = status.vault_path;
+            }
+        }
     }
 
     /// A context for calling a handler directly, past the gates.
@@ -271,6 +289,49 @@ mod tests {
     use zeroize::Zeroizing;
 
     #[test]
+    fn observer_registered_while_unlocked_sees_the_first_vault_switch() {
+        let f = fx();
+        assert!(f.session.is_unlocked());
+        // A second service registered after the vault was opened (a bridge restart).
+        let recording = Arc::new(RecordingPasskeys::default());
+        let proposals = Arc::new(ProposalStore::new(f.sched.clone()));
+        let _late = BridgeService::new(BridgeDeps {
+            session: f.session.clone(),
+            autolock: mypass_session::autolock::AutoLock::new(
+                f.session.clone(),
+                f.settings.clone(),
+                f.sched.clone(),
+            ),
+            settings: f.settings.clone(),
+            scheduler: f.sched.clone(),
+            pairing: Arc::new(
+                PairingManager::new(
+                    crate::pairing::PairedBrowserStore::new(
+                        mypass_platform::testing::InMemorySecretStore::new(),
+                    ),
+                    f.sched.clone(),
+                )
+                .unwrap(),
+            ),
+            diagnostics: Arc::new(DiagnosticsStore::new()),
+            proposals,
+            ui: f.ui.clone(),
+            passkeys: recording.clone(),
+        });
+        // A direct switch to another vault: its first `StateChanged` is already `Unlocked`.
+        let dir = tempfile::tempdir().unwrap();
+        f.session
+            .create_vault_with(
+                &dir.path().join("other.kdbx"),
+                secrecy::SecretString::from("pw".to_owned()),
+                mypass_session::testing::fast_database("Other"),
+            )
+            .unwrap();
+        assert!(f.session.is_unlocked());
+        assert_eq!(recording.locked.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
     fn request_table_matches_wire_types() {
         let all = all_requests(None);
         assert_eq!(all.len(), 29);
@@ -297,7 +358,7 @@ mod tests {
 
     #[test]
     fn cancel_quit_restores_service_answers() {
-        let f = fx();
+        let (f, _svc) = passkey_fx();
         let r = || named("getPasskeyProxyStatus", Some(&f.secret));
         f.session.begin_quit();
         assert!(matches!(f.svc.handle(r()), Response::Error { .. }));
@@ -427,8 +488,8 @@ mod tests {
     }
 
     #[test]
-    fn passkey_status_placeholder_reports_disabled_and_stays_locked_safe() {
-        let f = fx();
+    fn passkey_status_answers_while_locked_from_the_real_service() {
+        let (f, _svc) = passkey_fx();
         f.session.lock(LockReason::Manual);
         assert_eq!(
             f.svc
@@ -437,41 +498,44 @@ mod tests {
                 unlocked: false,
                 paired: true,
                 attach_allowed: false,
-                enabled: false
+                enabled: true
             }
         );
     }
 
     #[test]
-    fn set_passkey_proxy_enabled_placeholder_answers_disabled() {
-        let f = fx();
-        assert_eq!(
-            f.svc
-                .handle(named("setPasskeyProxyEnabled", Some(&f.secret))),
-            Response::PasskeyProxyEnabled { enabled: false }
-        );
-    }
-
-    #[test]
-    fn passkey_placeholder_cases_return_not_supported_error() {
-        let f = fx();
-        for name in [
-            "passkeyCreate",
-            "passkeyCreateConfirm",
-            "passkeyGet",
-            "passkeyGetApprove",
-        ] {
-            let r = f.svc.handle(named(name, Some(&f.secret)));
-            assert_eq!(
-                error_message(&r),
-                "passkeys are not supported by this version of MyPass yet"
-            );
+    fn passkey_requests_but_the_status_answer_locked_while_locked() {
+        // R4: the lock gate answers first, whatever the toggle says.
+        for toggle in [true, false] {
+            let (f, svc) = passkey_fx();
+            f.settings
+                .update(mypass_session::settings::SettingsPatch {
+                    passkey_proxy_enabled: Some(toggle),
+                    ..mypass_session::settings::SettingsPatch::default()
+                })
+                .unwrap();
+            f.session.lock(LockReason::Manual);
+            for name in [
+                "setPasskeyProxyEnabled",
+                "passkeyCreate",
+                "passkeyCreateConfirm",
+                "passkeyGet",
+                "passkeyGetApprove",
+                "passkeyCancel",
+            ] {
+                assert_eq!(
+                    f.svc.handle(named(name, Some(&f.secret))),
+                    Response::Locked,
+                    "{name}"
+                );
+            }
+            assert_eq!(svc.pending_len(), (0, 0));
         }
     }
 
     #[test]
-    fn passkey_cancel_placeholder_answers_cancelled_with_same_id() {
-        let f = fx();
+    fn passkey_cancel_answers_cancelled_with_same_id() {
+        let (f, _svc) = passkey_fx();
         assert_eq!(
             f.svc.handle(named("passkeyCancel", Some(&f.secret))),
             Response::PasskeyCancelled { request_id: -9 }
@@ -480,10 +544,17 @@ mod tests {
 
     #[test]
     fn passkey_confirm_never_resets_timer_when_error() {
-        let f = fx();
+        let (f, _svc) = passkey_fx();
         let confirm = named("passkeyCreateConfirm", Some(&f.secret));
         assert!(!resets_timer(&f, || {
-            assert!(matches!(f.svc.handle(confirm), Response::Error { .. }));
+            assert!(matches!(
+                f.svc.handle(confirm),
+                Response::PasskeyCreateComplete {
+                    error: Some(_),
+                    response_json: None,
+                    ..
+                }
+            ));
         }));
     }
 

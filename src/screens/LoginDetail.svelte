@@ -12,6 +12,7 @@
   import { webLinks } from "../lib/ui/web-links";
   import { webUrl } from "../lib/web-url";
   import DetailField from "./DetailField.svelte";
+  import PasskeyPopover from "./PasskeyPopover.svelte";
   import TotpField from "./TotpField.svelte";
 
   let {
@@ -62,24 +63,22 @@
   </DetailField>
 {/if}
 {#if detail.passkey}
-  <div class="passkey">
-    <button
-      type="button"
-      class="chip"
-      aria-expanded={passkeyOpen}
-      onclick={() => (passkeyOpen = !passkeyOpen)}
-      onkeydown={(e) => e.key === "Escape" && (passkeyOpen = false)}
-    >
-      <Icon name="passkey" size={14} />{t("Passkey")}
-    </button>
-    {#if passkeyOpen}
-      <div class="popover" role="region" aria-label={t("Passkey")}>
-        <FieldRow label={t("Relying party")}>{detail.passkey.relyingParty}</FieldRow>
-        <FieldRow label={t("Username")}>{detail.passkey.username}</FieldRow>
-        {#if detail.passkey.created !== null}
-          <FieldRow label={t("Created")}>{formatDate(detail.passkey.created)}</FieldRow>
+  {@const passkey = detail.passkey}
+  <div class="passkey" role="group" aria-label={t("Passkey")}>
+    <FieldRow label={t("Passkey")}>
+      <span class="added"><Icon name="passkey" size={14} />{#if !passkey.usable}{t("Damaged passkey")}{:else if passkey.created !== null}{t("Added %@", [formatDate(passkey.created)])}{:else}{t("Added")}{/if}</span>
+      {#snippet actions()}
+        {#if passkey.usable}
+          <Button variant="plain" aria-label={t("Show passkey details")} aria-expanded={passkeyOpen} onclick={() => (passkeyOpen = !passkeyOpen)}>
+            {t("Show")}
+          </Button>
         {/if}
-      </div>
+      {/snippet}
+    </FieldRow>
+    {#if passkeyOpen && passkey.usable}
+      <PasskeyPopover {entryId} context="detail" onclose={() => (passkeyOpen = false)} />
+    {:else if !passkey.usable}
+      <p class="note">{t("Remove this passkey by editing the entry.")}</p>
     {/if}
   </div>
 {/if}
@@ -93,28 +92,14 @@
   a {
     color: var(--accent);
   }
-  .passkey {
-    margin-top: 10px;
-  }
-  .chip {
+  .added {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 3px 10px;
-    border: 1px solid var(--control-border);
-    border-radius: 999px;
-    background: var(--control-bg);
-    color: var(--text);
-    font: inherit;
-    font-size: 12px;
-    cursor: pointer;
   }
-  .popover {
-    margin-top: 6px;
-    padding: 4px 12px;
-    border: var(--sep);
-    border-radius: var(--radius);
-    background: var(--bg);
-    box-shadow: var(--shadow);
+  .note {
+    margin: 6px 0 4px;
+    color: var(--text-2);
+    font-size: 12px;
   }
 </style>

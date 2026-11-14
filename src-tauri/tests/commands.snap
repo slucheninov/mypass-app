@@ -30,6 +30,7 @@ entry_history_restore
 entry_list
 entry_move
 entry_new_model
+entry_passkey_details
 entry_purge
 entry_recent
 entry_restore

@@ -171,6 +171,26 @@ pub struct PasskeyMeta {
     pub username: String,
     /// Unix milliseconds; absent for passkeys MyPass did not create.
     pub created: Option<f64>,
+    /// `false` for a damaged passkey: a private key with a missing or undecodable credential id.
+    /// It cannot sign in anywhere and counts nowhere (category, badge, browser); it is shown only
+    /// so the user can remove it. `serde(default)` keeps older stored drafts loadable.
+    #[serde(default)]
+    pub usable: bool,
+}
+
+/// The passkey of an entry as shown after an explicit click: [`PasskeyMeta`] plus the credential
+/// id, which users compare with the relying party's list of keys. The credential id is public
+/// (every assertion sends it); the private key PEM, the user handle and every other piece of key
+/// material are never part of it.
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PasskeyDetails {
+    pub relying_party: String,
+    pub username: String,
+    /// Unix milliseconds; absent for passkeys MyPass did not create.
+    pub created: Option<f64>,
+    /// Canonical unpadded base64url.
+    pub credential_id: String,
 }
 
 /// `value` is `None` when the field is protected.
@@ -307,6 +327,20 @@ pub struct EntryEditModel {
     pub custom_fields: Vec<CustomFieldEdit>,
     pub attachments: Vec<AttachmentMeta>,
     pub attachment_ops: Vec<AttachmentOp>,
+    /// The entry's passkey, for the read-only Passkey row; informational only, ignored on save.
+    /// It never carries a `KPEX_PASSKEY_*` secret (no PEM, credential id or user handle).
+    /// `serde(default)` keeps encrypted drafts stored before this field existed loadable.
+    #[serde(default)]
+    pub passkey: Option<PasskeyMeta>,
+    /// Remove the passkey when this model is saved (every `KPEX_PASSKEY_*` field); the removal
+    /// waits for the save, so cancelling the editor keeps the passkey.
+    #[serde(default)]
+    pub remove_passkey: bool,
+    /// An opaque reference to the passkey this model was built with (not a `KPEX_PASSKEY_*`
+    /// value). `remove_passkey` removes the stored passkey only while it still matches, so a
+    /// passkey stored after the editor opened (a browser replace) is never removed unseen.
+    #[serde(default)]
+    pub passkey_ref: Option<String>,
 }
 
 impl std::fmt::Debug for EntryEditModel {
@@ -319,6 +353,9 @@ impl std::fmt::Debug for EntryEditModel {
             .field("custom_fields", &self.custom_fields.len())
             .field("attachments", &self.attachments.len())
             .field("attachment_ops", &self.attachment_ops.len())
+            .field("passkey", &self.passkey.is_some())
+            .field("remove_passkey", &self.remove_passkey)
+            .field("passkey_ref", &self.passkey_ref.is_some())
             .finish_non_exhaustive()
     }
 }
