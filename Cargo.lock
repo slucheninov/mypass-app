@@ -2806,6 +2806,7 @@ dependencies = [
  "mypass-kdbx",
  "quick-xml",
  "rand 0.8.8",
+ "rustix",
  "salsa20",
  "secrecy",
  "sha2 0.11.1",

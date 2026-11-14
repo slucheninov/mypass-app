@@ -102,6 +102,9 @@ libc = "0.2.191"
 # Folder watcher of the secondary sync folder: FSEvents on macOS (the default `macos_fsevent`
 # feature), `ReadDirectoryChangesW` on Windows.
 notify = "=8.2.2"
+# Safe wrappers for the guarded replacement of a remote vault (`renameat_with` with `EXCHANGE`
+# and `NOREPLACE`) and the nonblocking open of the bounded read, in `mypass-kdbx` (unix only).
+rustix = { version = "=1.1.6", default-features = false, features = ["std", "fs"] }
 
 # --- Stage 5: update check ---
 # HTTPS client of the GitHub release check, behind the `github` feature of `mypass-update` (only
