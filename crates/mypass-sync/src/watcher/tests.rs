@@ -5,6 +5,8 @@ use std::sync::mpsc::RecvTimeoutError;
 const FIRE_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long a test waits to be sure nothing (more) fires.
 const QUIET: Duration = Duration::from_millis(1500);
+/// Only a deadlock takes this long.
+const DEADLOCK_BOUND: Duration = Duration::from_secs(20);
 /// A short debounce for the tests that do not measure the production one.
 const TEST_DEBOUNCE: Duration = Duration::from_millis(200);
 
@@ -203,8 +205,17 @@ fn dropping_the_watcher_from_its_own_callback_does_not_deadlock() {
     )
     .unwrap();
     *slot.lock().unwrap() = Some(watcher);
-    fs::write(d.path().join("vault.kdbx"), b"x").unwrap();
-    done.recv_timeout(FIRE_TIMEOUT).unwrap();
+    // A real event source may miss or delay a change made right after the watch starts, so keep
+    // changing the file until the callback runs; the bound only catches a deadlock.
+    let deadline = Instant::now() + DEADLOCK_BOUND;
+    for i in 0u8.. {
+        fs::write(d.path().join("vault.kdbx"), [i; 8]).unwrap();
+        match done.recv_timeout(Duration::from_secs(1)) {
+            Ok(()) => break,
+            Err(RecvTimeoutError::Timeout) if Instant::now() < deadline => {}
+            Err(e) => panic!("the callback never completed: {e:?}"),
+        }
+    }
     assert!(slot.lock().unwrap().is_none());
 }
 

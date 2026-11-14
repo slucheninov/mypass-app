@@ -277,8 +277,11 @@ impl SyncEngine {
     }
 
     /// Reconcile `local` with the remote copy. `local` is never mutated and no checkpoint is
-    /// stored (see [`SyncResult::pending`]). `still_current` is asked right before every remote
-    /// write; `false` ends the sync with [`SyncError::Cancelled`] and writes nothing more.
+    /// stored (see [`SyncResult::pending`]). `still_current` is asked at the start of every
+    /// attempt, before every decryption of the remote and right before every remote write;
+    /// `false` ends the sync with [`SyncError::Cancelled`] and writes nothing more, so a caller
+    /// that withdrew (a locked vault) gets its key material back after at most one more storage
+    /// read or KDF run.
     ///
     /// - Remote missing: write `local` (never over a file that appeared meanwhile),
     ///   [`SyncResult::UploadedInitial`].
@@ -334,6 +337,9 @@ impl SyncEngine {
         vault: &str,
         still_current: &dyn Fn() -> bool,
     ) -> Result<Attempt, SyncError> {
+        if !still_current() {
+            return Err(SyncError::Cancelled);
+        }
         let base = rebased.unwrap_or(local);
         let Some(remote_bytes) = self.remote.read()? else {
             let bytes = encode(base, password)?;
@@ -347,6 +353,9 @@ impl SyncEngine {
             && checkpoint.as_ref().is_some_and(|cp| {
                 cp.vault_uuid.as_deref() == Some(vault) && cp.describes(&remote_bytes)
             });
+        if !still_current() {
+            return Err(SyncError::Cancelled);
+        }
         if ours {
             match mode {
                 SyncMode::Pull => return Ok(Attempt::Done(SyncResult::Unchanged(None))),

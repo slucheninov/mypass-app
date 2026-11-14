@@ -881,3 +881,27 @@ fn reconciling_push_writes_a_changed_file_format() {
     assert!(matches!(r, SyncResult::UploadedLocal(_)), "{r:?}");
     assert_eq!(fx.remote_db().settings.cipher, Cipher::ChaCha20);
 }
+
+#[test]
+fn withdrawal_after_the_read_stops_before_decrypting_the_remote() {
+    let fx = Fx::new();
+    // A remote under another password: decrypting it would end in `RemotePasswordMismatch`, so
+    // `Cancelled` proves the sync stopped before the KDF ran.
+    let other = fast_db("v");
+    fx.folder
+        .write(&other.save(&SecretString::from("other password")).unwrap())
+        .unwrap();
+    let before = fx.remote_bytes();
+    let asked = AtomicUsize::new(0);
+    // Current for the first question (attempt start), withdrawn from then on (a lock).
+    let still = || asked.fetch_add(1, Ordering::SeqCst) == 0;
+    assert_eq!(
+        fx.engine
+            .sync_checked(&fast_db("v"), &pw(), SyncMode::Push, &still)
+            .unwrap_err(),
+        SyncError::Cancelled
+    );
+    assert_eq!(fx.probe.reads.load(Ordering::SeqCst), 1);
+    assert_eq!(fx.probe.write_attempts.load(Ordering::SeqCst), 0);
+    assert_eq!(fx.remote_bytes(), before);
+}
