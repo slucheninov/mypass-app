@@ -39,6 +39,8 @@ zeroize.workspace = true
 secrecy.workspace = true
 tempfile.workspace = true
 mypass-platform = { path = "../mypass-platform", features = ["test-util"] }
+# The shared passkey fixtures (`mypass_session::testing::passkey_category_database`).
+mypass-session = { path = "../mypass-session", features = ["test-util"] }
 # `FailingFileIo` for the passkey durability tests.
 mypass-kdbx = { path = "../mypass-kdbx", features = ["test-util"] }
 # Verify passkey create responses independently of the encoder (signature and CBOR).

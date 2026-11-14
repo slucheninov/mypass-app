@@ -171,6 +171,11 @@ pub struct PasskeyMeta {
     pub username: String,
     /// Unix milliseconds; absent for passkeys MyPass did not create.
     pub created: Option<f64>,
+    /// `false` for a damaged passkey: a private key with a missing or undecodable credential id.
+    /// It cannot sign in anywhere and counts nowhere (category, badge, browser); it is shown only
+    /// so the user can remove it. `serde(default)` keeps older stored drafts loadable.
+    #[serde(default)]
+    pub usable: bool,
 }
 
 /// The passkey of an entry as shown after an explicit click: [`PasskeyMeta`] plus the credential
@@ -331,6 +336,11 @@ pub struct EntryEditModel {
     /// waits for the save, so cancelling the editor keeps the passkey.
     #[serde(default)]
     pub remove_passkey: bool,
+    /// An opaque reference to the passkey this model was built with (not a `KPEX_PASSKEY_*`
+    /// value). `remove_passkey` removes the stored passkey only while it still matches, so a
+    /// passkey stored after the editor opened (a browser replace) is never removed unseen.
+    #[serde(default)]
+    pub passkey_ref: Option<String>,
 }
 
 impl std::fmt::Debug for EntryEditModel {
@@ -345,6 +355,7 @@ impl std::fmt::Debug for EntryEditModel {
             .field("attachment_ops", &self.attachment_ops.len())
             .field("passkey", &self.passkey.is_some())
             .field("remove_passkey", &self.remove_passkey)
+            .field("passkey_ref", &self.passkey_ref.is_some())
             .finish_non_exhaustive()
     }
 }

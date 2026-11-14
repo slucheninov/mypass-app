@@ -77,18 +77,24 @@ pub mod testing {
         ]
     }
 
-    /// The private key PEM [`add_test_passkey`] stores (not a real key: nothing here parses it).
-    pub const TEST_PASSKEY_PEM: &str = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgTestPasskeyBodyXyz\n-----END PRIVATE KEY-----\n";
+    /// The private key PEM value [`add_test_passkey`] stores. Not a key and deliberately not PEM
+    /// armoured (nothing here parses it), so secret scanners have nothing to flag.
+    #[cfg(any(test, feature = "test-util"))]
+    pub const TEST_PASSKEY_PEM: &str = "test-passkey-private-key-TestPasskeyBodyXyz";
     /// The base64url credential id [`add_test_passkey`] stores (bytes 1 to 8).
+    #[cfg(any(test, feature = "test-util"))]
     pub const TEST_PASSKEY_CREDENTIAL_ID: &str = "AQIDBAUGBwg";
     /// The base64url user handle [`add_test_passkey`] stores (`user-handle-1`).
+    #[cfg(any(test, feature = "test-util"))]
     pub const TEST_PASSKEY_USER_HANDLE: &str = "dXNlci1oYW5kbGUtMQ";
     /// The `KPEX_PASSKEY_CREATED` value [`add_test_passkey`] stores when asked to.
+    #[cfg(any(test, feature = "test-util"))]
     pub const TEST_PASSKEY_CREATED: &str = "2023-11-14T22:13:20Z";
 
     /// Stores a passkey on `e` the way KeePassXC lays it out (credential id, PEM and user handle
     /// protected, the rest plain), relying party `example.com`, account `alice@example.com`.
     /// With `created` it is the eight fields MyPass writes; without, a KeePassXC passkey (seven).
+    #[cfg(any(test, feature = "test-util"))]
     pub fn add_test_passkey(e: &mut mypass_kdbx::Entry, created: bool) {
         use crate::fields::{
             PASSKEY_CREATED, PASSKEY_CREDENTIAL_ID, PASSKEY_FLAG_BE, PASSKEY_FLAG_BS,
@@ -111,6 +117,7 @@ pub mod testing {
     /// group). Not listed: a credential id without a PEM, an undecodable credential id, an empty
     /// PEM, an empty credential id, a passkey in the generator history group, one in the recycle
     /// bin and one in a group inside the bin.
+    #[cfg(any(test, feature = "test-util"))]
     pub fn passkey_category_database() -> (Database, Vec<uuid::Uuid>) {
         use crate::fields::{PASSKEY_CREDENTIAL_ID, PASSKEY_PRIVATE_KEY_PEM};
         use mypass_core::entry_ext::GENERATOR_HISTORY_GROUP_UUID;

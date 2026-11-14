@@ -15,7 +15,7 @@ use crate::dto::{
 use crate::fields::{
     bin_id, is_history_group, EntryFields, ADDRESS_FIELDS, ADDRESS_LABELS, ADDRESS_PREFIX,
     CARD_CVV, CARD_EXPIRY, CARD_HOLDER, CARD_NUMBER, GROUP_EMOJI, NOTES_BODY, PASSKEY_CREATED,
-    PASSKEY_RELYING_PARTY, PASSKEY_USERNAME,
+    PASSKEY_CREDENTIAL_ID, PASSKEY_RELYING_PARTY, PASSKEY_USERNAME,
 };
 use crate::session::SessionError;
 use mypass_core::entry_ext::{EntryExt, EntryType};
@@ -544,25 +544,48 @@ pub fn entry_detail(db: &Database, id: Uuid) -> Option<EntryDetailDto> {
     })
 }
 
+/// The entry holds passkey key material: a usable passkey (the one `has_passkey` predicate) or
+/// a non-empty private key PEM next to a missing or undecodable credential id (a damaged one).
+pub fn has_passkey_material(entry: &Entry) -> bool {
+    entry.has_passkey() || PasskeyRecord::has_private_key(entry)
+}
+
 /// The secret-free passkey metadata of `entry` (relying party, account name, creation time), or
-/// `None` unless it carries a usable passkey (the one `has_passkey` predicate). Shared by the
-/// detail DTO and the edit model.
+/// `None` when it holds no passkey key material. `usable` is the one `has_passkey` predicate; a
+/// damaged passkey (`usable: false`) is shown only so the user can remove it, and counts nowhere
+/// (category, badge, bridge, matching). Shared by the detail DTO and the edit model.
 pub fn passkey_meta(entry: &Entry) -> Option<PasskeyMeta> {
-    entry.has_passkey().then(|| PasskeyMeta {
+    has_passkey_material(entry).then(|| PasskeyMeta {
         relying_party: entry.field(PASSKEY_RELYING_PARTY).unwrap_or("").to_owned(),
         username: entry.field(PASSKEY_USERNAME).unwrap_or("").to_owned(),
         created: entry
             .field(PASSKEY_CREATED)
             .and_then(parse_created)
             .map(timestamp_ms),
+        usable: entry.has_passkey(),
     })
+}
+
+/// An opaque reference to the passkey the editor showed: a truncated SHA-256 of the stored
+/// credential id text (domain-separated), so the model carries no `KPEX_PASSKEY_*` value. `None`
+/// without passkey key material. Every replace writes a fresh random credential id, so a
+/// passkey stored after the editor opened has a different reference.
+pub fn passkey_fingerprint(entry: &Entry) -> Option<String> {
+    if !has_passkey_material(entry) {
+        return None;
+    }
+    let mut hash = Sha256::new();
+    hash.update(b"MyPass passkey editor reference v1\0");
+    hash.update(entry.field(PASSKEY_CREDENTIAL_ID).unwrap_or("").as_bytes());
+    let digest = hash.finalize();
+    Some(digest.iter().take(16).map(|b| format!("{b:02x}")).collect())
 }
 
 /// The passkey of entry `id` with its credential id, after an explicit click: `NotFound` for an
 /// unknown entry, `None` for an entry without a usable passkey. Never the PEM or the user handle.
 pub fn passkey_details(db: &Database, id: Uuid) -> Result<Option<PasskeyDetails>, SessionError> {
     let entry = db.find_entry(id).ok_or(SessionError::NotFound)?;
-    let Some(meta) = passkey_meta(entry) else {
+    let Some(meta) = passkey_meta(entry).filter(|m| m.usable) else {
         return Ok(None);
     };
     let Some(credential_id) = PasskeyRecord::credential_id(entry) else {
@@ -1002,7 +1025,11 @@ mod tests {
                 "{fields:?}"
             );
             assert_eq!(e.has_passkey(), expected, "{fields:?}");
-            assert_eq!(passkey_meta(&e).is_some(), expected, "{fields:?}");
+            assert_eq!(
+                passkey_meta(&e).is_some_and(|m| m.usable),
+                expected,
+                "{fields:?}"
+            );
         }
     }
 
@@ -1067,6 +1094,7 @@ mod tests {
                 relying_party: "example.com".into(),
                 username: "alice@example.com".into(),
                 created: Some(1_700_000_000_000.0),
+                usable: true,
             }
         );
         // The detail never shows a passkey field as a custom field, nor any of its secrets.
@@ -1079,6 +1107,55 @@ mod tests {
         ] {
             assert!(!json.contains(secret), "{secret}");
         }
+    }
+
+    #[test]
+    fn damaged_passkey_is_shown_as_unusable_and_counts_nowhere() {
+        let (db, _) = crate::testing::passkey_category_database();
+        let by_title = |t: &str| {
+            db.root
+                .entries
+                .iter()
+                .find(|e| e.title() == t)
+                .unwrap()
+                .uuid
+        };
+        // A private key with an undecodable or an empty credential id: damaged, shown.
+        for title in ["Malformed ID", "Empty ID"] {
+            let id = by_title(title);
+            let meta = entry_detail(&db, id).unwrap().passkey.unwrap();
+            assert!(!meta.usable, "{title}");
+            assert_eq!(meta.relying_party, "example.com");
+            assert_eq!(passkey_details(&db, id).unwrap(), None, "{title}");
+            assert!(passkey_fingerprint(db.find_entry(id).unwrap()).is_some());
+        }
+        // No key material: nothing to show.
+        for title in ["Missing key", "Empty key"] {
+            let id = by_title(title);
+            assert_eq!(entry_detail(&db, id).unwrap().passkey, None, "{title}");
+            assert!(passkey_fingerprint(db.find_entry(id).unwrap()).is_none());
+        }
+        // Usable ones say so; the damaged ones carry no badge.
+        let only = by_title("Passkey only");
+        assert!(entry_detail(&db, only).unwrap().passkey.unwrap().usable);
+        let all = list_entries(&db, &cat(Category::All, ""), SearchScope::App);
+        let badge = |id: Uuid| all.iter().find(|s| s.id == simple(id)).unwrap().has_passkey;
+        assert!(badge(only));
+        assert!(!badge(by_title("Malformed ID")) && !badge(by_title("Empty ID")));
+    }
+
+    #[test]
+    fn passkey_fingerprint_follows_the_credential_id_and_hides_it() {
+        let mut e = entry("pk");
+        crate::testing::add_test_passkey(&mut e, true);
+        let first = passkey_fingerprint(&e).unwrap();
+        assert_eq!(first.len(), 32);
+        assert!(!first.contains(crate::testing::TEST_PASSKEY_CREDENTIAL_ID));
+        // Stable for the same passkey, different after a replace (a new credential id).
+        assert_eq!(passkey_fingerprint(&e.clone()), Some(first.clone()));
+        e.set_field(PASSKEY_CREDENTIAL_ID, "BAUGBwgJCgs", true);
+        assert_ne!(passkey_fingerprint(&e).unwrap(), first);
+        assert_eq!(passkey_fingerprint(&entry("none")), None);
     }
 
     #[test]

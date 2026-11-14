@@ -130,7 +130,8 @@ export function makeEntry(spec: EntrySpec): FixtureEntry {
       entryType,
       favorite,
       hasTotp: spec.hasTotp ?? false,
-      hasPasskey: (spec.hasPasskey ?? false) || spec.passkey !== undefined,
+      // Like the one predicate: a damaged passkey (`usable: false`) carries no badge.
+      hasPasskey: (spec.hasPasskey ?? false) || spec.passkey?.usable === true,
       attachmentCount: spec.attachments?.length ?? 0,
       modified: spec.modified,
       groupId,
@@ -156,6 +157,7 @@ export function makeEntry(spec: EntrySpec): FixtureEntry {
       attachmentOps: [],
       passkey: spec.passkey ?? null,
       removePasskey: false,
+      passkeyRef: spec.passkey ? `passkey-ref-${spec.id}` : null,
     },
   };
   const versions: HistorySpec[] =

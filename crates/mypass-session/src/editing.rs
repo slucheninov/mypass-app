@@ -21,7 +21,7 @@ use crate::fields::{
     bin_id, require_not_history, EntryFields, ADDRESS_FIELDS, ADDRESS_LABELS, ADDRESS_PREFIX,
     CARD_CVV, CARD_EXPIRY, CARD_HOLDER, CARD_NUMBER, GROUP_EMOJI, NOTES_BODY, OTP,
 };
-use crate::queries::{passkey_meta, totp_now};
+use crate::queries::{passkey_fingerprint, passkey_meta, totp_now};
 use crate::session::{SessionError, VaultSession};
 use mypass_core::entry_ext::{EntryExt, EntryType, UriMatchMode, ENTRY_TYPE_FIELD};
 use mypass_core::passkey::PasskeyRecord;
@@ -116,6 +116,7 @@ pub fn new_model(entry_type: EntryTypeDto, group_id: Uuid) -> EntryEditModel {
         attachment_ops: Vec::new(),
         passkey: None,
         remove_passkey: false,
+        passkey_ref: None,
     }
 }
 
@@ -226,6 +227,7 @@ pub fn edit_model(db: &Database, id: Uuid) -> Result<EntryEditModel, SessionErro
         // Display data only; the `KPEX_PASSKEY_*` values themselves never enter the model.
         passkey: passkey_meta(entry),
         remove_passkey: false,
+        passkey_ref: passkey_fingerprint(entry),
     })
 }
 
@@ -449,7 +451,16 @@ fn apply(
     // The passkey is removed only on an explicit request, after the field rebuild above (which
     // keeps every reserved `KPEX_PASSKEY_*` field), and inside `update_entry`, so the history
     // snapshot taken before this edit still holds the key. `model.passkey` is never an input.
-    if model.remove_passkey {
+    // Only the passkey the editor showed is removed: when the stored one no longer matches
+    // `passkey_ref` (a browser stored a replacement, with the user's consent in the popup, while
+    // the editor was open), the removal is skipped and the rest of the edit is saved. The
+    // passkey the user asked to remove is already gone in that case, and the new one is not
+    // deleted unseen; the detail pane shows it after the save. A missing reference never
+    // matches, and the reference only ever selects this entry's own passkey.
+    if model.remove_passkey
+        && model.passkey_ref.is_some()
+        && passkey_fingerprint(entry) == model.passkey_ref
+    {
         PasskeyRecord::clear(entry);
     }
 
@@ -1280,8 +1291,15 @@ mod tests {
         let obj = json.as_object_mut().unwrap();
         obj.remove("passkey");
         obj.remove("removePasskey");
+        obj.remove("passkeyRef");
         let model: EntryEditModel = serde_json::from_value(json).unwrap();
-        assert!(model.passkey.is_none() && !model.remove_passkey);
+        assert!(model.passkey.is_none() && !model.remove_passkey && model.passkey_ref.is_none());
+        // A draft whose passkey meta predates `usable` loads too (as not usable; display only).
+        let mut json = serde_json::to_value(new_model(EntryTypeDto::Login, f.root)).unwrap();
+        json["passkey"] =
+            serde_json::json!({"relyingParty": "example.com", "username": "a", "created": null});
+        let model: EntryEditModel = serde_json::from_value(json).unwrap();
+        assert!(!model.passkey.unwrap().usable);
     }
 
     #[test]
@@ -1332,6 +1350,7 @@ mod tests {
                 relying_party: "evil.test".into(),
                 username: "mallory".into(),
                 created: None,
+                usable: true,
             });
         });
         assert_eq!(passkey_fields(&f.entry(id)), before);
@@ -1342,6 +1361,7 @@ mod tests {
                 relying_party: "evil.test".into(),
                 username: "mallory".into(),
                 created: None,
+                usable: true,
             });
         });
         assert!(passkey_fields(&f.entry(new_id)).is_empty());
@@ -1392,6 +1412,88 @@ mod tests {
         assert_eq!(e.otp_source(), Some(TOTP_SECRET));
         assert_eq!(e.field("Recovery code"), Some("abc"));
         assert!(passkey_fields(&e).is_empty());
+    }
+
+    /// What a browser replace does to the entry (popup consent): a fresh key and credential id.
+    fn replace_passkey(f: &Fx, id: Uuid) {
+        f.session
+            .mutate(|db, _| {
+                let e = db.find_entry_mut(id).unwrap();
+                e.set_field(PASSKEY_CREDENTIAL_ID, "BAUGBwgJCgs", true);
+                e.set_field(PASSKEY_PRIVATE_KEY_PEM, "replacement-key", true);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn remove_skips_a_passkey_stored_after_the_editor_opened() {
+        let (f, id) = passkey_login();
+        // The editor opens and the user ticks Remove; meanwhile the browser replaces the passkey.
+        let mut m = f.model(id);
+        m.title = "Edited".into();
+        m.remove_passkey = true;
+        replace_passkey(&f, id);
+        let replaced = passkey_fields(&f.entry(id));
+        save_entry(&f.session, m).unwrap();
+        let e = f.entry(id);
+        // The rest of the edit is saved, the passkey the user never saw is kept.
+        assert_eq!(e.title(), "Edited");
+        assert_eq!(passkey_fields(&e), replaced);
+        assert_eq!(e.field(PASSKEY_PRIVATE_KEY_PEM), Some("replacement-key"));
+        // A fresh editor sees the new passkey and can remove that one.
+        f.edit(id, |m| m.remove_passkey = true);
+        assert!(passkey_fields(&f.entry(id)).is_empty());
+    }
+
+    #[test]
+    fn remove_needs_the_reference_of_this_entrys_passkey() {
+        let (f, id) = passkey_login();
+        let before = passkey_fields(&f.entry(id));
+        // No reference, or a made-up one: nothing is removed.
+        for forged in [None, Some("0".repeat(32)), Some(String::new())] {
+            f.edit(id, |m| {
+                m.remove_passkey = true;
+                m.passkey_ref = forged.clone();
+            });
+            assert_eq!(passkey_fields(&f.entry(id)), before, "{forged:?}");
+        }
+        // The reference of another entry's passkey does not match this one either.
+        let other = f.create(|m| m.title = "Other".into());
+        f.session
+            .mutate(|db, _| {
+                let e = db.find_entry_mut(other).unwrap();
+                add_test_passkey(e, true);
+                e.set_field(PASSKEY_CREDENTIAL_ID, "CQoLDA0ODxA", true);
+                Ok(())
+            })
+            .unwrap();
+        let foreign = f.model(other).passkey_ref;
+        assert!(foreign.is_some());
+        f.edit(id, |m| {
+            m.remove_passkey = true;
+            m.passkey_ref = foreign.clone();
+        });
+        assert_eq!(passkey_fields(&f.entry(id)), before);
+        assert!(f.entry(other).has_passkey());
+    }
+
+    #[test]
+    fn damaged_passkey_is_in_the_model_and_can_be_removed() {
+        let mut e = titled("Broken");
+        add_test_passkey(&mut e, true);
+        e.set_field(PASSKEY_CREDENTIAL_ID, "not base64!", true);
+        let (db, id) = db_with(e);
+        let f = fx_with(db);
+        let m = f.model(id);
+        let meta = m.passkey.clone().unwrap();
+        assert!(!meta.usable);
+        assert!(m.passkey_ref.is_some());
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(!json.contains("not base64!") && !json.contains(TEST_PASSKEY_PEM));
+        f.edit(id, |m| m.remove_passkey = true);
+        assert!(passkey_fields(&f.entry(id)).is_empty());
+        assert!(f.model(id).passkey.is_none());
     }
 
     #[test]

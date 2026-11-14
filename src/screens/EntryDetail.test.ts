@@ -180,7 +180,7 @@ describe("login detail", () => {
         id: "e-pk",
         title: "Passkeyed",
         modified: 5,
-        passkey: { relyingParty: "example.org", username: "ann@example.org", created: 1_700_000_000_000 },
+        passkey: { relyingParty: "example.org", username: "ann@example.org", created: 1_700_000_000_000, usable: true },
       },
     ]);
     await open(fake, "e-pk");
@@ -741,7 +741,7 @@ describe("accessibility", () => {
         notes: "n",
         urls: ["https://x.test"],
         hasTotp: true,
-        passkey: { relyingParty: "x.test", username: "u", created: 1 },
+        passkey: { relyingParty: "x.test", username: "u", created: 1, usable: true },
         customFields: [{ key: "K", value: "v", protected: true }],
         attachments: [{ name: "f.txt", size: 10 }],
         historyCount: 2,

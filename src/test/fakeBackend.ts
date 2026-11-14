@@ -557,13 +557,16 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         attachmentOps: [],
         passkey: null,
         removePasskey: false,
+        passkeyRef: null,
       };
     },
     // Like `queries::passkey_details`: the metadata plus the public credential id, never the key.
     entryPasskeyDetails: ({ id }) => {
       requireUnlocked();
       const found = findEntry(id);
-      return found.passkey ? { ...structuredClone(found.passkey), credentialId: FIXTURE_PASSKEY_CREDENTIAL_ID } : null;
+      if (!found.passkey?.usable) return null;
+      const { relyingParty, username, created } = found.passkey;
+      return { relyingParty, username, created, credentialId: FIXTURE_PASSKEY_CREDENTIAL_ID };
     },
     entryPurge: ({ id }) => {
       requireUnlocked();
@@ -627,12 +630,23 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         model.entryType === "address" && model.title.trim() === "" ? (model.address?.label ?? "") : model.title.trim();
       const found = model.id ? findEntry(model.id) : null;
       // Like `editing::apply`: `passkey` is display data and never an input; only `removePasskey`
-      // changes the stored passkey, and only on save.
-      const passkey = found && !model.removePasskey ? found.passkey : null;
-      const saved = { ...structuredClone(model), title, attachments, attachmentOps: [], passkey, removePasskey: false };
+      // changes the stored passkey, on save, and only while `passkeyRef` still names the stored one.
+      const remove =
+        found !== null && model.removePasskey && model.passkeyRef !== null && model.passkeyRef === found.model.passkeyRef;
+      const passkey = found && !remove ? found.passkey : null;
+      const passkeyRef = found && !remove ? found.model.passkeyRef : null;
+      const saved = {
+        ...structuredClone(model),
+        title,
+        attachments,
+        attachmentOps: [],
+        passkey,
+        removePasskey: false,
+        passkeyRef,
+      };
       if (found) {
         found.passkey = passkey;
-        if (model.removePasskey) found.summary.hasPasskey = false;
+        if (remove) found.summary.hasPasskey = false;
         // Every save of an existing entry snapshots the previous state into its history.
         found.history.push({ modified: found.modified, model: structuredClone(found.model) });
         found.model = saved;

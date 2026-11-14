@@ -99,17 +99,18 @@ impl BridgeService {
         // be confirmed or approved against the new one.
         // Seeded with the vault already open at registration (the bridge can start, or restart,
         // while a vault is unlocked), so the first switch after that is seen as a switch too.
-        let status = self.deps.session.status();
-        let open_path: Mutex<Option<String>> = Mutex::new(
-            (status.state == SessionState::Unlocked)
-                .then_some(status.vault_path)
-                .flatten(),
-        );
+        // The seed is taken after the observer is in place and only when no event arrived in
+        // between, under the observer's own lock, so no switch can fall between the two.
+        // `.1` records that the observer has seen an event.
+        let open_path: Arc<Mutex<(Option<String>, bool)>> = Arc::new(Mutex::new((None, false)));
+        let observed = Arc::clone(&open_path);
         self.deps
             .session
             .add_observer(Arc::new(move |e: &SessionEvent| {
                 if let SessionEvent::StateChanged(status) = e {
-                    let mut open = open_path.lock().unwrap_or_else(PoisonError::into_inner);
+                    let mut guard = observed.lock().unwrap_or_else(PoisonError::into_inner);
+                    let (open, seen) = &mut *guard;
+                    *seen = true;
                     if status.state != SessionState::Unlocked {
                         *open = None;
                         proposals.clear();
@@ -119,10 +120,17 @@ impl BridgeService {
                             proposals.clear();
                             passkeys.on_session_locked();
                         }
-                        *open = status.vault_path.clone();
+                        open.clone_from(&status.vault_path);
                     }
                 }
             }));
+        let mut guard = open_path.lock().unwrap_or_else(PoisonError::into_inner);
+        if !guard.1 {
+            let status = self.deps.session.status();
+            if status.state == SessionState::Unlocked {
+                guard.0 = status.vault_path;
+            }
+        }
     }
 
     /// A context for calling a handler directly, past the gates.

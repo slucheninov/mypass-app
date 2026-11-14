@@ -460,6 +460,12 @@ export type EntryEditModel_Deserialize = {
 	 *  waits for the save, so cancelling the editor keeps the passkey.
 	 */
 	removePasskey?: boolean,
+	/**
+	 *  An opaque reference to the passkey this model was built with (not a `KPEX_PASSKEY_*`
+	 *  value). `remove_passkey` removes the stored passkey only while it still matches, so a
+	 *  passkey stored after the editor opened (a browser replace) is never removed unseen.
+	 */
+	passkeyRef?: string | null,
 };
 
 /**
@@ -494,6 +500,12 @@ export type EntryEditModel_Serialize = {
 	 *  waits for the save, so cancelling the editor keeps the passkey.
 	 */
 	removePasskey: boolean,
+	/**
+	 *  An opaque reference to the passkey this model was built with (not a `KPEX_PASSKEY_*`
+	 *  value). `remove_passkey` removes the stored passkey only while it still matches, so a
+	 *  passkey stored after the editor opened (a browser replace) is never removed unseen.
+	 */
+	passkeyRef: string | null,
 };
 
 export type EntryQuery = {
@@ -779,6 +791,12 @@ export type PasskeyMeta_Deserialize = {
 	username: string,
 	/**  Unix milliseconds; absent for passkeys MyPass did not create. */
 	created?: number | null,
+	/**
+	 *  `false` for a damaged passkey: a private key with a missing or undecodable credential id.
+	 *  It cannot sign in anywhere and counts nowhere (category, badge, browser); it is shown only
+	 *  so the user can remove it. `serde(default)` keeps older stored drafts loadable.
+	 */
+	usable?: boolean,
 };
 
 export type PasskeyMeta_Serialize = {
@@ -786,6 +804,12 @@ export type PasskeyMeta_Serialize = {
 	username: string,
 	/**  Unix milliseconds; absent for passkeys MyPass did not create. */
 	created: number | null,
+	/**
+	 *  `false` for a damaged passkey: a private key with a missing or undecodable credential id.
+	 *  It cannot sign in anywhere and counts nowhere (category, badge, browser); it is shown only
+	 *  so the user can remove it. `serde(default)` keeps older stored drafts loadable.
+	 */
+	usable: boolean,
 };
 
 /**
