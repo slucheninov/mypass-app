@@ -49,10 +49,14 @@ serde_json = "1.0.154"
 # rand stays on 0.8 (matches the RustCrypto traits used by the KDBX engine).
 rand = { version = "0.8.8", features = ["std_rng"] }
 getrandom = "0.4.3"
+# P-256 ECDSA for passkeys; 0.14 needs rand_core 0.10, so keys are drawn with getrandom, not rand.
+p256 = { version = "=0.14.0", default-features = false, features = ["ecdsa", "pkcs8", "pem", "std"] }
 
 # --- Dev-only crates (tests, oracle, repo guards); never linked into a shipped artifact ---
 tempfile = "3.27.0"
 proptest = "1.12.0"
+# Independent CBOR decoder for the passkey encoder tests only.
+ciborium = "=0.2.2"
 # keepass-rs is a test oracle only.
 keepass = "0.17.0"
 toml = "1.2.1"
