@@ -1,0 +1,16 @@
+[package]
+name = "mypass-update"
+version = "0.1.0"
+description = "MyPass update check: release feed, semantic versions and the update policy."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+# Depends on no MyPass crate, so the session can own the update service without a cycle; the HTTP
+# client arrives behind a `github` feature that only `src-tauri` enables.
+[dependencies]

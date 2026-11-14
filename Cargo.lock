@@ -2804,6 +2804,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mypass-sync"
+version = "0.1.0"
+
+[[package]]
+name = "mypass-update"
+version = "0.1.0"
+
+[[package]]
 name = "ndk"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

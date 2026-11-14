@@ -105,6 +105,19 @@ pub enum UnlockWithDeviceWindow {
     Never,
 }
 
+impl UnlockWithDeviceWindow {
+    /// The window in seconds; `None` for `Never` (no limit since the last real event).
+    pub fn seconds(self) -> Option<u64> {
+        match self {
+            Self::OneHour => Some(3600),
+            Self::FourHours => Some(14_400),
+            Self::EightHours => Some(28_800),
+            Self::TwentyFourHours => Some(86_400),
+            Self::Never => None,
+        }
+    }
+}
+
 /// How often the master password is required again regardless of device unlock (stage 5).
 #[derive(Serialize, Deserialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "camelCase")]
@@ -116,6 +129,20 @@ pub enum RequireAccountPasswordWindow {
     ThirtyDays,
     NinetyDays,
     Never,
+}
+
+impl RequireAccountPasswordWindow {
+    /// The window in seconds; `None` for `Never` (no limit since the last master password entry).
+    pub fn seconds(self) -> Option<u64> {
+        match self {
+            Self::OneDay => Some(86_400),
+            Self::SevenDays => Some(604_800),
+            Self::FourteenDays => Some(1_209_600),
+            Self::ThirtyDays => Some(2_592_000),
+            Self::NinetyDays => Some(7_776_000),
+            Self::Never => None,
+        }
+    }
 }
 
 /// Generator defaults remembered between sessions (a partial object fills the rest from the
@@ -1168,5 +1195,62 @@ mod tests {
         store.remember_vault("/other.kdbx");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
         assert_eq!(fs::read(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn window_seconds_tables() {
+        use RequireAccountPasswordWindow as A;
+        use UnlockWithDeviceWindow as D;
+        for (window, seconds) in [
+            (D::OneHour, Some(3600)),
+            (D::FourHours, Some(14_400)),
+            (D::EightHours, Some(28_800)),
+            (D::TwentyFourHours, Some(86_400)),
+            (D::Never, None),
+        ] {
+            assert_eq!(window.seconds(), seconds, "{window:?}");
+        }
+        for (window, seconds) in [
+            (A::OneDay, Some(86_400)),
+            (A::SevenDays, Some(604_800)),
+            (A::FourteenDays, Some(1_209_600)),
+            (A::ThirtyDays, Some(2_592_000)),
+            (A::NinetyDays, Some(7_776_000)),
+            (A::Never, None),
+        ] {
+            assert_eq!(window.seconds(), seconds, "{window:?}");
+        }
+    }
+
+    /// Stage 5 adds no settings field: the schema snapshot is unchanged (`settings_schema_snapshot`
+    /// runs on the committed 2a file), and the Rust-only unlock timestamps never become settings:
+    /// a `lastDeviceUnlock` key in the file is ignored and never written back.
+    #[test]
+    fn stage_5_adds_no_settings_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, path) = store_in(dir.path());
+        fs::write(
+            &path,
+            r#"{"lastDeviceUnlock":1700000000,"lastFullPassword":1700000000,"theme":"dark"}"#,
+        )
+        .unwrap();
+        let store = SettingsStore::load(path.clone());
+        assert_eq!(store.get().theme, Theme::Dark);
+        store
+            .update(SettingsPatch {
+                language: Some(Language::Uk),
+                ..SettingsPatch::default()
+            })
+            .unwrap();
+        let written: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let keys = written.as_object().unwrap();
+        assert!(!keys.contains_key("lastDeviceUnlock"));
+        assert!(!keys.contains_key("lastFullPassword"));
+        let defaults = serde_json::to_value(Settings::default()).unwrap();
+        let mut expected: Vec<_> = defaults.as_object().unwrap().keys().collect();
+        let mut actual: Vec<_> = keys.keys().collect();
+        expected.sort();
+        actual.sort();
+        assert_eq!(actual, expected);
     }
 }

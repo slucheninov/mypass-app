@@ -8,6 +8,7 @@ pub mod autolock;
 pub mod backups;
 pub mod clipboard_service;
 pub mod csv_import;
+pub mod device_unlock;
 pub mod drafts;
 pub mod dto;
 pub mod editing;
