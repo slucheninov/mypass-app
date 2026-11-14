@@ -25,6 +25,7 @@
 pub mod candidates;
 mod create;
 pub mod errors;
+mod get;
 pub mod pending;
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -189,11 +190,16 @@ impl PasskeyHandler for PasskeyService {
                 }
                 create::handle_create(self, ctx, *request_id, request_details_json, origin_url)
             }
-            Request::PasskeyGet { request_id, .. } => {
+            Request::PasskeyGet {
+                request_id,
+                request_details_json,
+                origin_url,
+                ..
+            } => {
                 if !toggle_on() {
                     return get_error(*request_id, NOT_ALLOWED, TURNED_OFF);
                 }
-                get_error(*request_id, NOT_ALLOWED, NOT_SUPPORTED)
+                get::handle_get(self, ctx, *request_id, request_details_json, origin_url)
             }
             // Phase two re-checks the toggle too: "off" set in the app's Settings window does not
             // clear the table, so a ceremony started before it must not complete after it.
@@ -210,12 +216,17 @@ impl PasskeyHandler for PasskeyService {
                 }
                 create::handle_confirm(self, ctx, *request_id, entry_id.as_deref(), *replace)
             }
-            Request::PasskeyGetApprove { request_id, .. } => {
+            Request::PasskeyGetApprove {
+                request_id,
+                entry_id,
+                ..
+            } => {
                 if !toggle_on() {
+                    // Consumes only the ceremony this approve names, never a create.
                     let _ = self.take_get(*request_id);
                     return get_error(*request_id, NOT_ALLOWED, TURNED_OFF);
                 }
-                get_error(*request_id, NOT_ALLOWED, NOT_SUPPORTED)
+                get::handle_approve(self, ctx, *request_id, entry_id)
             }
             // Not passkey requests: the service never routes them here.
             Request::GetCredentials { .. }
