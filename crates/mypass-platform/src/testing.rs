@@ -14,6 +14,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+pub mod device_unlock_contract;
+
 /// Locks a fake's state; a poisoned lock (a panicking test thread) still yields the data.
 fn lock<T: ?Sized>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
