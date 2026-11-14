@@ -16,7 +16,7 @@ use mypass_kdbx::{Database, Entry};
 
 /// Whether the rpId stored on `entry` is `rp_id`, both compared in canonical form. An entry
 /// without a stored rpId, or with one that does not canonicalise, never matches.
-fn stored_rp_is(entry: &Entry, rp_id: &str) -> bool {
+pub(crate) fn stored_rp_is(entry: &Entry, rp_id: &str) -> bool {
     let Some(wanted) = canonical_host(rp_id) else {
         return false;
     };

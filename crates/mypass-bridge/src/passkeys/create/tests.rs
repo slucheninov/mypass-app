@@ -9,15 +9,16 @@
 //! Ports of the Swift bridge tests (1308-1440, 1715-1770), adapted to R7, R8, R9 and R31.
 
 use super::super::candidates::{create_candidates, excluded_credential_exists, passkey_entries};
+use super::super::pending::PendingCreate;
 use super::super::pending::PENDING_TTL;
 use super::super::{PasskeyContext, PasskeyHandler, PasskeyService, TURNED_OFF};
-use super::{COULD_NOT_SAVE, NO_PENDING};
+use super::{confirm_in_vault, undo_in_vault, Kept, COULD_NOT_SAVE, NO_PENDING};
 use crate::protocol::{Request, Response};
 use crate::testing::*;
 use crate::views::wire_id;
 use base64::Engine;
 use mypass_core::entry_ext::{EntryExt, UriMatchMode, GENERATOR_HISTORY_GROUP_UUID};
-use mypass_core::passkey::{b64url, PasskeyRecord, PasskeySigningKey};
+use mypass_core::passkey::{b64url, parse_create, PasskeyRecord, PasskeySigningKey};
 use mypass_kdbx::test_util::FailingFileIo;
 use mypass_kdbx::{Database, Entry, FileIo, FileMeta, Group, PlainFileIo, Timestamp};
 use mypass_session::saving::AUTOSAVE_DEBOUNCE;
@@ -817,7 +818,7 @@ fn replace_requires_flag_and_snapshots_history() {
     create(&f, 40, &[]);
     assert_failure(
         &confirm_into(&f, 40, ids.both, false),
-        "InvalidStateError",
+        "NotAllowedError",
         "Entry already has a passkey",
     );
     assert_eq!(snapshot(&f), before);
@@ -1054,8 +1055,9 @@ fn confirm_flushes_before_returning_response_json() {
 }
 
 #[test]
-fn flush_failure_returns_could_not_save() {
+fn flush_failure_after_new_entry_leaves_no_orphan() {
     let (f, _svc, _ids) = sample_fx();
+    let before = snapshot(&f);
     let io = Arc::new(FailingFileIo::new(Arc::new(PlainFileIo)));
     f.session.set_file_io(io.clone());
     io.fail_write_atomic(ErrorKind::PermissionDenied);
@@ -1064,22 +1066,129 @@ fn flush_failure_returns_could_not_save() {
     assert_failure(&r, "NotAllowedError", COULD_NOT_SAVE);
     assert!(!r.was_served());
     assert!(!f.ui.calls().contains(&"credential_filled".to_owned()));
-    // The edit stays in memory for the autosave retry; nothing reached the disk.
+    // The new entry is purged in memory: same entries as before, no key anywhere.
     let in_memory = snapshot(&f);
-    let written: Vec<Entry> = in_memory
-        .entries_excluding(&[])
-        .into_iter()
-        .filter(|e| PasskeyRecord::read(e).is_some_and(|r| r.username.as_deref() == Some("alice")))
-        .cloned()
-        .collect();
-    assert_eq!(written.len(), 1);
-    let credential = PasskeyRecord::credential_id(&written[0]).unwrap();
-    assert!(entry_with_credential(&on_disk(&f), &credential).is_none());
-    assert_eq!(f.session.status().save.state, SaveState::Failed);
-    // Healed, the next flush writes it.
+    let uuids = |db: &Database| {
+        let mut v: Vec<Uuid> = db.entries_excluding(&[]).iter().map(|e| e.uuid).collect();
+        v.sort();
+        v
+    };
+    assert_eq!(uuids(&in_memory), uuids(&before));
+    assert!(!in_memory.entries_excluding(&[]).iter().any(|e| {
+        PasskeyRecord::read(e).is_some_and(|r| r.username.as_deref() == Some("alice"))
+    }));
+    // Healed, the next flush writes a vault without it.
     io.heal();
     f.session.flush().unwrap();
-    assert!(entry_with_credential(&on_disk(&f), &credential).is_some());
+    assert_eq!(uuids(&on_disk(&f)), uuids(&before));
+}
+
+#[test]
+fn flush_failure_after_replace_restores_the_old_key_which_still_signs() {
+    let (f, _svc, ids) = sample_fx();
+    // A real, registered passkey on the login first.
+    create(&f, 57, &[]);
+    let first = success(&confirm_into(&f, 57, ids.login, false));
+    let spki = b64_field(&first, &["response", "publicKey"]);
+    let registered = entry_of(&f, ids.login);
+
+    let io = Arc::new(FailingFileIo::new(Arc::new(PlainFileIo)));
+    f.session.set_file_io(io.clone());
+    io.fail_write_atomic(ErrorKind::PermissionDenied);
+    create(&f, 58, &[]);
+    let r = confirm_into(&f, 58, ids.login, true);
+    assert_failure(&r, "NotAllowedError", COULD_NOT_SAVE);
+    // The entry is back exactly as registered, history included: no copy of the new key left.
+    assert!(entry_of(&f, ids.login) == registered);
+
+    // The restored key still signs for the public key the site holds.
+    let pem = registered.field("KPEX_PASSKEY_PRIVATE_KEY_PEM").unwrap();
+    let signing = p256::ecdsa::SigningKey::from_pkcs8_pem(pem).unwrap();
+    let sig: p256::ecdsa::Signature = p256::ecdsa::signature::Signer::sign(&signing, b"m");
+    let verifying = p256::ecdsa::VerifyingKey::from_public_key_der(&spki).unwrap();
+    verifying.verify(b"m", &sig).unwrap();
+
+    io.heal();
+    f.session.flush().unwrap();
+    let disk = on_disk(&f);
+    assert!(disk.find_entry(ids.login).unwrap() == &registered);
+}
+
+/// The undo only reverses its own write: an entry changed after the write is left alone.
+#[test]
+fn undo_leaves_an_entry_changed_after_the_write() {
+    let (mut db, ids) = sample();
+    let now = Timestamp::now();
+    let json = request_json(ORIGIN, Some(RP), &[]).to_string();
+    for target in [Some(ids.both), None] {
+        let request = parse_create(ORIGIN, &json).unwrap();
+        let candidates = create_candidates(&db, ORIGIN, RP)
+            .iter()
+            .map(|e| e.uuid)
+            .collect();
+        let pending = PendingCreate::new(&db, request, candidates);
+        let original = db.clone();
+        let written = confirm_in_vault(&mut db, now, &pending, target, true)
+            .ok()
+            .unwrap();
+
+        // Untouched: the undo restores the vault's entries exactly.
+        let mut undone = db.clone();
+        undo_in_vault(&mut undone, now, &pending, &written.undo).unwrap();
+        match target {
+            Some(id) => assert!(undone.find_entry(id) == original.find_entry(id)),
+            None => assert!(undone.find_entry(written.entry).is_none()),
+        }
+
+        // Changed in between (the editor, a merge): left as it is.
+        let mut changed = db.clone();
+        changed
+            .find_entry_mut(written.entry)
+            .unwrap()
+            .set_field("Notes", "edited", false);
+        let kept = changed.find_entry(written.entry).unwrap().clone();
+        assert_eq!(
+            undo_in_vault(&mut changed, now, &pending, &written.undo),
+            Err(Kept::Changed)
+        );
+        assert!(changed.find_entry(written.entry) == Some(&kept));
+
+        // Another vault: nothing is read or changed.
+        let mut other = fast_database("Other");
+        let other_before = other.clone();
+        assert_eq!(
+            undo_in_vault(&mut other, now, &pending, &written.undo),
+            Err(Kept::OtherVault)
+        );
+        assert!(other == other_before);
+        db = original;
+    }
+}
+
+#[test]
+fn replace_refuses_a_passkey_stored_for_another_rp() {
+    let (f, _svc, ids) = sample_fx();
+    // The login's URL matches the page, but its passkey belongs to a sibling relying party.
+    f.session
+        .mutate(|db, now| {
+            db.update_entry(ids.login, now, |e| {
+                *e = with_passkey(e.clone(), "login.example.com", b"sibling");
+            })
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    let before = snapshot(&f);
+    assert!(offered(&create(&f, 56, &[])).contains(&ids.login));
+    assert_failure(
+        &confirm_into(&f, 56, ids.login, true),
+        "NotAllowedError",
+        "Entry not found or domain mismatch",
+    );
+    assert_eq!(snapshot(&f), before);
+    // The same rp in another spelling ("Example.COM") is still replaceable.
+    create(&f, 55, &[]);
+    success(&confirm_into(&f, 55, ids.sub, true));
 }
 
 /// Test-only IO whose next `write_atomic` after `arm` blocks until `release`.

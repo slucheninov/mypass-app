@@ -204,14 +204,15 @@ impl PasskeyHandler for PasskeyService {
                 ..
             } => {
                 if !toggle_on() {
-                    self.pending().remove_both(*request_id);
+                    // Consumes only the ceremony this confirm names, never a get under the same id.
+                    let _ = self.take_create(*request_id);
                     return create_error(*request_id, NOT_ALLOWED, TURNED_OFF);
                 }
                 create::handle_confirm(self, ctx, *request_id, entry_id.as_deref(), *replace)
             }
             Request::PasskeyGetApprove { request_id, .. } => {
                 if !toggle_on() {
-                    self.pending().remove_both(*request_id);
+                    let _ = self.take_get(*request_id);
                     return get_error(*request_id, NOT_ALLOWED, TURNED_OFF);
                 }
                 get_error(*request_id, NOT_ALLOWED, NOT_SUPPORTED)

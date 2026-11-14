@@ -105,6 +105,9 @@ Last updated: 2026-11-14
   (`anchor apple generic and certificate leaf[subject.OU] = "W645B93PPQ"` plus the host
   identifier); never trust a path under Application Support. Delete-then-add on write (a crash in
   between only loses the per-launch endpoint), then delete the file.
+  Until then a same-user process that captures the pairing secret can also write passkeys: it can
+  rewrite the passkey fields of any https entry it can name and churn entry history with
+  unbounded confirm calls (each Replace snapshots the entry, bounded only by HistoryMaxItems).
 - [ ] The native messaging manifests point at a host copy under Application Support, which a
   same-user process can replace (the same accepted risk as the 0600 endpoint file). Point the
   manifests at the host inside the signed app bundle (`Contents/MacOS/mypass-native-host`, the Tauri sidecar, named so it cannot replace cargo's `mypass-host`, which Chrome

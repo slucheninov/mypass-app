@@ -18,16 +18,32 @@
 //! **Durable before the relying party sees the public key.** After the write, `session.flush()`
 //! must succeed before the response JSON is returned (R9). The Swift app answered after an
 //! in-memory change only, so a crash inside the save debounce left the site holding a public key
-//! whose private half was lost. When the flush fails the page gets `NotAllowedError` "Could not
-//! save the passkey" and no response: the edit stays in memory and the autosave retries it; the
-//! key it holds is an orphan the site never registered, which is harmless.
-
+//! whose private half was lost. A hung write therefore holds this bridge connection (and the
+//! extension's request) until the write finishes or fails; `flush` has no timeout of its own.
+//!
+//! **A failed flush is rolled back.** The site never sees the new public key, so leaving the edit
+//! in memory for the autosave would make a key nobody registered durable and, on Replace, swap a
+//! working passkey for it. A second `mutate` undoes the write instead, but only while the entry
+//! is still exactly what the first `mutate` wrote (anything else changed it since: it is left
+//! alone): Replace puts the entry back as it was before, history included, so the old key is live
+//! again; a new entry is purged outright (removed with a deleted-object record) rather than moved
+//! to the recycle bin, because the bin would keep an unregistered private key in the vault, and
+//! the entry was created by this ceremony a moment ago, so nothing of the user's is lost. The
+//! undo is itself an ordinary edit that the autosave writes; the page gets `NotAllowedError`
+//! "Could not save the passkey" either way. When the undo cannot run (the vault was locked or the
+//! app is quitting in between), the write stays in memory as before; on Replace the old key is
+//! still in the entry's history.
+//!
+//! **Same vault after the flush.** A vault switch can land between the write and the flush, and
+//! the flush then reports on the other vault. The binding is re-checked after the flush; when it
+//! no longer holds, the answer is "Could not save the passkey", since nothing proves the write
+//! reached the file. A switch away and back to the same vault in that window is not detected.
 use mypass_core::passkey::{parse_create, perform_create, BackupFlags, PasskeyRecord};
 use mypass_kdbx::{Database, Entry, Timestamp};
 use mypass_session::session::SessionError;
 use uuid::Uuid;
 
-use super::candidates::{create_candidates, excluded_credential_exists};
+use super::candidates::{create_candidates, excluded_credential_exists, stored_rp_is};
 use super::errors::{create_error, page_error, INVALID_STATE, NOT_ALLOWED};
 use super::pending::PendingCreate;
 use super::{PasskeyContext, PasskeyService};
@@ -78,6 +94,8 @@ pub(crate) fn handle_create(
     Response::PasskeyCreatePending {
         request_id,
         rp_id: request.rp_id().to_owned(),
+        // The parser already falls back to the rpId when `rp.name` is absent; this covers an
+        // explicit empty `""`, which the popup would otherwise show as a blank site name.
         rp_name: if ceremony.rp_name.is_empty() {
             request.rp_id().to_owned()
         } else {
@@ -94,7 +112,8 @@ enum Refusal {
     OtherVault,
     /// An `excludeCredentials` id is already held for this rpId.
     Excluded,
-    /// The chosen entry is not a current candidate (forged, binned, moved off the site).
+    /// The chosen entry is not a current candidate (forged, binned, moved off the site), or it
+    /// holds a passkey for another relying party.
     NotCandidate,
     /// The chosen entry already holds a private key and `replace` was not set.
     HasKey,
@@ -108,18 +127,40 @@ impl Refusal {
             Self::OtherVault => (NOT_ALLOWED, NO_PENDING),
             Self::Excluded => (INVALID_STATE, "A passkey for this account already exists"),
             Self::NotCandidate => (NOT_ALLOWED, "Entry not found or domain mismatch"),
-            Self::HasKey => (INVALID_STATE, "Entry already has a passkey"),
+            // NotAllowedError, not InvalidStateError: the page must not learn that the user's
+            // entry holds a passkey unless it listed that credential in `excludeCredentials`.
+            Self::HasKey => (NOT_ALLOWED, "Entry already has a passkey"),
             Self::Failed => (NOT_ALLOWED, COULD_NOT_SAVE),
         };
         create_error(request_id, name, message)
     }
 }
 
-/// What the confirm `mutate` closure hands back: the entry written and the response JSON. The
-/// private key never leaves the closure.
+/// What the confirm `mutate` closure hands back: the entry written, the response JSON and what
+/// undoes the write. The private key leaves the closure only inside those entry copies, which
+/// stay in this module and are dropped when the confirm answers.
 struct Written {
     entry: Uuid,
     response_json: String,
+    undo: Undo,
+}
+
+/// How to undo the confirm write after a failed flush. The undo runs only while the live entry
+/// still equals `after`.
+struct Undo {
+    /// The entry exactly as the write left it.
+    after: Entry,
+    /// Replace: the entry as it was before, put back. `None`: a new entry, purged.
+    before: Option<Entry>,
+}
+
+/// Why the undo left the vault alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kept {
+    /// Another vault is open now.
+    OtherVault,
+    /// The entry is gone or was changed after the write; it is not ours to undo any more.
+    Changed,
 }
 
 /// `passkeyCreateConfirm`. The toggle was re-checked by the caller. `entry_id` absent means a new
@@ -161,6 +202,13 @@ pub(crate) fn handle_confirm(
     // Durable before the relying party sees the public key (see the module docs). `flush` waits
     // for an in-flight background write and is `Ok` only once this edit is on disk.
     if ctx.session.flush().is_err() {
+        // The outcome is not reported to the page: it gets the same error whether or not the
+        // undo ran (see the module docs).
+        let _ = roll_back(ctx, &pending, &written.undo);
+        return Refusal::Failed.answer(request_id);
+    }
+    // The flush reported on the vault open now; it must still be the one written to.
+    if ctx.session.with_db(|db| pending.vault_matches(db)) != Ok(true) {
         return Refusal::Failed.answer(request_id);
     }
     svc.ui.credential_filled(written.entry);
@@ -168,6 +216,49 @@ pub(crate) fn handle_confirm(
         request_id,
         response_json: Some(written.response_json),
         error: None,
+    }
+}
+
+/// Undoes a confirm write whose flush failed, in its own `mutate`. `Err` when the session
+/// refused the edit or the undo left the vault alone.
+fn roll_back(
+    ctx: &PasskeyContext<'_>,
+    pending: &PendingCreate,
+    undo: &Undo,
+) -> Result<(), Option<Kept>> {
+    let mut kept = None;
+    let done = ctx.session.mutate(|db, now| {
+        undo_in_vault(db, now, pending, undo).map_err(|k| {
+            kept = Some(k);
+            SessionError::InvalidInput("passkey undo skipped".into())
+        })
+    });
+    done.map_err(|_| kept)
+}
+
+/// The body of the undo `mutate`: the vault binding first, then the guard, then the undo.
+fn undo_in_vault(
+    db: &mut Database,
+    now: Timestamp,
+    pending: &PendingCreate,
+    undo: &Undo,
+) -> Result<(), Kept> {
+    if !pending.vault_matches(db) {
+        return Err(Kept::OtherVault);
+    }
+    let id = undo.after.uuid;
+    let Some(live) = db.find_entry_mut(id) else {
+        return Err(Kept::Changed);
+    };
+    if *live != undo.after {
+        return Err(Kept::Changed);
+    }
+    match &undo.before {
+        Some(before) => {
+            *live = before.clone();
+            Ok(())
+        }
+        None => db.purge_entry(id, now).map_err(|_| Kept::Changed),
     }
 }
 
@@ -211,6 +302,12 @@ fn confirm_in_vault(
         if PasskeyRecord::has_private_key(entry) && !replace {
             return Err(Refusal::HasKey);
         }
+        // A passkey stored for another relying party (a sibling subdomain whose entry URL still
+        // matches the page) is never overwritten from this one, with or without consent.
+        let stored_rp = PasskeyRecord::relying_party(entry).is_some_and(|rp| !rp.is_empty());
+        if stored_rp && !stored_rp_is(entry, rp_id) {
+            return Err(Refusal::NotCandidate);
+        }
     }
 
     let outcome = perform_create(request).map_err(|_| Refusal::Failed)?;
@@ -225,15 +322,23 @@ fn confirm_in_vault(
         flags: BackupFlags::default(),
     };
 
-    let entry = match target {
+    let (entry, undo) = match target {
         Some(id) => {
+            let before = db.find_entry(id).cloned().ok_or(Refusal::NotCandidate)?;
             // `update_entry` keeps the stored version, including any previous private key, in the
             // entry's history. An authenticator cannot know whether the relying party accepted
             // the new credential (Google, for one, may keep asking for the old one), so the old
             // key must stay recoverable.
             db.update_entry(id, now, |e| record.write(e))
                 .map_err(|_| Refusal::Failed)?;
-            id
+            let after = db.find_entry(id).cloned().ok_or(Refusal::Failed)?;
+            (
+                id,
+                Undo {
+                    after,
+                    before: Some(before),
+                },
+            )
         }
         None => {
             let mut e = Entry::new(now);
@@ -250,12 +355,21 @@ fn confirm_in_vault(
             // The root group, the same target the stage 3 `createEntry` uses.
             let root = db.root_id();
             db.add_entry(root, e, now).map_err(|_| Refusal::Failed)?;
-            id
+            // Read back, so the guard compares what is actually in the vault.
+            let after = db.find_entry(id).cloned().ok_or(Refusal::Failed)?;
+            (
+                id,
+                Undo {
+                    after,
+                    before: None,
+                },
+            )
         }
     };
     Ok(Written {
         entry,
         response_json: outcome.response_json,
+        undo,
     })
 }
 

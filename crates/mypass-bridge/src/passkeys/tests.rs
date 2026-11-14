@@ -475,6 +475,8 @@ fn toggle_off_in_the_app_refuses_confirm_and_approve() {
         f.svc.handle(named("passkeyCreateConfirm", Some(&f.secret))),
         errors::create_error(7, "NotAllowedError", TURNED_OFF)
     );
+    // Review M6: confirm consumes only the create; the get under the same id is approve's.
+    assert_eq!(svc.pending_len(), (0, 1));
     assert_eq!(
         f.svc.handle(named("passkeyGetApprove", Some(&f.secret))),
         errors::get_error(7, "NotAllowedError", TURNED_OFF)
