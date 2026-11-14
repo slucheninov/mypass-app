@@ -284,6 +284,21 @@ fn attestation_object_key_order_is_fmt_attstmt_authdata() {
 }
 
 #[test]
+fn create_answers_cred_props_rk_true_only_when_requested() {
+    let asked =
+        create_json(None).replace(r#""extensions":{"#, r#""extensions":{"credProps":true,"#);
+    let request = parse_create(ORIGIN, &asked).unwrap();
+    assert!(request.request().cred_props);
+    let resp = response(&perform_create(&request).unwrap().response_json);
+    assert_eq!(
+        resp["clientExtensionResults"],
+        serde_json::json!({"credProps": {"rk": true}})
+    );
+    let resp = response(&perform_create(&create_request(None)).unwrap().response_json);
+    assert_eq!(resp["clientExtensionResults"], serde_json::json!({}));
+}
+
+#[test]
 fn create_response_has_chromium_required_fields() {
     let out = perform_create(&create_request(None)).unwrap();
     let resp = response(&out.response_json);

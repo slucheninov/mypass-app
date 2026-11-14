@@ -50,9 +50,11 @@
 //! **Sign counter.** Always 0. No counter is persisted, so copies of a vault synced between
 //! devices never trip a relying party's clone detection (WebAuthn allows a zero counter).
 //!
-//! **Client extensions.** `clientExtensionResults` is always `{}`. In particular `credProps` is
-//! not answered: it is optional, and a relying party that asked for it treats a missing result as
-//! "unknown" (every MyPass passkey is discoverable anyway).
+//! **Client extensions.** `clientExtensionResults` answers only `credProps`, and only when the
+//! request asked for it: `{"credProps":{"rk":true}}`. That is truthful because every MyPass
+//! passkey is a discoverable credential: it is stored with its user handle and found by rpId alone
+//! when `allowCredentials` is empty. Relying parties use `rk` to offer username-less sign-in.
+//! Everything else (and `credProps` when not requested) is `{}`.
 
 use super::{b64url, cbor, PasskeyError, ValidatedCreate, ValidatedGet, AAGUID};
 use p256::ecdsa::signature::Signer;
@@ -190,6 +192,16 @@ impl PasskeySigningKey {
     }
 }
 
+/// The create response's `clientExtensionResults` (see the module docs): `credProps` with
+/// `rk: true` when requested, since every MyPass passkey is discoverable.
+fn create_extension_results(request: &ValidatedCreate) -> Value {
+    if request.request().cred_props {
+        json!({ "credProps": { "rk": true } })
+    } else {
+        json!({})
+    }
+}
+
 /// `clientDataJSON` in the WebAuthn-recommended member order `type, challenge, origin,
 /// crossOrigin`, with no escaping of `/`. The Swift app used `JSONSerialization`, which escaped
 /// slashes (`https:\/\/x`): valid JSON, but not the canonical form some relying party libraries
@@ -283,7 +295,7 @@ fn create_with(
             "publicKey": b64url::encode(&public_key_der),
             "transports": ["internal"],
         },
-        "clientExtensionResults": {},
+        "clientExtensionResults": create_extension_results(request),
     });
     let private_key_pem = key
         .to_pkcs8_pem(LineEnding::LF)

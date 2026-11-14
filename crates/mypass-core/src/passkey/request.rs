@@ -55,6 +55,8 @@ pub struct CreateContext {
     /// `none` for `none`, an absent value or anything unrecognised (WebAuthn: unknown values are
     /// ignored). This departs from the Swift app, which mapped every non-`none` value to packed.
     pub attestation: String,
+    /// The page asked for the `credProps` client extension (`extensions.credProps: true`).
+    pub cred_props: bool,
 }
 
 impl fmt::Debug for CreateContext {
@@ -64,6 +66,7 @@ impl fmt::Debug for CreateContext {
             .field("user_id_len", &self.user_id.len())
             .field("exclude_credentials", &self.exclude_credential_ids.len())
             .field("attestation", &self.attestation)
+            .field("cred_props", &self.cred_props)
             .finish_non_exhaustive()
     }
 }
@@ -205,6 +208,12 @@ pub fn parse_create(origin_url: &str, json: &str) -> Result<ValidatedCreate, Pas
         Some(list) => credential_descriptors(list)?,
     };
 
+    // Only a JSON `true` asks for it (WebAuthn `credProps` is a boolean input).
+    let cred_props = root
+        .get("extensions")
+        .and_then(|e| e.get("credProps"))
+        .is_some_and(|v| v == &Value::Bool(true));
+
     let origin = validate_origin_in(&root, origin_url, rp_id.as_deref())?;
     let rp_name = rp_name.unwrap_or_else(|| origin.rp_id().to_owned());
     Ok(ValidatedCreate {
@@ -216,6 +225,7 @@ pub fn parse_create(origin_url: &str, json: &str) -> Result<ValidatedCreate, Pas
             user_display_name,
             exclude_credential_ids,
             attestation,
+            cred_props,
         },
         origin,
     })
@@ -558,6 +568,27 @@ mod tests {
             "alice",
             "display name falls back to name"
         );
+    }
+
+    #[test]
+    fn create_reads_cred_props_only_when_true() {
+        for (input, want) in [
+            (Some(json!(true)), true),
+            (Some(json!(false)), false),
+            (Some(json!("true")), false),
+            (Some(json!(1)), false),
+            (None, false),
+        ] {
+            let mut v = create_json(&[-7], None);
+            let mut ext = json!({ "remoteDesktopClientOverride":
+                { "origin": ORIGIN, "sameOriginWithAncestors": true } });
+            if let Some(i) = input.clone() {
+                ext["credProps"] = i;
+            }
+            v["extensions"] = ext;
+            let ctx = parse_create(ORIGIN, &v.to_string()).unwrap();
+            assert_eq!(ctx.request().cred_props, want, "{input:?}");
+        }
     }
 
     #[test]
