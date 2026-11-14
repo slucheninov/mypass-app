@@ -1,12 +1,11 @@
 use super::*;
 use crate::app_core::ErrorCode;
-use crate::scheduler::ManualScheduler;
+use crate::scheduler::{ManualScheduler, ThreadScheduler};
 use crate::session::{LockReason, SessionDeps};
 use crate::testing::fast_database;
 use mypass_kdbx::test_util::FailingFileIo;
 use mypass_kdbx::{Entry, PlainFileIo, Timestamp};
 use secrecy::SecretString;
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::mpsc;
 use std::time::SystemTime;
@@ -151,6 +150,7 @@ fn world_in(tmp: TempDir, folder: PathBuf) -> World {
         &paths,
         watch.clone(),
     );
+    settle_after_every_job(&scheduler, &sync);
     let statuses = Arc::new(Mutex::new(Vec::new()));
     let log = statuses.clone();
     sync.add_observer(Arc::new(move |s: &SecondaryStatus| {
@@ -168,6 +168,23 @@ fn world_in(tmp: TempDir, folder: PathBuf) -> World {
         folder,
         statuses,
     }
+}
+
+/// The deadlock bound of every wait on the worker (never a timing rule).
+const WORKER_BOUND: Duration = Duration::from_secs(20);
+
+/// Every scheduler job of the service only queues a run on its worker; waiting for the worker
+/// after each job keeps the manual timeline exactly as if the job had run the sync inline.
+fn settle_after_every_job(scheduler: &ManualScheduler, sync: &SecondarySync) {
+    let weak = Arc::downgrade(&sync.0);
+    scheduler.set_after_job(Some(Arc::new(move || {
+        if let Some(shared) = weak.upgrade() {
+            assert!(
+                SecondarySync(shared).wait_idle(WORKER_BOUND),
+                "the sync worker did not go idle"
+            );
+        }
+    })));
 }
 
 fn titles(db: &Database) -> Vec<String> {
@@ -791,13 +808,21 @@ fn crash_at(point: fn(&Probe) -> &Hook) {
     let w = world();
     w.open();
     w.foreign_add("B");
-    w.set_hook(point(w.sync.probe()), || panic!("simulated crash"));
+    let reached = Arc::new(AtomicBool::new(false));
+    let flag = reached.clone();
+    w.set_hook(point(w.sync.probe()), move || {
+        flag.store(true, Ordering::SeqCst);
+        panic!("simulated crash")
+    });
     w.add("A");
     w.advance(1);
-    let crashed = catch_unwind(AssertUnwindSafe(|| {
-        w.advance(SECONDARY_PUSH_DEBOUNCE.as_secs())
-    }));
-    assert!(crashed.is_err(), "the crash point was reached");
+    // The panic ends the run on the worker (contained there, like a process that died at this
+    // point: nothing after it runs).
+    w.advance(SECONDARY_PUSH_DEBOUNCE.as_secs());
+    assert!(
+        reached.load(Ordering::SeqCst),
+        "the crash point was reached"
+    );
     assert_eq!(w.remote_titles(), v(&["A", "B"]));
     let w = w.restart();
     assert_eq!(w.live_titles(), v(&["A", "B"]));
@@ -1068,5 +1093,187 @@ fn folder_that_cannot_be_inspected_is_invalid_not_missing() {
     assert_eq!(
         validate_folder(tmp.path().join("gone").to_str().unwrap(), &primary, FILE),
         Err(SecondaryUnavailable::FolderMissing)
+    );
+}
+
+// ---- CD-sched: runs happen on the service's own worker, never on the scheduler ----
+
+/// A world on the production `ThreadScheduler`, with a `during_engine` hook that parks the first
+/// run inside the engine (a hung network folder) until the test releases it.
+struct Hung {
+    tmp: TempDir,
+    scheduler: Arc<ThreadScheduler>,
+    session: VaultSession,
+    sync: SecondarySync,
+    watch: Arc<FakeWatch>,
+    folder: PathBuf,
+    entered: mpsc::Receiver<()>,
+    release: mpsc::Sender<()>,
+}
+
+fn hung_world() -> Hung {
+    let tmp = tempfile::tempdir().unwrap();
+    let folder = tmp.path().join("secondary");
+    fs::create_dir_all(&folder).unwrap();
+    fs::create_dir_all(tmp.path().join("vaults")).unwrap();
+    let scheduler = ThreadScheduler::new("test-scheduler").unwrap();
+    let settings = SettingsStore::in_memory();
+    settings
+        .set_secondary_folder(Some(folder.to_string_lossy().into_owned()))
+        .unwrap();
+    let session = VaultSession::new(SessionDeps {
+        settings: settings.clone(),
+        scheduler: scheduler.clone(),
+        backups_root: tmp.path().join("backups"),
+        file_io: Arc::new(PlainFileIo),
+    });
+    let watch = Arc::new(FakeWatch::default());
+    let sync = SecondarySync::with_watch(
+        session.clone(),
+        settings,
+        scheduler.clone(),
+        &AppPaths::macos(&tmp.path().join("home")),
+        watch.clone(),
+    );
+    let (entered_tx, entered) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel::<()>();
+    let mut first = true;
+    *sync.probe().during_engine.lock().unwrap() = Some(Box::new(move || {
+        if std::mem::take(&mut first) {
+            entered_tx.send(()).unwrap();
+            // Bounded only against a deadlock of the test itself.
+            let _ = release_rx.recv_timeout(WORKER_BOUND);
+        }
+    }));
+    sync.attach();
+    session
+        .create_vault_with(
+            &tmp.path().join("vaults").join(FILE),
+            pw(),
+            fast_database("Main"),
+        )
+        .unwrap();
+    entered
+        .recv_timeout(WORKER_BOUND)
+        .expect("the arm run reached the engine");
+    Hung {
+        tmp,
+        scheduler,
+        session,
+        sync,
+        watch,
+        folder,
+        entered,
+        release,
+    }
+}
+
+impl Hung {
+    /// Runs `f` on a helper thread; panics when it does not return within the bound.
+    fn returns<R: Send + 'static>(&self, what: &str, f: impl FnOnce() -> R + Send + 'static) -> R {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        rx.recv_timeout(WORKER_BOUND)
+            .unwrap_or_else(|_| panic!("{what} waited for the hung sync"))
+    }
+
+    /// Waits until every job queued on the scheduler so far has run.
+    fn scheduler_barrier(&self) -> bool {
+        let (tx, rx) = mpsc::channel();
+        self.scheduler.schedule(
+            Duration::ZERO,
+            Box::new(move || {
+                let _ = tx.send(());
+            }),
+        );
+        rx.recv_timeout(WORKER_BOUND).is_ok()
+    }
+
+    fn release(&self) {
+        let _ = self.release.send(());
+        assert!(self.sync.wait_idle(WORKER_BOUND), "the worker went idle");
+        let _ = &self.entered;
+        let _ = &self.tmp;
+    }
+}
+
+/// CD-sched: while a run hangs in the engine, the scheduler keeps running other jobs (auto-lock,
+/// autosave), and a lock completes without waiting for the run, which then writes nothing.
+#[test]
+fn a_hung_sync_never_delays_the_scheduler_or_a_lock() {
+    let h = hung_world();
+    assert!(
+        h.scheduler_barrier(),
+        "a scheduler job waited for the hung sync"
+    );
+    let session = h.session.clone();
+    h.returns("lock", move || session.lock(LockReason::Manual));
+    let sync = h.sync.clone();
+    h.returns("status", move || sync.status());
+    h.release();
+    assert!(!h.session.is_unlocked());
+    assert!(
+        !h.folder.join(FILE).exists(),
+        "the run stopped without writing after the lock"
+    );
+}
+
+/// CD-sched: at most one run is in flight; triggers that arrive meanwhile queue one request
+/// each (duplicates dropped) and run after it, one at a time.
+#[test]
+fn at_most_one_run_is_in_flight_and_queued_triggers_coalesce() {
+    let h = hung_world();
+    for _ in 0..3 {
+        h.watch.fire();
+        assert!(h.scheduler_barrier());
+    }
+    assert_eq!(h.sync.probe().engine_runs.load(Ordering::SeqCst), 1);
+    {
+        let w = lock(&h.sync.0.worker.state);
+        assert!(w.running);
+        assert_eq!(w.queue.len(), 1, "three pulls coalesced into one request");
+    }
+    h.release();
+    // The queued pull found this device's own upload (an echo): no second engine run.
+    assert_eq!(h.sync.probe().engine_runs.load(Ordering::SeqCst), 1);
+    assert!(h.folder.join(FILE).is_file());
+}
+
+/// CD-sched: `shutdown` returns while a run hangs; the run then stops without writing, the
+/// worker ends and nothing runs afterwards.
+#[test]
+fn shutdown_returns_at_once_and_stops_the_worker() {
+    let h = hung_world();
+    let sync = h.sync.clone();
+    h.returns("shutdown", move || sync.shutdown());
+    h.release();
+    assert!(lock(&h.sync.0.worker.state).shutdown);
+    assert!(!h.folder.join(FILE).exists());
+    assert_eq!(h.sync.sync_now().unwrap(), h.sync.status());
+    h.watch.fire();
+    assert!(h.scheduler_barrier());
+    assert!(h.sync.wait_idle(WORKER_BOUND));
+    assert_eq!(h.sync.probe().engine_runs.load(Ordering::SeqCst), 1);
+    assert!(!h.folder.join(FILE).exists());
+}
+
+/// CD-sched: a vault switch while a run hangs is not blocked either, and the run never writes
+/// the old vault's content after it.
+#[test]
+fn a_vault_switch_is_not_blocked_by_a_hung_sync() {
+    let h = hung_world();
+    let session = h.session.clone();
+    let second = h.tmp.path().join("vaults").join("second.kdbx");
+    h.returns("switch", move || {
+        session
+            .create_vault_with(&second, pw(), fast_database("Second"))
+            .unwrap()
+    });
+    h.release();
+    assert!(
+        !h.folder.join(FILE).exists(),
+        "nothing written for the old vault"
     );
 }

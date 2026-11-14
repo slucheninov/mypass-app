@@ -51,13 +51,25 @@
 //! - **Echoes.** The engine notes its own writes in an `EchoFilter`; a watcher event whose remote
 //!   content is exactly what this device last wrote runs no engine call.
 //!
+//! - **Runs never block the scheduler.** Every run happens on the service's own worker thread
+//!   (`mypass-secondary-sync`, started on first use). Scheduler jobs, watcher events and
+//!   `sync_now` only queue a request, so a hung folder (a stalled network share) delays nothing
+//!   else on the scheduler. At most one run is in flight; queued requests are kept in order,
+//!   duplicates of a queued request are dropped and requests of an earlier arm are discarded when
+//!   a newer one arrives. Lock, unlock, a vault switch, a folder change and quitting never wait
+//!   for the worker: they bump the epoch or the session incarnation, and the run in flight stops
+//!   at its next check (before every attempt, remote decryption and remote write) without
+//!   writing. [`SecondarySync::shutdown`] (the app's exit) disarms and stops the worker without
+//!   waiting; [`SecondarySync::wait_idle`] waits for it with a bound. A panic inside a run is
+//!   contained, so one faulty run cannot stop syncing.
+//!
 //! Nothing here logs; statuses and errors carry codes only (R37).
 //!
 //! Locking discipline: the run gate (one run at a time) is taken before the session lock and the
 //! session lock is held only for the snapshot, the adoption and the durability check, never
 //! across remote I/O; the service's state lock is never held while calling the session, the
 //! scheduler's jobs or a watcher's `stop` (which joins the watcher thread, whose callback takes
-//! the state lock).
+//! the state lock). The worker queue's lock is a leaf: nothing else is taken while holding it.
 
 use crate::app_core::ApiError;
 use crate::saving::same_content;
@@ -74,11 +86,15 @@ use mypass_sync::{
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::collections::VecDeque;
 use std::fs;
 use std::io::ErrorKind;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, RwLock, Weak};
+use std::sync::mpsc;
+use std::sync::{Arc, Condvar, Mutex, PoisonError, RwLock, Weak};
+use std::thread::ThreadId;
 use std::time::{Duration, UNIX_EPOCH};
 
 /// Delay between a completed primary save and the push to the secondary folder.
@@ -88,6 +104,8 @@ pub const SECONDARY_RETRY: Duration = Duration::from_secs(300);
 /// First delay before a folder watcher that failed to start is tried again; it doubles on every
 /// further failure, up to [`SECONDARY_RETRY`].
 pub const SECONDARY_WATCH_RETRY_MIN: Duration = Duration::from_secs(5);
+/// The name of the service's worker thread, which runs every sync.
+pub const SECONDARY_WORKER_THREAD: &str = "mypass-secondary-sync";
 /// Folder under `AppPaths::data_dir` that holds one checkpoint folder per vault id.
 pub const SYNC_STATE_DIR: &str = "sync";
 /// How many flushes a run tries while edits keep arriving before it leaves the checkpoint for
@@ -359,6 +377,86 @@ fn run_hook(hook: &Hook) {
     }
 }
 
+/// One request for the worker.
+struct Request {
+    kind: RunKind,
+    epoch: u64,
+    /// `sync_now` waits here for the status its run ends with (dropped unanswered when the
+    /// request is discarded).
+    reply: Option<mpsc::Sender<SecondaryStatus>>,
+}
+
+#[derive(Default)]
+struct WorkState {
+    queue: VecDeque<Request>,
+    /// A run is in flight.
+    running: bool,
+    /// The worker thread, once started.
+    thread: Option<ThreadId>,
+    /// The worker stopped (or must stop); nothing is queued any more.
+    shutdown: bool,
+}
+
+/// The queue between the triggers (scheduler jobs, `sync_now`) and the worker thread.
+#[derive(Default)]
+struct Worker {
+    state: Mutex<WorkState>,
+    /// Signalled when a request is queued or the worker must stop.
+    wake: Condvar,
+    /// Signalled when the worker goes idle (nothing queued, no run in flight) or stops.
+    idle: Condvar,
+}
+
+impl Worker {
+    fn stop(&self) {
+        let mut w = lock(&self.state);
+        w.shutdown = true;
+        let dropped = std::mem::take(&mut w.queue);
+        drop(w);
+        // Unanswered replies tell their `sync_now` callers to stop waiting.
+        drop(dropped);
+        self.wake.notify_all();
+        self.idle.notify_all();
+    }
+}
+
+/// The worker thread: runs one request at a time until the service is gone or stopped. Holds
+/// the service only while a run is in flight.
+fn worker_loop(worker: &Worker, service: &Weak<Shared>) {
+    loop {
+        let request = {
+            let mut w = lock(&worker.state);
+            loop {
+                if w.shutdown {
+                    w.running = false;
+                    worker.idle.notify_all();
+                    return;
+                }
+                if let Some(request) = w.queue.pop_front() {
+                    w.running = true;
+                    break request;
+                }
+                w.running = false;
+                worker.idle.notify_all();
+                w = worker.wake.wait(w).unwrap_or_else(PoisonError::into_inner);
+            }
+        };
+        let Some(shared) = service.upgrade() else {
+            worker.stop();
+            return;
+        };
+        let me = SecondarySync(shared);
+        let status = catch_unwind(AssertUnwindSafe(|| me.run(request.kind, request.epoch)));
+        if let (Some(reply), Ok(status)) = (request.reply, status) {
+            let _ = reply.send(status);
+        }
+        // Possibly the last handle: dropping it stops the worker (see `Drop for Shared`), and
+        // must happen without the queue lock.
+        drop(me);
+        lock(&worker.state).running = false;
+    }
+}
+
 struct Shared {
     session: VaultSession,
     settings: SettingsStore,
@@ -371,8 +469,15 @@ struct Shared {
     run_gate: Mutex<()>,
     observers: RwLock<Vec<SecondaryObserver>>,
     attached: AtomicBool,
+    worker: Arc<Worker>,
     #[cfg(test)]
     probe: Probe,
+}
+
+impl Drop for Shared {
+    fn drop(&mut self) {
+        self.worker.stop();
+    }
 }
 
 /// The secondary-folder sync service (cheap to clone; every clone is the same service).
@@ -438,6 +543,7 @@ impl SecondarySync {
             run_gate: Mutex::new(()),
             observers: RwLock::new(Vec::new()),
             attached: AtomicBool::new(false),
+            worker: Arc::new(Worker::default()),
             #[cfg(test)]
             probe: Probe::default(),
         }))
@@ -481,6 +587,11 @@ impl SecondarySync {
 
     /// Syncs now (push and pull) and returns the resulting status. `Off` when no folder is set;
     /// `Locked` / `NoVault` unless a vault is open.
+    ///
+    /// The run happens on the worker after the requests queued before it; this call waits for
+    /// its result (blocking: a command thread, never the main thread). A lock, vault switch or
+    /// quit meanwhile ends that run early; a call from the worker itself (a status observer)
+    /// answers the current status without waiting.
     pub fn sync_now(&self) -> Result<SecondaryStatus, ApiError> {
         if self.0.settings.get().secondary_folder.is_none() {
             self.rearm();
@@ -488,16 +599,139 @@ impl SecondarySync {
         }
         self.0.session.with_db(|_| ())?;
         self.rearm();
+        if self.on_worker_thread() {
+            return Ok(self.status());
+        }
         let epoch = lock(&self.0.state).epoch;
-        Ok(self.run(RunKind::Now, epoch))
+        let (reply, answer) = mpsc::channel();
+        if !self.enqueue(RunKind::Now, epoch, Some(reply)) {
+            return Ok(self.status());
+        }
+        Ok(answer.recv().unwrap_or_else(|_| self.status()))
+    }
+
+    /// Disarms and stops the worker, for the app's exit. Returns at once: a run in flight stops
+    /// at its next check without writing (the quitting session refuses it anyway) and the worker
+    /// thread then ends. Nothing is synced afterwards; [`SecondarySync::wait_idle`] waits for
+    /// the worker with a bound.
+    pub fn shutdown(&self) {
+        let (old, changed) = {
+            let mut st = lock(&self.0.state);
+            st.epoch = st.epoch.wrapping_add(1);
+            st.jobs.cancel_all();
+            let old = st.armed.take();
+            let status = SecondaryStatus::Idle {
+                last_sync: old
+                    .as_ref()
+                    .and_then(|a| last_sync_for(&st, Some(&a.key.vault_id), &a.key.folder)),
+            };
+            let changed = old.is_some().then(|| set_status(&mut st, status)).flatten();
+            (old, changed)
+        };
+        self.0.worker.stop();
+        if let Some(watcher) = old.and_then(|a| a.watcher) {
+            watcher.stop();
+        }
+        if let Some(status) = changed {
+            self.notify(&status);
+        }
+    }
+
+    /// Waits until nothing is queued and no run is in flight (or the worker stopped), at most
+    /// `timeout`; `true` when it is idle. `false` at once on the worker thread itself.
+    pub fn wait_idle(&self, timeout: Duration) -> bool {
+        if self.on_worker_thread() {
+            return false;
+        }
+        let w = lock(&self.0.worker.state);
+        let (w, _) = self
+            .0
+            .worker
+            .idle
+            .wait_timeout_while(w, timeout, |w| {
+                !(w.shutdown && !w.running || w.queue.is_empty() && !w.running)
+            })
+            .unwrap_or_else(PoisonError::into_inner);
+        !w.running && (w.shutdown || w.queue.is_empty())
+    }
+
+    fn on_worker_thread(&self) -> bool {
+        lock(&self.0.worker.state).thread == Some(std::thread::current().id())
+    }
+
+    /// Hands a run to the worker (starting it on first use) and returns at once; `false` when
+    /// the request was not queued (stopped worker, superseded epoch, no thread). Requests of an
+    /// earlier arm are dropped, and so is a duplicate of a request already queued.
+    fn enqueue(
+        &self,
+        kind: RunKind,
+        epoch: u64,
+        reply: Option<mpsc::Sender<SecondaryStatus>>,
+    ) -> bool {
+        let current = lock(&self.0.state).epoch;
+        if epoch != current {
+            return false;
+        }
+        let started = {
+            let mut w = lock(&self.0.worker.state);
+            if w.shutdown {
+                return false;
+            }
+            w.queue.retain(|r| r.epoch == current);
+            let duplicate = reply.is_none()
+                && w.queue
+                    .iter()
+                    .any(|r| r.kind == kind && r.epoch == epoch && r.reply.is_none());
+            if !duplicate {
+                w.queue.push_back(Request { kind, epoch, reply });
+            }
+            // Started under the queue lock, so two triggers never start two workers; the new
+            // thread waits for this lock before it looks at the queue.
+            let started = w.thread.is_some() || self.spawn_worker(&mut w);
+            if started {
+                self.0.worker.wake.notify_one();
+            } else {
+                w.queue.clear();
+            }
+            started
+        };
+        if !started {
+            self.finish(
+                epoch,
+                Outcome::Failed(SyncError::Storage(StorageError::Io(
+                    "the sync worker could not start".into(),
+                ))),
+            );
+            return false;
+        }
+        true
+    }
+
+    /// Starts the worker thread (the caller holds the queue lock); `false` when the OS refused
+    /// a thread.
+    fn spawn_worker(&self, w: &mut WorkState) -> bool {
+        let worker = self.0.worker.clone();
+        let service = Arc::downgrade(&self.0);
+        let spawned = std::thread::Builder::new()
+            .name(SECONDARY_WORKER_THREAD.to_owned())
+            .spawn(move || worker_loop(&worker, &service));
+        match spawned {
+            Ok(handle) => {
+                w.thread = Some(handle.thread().id());
+                true
+            }
+            Err(_) => false,
+        }
     }
 
     /// Clears the secondary folder setting and stops syncing; the copy in the folder is left as
     /// it is. The current vault's checkpoint is cleared (best effort), so a later connect merges
-    /// with whatever the folder then holds instead of writing over it.
+    /// with whatever the folder then holds instead of writing over it. The setting goes first
+    /// and disarms, so a run in flight stops at its next check instead of being waited out.
     pub fn disconnect(&self) -> Result<(), ApiError> {
-        let _gate = lock(&self.0.run_gate);
         self.0.settings.set_secondary_folder(None)?;
+        self.rearm();
+        let _gate = lock(&self.0.run_gate);
         if let (Some(vault_id), Some(primary)) =
             (self.0.session.vault_id(), self.0.session.vault_path())
         {
@@ -508,7 +742,6 @@ impl SecondarySync {
                 let _ = FileCheckpointStore::new(path).save(None);
             }
         }
-        self.rearm();
         Ok(())
     }
 
@@ -605,7 +838,7 @@ impl SecondarySync {
             if let Some(shared) = weak.upgrade() {
                 let me = SecondarySync(shared);
                 if me.take_job(slot, id, epoch) {
-                    me.run(kind, epoch);
+                    me.enqueue(kind, epoch, None);
                 }
             }
         });
