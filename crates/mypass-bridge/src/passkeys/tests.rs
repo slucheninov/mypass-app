@@ -114,6 +114,14 @@ fn set_enabled_persists_and_returns_stored_value() {
         Response::PasskeyProxyEnabled { enabled: true }
     );
     assert!(SettingsStore::load(path).get().passkey_proxy_enabled);
+}
+
+/// Unix only: on Windows a read under a regular file is `NotFound`, so the store does not degrade.
+#[cfg(unix)]
+#[test]
+fn set_enabled_on_a_degraded_store_answers_the_in_memory_value() {
+    let (f, svc) = passkey_fx();
+    let dir = tempfile::tempdir().unwrap();
 
     // A store that cannot write (its file sits under a regular file, so the read at load fails
     // and the store runs degraded): the new value is still in force in memory for this run, and
