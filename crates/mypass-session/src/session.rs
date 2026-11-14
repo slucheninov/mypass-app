@@ -127,6 +127,22 @@ pub enum SessionEvent {
 /// A session observer; runs after the session lock is released, on the calling thread.
 pub type Observer = Arc<dyn Fn(&SessionEvent) + Send + Sync>;
 
+/// Told the vault id after the user's typed master password opened, created or unlocked the
+/// vault (also a reopen of the vault already open, which emits no state change). Never told about
+/// an unlock with a password that came from somewhere else (device unlock). Runs after the
+/// session lock is released, on the calling thread.
+pub type PasswordListener = Arc<dyn Fn(&str) + Send + Sync>;
+
+/// What [`VaultSession::unlock_if_incarnation`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConditionalUnlock {
+    /// The locked vault of that incarnation is now unlocked.
+    Unlocked,
+    /// The session no longer holds that locked vault (it was unlocked, locked again, switched or
+    /// relocated meanwhile); nothing was installed.
+    Superseded,
+}
+
 /// Why the password generator could not produce a value (raised from Task 12).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum GeneratorRulesError {
@@ -421,6 +437,7 @@ pub(crate) struct Shared {
     pub(crate) idle: Condvar,
     pub(crate) io: Arc<SwitchIo>,
     observers: RwLock<Vec<Observer>>,
+    password_listeners: RwLock<Vec<PasswordListener>>,
     pub(crate) deps: SessionDeps,
     pub(crate) backups: BackupManager,
 }
@@ -470,6 +487,7 @@ impl VaultSession {
             idle: Condvar::new(),
             io,
             observers: RwLock::new(Vec::new()),
+            password_listeners: RwLock::new(Vec::new()),
             deps,
             backups,
         }))
@@ -488,6 +506,32 @@ impl VaultSession {
             .write()
             .unwrap_or_else(PoisonError::into_inner)
             .push(o);
+    }
+
+    /// Registers a [`PasswordListener`] for every later typed-password open, create or unlock.
+    pub fn add_password_listener(&self, l: PasswordListener) {
+        self.0
+            .password_listeners
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(l);
+    }
+
+    /// Tells the password listeners that the typed password opened `vault_id`. Called after the
+    /// session lock is released.
+    fn password_entered(&self, vault_id: Option<String>) {
+        let Some(id) = vault_id else {
+            return;
+        };
+        let listeners = self
+            .0
+            .password_listeners
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        for l in &listeners {
+            l(&id);
+        }
     }
 
     /// The current status (stats the vault file once, outside the session lock).
@@ -594,12 +638,14 @@ impl VaultSession {
             inner.fresh_file = fresh;
             out.state_changed = true;
             out.vault_changed = true;
-            inner.path.clone()
+            (inner.path.clone(), inner.vault_id.clone())
         };
+        let (path, vault_id) = path;
         if let Some(p) = path {
             self.remember(&p);
         }
         self.emit(out);
+        self.password_entered(vault_id);
         Ok(())
     }
 
@@ -684,6 +730,53 @@ impl VaultSession {
     /// password that opens the disk but not the kept edits (or the reverse) is `WrongPassword`
     /// and keeps them; see the module docs for the recovery path.
     pub fn unlock(&self, password: SecretString) -> Result<(), SessionError> {
+        self.unlock_inner(password, None).map(|_| ())
+    }
+
+    /// The locked vault right now, as `(incarnation, vault id)`: what a device unlock binds its
+    /// prompt to. `None` unless a vault is open, locked and the session is not quitting.
+    pub(crate) fn locked_binding(&self) -> Option<(u64, String)> {
+        let inner = lock(&self.0.inner);
+        if inner.quitting || inner.db.is_some() || inner.path.is_none() {
+            return None;
+        }
+        inner.vault_id.clone().map(|id| (inner.incarnation, id))
+    }
+
+    /// Unlocks with a password that did not come from the user's keyboard (device unlock), and
+    /// only the locked vault of `incarnation` (see [`VaultSession::locked_binding`]): the check
+    /// happens before the KDF and again, atomically, at the install. Any change in between (an
+    /// unlock by other means, a lock, a switch to another vault or another copy of the same one,
+    /// a relocation) gives [`ConditionalUnlock::Superseded`] and installs nothing. The
+    /// [`PasswordListener`]s are not told.
+    pub(crate) fn unlock_if_incarnation(
+        &self,
+        password: SecretString,
+        incarnation: u64,
+    ) -> Result<ConditionalUnlock, SessionError> {
+        self.unlock_inner(password, Some(incarnation))
+    }
+
+    /// The unlocked vault's id and a copy of its password, read in one acquisition of the session
+    /// lock (so the two always belong to the same vault). For device-unlock enrolment; the copy is
+    /// zeroized on drop and never logged.
+    pub(crate) fn identity_with_password(&self) -> Result<(String, SecretString), SessionError> {
+        let inner = lock(&self.0.inner);
+        match (&inner.db, &inner.password, &inner.vault_id) {
+            (Some(_), Some(p), Some(id)) => Ok((id.clone(), p.clone())),
+            _ => Err(inner.not_unlocked()),
+        }
+    }
+
+    /// [`VaultSession::unlock`] (`expected` is `None`: a typed password, listeners told) or
+    /// [`VaultSession::unlock_if_incarnation`] (`expected` is the incarnation, listeners not told).
+    fn unlock_inner(
+        &self,
+        password: SecretString,
+        expected: Option<u64>,
+    ) -> Result<ConditionalUnlock, SessionError> {
+        let superseded =
+            |inner: &Inner| expected.is_some_and(|i| i != inner.incarnation || inner.db.is_some());
         // The KDF runs without the session lock; a retry write that consumed the kept edits
         // meanwhile makes the loop start over with the new state.
         for _ in 0..3 {
@@ -692,9 +785,15 @@ impl VaultSession {
                 if inner.quitting {
                     return Err(SessionError::Quitting);
                 }
+                if superseded(&inner) {
+                    return Ok(ConditionalUnlock::Superseded);
+                }
                 if inner.db.is_some() {
+                    let vault_id = inner.vault_id.clone();
                     drop(inner);
-                    return self.verify_password(&password);
+                    self.verify_password(&password)?;
+                    self.password_entered(vault_id);
+                    return Ok(ConditionalUnlock::Unlocked);
                 }
                 let path = inner.path.clone().ok_or(SessionError::NoVault)?;
                 (path, inner.pending_bytes.clone(), inner.disk_meta.clone())
@@ -711,15 +810,21 @@ impl VaultSession {
             };
             let had_pending = restored.is_some();
             let mut out = Outbox::default();
-            {
+            let vault_id = {
                 let mut inner = self.wait_idle(lock(&self.0.inner));
                 if inner.quitting {
                     return Err(SessionError::Quitting);
                 }
+                if superseded(&inner) {
+                    return Ok(ConditionalUnlock::Superseded);
+                }
                 if inner.db.is_some() || inner.path.as_deref() != Some(path.as_path()) {
                     // Another call unlocked or switched vaults meanwhile; that state wins.
+                    let vault_id = inner.vault_id.clone();
                     drop(inner);
-                    return self.verify_password(&password);
+                    self.verify_password(&password)?;
+                    self.password_entered(vault_id);
+                    return Ok(ConditionalUnlock::Unlocked);
                 }
                 if inner.pending_bytes != pending {
                     continue;
@@ -739,13 +844,17 @@ impl VaultSession {
                 }
                 out.state_changed = true;
                 out.vault_changed = true;
-            }
+                inner.vault_id.clone()
+            };
             self.emit(out);
+            if expected.is_none() {
+                self.password_entered(vault_id);
+            }
             if had_pending {
                 // A failure shows as `Failed` and schedules a retry; the unlock itself succeeded.
                 let _ = self.flush();
             }
-            return Ok(());
+            return Ok(ConditionalUnlock::Unlocked);
         }
         Err(SessionError::Io(
             "the unsaved changes were being written; try again".into(),
