@@ -157,10 +157,13 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     // The bridge starts even while the vault is locked. A start failure (an unreadable pairing
     // list, a port that cannot be bound) leaves the app running; the Browser pane shows
     // `listening: false` and, for the pairing list, offers the reset.
+    // One gate for every settings emitter: `settings_update` and the bridge's passkey toggle.
+    let settings_gate = Arc::new(Mutex::new(()));
     let bridge = build_state(
         &core,
         windows.clone(),
         Arc::new(TauriBridgeEvents(handle.clone())),
+        Arc::clone(&settings_gate),
     );
     app.manage(bridge.clone());
     // The start reads the pairing list from the Keychain and binds the port: never on the main
@@ -179,7 +182,7 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         grants,
         windows,
         effects: Arc::new(ShellEffects::new(core, target)),
-        settings_gate: Arc::new(Mutex::new(())),
+        settings_gate,
     });
     Ok(())
 }

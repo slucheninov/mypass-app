@@ -162,6 +162,8 @@ pub fn pairing_changed(
 pub struct TauriBridgeUi {
     core: Arc<AppCore>,
     events: Arc<dyn BridgeEvents>,
+    /// The settings gate of `settings_update` (`ShellState::settings_gate`).
+    settings_gate: Arc<Mutex<()>>,
     windows: Arc<dyn WindowOps>,
     pairing: Arc<PairingManager>,
     pairing_window: Arc<PairingWindow>,
@@ -245,7 +247,14 @@ impl BridgeUi for TauriBridgeUi {
     fn passkey_proxy_changed(&self, _enabled: bool) {
         // The whole stored snapshot, not just the flag: the settings store of every window
         // replaces its copy with what `SettingsChanged` carries (one source of truth, no event
-        // of its own for this one field).
+        // of its own for this one field). Read and emitted under the gate `settings_update`
+        // holds for its read, write and emit, so the two emitters cannot interleave and leave a
+        // window with an older snapshot than the store (each one reads what is stored when it
+        // emits, in gate order). This runs on a bridge connection thread, never the main thread.
+        let _serial = self
+            .settings_gate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         self.events.settings_changed(self.core.settings.get());
     }
 }
@@ -300,6 +309,7 @@ pub fn start_bridge(
     core: &Arc<AppCore>,
     windows: Arc<dyn WindowOps>,
     events: Arc<dyn BridgeEvents>,
+    settings_gate: Arc<Mutex<()>>,
     bundled_host: Option<PathBuf>,
 ) -> Result<BridgeHandle, BridgeStartError> {
     let platform = core.platform();
@@ -331,6 +341,7 @@ pub fn start_bridge(
     let ui: Arc<dyn BridgeUi> = Arc::new(TauriBridgeUi {
         core: Arc::clone(core),
         events: Arc::clone(&events),
+        settings_gate,
         windows,
         pairing: Arc::clone(&pairing),
         pairing_window,
@@ -543,11 +554,13 @@ pub fn extension_folder(
         .find(|candidate| candidate.is_dir())
 }
 
-/// The production [`BridgeState`]: starts over `core` with the real windows and events.
+/// The production [`BridgeState`]: starts over `core` with the real windows and events, and the
+/// settings gate shared with `settings_update`.
 pub fn build_state(
     core: &Arc<AppCore>,
     windows: Arc<dyn WindowOps>,
     events: Arc<dyn BridgeEvents>,
+    settings_gate: Arc<Mutex<()>>,
 ) -> BridgeState {
     let bundled_host = std::env::current_exe()
         .ok()
@@ -561,6 +574,7 @@ pub fn build_state(
                 &core,
                 Arc::clone(&windows),
                 Arc::clone(&events),
+                Arc::clone(&settings_gate),
                 host.clone(),
             )
         })
@@ -627,6 +641,8 @@ pub(crate) mod test_support {
         pub events: Arc<RecordingEvents>,
         pub windows: Arc<FakeWindowOps>,
         pub state: BridgeState,
+        /// The settings gate the bridge shares with `settings_update`.
+        pub settings_gate: Arc<Mutex<()>>,
     }
 
     impl Fixture {
@@ -651,16 +667,19 @@ pub(crate) mod test_support {
         let w = shared_world(open);
         let events = Arc::new(RecordingEvents::default());
         let windows = Arc::new(FakeWindowOps::default());
+        let settings_gate = Arc::new(Mutex::new(()));
         let starter = {
             let core = Arc::clone(&w.core);
             let windows: Arc<dyn WindowOps> = windows.clone();
             let events: Arc<dyn BridgeEvents> = events.clone();
             let host = bundled_host.clone();
+            let gate = Arc::clone(&settings_gate);
             Box::new(move || {
                 start_bridge(
                     &core,
                     Arc::clone(&windows),
                     Arc::clone(&events),
+                    Arc::clone(&gate),
                     host.clone(),
                 )
             })
@@ -676,6 +695,7 @@ pub(crate) mod test_support {
             events,
             windows,
             state,
+            settings_gate,
         }
     }
 
@@ -1151,6 +1171,34 @@ mod tests {
         assert_eq!(toggle(true)["enabled"], true);
         assert_eq!(f.events.count("settings_changed"), 2);
         assert!(lock(&f.events.settings)[1].passkey_proxy_enabled);
+    }
+
+    #[test]
+    fn passkey_proxy_snapshot_is_emitted_under_the_settings_gate() {
+        let f = fixture(true);
+        let secret = pair(&f);
+        let handle = f.handle();
+        // A `settings_update` in progress holds the gate.
+        let held = f.settings_gate.lock().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let r = ask(
+                &handle,
+                &serde_json::json!({
+                    "type": "setPasskeyProxyEnabled", "enabled": false, "pairing": secret
+                }),
+            );
+            tx.send(r).unwrap();
+        });
+        // The toggle is stored but its snapshot waits for the gate. (A wrong implementation can
+        // only make this pass late, never fail spuriously.)
+        assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+        assert_eq!(f.events.count("settings_changed"), 0);
+        drop(held);
+        assert_eq!(rx.recv().unwrap()["enabled"], false);
+        worker.join().unwrap();
+        assert_eq!(f.events.count("settings_changed"), 1);
+        assert!(!lock(&f.events.settings)[0].passkey_proxy_enabled);
     }
 
     /// A create request as Chrome hands it over (origin in the proxy override, ES256 offered).

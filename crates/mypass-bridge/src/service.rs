@@ -97,7 +97,14 @@ impl BridgeService {
         // with a new path: a proposal made for the old vault must not be taken into the new one,
         // and a pending passkey ceremony (its candidates are entry ids of the old vault) must not
         // be confirmed or approved against the new one.
-        let open_path: Mutex<Option<String>> = Mutex::new(None);
+        // Seeded with the vault already open at registration (the bridge can start, or restart,
+        // while a vault is unlocked), so the first switch after that is seen as a switch too.
+        let status = self.deps.session.status();
+        let open_path: Mutex<Option<String>> = Mutex::new(
+            (status.state == SessionState::Unlocked)
+                .then_some(status.vault_path)
+                .flatten(),
+        );
         self.deps
             .session
             .add_observer(Arc::new(move |e: &SessionEvent| {
@@ -272,6 +279,49 @@ mod tests {
     use mypass_session::session::LockReason;
     use std::sync::atomic::Ordering;
     use zeroize::Zeroizing;
+
+    #[test]
+    fn observer_registered_while_unlocked_sees_the_first_vault_switch() {
+        let f = fx();
+        assert!(f.session.is_unlocked());
+        // A second service registered after the vault was opened (a bridge restart).
+        let recording = Arc::new(RecordingPasskeys::default());
+        let proposals = Arc::new(ProposalStore::new(f.sched.clone()));
+        let _late = BridgeService::new(BridgeDeps {
+            session: f.session.clone(),
+            autolock: mypass_session::autolock::AutoLock::new(
+                f.session.clone(),
+                f.settings.clone(),
+                f.sched.clone(),
+            ),
+            settings: f.settings.clone(),
+            scheduler: f.sched.clone(),
+            pairing: Arc::new(
+                PairingManager::new(
+                    crate::pairing::PairedBrowserStore::new(
+                        mypass_platform::testing::InMemorySecretStore::new(),
+                    ),
+                    f.sched.clone(),
+                )
+                .unwrap(),
+            ),
+            diagnostics: Arc::new(DiagnosticsStore::new()),
+            proposals,
+            ui: f.ui.clone(),
+            passkeys: recording.clone(),
+        });
+        // A direct switch to another vault: its first `StateChanged` is already `Unlocked`.
+        let dir = tempfile::tempdir().unwrap();
+        f.session
+            .create_vault_with(
+                &dir.path().join("other.kdbx"),
+                secrecy::SecretString::from("pw".to_owned()),
+                mypass_session::testing::fast_database("Other"),
+            )
+            .unwrap();
+        assert!(f.session.is_unlocked());
+        assert_eq!(recording.locked.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn request_table_matches_wire_types() {
