@@ -91,6 +91,7 @@ describe("detail row", () => {
     expect(detailCalls(fake)).toHaveLength(0);
     expect(text()).not.toContain(FIXTURE_PASSKEY_CREDENTIAL_ID);
     expect(text()).not.toContain("PRIVATE KEY");
+    expect(text()).not.toContain("ann@example.org");
     expect(JSON.stringify(navigation.editModel)).not.toContain(FIXTURE_PASSKEY_CREDENTIAL_ID);
     await user().click(showButton(pane()));
     await waitFor(() => expect(text()).toContain(FIXTURE_PASSKEY_CREDENTIAL_ID));
@@ -160,13 +161,12 @@ describe("editor", () => {
     expect(navigation.editModel?.removePasskey).toBe(false);
   });
 
-  it("editor_save_sends_remove_passkey_true_only_after_remove", async () => {
+  it("editor_save_sends_remove_passkey_false_without_remove", async () => {
     const fake = backendWith([PK]);
     await openEdit(fake, "e-pk");
     await user().click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(calls(fake, "entrySave")).toHaveLength(1));
     expect(savedModel(fake).removePasskey).toBe(false);
-
   });
 
   it("editor_save_after_remove_sends_the_flag_and_the_row_is_gone_after_the_reread", async () => {
@@ -180,6 +180,14 @@ describe("editor", () => {
     // The detail is re-read after the save: the row is gone.
     await screen.findByRole("heading", { name: "Passkeyed" });
     await waitFor(() => expect(within(pane()).queryByRole("group", { name: "Passkey" })).toBeNull());
+  });
+
+  it("focus_moves_to_undo_after_the_remove_is_confirmed", async () => {
+    const fake = backendWith([PK]);
+    await openEdit(fake, "e-pk");
+    await confirmRemoval();
+    const undo = await screen.findByRole("button", { name: "Undo" });
+    await waitFor(() => expect(document.activeElement).toBe(undo));
   });
 
   it("editor_cancel_leaves_passkey_untouched", async () => {

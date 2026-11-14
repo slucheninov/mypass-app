@@ -3,7 +3,7 @@
   // one-time password, notes and custom fields. Title, group and favourite belong to the editor
   // shell. The Generator popover of a later task plugs in through `generatorSlot`, which receives
   // `onuse` (puts the chosen value into the password field) and the first website for the rules.
-  import { onMount, type Snippet } from "svelte";
+  import { onMount, tick, type Snippet } from "svelte";
   import type { EntryEditModel_Serialize } from "../../lib/bindings";
   import { t } from "../../lib/i18n/index.svelte";
   import { onWindowHidden } from "../../lib/secret.svelte";
@@ -104,7 +104,7 @@
             </Button>
           {/if}
           {#if model.removePasskey}
-            <Button variant="plain" onclick={() => (model.removePasskey = false)}>{t("Undo")}</Button>
+            <Button variant="plain" id="passkey-undo" onclick={() => (model.removePasskey = false)}>{t("Undo")}</Button>
           {:else}
             <Button variant="plain" onclick={() => (confirmingRemoval = true)}>{t("Remove")}</Button>
           {/if}
@@ -124,9 +124,13 @@
       <Button onclick={() => (confirmingRemoval = false)}>{t("Cancel")}</Button>
       <Button
         variant="danger"
-        onclick={() => {
+        onclick={async () => {
           model.removePasskey = true;
           confirmingRemoval = false;
+          // The Remove button that opened this dialog is gone now, so the dialog's focus restore has no
+          // target; hand focus to Undo instead of letting it fall to the body.
+          await tick();
+          document.getElementById("passkey-undo")?.focus();
         }}>{t("Remove")}</Button
       >
     {/snippet}
