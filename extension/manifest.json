@@ -1,0 +1,71 @@
+{
+  "manifest_version": 3,
+  "name": "MyPass",
+  "version": "0.6.1",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3g4jQjrf7R0zDFOQTwQGRpzY/Zl1iOChwlpfDJav6F6e5GiRJPy7S9/cC8yFvhJZsVLs49hQgLg+HqL206KziXRnSTFT1+SbxFzIGqwGjW1Q9u0koXFEzpE82kPQlxG6zeFqtjm35cPfhkCu6oqGFtImLBzP9JR2s4n5IMEQabVvKH2KxsKF84RK7+3MkBLJ/0bluRxXv+VpeG20QN6rQr/VTmC0B5YoIChLdM0ObWhBjzJl8VA64VCAYcaPfLVQ4ZSkLdrIFfNIi5Sc8/8Mtil8wJCON+W/ilWZnYakMvV5Y83fafu8lTHCeuNzbxGAObJFWeIoeaILkoiD1PCuRQIDAQAB",
+  "description": "Autofill and save logins from MyPass",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": ["nativeMessaging", "activeTab", "storage", "webAuthenticationProxy", "alarms", "notifications"],
+  "options_ui": { "page": "app/app.html", "open_in_tab": true },
+  "optional_permissions": ["privacy", "management"],
+  "minimum_chrome_version": "127",
+  "background": {
+    "service_worker": "background-loader.js"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      },
+      "description": "Open MyPass"
+    },
+    "lock-vault": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+L",
+        "mac": "Command+Shift+L"
+      },
+      "description": "Lock MyPass"
+    }
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["vendor/jsQR.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "all_frames": true,
+      "js": [
+        "shared/entry-visuals.js",
+        "shared/url-match.js",
+        "shared/bridge-status.js",
+        "shared/base32.js",
+        "shared/form-detection.js",
+        "shared/page-identifier.js",
+        "shared/security-watch.js",
+        "shared/autofill-settings.js",
+        "shared/address-form.js",
+        "shared/totp-detection.js",
+        "shared/placement.js",
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

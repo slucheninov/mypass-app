@@ -22,7 +22,7 @@ function usedKeys(): Set<string> {
 }
 
 // Proper names and the like that read the same in every language.
-const SAME_IN_EVERY_LANGUAGE = new Set(["MyPass", "URL", "English"]);
+const SAME_IN_EVERY_LANGUAGE = new Set(["MyPass", "URL", "English", "Bitwarden", "1Password", "iCloud Passwords"]);
 
 describe("string audit", () => {
   it("no_literal_user_text_survives_in_svelte_files", () => {

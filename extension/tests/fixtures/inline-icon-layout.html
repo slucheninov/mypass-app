@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MyPass inline logo — field layout checks</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { margin: 0; padding: 36px; font: 17px system-ui, sans-serif; background: #fff; color: #222; }
+    main { max-width: 760px; margin: auto; }
+    h1 { font-size: 30px; margin-bottom: 36px; }
+    label { display: block; margin: 22px 0 10px; }
+    input { box-sizing: border-box; width: 100%; height: 64px; padding: 12px; font: inherit;
+      border: 1px solid #007aff; border-radius: 6px; background: #fff; color: #222; }
+    .field { position: relative; }
+    .reveal { position: absolute; right: 8px; top: 12px; width: 40px; height: 40px;
+      display: grid; place-items: center; border: 0; background: transparent; color: inherit; cursor: pointer; }
+    .reveal svg { width: 22px; height: 22px; }
+    .split { display: flex; align-items: center; border: 1px solid #007aff; border-radius: 6px; }
+    .split input { width: calc(100% - 56px); border: 0; }
+    .split .reveal { position: static; flex: 0 0 40px; margin: 0 8px; }
+    .small { width: 72px; height: 26px; padding: 2px; }
+    .tiny { width: 48px; height: 24px; padding: 2px; }
+    .dark { padding: 8px 20px 24px; background: #20252d; color: #eee; border-radius: 8px; }
+    .dark input { background: #20252d; color: #eee; border-color: #667488; }
+    .scroller { height: 150px; overflow: auto; border: 1px solid #aaa; padding: 12px; }
+    .spacer { height: 220px; }
+    p { color: #647084; font-size: 14px; line-height: 1.5; }
+    /* These hostile rules must not resize, move, or hide MyPass overlays. */
+    [data-mypass-inline-icon] { display: none !important; top: 0 !important; left: 0 !important;
+      width: 200px !important; height: 100px !important; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Sign in</h1>
+  <form onsubmit="return false">
+    <label for="username">Username or email address</label>
+    <input id="username" name="username" autocomplete="username">
+    <label for="password">Password — no site control</label>
+    <input id="password" name="password" type="password" autocomplete="current-password">
+    <label for="overlay-password">Password — overlaid reveal button</label>
+    <div class="field">
+      <input id="overlay-password" type="password" autocomplete="current-password">
+      <button class="reveal" type="button" aria-label="Show password" onclick="togglePassword(this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
+    </div>
+    <label for="split-password">Password — separate reveal area</label>
+    <div class="split">
+      <input id="split-password" type="password" autocomplete="current-password">
+      <button class="reveal" type="button" aria-label="Show split password" onclick="togglePassword(this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
+    </div>
+  </form>
+  <p>Plain fields align equally. Reveal controls remain clickable. The split field's logo stays inside its input. Tab to the logo for a visible focus ring. Synthetic clicks cannot open it.</p>
+  <section class="dark">
+    <label for="dark-password">Dark field</label>
+    <input id="dark-password" type="password">
+  </section>
+  <label for="small-password">Compact field (logo fits)</label>
+  <input id="small-password" class="small" type="password">
+  <label for="tiny-password">Tiny field (use the extension popup)</label>
+  <input id="tiny-password" class="tiny" type="password">
+  <label for="scroll-password">Scroll inside this box</label>
+  <div class="scroller">
+    <div class="spacer"></div>
+    <input id="scroll-password" type="password">
+    <div class="spacer"></div>
+  </div>
+  <p>Scroll the field fully outside the box: its logo must disappear, then return when the field is visible. Check at 100% and 200% browser zoom and narrow window widths. Input attributes and styles must remain unchanged after the extension attaches.</p>
+</main>
+<script>
+  function togglePassword(button) {
+    const input = button.parentElement.querySelector('input');
+    input.type = input.type === 'password' ? 'text' : 'password';
+  }
+</script>
+</body>
+</html>

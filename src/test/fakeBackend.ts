@@ -12,6 +12,9 @@ import type {
   AttachmentMeta,
   BackupFailure,
   BackupItem,
+  BrowserRegistrationDto_Serialize,
+  BrowserStatus_Serialize,
+  EntryEditModel_Serialize,
   CsvPreview,
   commands,
   DraftVersionDto,
@@ -98,6 +101,12 @@ export interface FakeCall {
 
 /** The mutable in-memory vault behind the implemented handlers. */
 export interface FakeState {
+  /** What `browser_status` answers; `browser_revoke`, `browser_pairing_cancel` and `browser_reset_pairings` edit it. */
+  browser: BrowserStatus_Serialize;
+  /** What `browser_reinstall_host` answers. */
+  browserReinstall: BrowserRegistrationDto_Serialize[];
+  /** Save proposals by id: `browser_proposal_take` hands one out once, like the Rust store. */
+  proposals: Record<string, EntryEditModel_Serialize>;
   session: SessionStatus_Serialize;
   settings: Settings_Serialize;
   entries: FixtureEntry[];
@@ -173,6 +182,16 @@ const kebab = (name: string) => name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase(
 export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
   const { os = "macos", deviceUnlockAvailable = false, keyboardLayout = null } = opts;
   const state: FakeState = {
+    browser: {
+      listening: true,
+      pairingStoreFailed: false,
+      paired: [],
+      pairing: null,
+      registrations: [],
+      hostPath: null,
+    },
+    browserReinstall: [],
+    proposals: {},
     session: sessionStatus(opts.session ?? "locked"),
     settings: defaultSettings(),
     entries: fixtureEntries(),
@@ -365,6 +384,33 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       interval: state.settings.backupInterval,
     }),
     // Like Rust: the vault is replaced and locked; a wrong-password backup is `invalidInput`.
+    // The Browser pane's backend. Only the state and the events are modelled; the window and the file manager live in Rust.
+    browserPairingCancel: () => {
+      state.browser.pairing = null;
+      publish("pairingChallengeEvent", null);
+      return null;
+    },
+    browserProposalTake: ({ id }) => {
+      const model = state.proposals[id];
+      if (!model) throw apiError("notFound");
+      delete state.proposals[id];
+      return structuredClone(model);
+    },
+    browserReinstallHost: () => structuredClone(state.browserReinstall),
+    browserResetPairings: () => {
+      state.browser.paired = [];
+      state.browser.pairingStoreFailed = false;
+      state.browser.listening = true;
+      publish("bridgeChangedEvent", null);
+      return null;
+    },
+    browserRevoke: ({ id }) => {
+      state.browser.paired = state.browser.paired.filter((b) => b.id !== id);
+      publish("bridgeChangedEvent", null);
+      return null;
+    },
+    browserShowExtensionFolder: () => null,
+    browserStatus: () => structuredClone(state.browser),
     backupRestore: ({ id }) => {
       if (state.restoreFailure) {
         const code = state.restoreFailure;

@@ -12,6 +12,17 @@ intermediate hash state. Versions and licences are unchanged.
 
 ## Vendored data
 
+### jsQR 1.4.0 (`extension/vendor/jsQR.js`)
+
+- Upstream: https://github.com/cozmo/jsQR, commit `34d8eec1ec5d85496f3948ff02fcfe6406f89d81`
+  ("1.4.0"); also published on npm as `jsqr@1.4.0`.
+- Vendored file: `extension/vendor/jsQR.js` (Chromium extension). Its content is byte-identical to
+  upstream `dist/jsQR.js` at the commit above, with one banner comment line prepended as the first
+  line ("jsQR v1.4.0 - (c) Cosmo Wolfe, Apache License 2.0").
+- Licence: Apache License 2.0 (the text is in `LICENSE` at the root of this repository). Upstream has
+  no `NOTICE` file; its `LICENSE` is the unmodified Apache-2.0 text with the appendix template left
+  unfilled.
+
 ### Apple password-manager-resources (`quirks/password-rules.json`)
 
 - Upstream: https://github.com/apple/password-manager-resources

@@ -25,14 +25,20 @@ Last updated: 2026-11-13
 - [ ] `VaultFile`: reject non-regular files (FIFO/device symlink targets) at open and cap the
   encoded vault read size, once stage 2 fixes a size policy.
 - [ ] `mypass-platform` macOS bodies that still return `Unsupported`: device unlock (Touch ID and
-  device password), the native messaging host registrar and launch at login. System events, the
+  device password) and launch at login. System events, the
   concealed clipboard, the keyboard layout and the Keychain secret stores already ship.
 
 ## Stage 2a follow-ups
 
 - [ ] Per-window command access: every window (main, settings, tray panel) can call every app
   command (`app_quit` and `app_show_main` included); add per-window command permissions through a
-  `tauri_build` app manifest so the tray panel and settings window get only what they use.
+  `tauri_build` app manifest so the tray panel and settings window get only what they use. This
+  includes the `browser_*` commands: `browser_proposal_take` returns a proposal's password, so only
+  the main window should be able to call it (and `browser_pairing_cancel`); `browser_status`,
+  `browser_revoke`, `browser_reset_pairings`, `browser_reinstall_host` and
+  `browser_show_extension_folder` are used by the Settings Browser pane, so they belong to the
+  settings window (and `browser_status`, which carries the live pairing code, to the main window too)
+  and not to the tray panel.
 - [ ] Startup failure is reported only on stderr (invisible in a Windows release build and when
   launched from Finder); show a native dialog.
 - [ ] Quit-dialog default button: with tauri-plugin-dialog 2.8.4 a closed dialog is reported as the
@@ -58,24 +64,26 @@ Last updated: 2026-11-13
 - [ ] Reserved hotkeys are refused in the UI only; move the check into the backend hotkey parser.
 - [ ] CSV import error causes are matched by their English message; add separate error codes
   (`csvMissingColumn`, `csvNotUtf8`, `csvEmpty`) instead.
-- [ ] Flaky test `keyboard_layout_off_main_without_a_run_loop_is_unknown_not_a_deadlock` in
-  `mypass-platform` (timing; failed once in two full runs): make it deterministic.
 - [ ] Prune unused legacy catalog keys (418 at the time of writing) once stage 3 has ported its screens.
 - [ ] npm dependencies are bumped by hand (exact pins); add an npm ecosystem with grouping to
   Dependabot, with the same cooldown as cargo.
 
 ## Stage 3 extension bridge
 
-- [ ] `mypass-bridge`: the browser protocol, loopback server, per-launch token and pairing.
-- [ ] `mypass-host`: the native messaging host, with Keychain secret sharing between app and host and
-  self-registration of native messaging manifests for all Chromium browsers.
-- [ ] Host-shared Keychain secret: trust only the host binary inside the signed app bundle,
-  verified against a code requirement pinned to the team (`anchor apple generic and certificate
-  leaf[subject.OU] = "W645B93PPQ"` plus the host identifier) before building the access list; never
-  trust a path under Application Support. Delete-then-add on write; a crash in between only loses
-  the per-launch endpoint.
-- [ ] The extension moved into this repository as `extension/` with its Node suites running in CI.
-- [ ] Browser settings pane with pairing and save proposals.
+- [ ] Manual: walk the Stage 3 checklist in `RUN.md` (registration, pairing, endpoint file, autofill,
+  save flows, lock behaviour, crash and quit, other browsers, iCloud guard) on a copy of the owner's
+  vault and record the results in the PR.
+- [ ] `PairingManager`: add one atomic "clear all" (a single save plus the cache). `reset_pairings` on a
+  running bridge revokes one browser at a time, so an error midway leaves a partial reset.
+- [ ] Before any `connectNative` use: host handshake lazily on the first frame, reconnect with a fresh
+  handshake, never resend a frame already written.
+- [ ] `mypass-host` dev-dependencies enable `mypass-bridge` with the `server` feature, so `cargo test`
+  and `cargo build --workspace` produce a `mypass-host` with the vault crates linked; the shipped
+  binary (`cargo build -p mypass-host` in `scripts/build-host.sh`) does not. Check the shipped
+  binary's dependency tree in CI, and let the e2e suite use that binary.
+- [ ] A failed `LoopbackServer::start` (for example a `secrets/shared` folder with group or other
+  bits) shows `listening: false` with no reason and no action in the Browser pane; surface an
+  "endpoint store unusable" state.
 
 ## Stage 4 passkeys
 
@@ -89,6 +97,15 @@ Last updated: 2026-11-13
 - [ ] iCloud Drive as a primary vault location with conflict merging and migration.
 - [ ] "Also sync to folder" secondary destination (`mypass-sync`).
 - [ ] Touch ID and device-password unlock, launch at login, and the daily update check.
+- [ ] Move the bridge endpoint from the 0600 file store into a Keychain item that trusts only the
+  host binary inside the signed app bundle, verified against a code requirement pinned to the team
+  (`anchor apple generic and certificate leaf[subject.OU] = "W645B93PPQ"` plus the host
+  identifier); never trust a path under Application Support. Delete-then-add on write (a crash in
+  between only loses the per-launch endpoint), then delete the file.
+- [ ] The native messaging manifests point at a host copy under Application Support, which a
+  same-user process can replace (the same accepted risk as the 0600 endpoint file). Point the
+  manifests at the host inside the signed app bundle (`Contents/MacOS/mypass-native-host`, the Tauri sidecar, named so it cannot replace cargo's `mypass-host`, which Chrome
+  accepts as any absolute path) or verify the copy's signature before registering.
 - [ ] Signed macOS packaging with a stable team (DMG, extension zip, checksums, tag-driven release
   workflow).
 - [ ] Manual checklist against a copy of the owner's vault and the cutover checklist from the old
@@ -98,6 +115,9 @@ Last updated: 2026-11-13
 
 - [ ] Windows bodies of every `mypass-platform` trait (DPAPI secret stores, lock and suspend events;
   the clipboard history exclusion already ships through `arboard`).
+- [ ] The Browser pane reports a broken pairing list on Windows only because `UnsupportedSecretStore`
+  fails `PairingManager::new`; map `PlatformError::Unsupported` to a separate "not available on this
+  platform" state until the DPAPI store lands.
 - [ ] Native messaging host registration through the registry, Windows shell behaviour and zip
   packaging.
 - [ ] Windows jobs in CI and the release workflow, and the Windows-only integration suite behind

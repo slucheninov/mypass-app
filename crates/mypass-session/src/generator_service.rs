@@ -200,6 +200,26 @@ pub fn record_history(
     value: &str,
     url: &str,
 ) -> Result<Uuid, SessionError> {
+    record_history_inner(session, value, url, None)
+}
+
+/// [`record_history`] with the entry's creation, modification and access time set to `created`
+/// (a generation that happened earlier, as the browser extension reports it).
+pub fn record_history_at(
+    session: &VaultSession,
+    value: &str,
+    url: &str,
+    created: Timestamp,
+) -> Result<Uuid, SessionError> {
+    record_history_inner(session, value, url, Some(created))
+}
+
+fn record_history_inner(
+    session: &VaultSession,
+    value: &str,
+    url: &str,
+    created: Option<Timestamp>,
+) -> Result<Uuid, SessionError> {
     session.mutate(|db, now| {
         if db.find_group(GENERATOR_HISTORY_GROUP_UUID).is_none() {
             let mut group = Group::new(HISTORY_GROUP_NAME, now);
@@ -208,7 +228,7 @@ pub fn record_history(
             let root = db.root_id();
             db.add_group(root, group, now)?;
         }
-        let mut entry = Entry::new(now);
+        let mut entry = Entry::new(created.unwrap_or(now));
         let title = host_of(url).unwrap_or_else(|| url.to_owned());
         entry.set_field("Title", &title, false);
         entry.set_field("URL", url, false);
@@ -573,6 +593,35 @@ mod tests {
         assert_eq!(items[0].created, 1_700_000_010_000.0);
         let json = serde_json::to_string(&items).unwrap();
         assert!(!json.contains("password-AAA") && !json.contains("password-BBB"));
+    }
+
+    #[test]
+    fn record_history_at_sets_all_entry_times_to_the_given_time() {
+        let f = fx();
+        let id = record_history_at(
+            &f.session,
+            "pw-at",
+            "https://a.example.com",
+            Timestamp(1_600_000_000),
+        )
+        .unwrap();
+        let (created, modified, accessed) = f
+            .session
+            .with_db(|db| {
+                let e = db.find_entry(id).unwrap();
+                (e.created, e.modified, e.accessed)
+            })
+            .unwrap();
+        assert_eq!(
+            (created, modified, accessed),
+            (
+                Timestamp(1_600_000_000),
+                Timestamp(1_600_000_000),
+                Timestamp(1_600_000_000)
+            )
+        );
+        let items = f.session.with_db(history_list).unwrap();
+        assert_eq!(items[0].created, 1_600_000_000_000.0);
     }
 
     #[test]

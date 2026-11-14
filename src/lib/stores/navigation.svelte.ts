@@ -13,6 +13,9 @@ class NavigationStore {
   /** The store-held secret: the editor's model carries the entry's password. Nulled on close,
    *  save and lock. */
   editModel = $state<EntryEditModel_Serialize | null>(null);
+  /** Where the open editor's model came from: `browser` for a save proposal (the editor shows the
+   *  "Saving from your browser" banner and nothing replaces it behind the user's back). */
+  editorSource = $state<"browser" | null>(null);
   /** A model waiting to replace a dirty editor; the editor asks "Discard changes?" before it opens.
    *  It can carry a password too (a full edit model routed through `requestOpenEditor`), so it is the
    *  second store-held secret: it is nulled by `openEditor`, `closeEditor` (hence `reset` on lock)
@@ -59,8 +62,9 @@ class NavigationStore {
     this.selectedId = id;
   }
 
-  openEditor(model: EntryEditModel_Serialize): void {
+  openEditor(model: EntryEditModel_Serialize, source: "browser" | null = null): void {
     this.pendingModel = null;
+    this.editorSource = source;
     this.editModel = model;
     this.presentation = model.id ? "edit" : "create";
     // An editor that replaced another one (an open-entry request after Discard) leaves the list
@@ -130,6 +134,7 @@ class NavigationStore {
     this.#settleLeave(false);
     this.pendingModel = null;
     this.editModel = null;
+    this.editorSource = null;
     this.presentation = "browse";
   }
 

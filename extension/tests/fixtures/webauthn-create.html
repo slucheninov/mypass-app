@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>MyPass WebAuthn create fixture</title></head>
+<body>
+  <h1>Register a passkey</h1>
+  <p>
+    Serve this over <code>http://localhost</code> — WebAuthn needs a secure context, and
+    Chrome treats localhost as one, so no TLS setup is required.
+  </p>
+  <button id="register-btn">Create passkey</button>
+  <button id="cancel-btn">Cancel pending request</button>
+  <p>With MyPass enabled and unlocked, its confirmation must appear. With a competing proxy enabled, check the MyPass popup for an actionable conflict warning. Canceling must not leave a stale confirmation.</p>
+  <pre id="result"></pre>
+  <script>
+    let controller;
+    document.getElementById("cancel-btn").addEventListener("click", () => controller?.abort());
+    function randomBytes(n) {
+      const arr = new Uint8Array(n);
+      crypto.getRandomValues(arr);
+      return arr;
+    }
+    document.getElementById('register-btn').addEventListener('click', async () => {
+      controller = new AbortController();
+      try {
+        const credential = await navigator.credentials.create({
+          signal: controller.signal,
+          publicKey: {
+            challenge: randomBytes(32),
+            rp: { id: location.hostname, name: 'MyPass Fixture' },
+            user: { id: randomBytes(16), name: 'fixture-user', displayName: 'Fixture User' },
+            pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+            attestation: 'none'
+          }
+        });
+        document.getElementById('result').textContent = JSON.stringify(credential.toJSON(), null, 2);
+      } catch (error) {
+        document.getElementById('result').textContent = 'Error: ' + error.name + ' — ' + error.message;
+      }
+    });
+  </script>
+</body>
+</html>

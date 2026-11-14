@@ -98,13 +98,22 @@ describe("no_remote_urls_in_sources", () => {
     "https://github.com/slucheninov/mypass-app",
     "https://www.apache.org/licenses/LICENSE-2.0",
   ];
+  // The official help pages of the Browser help sheet (the settings capability opens exactly these
+  // hosts); no other file may carry them.
+  const HELP_FILE = "src/windows/settings/BrowserHelpSheet.svelte";
+  const HELP_URLS = [
+    "https://support.google.com/chrome/answer/",
+    "https://bitwarden.com/help/",
+    "https://support.1password.com/",
+    "https://support.apple.com/en-us/",
+  ];
   const URL_RE = /https?:\/\/[A-Za-z0-9]/g;
 
   it("only the allow-listed URLs appear", () => {
     const bad: string[] = [];
     for (const f of sourceFiles(["ts", "svelte", "css"])) {
       let text = f.text;
-      for (const ok of ALLOWED) text = text.split(ok).join("");
+      for (const ok of f.path === HELP_FILE ? [...ALLOWED, ...HELP_URLS] : ALLOWED) text = text.split(ok).join("");
       if (URL_RE.test(text)) bad.push(f.path);
       URL_RE.lastIndex = 0;
     }

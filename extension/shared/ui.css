@@ -1,0 +1,51 @@
+/* Shared control size for the popup and the extension windows. */
+:root,
+html[data-theme="light"] {
+  --mp-control-height: 32px;
+  --mp-control-radius: 8px;
+  --mp-control-font: 13px;
+  --mp-control-weight: 600;
+  --mp-blue: #007aff;
+  --mp-bg: #ffffff;
+  --mp-text: #1d1d1f;
+  --mp-secondary: #6e6e73;
+  --mp-fill: #f5f5f7;
+  --mp-line: #d2d2d7;
+  --mp-hairline: #e5e5e7;
+  --mp-muted: #86868b;
+  --mp-control-bg: #ffffff;
+  --mp-accent-soft: #e8f2ff;
+  color-scheme: light;
+}
+
+html[data-theme="dark"] {
+  --mp-bg: #1c1c1e;
+  --mp-text: #f5f5f7;
+  --mp-secondary: #98989d;
+  --mp-fill: #2c2c2e;
+  --mp-line: #3a3a3c;
+  --mp-hairline: #3a3a3c;
+  --mp-muted: #98989d;
+  --mp-control-bg: #2c2c2e;
+  --mp-accent-soft: #1a3654;
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  html[data-theme="system"] {
+    --mp-bg: #1c1c1e;
+    --mp-text: #f5f5f7;
+    --mp-secondary: #98989d;
+    --mp-fill: #2c2c2e;
+    --mp-line: #3a3a3c;
+    --mp-hairline: #3a3a3c;
+    --mp-muted: #98989d;
+    --mp-control-bg: #2c2c2e;
+    --mp-accent-soft: #1a3654;
+    color-scheme: dark;
+  }
+}
+
+[hidden] {
+  display: none !important;
+}

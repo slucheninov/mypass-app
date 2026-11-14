@@ -2508,6 +2508,7 @@ dependencies = [
 name = "mypass-app"
 version = "0.1.0"
 dependencies = [
+ "mypass-bridge",
  "mypass-core",
  "mypass-kdbx",
  "mypass-platform",
@@ -2526,6 +2527,30 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-specta",
  "tempfile",
+ "thiserror 2.0.21",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "mypass-bridge"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "hmac",
+ "mypass-core",
+ "mypass-kdbx",
+ "mypass-platform",
+ "mypass-session",
+ "rand 0.8.8",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "subtle",
+ "tempfile",
+ "thiserror 2.0.21",
+ "url",
  "uuid",
  "zeroize",
 ]
@@ -2549,6 +2574,21 @@ dependencies = [
  "url",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "mypass-host"
+version = "0.1.0"
+dependencies = [
+ "mypass-bridge",
+ "mypass-core",
+ "mypass-kdbx",
+ "mypass-platform",
+ "mypass-session",
+ "secrecy",
+ "serde_json",
+ "tempfile",
+ "uuid",
 ]
 
 [[package]]
@@ -2584,13 +2624,18 @@ dependencies = [
  "arboard",
  "block2",
  "core-foundation",
+ "libc",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
  "secrecy",
  "security-framework",
+ "serde",
+ "serde_json",
  "sha2 0.11.1",
+ "tempfile",
  "thiserror 2.0.21",
+ "zeroize",
 ]
 
 [[package]]
@@ -3483,8 +3528,10 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 name = "repo-guards"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "serde_json",
  "serde_yaml_ng",
+ "sha2 0.11.1",
  "toml 1.2.1+spec-1.1.0",
 ]
 

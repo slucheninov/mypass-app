@@ -1,6 +1,6 @@
 //! `app_*`: app-level commands (version, activity, windows, reveal in the file manager).
 
-use crate::events::OpenEntryEvent;
+use crate::events::{OpenEntryEvent, SettingsPaneEvent};
 use crate::shell::WindowOps;
 use crate::state::{AppState, EditorDirty, ShellState};
 use mypass_session::dto::AppInfo;
@@ -127,17 +127,35 @@ pub fn app_reveal_backups(state: State<'_, AppState>) -> Result<(), ApiError> {
     tauri_plugin_opener::reveal_item_in_dir(folder).map_err(|e| super::internal(e.to_string()))
 }
 
-/// Shows the settings window, creating it on first use. `async` because creating a window from a
-/// synchronous command deadlocks on Windows.
-#[tauri::command]
-#[specta::specta]
-pub async fn app_open_settings(app: AppHandle) -> Result<(), ApiError> {
+/// The URL of the settings window, at `pane` when it names one (letters only).
+pub fn settings_url(pane: Option<&str>) -> String {
+    match pane {
+        Some(p) if !p.is_empty() && p.chars().all(|c| c.is_ascii_lowercase()) => {
+            format!("index.html#/settings/{p}")
+        }
+        _ => "index.html#/settings".to_owned(),
+    }
+}
+
+/// Shows the settings window, creating it on first use, at `pane` when given: a new window opens
+/// on it through its URL, an open one is told by `SettingsPaneEvent`. Blocking work: creating a
+/// window from a synchronous command deadlocks on Windows, so callers are async commands or
+/// worker threads.
+pub fn open_settings(app: &AppHandle, pane: Option<&str>) -> Result<(), ApiError> {
     let window = match app.get_webview_window(SETTINGS_WINDOW) {
-        Some(window) => window,
+        Some(window) => {
+            if let Some(pane) = pane {
+                let _ = SettingsPaneEvent {
+                    pane: pane.to_owned(),
+                }
+                .emit_to(app, SETTINGS_WINDOW);
+            }
+            window
+        }
         None => WebviewWindowBuilder::new(
-            &app,
+            app,
             SETTINGS_WINDOW,
-            WebviewUrl::App("index.html#/settings".into()),
+            WebviewUrl::App(settings_url(pane).into()),
         )
         .title("MyPass")
         .inner_size(640.0, 520.0)
@@ -151,11 +169,29 @@ pub async fn app_open_settings(app: AppHandle) -> Result<(), ApiError> {
         .map_err(|e| super::internal(e.to_string()))
 }
 
+/// Shows the settings window (General pane).
+#[tauri::command]
+#[specta::specta]
+pub async fn app_open_settings(app: AppHandle) -> Result<(), ApiError> {
+    open_settings(&app, None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::shell::FakeWindowOps;
     use crate::testing::{open_world, world};
+
+    #[test]
+    fn settings_url_names_a_pane_only_when_it_is_plain_letters() {
+        assert_eq!(settings_url(None), "index.html#/settings");
+        assert_eq!(
+            settings_url(Some("browser")),
+            "index.html#/settings/browser"
+        );
+        assert_eq!(settings_url(Some("../x")), "index.html#/settings");
+        assert_eq!(settings_url(Some("")), "index.html#/settings");
+    }
 
     #[test]
     fn only_the_main_window_may_report_the_editor_state() {

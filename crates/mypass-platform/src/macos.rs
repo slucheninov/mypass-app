@@ -22,10 +22,7 @@
 // `unsafe_only_in_allow_listed_modules` keeps `unsafe` out of every other file.
 #![allow(unsafe_code)]
 
-use crate::fallback::{
-    UnsupportedDeviceUnlock, UnsupportedHostRegistrar, UnsupportedLaunchAtLogin,
-    UnsupportedSecretStore,
-};
+use crate::fallback::{UnsupportedDeviceUnlock, UnsupportedLaunchAtLogin};
 use crate::macos_keychain::MacKeychainSecretStore;
 use crate::{
     AppPaths, ClipboardStamp, KeyboardLayout, Platform, PlatformError, PlatformResult,
@@ -66,16 +63,16 @@ pub(crate) const INPUT_SOURCE_CHANGED: &str =
 const MAIN_THREAD_WAIT: Duration = Duration::from_millis(500);
 
 /// The real macOS platform: events, clipboard, keyboard layout and the app-private Keychain store;
-/// `Unsupported` placeholders for the host-shared secret store and the host registrar (stage 3) and device unlock and launch at
-/// login (stage 5).
-pub(crate) fn platform(_paths: &AppPaths) -> Platform {
+/// the 0600 file store shared with the native host; the native host registrar; `Unsupported`
+/// placeholders for device unlock and launch at login (stage 5).
+pub(crate) fn platform(paths: &AppPaths) -> Platform {
     Platform {
         events: Arc::new(MacSystemEvents),
         clipboard: Arc::new(MacClipboard::general()),
         secrets: Arc::new(MacKeychainSecretStore::app_only()),
-        shared_secrets: Arc::new(UnsupportedSecretStore),
+        shared_secrets: Arc::new(crate::file_store::shared_store(paths)),
         device_unlock: Arc::new(UnsupportedDeviceUnlock),
-        host_registrar: Arc::new(UnsupportedHostRegistrar),
+        host_registrar: Arc::new(crate::MacHostRegistrar::new(paths.clone())),
         launch_at_login: Arc::new(UnsupportedLaunchAtLogin),
         keyboard_layout: Arc::new(MacKeyboardLayout),
     }
@@ -555,10 +552,12 @@ mod tests {
     #[test]
     fn keyboard_layout_off_main_without_a_run_loop_is_unknown_not_a_deadlock() {
         // libtest never runs a test on the main thread and nothing pumps the main queue here, so
-        // the hop times out and reports "unknown".
+        // the hop times out and reports "unknown". A deadlock never returns, so the bound is a
+        // generous ceiling far above `MAIN_THREAD_WAIT`: a tight multiple of it flaked whenever a
+        // loaded machine delayed the waiting thread's wake-up.
         let started = std::time::Instant::now();
         assert_eq!(MacKeyboardLayout.current(), Ok(None));
-        assert!(started.elapsed() < MAIN_THREAD_WAIT * 4);
+        assert!(started.elapsed() < Duration::from_secs(30));
     }
 
     #[test]

@@ -56,7 +56,10 @@
 
   // Dropped with the component (it holds the password like the model does).
   let baseline: string | null = untrack(() => JSON.stringify($state.snapshot(model)));
-  const isDirty = () => baseline !== null && JSON.stringify($state.snapshot(model)) !== baseline;
+  const changed = () => baseline !== null && JSON.stringify($state.snapshot(model)) !== baseline;
+  // A proposal from the browser counts as unsaved even untouched: it was taken from the backend
+  // and cannot be fetched again, so leaving it (another entry, a lock by the user, quit) asks first.
+  const isDirty = () => changed() || navigation.editorSource === "browser";
 
   let saving = $state(false);
   let confirming = $state(false);
@@ -131,6 +134,13 @@
     else close();
   }
 
+  /** The banner's Dismiss: discards the proposal at once, unless the user edited it meanwhile. */
+  function dismiss() {
+    if (saving) return;
+    if (changed()) confirming = true;
+    else close();
+  }
+
   async function save() {
     if (saving) return;
     titleError = formError = filesError = null;
@@ -202,6 +212,14 @@
       <Button variant="primary" disabled={saving} onclick={() => void save()}>{t("Save")}</Button>
     </div>
   </header>
+
+  {#if navigation.editorSource === "browser"}
+    <!-- A save proposal from the browser: nothing is stored until Save; Dismiss is the same as Cancel. -->
+    <div class="banner" data-testid="proposal-banner">
+      <span>{t("Saving from your browser")}</span>
+      <Button variant="plain" disabled={saving} onclick={dismiss}>{t("Dismiss")}</Button>
+    </div>
+  {/if}
 
   {#if formError}<p class="form-error" role="alert" tabindex="-1">{formError}</p>{/if}
 
@@ -278,6 +296,19 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
+  }
+  .banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0 0 12px;
+    padding: 6px 10px;
+    border: var(--sep);
+    border-radius: var(--radius);
+    background: var(--list-bg);
+    color: var(--text-2);
+    font-size: 13px;
   }
   .form-error {
     margin: 0 0 12px;

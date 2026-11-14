@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MyPass inline icon — slim input inside a tall clipping field wrapper</title>
+  <style>
+    /* Sanitized shape of the Angular Material "filled" fields on the pz.gov.pl login, measured on
+       the live page. The visible field is a 48 px tall box (.field) with overflow:hidden, but the
+       <input> is only 22 px tall. The icon must be sized from the visible box, not from the input.
+
+       Three fields, three ways a site makes room for its own controls:
+         1. user name: the input fills its container; a clear button appears at the container's end
+            once something is typed (the site's clear-input directive only drops `hidden`).
+         2. password: the site's CSS narrows the input by 3.375rem (54 px) to reserve the end of the
+            container. After the first keystroke it adds a 24 px reveal button and shows a 14 px
+            clear button there, both absolutely positioned inside the container, not in the input.
+            The input is 54 px narrower than the container, which is more than a "hugging" box
+            tolerates; the live page showed no icon on this field because of that.
+         3. suffix: a Material-style 40 px suffix button next to the container, always visible. */
+    body { margin: 0; font: 14px/22px system-ui, sans-serif; }
+    form { width: 550px; margin: 40px 0 0 42px; }
+    .field { position: relative; overflow: hidden; display: flex; height: 48px; margin: 24px 0; box-sizing: border-box; padding: 0 16px; background: #f0f0f0; }
+    .infix { position: relative; flex: 1 1 auto; min-width: 0; padding: 13px 0 13px; }
+    input { display: inline-block; box-sizing: border-box; width: 100%; height: 22px; margin: 0; padding: 0 25px 0 0; border: 0; background: transparent; font: inherit; }
+    .narrow input { width: calc(100% - 3.375rem); }
+    .clear { position: absolute; right: 0; top: 50%; transform: translateY(-7px); width: 14px; height: 14px; padding: 0; border: 0; background: #c33; }
+    .clear[hidden] { display: none; }
+    .reveal { position: absolute; top: 50%; right: 1.5rem; transform: translateY(-0.75rem); width: 24px; height: 24px; padding: 0; border: 0; background: #36c; }
+    .suffix { flex: 0 0 40px; width: 40px; height: 40px; align-self: center; margin: 0; padding: 0; border: 0; background: #393; }
+  </style>
+</head>
+<body>
+<form onsubmit="return false">
+  <div class="field">
+    <div class="infix">
+      <input id="su" type="text" autocomplete="username" aria-label="User name">
+      <button class="clear" type="button" hidden aria-label="Clear field"></button>
+    </div>
+  </div>
+  <div class="field narrow">
+    <div class="infix">
+      <input id="sp" type="password" autocomplete="current-password" aria-label="Password" maxlength="256">
+      <button class="clear" type="button" hidden aria-label="Clear field"></button>
+    </div>
+  </div>
+  <div class="field">
+    <div class="infix">
+      <input id="ss" type="password" autocomplete="current-password" aria-label="Password with suffix button" maxlength="256">
+    </div>
+    <button class="suffix" type="button" aria-label="Show password"></button>
+  </div>
+</form>
+<script>
+  // What the site does on typing: show the clear button, and on the password field add the reveal
+  // button the first time. The reveal button swaps the input between password and text.
+  var su = document.getElementById('su');
+  var sp = document.getElementById('sp');
+  su.addEventListener('input', function () { su.parentNode.querySelector('.clear').hidden = !su.value; });
+  sp.addEventListener('input', function () {
+    var clear = sp.parentNode.querySelector('.clear');
+    clear.hidden = !sp.value;
+    if (sp.value && !sp.parentNode.querySelector('.reveal')) {
+      var reveal = document.createElement('button');
+      reveal.type = 'button';
+      reveal.className = 'reveal';
+      reveal.setAttribute('aria-label', 'Show password');
+      reveal.addEventListener('click', function () { sp.type = sp.type === 'password' ? 'text' : 'password'; });
+      sp.parentNode.insertBefore(reveal, clear);
+    }
+  });
+  document.querySelector('.suffix').addEventListener('click', function () {
+    var s = document.getElementById('ss');
+    s.type = s.type === 'password' ? 'text' : 'password';
+  });
+  document.querySelectorAll('.clear').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var i = b.parentNode.querySelector('input');
+      i.value = '';
+      b.hidden = true;
+    });
+  });
+</script>
+</body>
+</html>

@@ -1,5 +1,8 @@
 use std::path::Path;
 
+#[path = "build_support.rs"]
+mod build_support;
+
 fn main() {
     // `tauri::generate_context!` embeds `frontendDist` (`../dist`) and fails when it is missing.
     // `dist/` is git-ignored and built by the UI toolchain (stage 2b), so a Rust-only checkout
@@ -20,6 +23,12 @@ fn main() {
         }
     }
     println!("cargo:rerun-if-changed=../dist");
+
+    // The same pattern for the `externalBin` host: `tauri-build` fails when it is missing.
+    let triple = std::env::var("TARGET").unwrap_or_default();
+    if let Err(error) = build_support::ensure_sidecar_placeholder(Path::new("binaries"), &triple) {
+        println!("cargo:warning=cannot create the placeholder sidecar in binaries/: {error}");
+    }
 
     let attributes = if targets_windows_msvc() {
         embed_windows_manifest();

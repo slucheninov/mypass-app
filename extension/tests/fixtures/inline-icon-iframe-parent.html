@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>MyPass fixture — cross-origin login iframe</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; max-width: 720px; }
+    iframe { width: 100%; height: 260px; border: 1px solid #ccc; }
+    .narrow { width: 180px; }
+    .ad { width: 300px; height: 250px; }
+    .why { background: #fff8e1; border-left: 4px solid #f0b429; padding: 12px 16px; margin: 20px 0; }
+  </style>
+</head>
+<body>
+  <h1>Parent page (localhost:8765)</h1>
+
+  <div class="why">
+    <p>Serve this directory twice and open this page as
+      <strong>http://localhost:8765/inline-icon-iframe-parent.html</strong>:</p>
+    <pre>cd extension/tests/fixtures &amp;&amp; python3 -m http.server 8765
+cd extension/tests/fixtures &amp;&amp; python3 -m http.server 8766</pre>
+    <p>The frames below load from <strong>127.0.0.1:8766</strong>, not localhost:8766. The
+      differing port already makes them a separate origin, but that alone is not enough to
+      test what this fixture exists to test: MyPass matches entries by
+      <strong>hostname only</strong>, ignoring scheme and port, so a localhost frame inside a
+      localhost parent would be offered an identical entry list and "the frame gets its own
+      entries" could not fail. <code>127.0.0.1</code> is a different hostname from
+      <code>localhost</code>, so the vault can hold a distinct entry for each and the
+      difference is visible.</p>
+    <p><strong>Set-up:</strong> save two entries in MyPass before starting — one for
+      <code>localhost</code> and one for <code>127.0.0.1</code>, with clearly different
+      usernames. Every "the lists differ" expectation below depends on it.</p>
+  </div>
+
+  <h2>1. Cross-origin login form</h2>
+  <p>Expect: the key icon appears inside the frame; the entries it lists are the
+     <code>127.0.0.1</code> ones and <em>not</em> this page's <code>localhost</code> ones;
+     filling lands in the frame and leaves this page untouched.</p>
+  <iframe src="http://127.0.0.1:8766/login.html" title="cross-origin login"></iframe>
+
+  <h2>2. Narrow frame — known limitation</h2>
+  <p>Expect: the icon appears, but the panel is clipped by the frame's width. Recorded in
+     the design, not a defect to file.</p>
+  <iframe class="narrow" src="http://127.0.0.1:8766/login.html" title="narrow login"></iframe>
+
+  <h2>3. Cross-origin frame containing a 2FA setup link</h2>
+  <p>Expect: <strong>nothing</strong>. The 2FA candidate scan and the "save 2FA" banner are
+     top-frame work, so the otpauth link in this frame must produce no banner here and none
+     on this page either, and the popup's <strong>Add 2FA</strong> section must not pick it
+     up from inside the frame.</p>
+  <iframe src="http://127.0.0.1:8766/otpauth-link.html" title="cross-origin 2FA setup"></iframe>
+
+  <h2>4. Ad-like frame</h2>
+  <p>Expect: no errors. It holds no form and no body-level content worth touching — it is
+     here so the "several third-party frames, no errors on <code>chrome://extensions</code>"
+     check has something real to observe.</p>
+  <iframe class="ad" src="http://127.0.0.1:8766/qr.html" title="ad-like frame"></iframe>
+  <iframe class="ad" src="http://127.0.0.1:8766/qr.html" title="second ad-like frame"></iframe>
+
+  <h2>4b. Bodyless-document frame (SVG)</h2>
+  <p>Expect: no errors. This frame is an SVG document, not an HTML one, so it has no
+     <code>document.body</code> at all — it exercises the guard that keeps
+     <code>MutationObserver.observe()</code> from throwing when a frame is not an HTML
+     document.</p>
+  <iframe class="ad" src="http://127.0.0.1:8766/blank.svg" title="bodyless SVG frame"></iframe>
+
+  <h2>5. This page's own field</h2>
+  <p>Expect: its own icon, filling with entries for <code>localhost</code>.</p>
+  <!-- The submit button is not decoration: it makes this form the CONTROL for the
+       "no banner inside a frame" check. Submitting here (with no saved entry for
+       localhost) must SHOW the save banner. Without that control, a missing banner in
+       frame 1 is indistinguishable from a banner mechanism that is simply dead — a locked
+       vault, an unpaired extension, or an already-saved entry all suppress it too. A form
+       with two inputs and no submit button cannot be submitted by pressing Enter, so
+       without this button the control could not be run at all. -->
+  <form onsubmit="event.preventDefault(); document.getElementById('parent-result').textContent='submitted';">
+    <input type="text" name="username" placeholder="Username">
+    <input type="password" name="password" placeholder="Password">
+    <button type="submit">Sign in</button>
+  </form>
+  <div id="parent-result"></div>
+
+  <p><strong>Also expect:</strong> no save-password and no save-2FA banner ever appears
+     inside any frame, including after <em>submitting</em> the form inside frame 1 — banners
+     belong to the top frame only, and they only ever fire on submit, so a frame that is
+     never submitted proves nothing.</p>
+</body>
+</html>

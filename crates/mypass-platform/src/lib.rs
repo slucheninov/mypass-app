@@ -9,11 +9,14 @@ mod device_unlock;
 mod error;
 mod events;
 mod fallback;
+mod file_store;
 mod host_registrar;
 mod keyboard_layout;
 mod launch_at_login;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(unix)]
+mod macos_host_install;
 #[cfg(target_os = "macos")]
 mod macos_keychain;
 mod paths;
@@ -27,11 +30,15 @@ pub use clipboard::{ClipboardStamp, SecureClipboard};
 pub use device_unlock::{DeviceUnlock, DeviceUnlockAvailability, DeviceUnlockMode};
 pub use error::{PlatformError, PlatformResult};
 pub use events::{Subscription, SystemEvent, SystemEvents};
+pub use file_store::{shared_store, FileSecretStore};
 pub use host_registrar::{
-    BrowserRegistration, HostRegistrationReport, NativeHostRegistrar, RegistrationState,
+    locate_bundled_host, manifest_json, BrowserRegistration, HostRegistrationReport, ManifestError,
+    NativeHostRegistrar, RegistrationState, BUNDLED_HOST_FILE, EXTENSION_ID, HOST_NAME,
 };
 pub use keyboard_layout::KeyboardLayout;
 pub use launch_at_login::{LaunchAtLogin, LoginItemStatus};
+#[cfg(unix)]
+pub use macos_host_install::MacHostRegistrar;
 pub use paths::{AppPaths, Browser, VaultId, BUNDLE_ID, HOST_MANIFEST_FILE};
 pub use secrets::SecretStore;
 
@@ -73,4 +80,25 @@ pub fn running_app_executables(bundle_id: &str) -> Vec<PathBuf> {
     return macos::running_app_executables(bundle_id);
     #[cfg(not(target_os = "macos"))]
     return fallback::running_app_executables(bundle_id);
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    /// Tests the selection logic on its own: `current` would touch the real pasteboard on macOS.
+    #[cfg(unix)]
+    #[test]
+    fn shared_store_is_the_file_store_under_secrets_shared() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::macos(tmp.path());
+        let store = file_store::shared_store(&paths);
+        store.set("svc", "acct", b"endpoint").unwrap();
+        let direct = FileSecretStore::new(paths.secrets_shared.clone(), tmp.path().to_path_buf());
+        assert_eq!(
+            direct.get("svc", "acct").unwrap(),
+            Some(b"endpoint".to_vec())
+        );
+        assert!(paths.secrets_shared.is_dir());
+    }
 }

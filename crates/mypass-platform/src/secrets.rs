@@ -2,8 +2,8 @@
 //!
 //! `Platform.secrets` is app-private (device-unlock wrapping material, later app state).
 //! `Platform.shared_secrets` holds what the ChromeHost must also read (bridge endpoint and token):
-//! the macOS shared Keychain access group (stage 3), DPAPI files under `AppPaths::secrets_shared`
-//! on Windows (stage 6).
+//! on macOS and, until DPAPI arrives in stage 6, on Windows it is a `FileSecretStore` (a same-user
+//! 0600 file) under `AppPaths::secrets_shared`; it holds only the per-launch endpoint.
 
 use crate::PlatformResult;
 

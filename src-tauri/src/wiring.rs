@@ -5,12 +5,13 @@
 //! start from `shell_runtime::start` once this has managed the state; the effect runner of
 //! [`ShellState`] is the real [`ShellEffects`] built here.
 
+use crate::bridge::{build_state, BridgeEvents, TauriBridgeEvents};
 use crate::events::{ClipboardClearedEvent, SaveStateChanged, SessionChanged, VaultChanged};
 use crate::files::{FileGrants, TauriFilePicker};
 use crate::hotkeys::ConflictGate;
 use crate::lifecycle::{ExitGate, QuitPort};
 use crate::lifecycle::{ShellEffects, TRAY_REFRESH_DELAY};
-use crate::shell::TauriWindowOps;
+use crate::shell::{TauriWindowOps, WindowOps};
 use crate::shell_runtime::{hide_panel, tray_refresher, TauriQuitPort, TauriTarget};
 use crate::state::{AppState, ShellState, SystemProcessLookup};
 use mypass_session::clipboard_service::ClearedSink;
@@ -152,10 +153,31 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(editor_dirty);
     app.manage::<Arc<dyn QuitPort>>(Arc::new(TauriQuitPort(handle.clone())));
     app.manage(AppState(core.clone()));
+    let windows: Arc<dyn WindowOps> = Arc::new(TauriWindowOps(handle.clone()));
+    // The bridge starts even while the vault is locked. A start failure (an unreadable pairing
+    // list, a port that cannot be bound) leaves the app running; the Browser pane shows
+    // `listening: false` and, for the pairing list, offers the reset.
+    let bridge = build_state(
+        &core,
+        windows.clone(),
+        Arc::new(TauriBridgeEvents(handle.clone())),
+    );
+    app.manage(bridge.clone());
+    // The start reads the pairing list from the Keychain and binds the port: never on the main
+    // thread, never in the setup hook. `listening: false` covers the gap; the worker emits
+    // `bridge_changed` when it is done.
+    let started_events = TauriBridgeEvents(handle.clone());
+    // A failed spawn leaves the bridge down (`listening: false`), like a failed start.
+    let _ = std::thread::Builder::new()
+        .name("mypass-bridge-start".into())
+        .spawn(move || {
+            let _ = bridge.start();
+            started_events.bridge_changed();
+        });
     app.manage(ShellState {
-        picker: Arc::new(TauriFilePicker(handle.clone())),
+        picker: Arc::new(TauriFilePicker(handle)),
         grants,
-        windows: Arc::new(TauriWindowOps(handle)),
+        windows,
         effects: Arc::new(ShellEffects::new(core, target)),
         settings_gate: Arc::new(Mutex::new(())),
     });

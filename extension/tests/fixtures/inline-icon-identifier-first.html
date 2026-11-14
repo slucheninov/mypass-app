@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>MyPass inline icon fixture — identifier-first and the score floor</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; max-width: 640px; }
+    section { margin: 32px 0; padding: 16px; border: 1px solid #ddd; border-radius: 8px; }
+    input { padding: 6px 8px; font-size: 14px; width: 260px; }
+    .expect { color: #0a7; font-weight: 600; }
+    .expect-none { color: #c33; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>Identifier-first / score floor</h1>
+  <p>There is <strong>no password field anywhere on this page</strong>. That is what makes the
+     username score floor apply — with a password present its mere presence is the evidence,
+     and the floor is deliberately skipped.</p>
+
+  <section>
+    <h2>1. Identifier-first login step</h2>
+    <p class="expect">Expect: the key icon IS present.</p>
+    <p>Scores above the floor on <code>name="username"</code>.</p>
+    <input type="text" name="username" placeholder="Email or username">
+    <button type="button">Next</button>
+  </section>
+
+  <section>
+    <h2>2. Search box</h2>
+    <p class="expect-none">Expect: NO icon.</p>
+    <p>A bare text input with no username signal. Before the floor was added, this got an icon —
+       which would have meant a key glyph in every search box on the web.</p>
+    <input type="text" placeholder="Search">
+  </section>
+
+  <section>
+    <h2>3. Comment field</h2>
+    <p class="expect-none">Expect: NO icon.</p>
+    <input type="text" placeholder="Add a comment">
+  </section>
+
+  <section>
+    <h2>4. Known limitation — placeholder-only login</h2>
+    <p class="expect-none">Expect: NO icon (recorded limitation, not a bug to file).</p>
+    <p>Scoring reads <code>autocomplete</code>, <code>type</code>, <code>name</code> and
+       <code>id</code> — never <code>placeholder</code>, <code>aria-label</code> or a
+       <code>&lt;label&gt;</code>. A real login field whose only hint is its placeholder
+       therefore falls below the floor and gets no icon. It under-attaches rather than
+       mis-filling, which is the safe direction.</p>
+    <input type="text" placeholder="Email">
+  </section>
+</body>
+</html>

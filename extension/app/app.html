@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="system">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MyPass</title>
+  <link rel="stylesheet" href="../shared/ui.css">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <main>
+    <section id="page-settings" hidden>
+      <nav id="settings-nav" aria-label="Settings sections">
+        <button type="button" data-section="general">General</button>
+        <button type="button" data-section="security">Security</button>
+        <button type="button" data-section="autofill">Autofill and save</button>
+        <button type="button" data-section="notifications">Notifications</button>
+        <button type="button" data-section="appearance">Appearance and shortcuts</button>
+      </nav>
+      <div id="settings-panes">
+      <section id="settings-general" class="settings-section" hidden>
+        <h2>General</h2>
+        <div class="settings-section-body">
+          <p class="panel-helper">Check this browser for other password managers, or open the MyPass app settings.</p>
+          <button id="check-browser-managers-btn" type="button" class="btn-secondary">Check this browser</button>
+          <button id="open-settings-btn" type="button" class="btn-secondary">MyPass settings</button>
+          <p id="settings-open-error" class="panel-helper" role="status" hidden></p>
+        </div>
+      </section>
+      <section id="settings-security" class="settings-section" hidden>
+        <h2>Security</h2>
+        <div class="settings-section-body">
+          <p class="panel-helper">Review security settings in the MyPass app.</p>
+          <button id="open-mypass-app-btn" type="button" class="btn-secondary">Open MyPass</button>
+          <p id="open-mypass-app-error" class="panel-helper" role="status" hidden></p>
+          <p class="security-heading">Phishing prevention</p>
+          <label class="security-row">
+            <span class="security-copy">
+              <strong>Warn when pasting on an unrecognized website</strong>
+              <p>Show a warning when a saved password is pasted on a site that is not saved with that item.</p>
+            </span>
+            <span class="security-switch">
+              <input id="warn-unrecognized-paste" type="checkbox" checked>
+              <span></span>
+            </span>
+          </label>
+          <label class="security-row">
+            <span class="security-copy">
+              <strong>Warn when copying on an unrecognized website</strong>
+              <p>Show a warning when a saved login or password is copied on a site that is not saved with that item.</p>
+            </span>
+            <span class="security-switch">
+              <input id="warn-unrecognized-copy" type="checkbox" checked>
+              <span></span>
+            </span>
+          </label>
+        </div>
+      </section>
+      <section id="settings-autofill" class="settings-section" hidden>
+        <h2>Autofill and save</h2>
+        <div class="settings-section-body">
+          <p class="panel-helper">These settings stay in this browser. Passkeys follow the switch in the MyPass app.</p>
+          <label class="security-row">
+            <span class="security-copy">
+              <strong>Offer to save new logins</strong>
+              <p>Ask to save a login after you submit a form on a site that has no saved item.</p>
+            </span>
+            <span class="security-switch">
+              <input id="offer-save-login" type="checkbox" checked>
+              <span></span>
+            </span>
+          </label>
+          <label class="security-row">
+            <span class="security-copy">
+              <strong>Offer to save a 2FA code</strong>
+              <p>Ask to save a code when a site shows a setup key.</p>
+            </span>
+            <span class="security-switch">
+              <input id="offer-save-totp" type="checkbox" checked>
+              <span></span>
+            </span>
+          </label>
+          <label class="security-row">
+            <span class="security-copy">
+              <strong>Show the MyPass icon in fields</strong>
+              <p>Put the icon in username, password, and one-time code fields.</p>
+            </span>
+            <span class="security-switch">
+              <input id="show-field-icon" type="checkbox" checked>
+              <span></span>
+            </span>
+          </label>
+          <label class="security-row">
+            <span class="security-copy">
+              <strong>Sign in after filling</strong>
+              <p>Click the form's sign-in button after MyPass fills a login and password. A generated password is not submitted.</p>
+            </span>
+            <span class="security-switch">
+              <input id="autofill-auto-submit" type="checkbox">
+              <span></span>
+            </span>
+          </label>
+          <label class="security-row">
+            <span class="security-copy">
+              <strong>Offer to sign in with a passkey</strong>
+              <p>Uses the passkey switch in the MyPass app. Unlock MyPass to change it.</p>
+            </span>
+            <span class="security-switch">
+              <input id="autofill-passkey-signin" type="checkbox">
+              <span></span>
+            </span>
+          </label>
+          <p id="autofill-passkey-error" class="panel-helper" role="status" hidden></p>
+          <p class="security-heading">Suggestions</p>
+          <label class="security-row">
+            <span class="security-copy">
+              <strong>Show logins</strong>
+              <p>Include saved logins in the menu on a field.</p>
+            </span>
+            <span class="security-switch">
+              <input id="suggest-logins" type="checkbox" checked>
+              <span></span>
+            </span>
+          </label>
+          <label class="security-row">
+            <span class="security-copy">
+              <strong>Show cards</strong>
+              <p>Include saved cards in the menu on a field.</p>
+            </span>
+            <span class="security-switch">
+              <input id="suggest-cards" type="checkbox" checked>
+              <span></span>
+            </span>
+          </label>
+          <label class="security-row">
+            <span class="security-copy">
+              <strong>Show addresses</strong>
+              <p>Include saved addresses when you fill a form from the popup.</p>
+            </span>
+            <span class="security-switch">
+              <input id="suggest-addresses" type="checkbox" checked>
+              <span></span>
+            </span>
+          </label>
+        </div>
+      </section>
+      <section id="settings-notifications" class="settings-section" hidden>
+        <h2>Notifications</h2>
+        <div class="settings-section-body">
+          <p class="panel-helper">These notifications stay in this browser.</p>
+          <label class="security-row">
+            <span class="security-copy">
+              <strong>Notify when a passkey needs confirmation</strong>
+              <p>Show a system notification when Chrome is in the background and a site asks MyPass to confirm a passkey.</p>
+            </span>
+            <span class="security-switch">
+              <input id="notify-passkey-confirmation" type="checkbox" checked>
+              <span></span>
+            </span>
+          </label>
+          <label class="security-row">
+            <span class="security-copy">
+              <strong>Notify when MyPass is unlocked</strong>
+              <p>Show a system notification when the vault changes from locked to unlocked.</p>
+            </span>
+            <span class="security-switch">
+              <input id="notify-vault-unlocked" type="checkbox" checked>
+              <span></span>
+            </span>
+          </label>
+        </div>
+      </section>
+      <section id="settings-appearance" class="settings-section" hidden>
+        <h2>Appearance and shortcuts</h2>
+        <div class="settings-section-body">
+          <p class="panel-helper">Theme and shortcuts stay in this browser.</p>
+          <label class="appearance-row">
+            <span>Theme</span>
+            <select id="appearance-theme">
+              <option value="system" selected>Match system</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </label>
+          <p class="security-heading">Shortcuts</p>
+          <div class="appearance-row">
+            <span>Open MyPass</span>
+            <kbd id="shortcut-open">Not set</kbd>
+          </div>
+          <div class="appearance-row">
+            <span>Lock MyPass</span>
+            <kbd id="shortcut-lock">Not set</kbd>
+          </div>
+          <p class="panel-helper">Change shortcuts on the <button id="open-shortcut-settings" type="button" class="appearance-link">Chrome shortcuts page</button>.</p>
+        </div>
+      </section>
+      </div>
+    </section>
+    <section id="page-not-found" hidden><p>Page not found.</p></section>
+  </main>
+  <script src="../shared/autofill-settings.js"></script>
+  <script src="../shared/notification-settings.js"></script>
+  <script src="../shared/security-watch.js"></script>
+  <script src="../shared/appearance-settings.js"></script>
+  <script src="../shared/theme.js"></script>
+  <script src="router.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

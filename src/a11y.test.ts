@@ -306,6 +306,37 @@ const SCENARIOS: Record<string, Scenario> = {
     await user.click(await screen.findByRole("menuitem", { name: "Show Large Type" }));
     return { dialog: "Large Type", opener: within(row).getByRole("button", { name: /Hide|Reveal/ }) };
   },
+  // A sheet the backend raises: focus comes back to whatever held it before the code appeared.
+  "src/screens/PairingCodeSheet.svelte#Pairing code": async () => {
+    const { fake } = await unlocked();
+    const opener = screen.getByRole("listbox");
+    opener.focus();
+    const challenge = { code: "123456", browser: "Chrome", expiresAt: Date.now() + 60_000 };
+    fake.state.browser.pairing = challenge;
+    await fake.emit("pairingChallengeEvent", challenge);
+    return { dialog: "Pairing code", opener };
+  },
+  "src/windows/settings/BrowserHelpSheet.svelte#Connect a browser": async (user) => {
+    await renderSettingsApp({}, { pane: "Browser" });
+    const opener = await screen.findByRole("button", { name: "Connect a browser" });
+    await click(user, opener);
+    return { dialog: "Connect a browser", opener };
+  },
+  "src/windows/settings/Browser.svelte#Revoke this browser?": async (user) => {
+    await renderSettingsApp(
+      {},
+      { pane: "Browser", prepare: (f) => (f.state.browser.paired = [{ id: "b1", label: "Chrome", createdAt: 1_700_000_000_000, diagnostics: null }]) },
+    );
+    const opener = await screen.findByRole("button", { name: "Revoke: Chrome" });
+    await click(user, opener);
+    return { dialog: "Revoke this browser?", opener };
+  },
+  "src/windows/settings/Browser.svelte#Reset paired browsers?": async (user) => {
+    await renderSettingsApp({}, { pane: "Browser", prepare: (f) => (f.state.browser.pairingStoreFailed = true) });
+    const opener = await screen.findByRole("button", { name: "Reset paired browsers" });
+    await click(user, opener);
+    return { dialog: "Reset paired browsers?", opener };
+  },
   "src/windows/settings/Vault.svelte#Restore this backup?": async (user) => {
     await renderSettingsApp(
       {},

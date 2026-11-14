@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MyPass address autofill fixture</title>
+<style>
+  body { font: 16px system-ui, sans-serif; margin: 32px auto; max-width: 1000px; padding: 0 24px; color: #172b38; background: #f5f7fa; }
+  h1 { margin-bottom: 8px; } .forms { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  form, .controls { padding: 24px; background: white; border: 1px solid #d7dfe6; border-radius: 14px; }
+  label { display: block; margin: 12px 0; } input, textarea, select { box-sizing: border-box; width: 100%; padding: 9px; margin-top: 5px; font: inherit; }
+  button { padding: 10px 14px; margin: 4px; border-radius: 8px; cursor: pointer; }
+  .controls { margin: 24px 0; } #result { font-weight: 600; } .muted { color: #596773; }
+  @media(max-width:700px) { .forms { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<h1>Address autofill</h1>
+<p class="muted">Synthetic local fixture. No network requests, saved data or automatic submission.</p>
+<div class="controls">
+  <button id="scan" type="button">Find address forms</button>
+  <div id="choices"></div><p id="result" role="status">Choose a form to fill with the example address.</p>
+</div>
+<div class="forms">
+<form id="checkout" onsubmit="event.preventDefault()">
+<h2>Shipping</h2>
+<label>Full name<input autocomplete="section-order shipping name"></label>
+<label>Street address<textarea autocomplete="section-order shipping street-address" rows="2"></textarea></label>
+<label>City<input autocomplete="section-order shipping address-level2"></label>
+<label>Postal code<input autocomplete="section-order shipping postal-code"></label>
+<label>Country<select autocomplete="section-order shipping country"><option value="">Select country</option><option value="DE">Germany</option><option value="PL">Polska</option></select></label>
+<label>Email<input type="email" autocomplete="section-order shipping email"></label>
+<input type="hidden" autocomplete="section-order shipping address-line2" value="hidden-trap">
+</form>
+<form id="billing" onsubmit="event.preventDefault()">
+<h2>Billing</h2>
+<label>Given name<input autocomplete="section-order billing given-name" value="Keep existing name"></label>
+<label>Address line 1<input autocomplete="section-order billing address-line1"></label>
+<label>Address line 2<input autocomplete="section-order billing address-line2"></label>
+<label>City<input autocomplete="section-order billing address-level2"></label>
+<label>Country<select autocomplete="section-order billing country-name"><option value="">Select country</option><option value="poland">Poland</option></select></label>
+<label>Phone<input type="tel" autocomplete="section-order billing tel" value="Keep existing phone"></label>
+<input style="display:none" autocomplete="section-order billing postal-code" value="hidden-trap">
+</form>
+<form id="login" onsubmit="event.preventDefault()">
+<h2>Login is excluded</h2>
+<label>Email<input type="email" autocomplete="email"></label>
+<label>Password<input type="password" autocomplete="current-password"></label>
+</form>
+<form id="ambiguous" onsubmit="event.preventDefault()">
+<h2>Ambiguous fields are excluded</h2>
+<label>First address<input autocomplete="address-line1"></label>
+<label>Second address<input autocomplete="address-line1"></label>
+</form>
+</div>
+<script src="../../shared/address-form.js"></script>
+<script>
+const sample = { fullName: 'Example Person', givenName: '', familyName: '',
+  addressLine1: '12 Example Street', addressLine2: 'Unit 4', city: 'Sample City',
+  postalCode: '00-001', countryCode: 'PL', countryName: 'Poland', email: 'demo@example.test', phone: '' };
+const result = document.getElementById('result');
+document.getElementById('scan').addEventListener('click', () => {
+  const groups = mypassAddressForm.collect(document);
+  const choices = document.getElementById('choices'); choices.replaceChildren();
+  mypassAddressForm.describe(groups, document).forEach((form) => {
+    const button = document.createElement('button'); button.type = 'button'; button.textContent = 'Fill ' + form.label;
+    button.addEventListener('click', () => {
+      const outcome = mypassAddressForm.apply(document, groups, form.id, sample, mypassAddressForm.setNativeAddressValue);
+      result.textContent = outcome.type === 'addressFilled' ? 'Filled ' + outcome.filled + ' fields. Other forms were not changed.' : outcome.code;
+    });
+    choices.appendChild(button);
+  });
+  result.textContent = 'Found ' + groups.length + ' address forms. Select one explicitly.';
+});
+</script>
+</body>
+</html>

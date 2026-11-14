@@ -182,7 +182,13 @@ fn cyrillic_allowed(rel: &str) -> bool {
         // the English catalog stays Cyrillic-free (pinned by the Node completeness tests).
         || matches!(
             rel,
-            "src/lib/i18n/locales/uk.json"
+            // The extension keeps localized keyword lists (and the tests that pin them) as copied.
+            "extension/shared/form-detection.js"
+                | "extension/shared/page-identifier.js"
+                | "extension/tests/formDetection.test.js"
+                | "extension/tests/inlineIcon.test.js"
+                | "extension/tests/pageIdentifier.test.js"
+                | "src/lib/i18n/locales/uk.json"
                 | "src/lib/i18n/locales/ru.json"
                 | "src-tauri/resources/macos/uk.lproj/InfoPlist.strings"
                 | "src-tauri/resources/macos/ru.lproj/InfoPlist.strings"
@@ -199,6 +205,17 @@ fn cyrillic_allowlist_covers_only_the_translation_files() {
     assert!(cyrillic_allowed(
         "src-tauri/resources/macos/ru.lproj/InfoPlist.strings"
     ));
+    for f in [
+        "extension/shared/form-detection.js",
+        "extension/shared/page-identifier.js",
+        "extension/tests/formDetection.test.js",
+        "extension/tests/inlineIcon.test.js",
+        "extension/tests/pageIdentifier.test.js",
+    ] {
+        assert!(cyrillic_allowed(f), "{f}");
+    }
+    assert!(!cyrillic_allowed("extension/background.js"));
+    assert!(!cyrillic_allowed("extension/content.js"));
     assert!(!cyrillic_allowed("src/lib/i18n/locales/en.json"));
     assert!(!cyrillic_allowed("src/lib/i18n/index.ts"));
     assert!(!cyrillic_allowed("scripts/convert-xcstrings.test.mjs"));
@@ -232,7 +249,7 @@ fn cyrillic_only_in_allowed_files() {
         };
         assert!(
             !has_cyrillic(&text),
-            "{rel} contains Cyrillic; use \\u{{..}} escapes (literal Cyrillic is allowed only in *.xcstrings, RUN.md, src/lib/i18n/locales/{{uk,ru}}.json, src-tauri/resources/macos/{{uk,ru}}.lproj/InfoPlist.strings, crates/mypass-kdbx/tests/unicode.rs, vendored data under crates/mypass-core/resources/ and binary fixtures crates/mypass-kdbx/tests/fixtures/*.kdbx)"
+            "{rel} contains Cyrillic; use \\u{{..}} escapes (literal Cyrillic is allowed only in *.xcstrings, RUN.md, src/lib/i18n/locales/{{uk,ru}}.json, src-tauri/resources/macos/{{uk,ru}}.lproj/InfoPlist.strings, five extension files listed in AGENTS.md, crates/mypass-kdbx/tests/unicode.rs, vendored data under crates/mypass-core/resources/ and binary fixtures crates/mypass-kdbx/tests/fixtures/*.kdbx)"
         );
     }
 }
@@ -296,6 +313,54 @@ fn every_locked_package_has_a_third_party_notice() {
         assert!(
             notices.contains(&row),
             "missing notice for {name} {version}"
+        );
+    }
+}
+
+#[test]
+fn agents_md_lists_the_bridge_crates_extension_and_scripts() {
+    let agents = read("AGENTS.md");
+    for needle in [
+        "mypass-bridge",
+        "mypass-host",
+        "extension/",
+        "scripts/test-extension.sh",
+        "scripts/build-host.sh",
+        "scripts/dev-app.sh",
+        "RUN.md",
+        "Browser bridge.",
+        "browser_proposal_take",
+    ] {
+        assert!(agents.contains(needle), "AGENTS.md must mention {needle}");
+    }
+    for stale in ["| in progress (stage 3) |", "wire up in progress"] {
+        assert!(!agents.contains(stale), "stale stage 3 wording: {stale}");
+    }
+}
+
+#[test]
+fn run_md_has_the_stage_3_sections_and_only_open_boxes() {
+    let run = read("RUN.md");
+    assert!(has_cyrillic(&run), "RUN.md is the Ukrainian checklist");
+    for needle in [
+        "**M1 ",
+        "**M14 ",
+        "Unlock MyPass",
+        "python3 -m http.server 8765",
+        "extension/tests/fixtures",
+        "127.0.0.1:8766",
+        "scripts/dev-app.sh",
+    ] {
+        assert!(run.contains(needle), "RUN.md must contain {needle}");
+    }
+    assert!(
+        !run.contains("SFTP"),
+        "SFTP is removed from the product; RUN.md must not mention it"
+    );
+    for line in run.lines().filter(|l| l.trim_start().starts_with("- [")) {
+        assert!(
+            line.trim_start().starts_with("- [ ]"),
+            "RUN.md lists unwalked checks only: {line}"
         );
     }
 }

@@ -1,0 +1,25 @@
+/* Prompt card (save login / save 2FA / autofill settings). Shared by popup.html and prompt.html. */
+.pc-card { display: block; }
+.pc-fields { margin: 8px 0 12px; }
+.pc-error { color: #d70015; font-size: 13px; line-height: 1.35; margin: 0 0 12px; overflow-wrap: anywhere; }
+.pc-accounts { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.pc-account {
+  width: 100%;
+  text-align: left;
+  box-sizing: border-box;
+  min-height: var(--mp-control-height, 32px);
+  padding: 6px 10px;
+  font-family: inherit;
+  font-size: var(--mp-control-font, 13px);
+  color: var(--mp-text);
+  background: var(--mp-fill);
+  border: 1px solid var(--mp-line);
+  border-radius: var(--mp-control-radius, 8px);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.pc-account[aria-pressed="true"] { border-color: var(--mp-blue); background: var(--mp-accent-soft); }
+.pc-toggles { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 12px; }
+.pc-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--mp-text); }
+.pc-card > .pc-toggle { margin-top: 14px; color: var(--mp-secondary); }
+.btn-primary:disabled, .btn-secondary:disabled { opacity: 0.55; cursor: default; }

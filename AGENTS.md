@@ -23,13 +23,13 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `mypass-kdbx` | implemented | KDBX4 engine: format pipeline, model, database API, vault file, `FileIo` seam |
 | `mypass-core` | implemented | Everything that consumes the model: TOTP, generator and password rules, Public Suffix List, entry matcher, merge engine |
 | `repo-guards` | implemented | Test-only (`publish = false`, never shipped): guard tests for the workspace, CI, docs and scripts |
-| `mypass-platform` | macOS bodies for events, clipboard and keyboard layout; Keychain, device unlock, host registrar and launch at login in stages 3 and 5; Windows in stage 6 | OS glue behind traits (system events, secure clipboard, secret stores, device unlock, native host registrar, launch at login, keyboard layout) and `AppPaths`; fakes behind the `test-util` feature, `Unsupported` fallbacks where a platform body has not landed |
+| `mypass-platform` | macOS bodies for events, clipboard, keyboard layout and Keychain; the hardened 0600 `FileSecretStore` is the host-shared store on macOS and, until DPAPI, Windows; the macOS native messaging host registrar (stage 3); device unlock and launch at login in stage 5; Windows in stage 6 | OS glue behind traits (system events, secure clipboard, secret stores, device unlock, native host registrar, launch at login, keyboard layout) and `AppPaths`; fakes behind the `test-util` feature, `Unsupported` fallbacks where a platform body has not landed |
 | `mypass-session` | implemented | Vault session, settings, scheduling and the `AppCore` command facade; no Tauri dependency |
 | `src/` (Svelte UI) | implemented (stage 2b) | The webview UI: typed API wrapper, stores (`src/lib/stores`), i18n, design kit, the screens (`src/screens`, `src/screens/editors`) and the windows (`src/windows`: main, settings, tray panel) |
 | `src-tauri` (package `mypass-app`, lib `mypass_app_lib`) | implemented | The Tauri 2 app shell: the typed commands and events (`tauri-specta`), capabilities, native file dialogs, plugins, tray, global hotkeys, single instance, quit flow, native-side i18n; a workspace member listed explicitly |
-| `mypass-bridge` | planned | Browser bridge protocol and loopback server |
-| `mypass-host` | planned | Native messaging host binary |
-| `extension/` | planned | The Chromium extension (JavaScript, with its own Node test suites) |
+| `mypass-bridge` | implemented | Browser bridge protocol, codec, endpoint, relay and loopback server (`server` feature, off for the host) |
+| `mypass-host` | implemented | Native messaging host binary; never links the session, core or KDBX crates |
+| `extension/` | implemented | The Chromium extension (Manifest V3 JavaScript, vendored `vendor/jsQR.js`), with its 41 Node suites in `extension/tests/`, run by `scripts/test-extension.sh` |
 
 ## Repo layout
 
@@ -45,9 +45,11 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `index.html`, `vite.config.ts`, `svelte.config.js`, `tsconfig.json`, `vitest.setup.ts` | The Svelte 5 (runes) + Vite + Vitest toolchain of the UI |
 | `src/` | The UI: `main.ts` picks the root for the window label (`windows/`), `lib/` the API wrapper, stores and i18n, `screens/` the screens and editors, `test/` holds the fake backend (type-checked against the bindings), the render helper and the shared source scan `textScan.ts`, `scaffold.test.ts` holds the static source guards, `journey.test.ts`, `a11y.test.ts` and `i18n.audit.test.ts` the journey, accessibility and string-audit suites |
 | `scripts/test.sh` | The single local and CI test entry point |
+| `scripts/build-host.sh`, `scripts/dev-app.sh` | Build the `mypass-host` sidecar (signed when `MYPASS_SIGNING_IDENTITY` names a certificate SHA-1; never ad-hoc), and build and run the app locally with it |
+| `scripts/test-extension.sh` | Runs every `extension/tests/*.test.js` suite in its own node process (`--list` prints them); part of the `js` part |
 | `scripts/convert-xcstrings.mjs` | One-time converter of the old app's String Catalogs; its output (`src/lib/i18n/locales/{en,uk,ru}.json`, `src-tauri/resources/macos/*.lproj/InfoPlist.strings`) is then the hand-edited source of truth |
 | `.github/` | Workflows (`ci.yml`, `codeql.yml`), Dependabot config, issue forms, pull request template |
-| `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts) and the Stage 2b UI walk-through |
+| `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts), the Stage 2b UI walk-through and the Stage 3 browser bridge checklist (M1 to M14) |
 | `docs/implementation/ROADMAP.md` | The only tracked document under `docs/`: unfinished work |
 | `LICENSE`, `THIRD_PARTY_NOTICES.md` | Apache-2.0 and the notices for vendored data and linked crates |
 
@@ -57,7 +59,8 @@ Stage 1 (the Rust core: KDBX4 engine, TOTP, generator, Public Suffix List, match
 vault file) is implemented.
 Stage 2a (the app backend behind the glass: `mypass-platform` macOS bodies, `mypass-session`, the Tauri shell with commands, events, capabilities, tray, hotkeys, single instance and the quit flow) is implemented; its open follow-ups are in `docs/implementation/ROADMAP.md`.
 Stage 2b (the Svelte UI: unlock, create and open, the three-pane shell, editors, history and bin, generator, settings window, CSV import, tray panel, themes, uk/ru/en) has landed; its manual checks live in `RUN.md`.
-Later stages (rest of the app backend, extension bridge, passkeys, macOS release, Windows) are listed in `docs/implementation/ROADMAP.md`.
+Stage 3 (the browser bridge: `mypass-bridge`, the `mypass-host` native messaging host, the Settings Browser pane with pairing and save proposals, and the extension moved into `extension/` with its suites in CI) is implemented apart from the owner's manual checks, which live in `RUN.md`.
+Later stages (the rest of the app backend, passkeys, macOS release, Windows) are listed in `docs/implementation/ROADMAP.md`.
 
 ## Build, run, test
 
@@ -85,7 +88,7 @@ pnpm build                       # production bundle into dist/
 - The `ui` part runs `pnpm install --frozen-lockfile`, `pnpm check`, `pnpm test` and `pnpm build`;
   `--ci` makes a missing node or pnpm a failure, a local run without them prints `ui: NOT RUN`.
 - The `js` part runs `node --test scripts/` (the i18n converter and catalog tests; plain Node, nothing
-  to install) and, from stage 3, the extension suites. `--no-js` is only for a local machine without
+  to install) and the extension suites (`scripts/test-extension.sh`: every `extension/tests/*.test.js` in its own `node` process, `N suites, M failed`; `--list` prints the discovered files). `--no-js` is only for a local machine without
   `node`, and it prints that the JavaScript suites were NOT run. It is never a way to report a change as tested when that change touches `extension/`.
 - Windows: run `cargo` commands from PowerShell, and `scripts/*.sh` from Git Bash.
 
@@ -110,16 +113,16 @@ jobs are independent and run in parallel, so the wall-clock time is the slowest 
   Python reads, then Python writes / Rust reads. It is path-gated on pull requests through
   `changes.outputs.crosscompat` and always runs on main pushes and manual dispatch.
   The env-gated Rust test prints a skip locally unless `MYPASS_PYKEEPASS_VAULT` is set.
-- `i18n` runs on Ubuntu with Node from `.nvmrc` (`actions/setup-node`): `bash scripts/test.sh --ci
+- `js` runs on Ubuntu with Node from `.nvmrc` (`actions/setup-node`): `bash scripts/test.sh --ci
   --only js`, i.e. `node --test scripts/` (the xcstrings converter and the catalog completeness
-  tests; built-in runner, no dependencies, no package install). It always runs and must be `success`.
+  tests) and `scripts/test-extension.sh` (the extension suites); built-in runner, no dependencies, no package install. It always runs and must be `success`.
 - `ui` runs on Ubuntu with pnpm (`pnpm/action-setup`, `version` equal to `packageManager`) and Node from
   `.nvmrc` with the pnpm cache: `bash scripts/test.sh --ci --only ui`. It has no rust-cache (it never
   runs cargo), always runs and must be `success`.
 - `windows-integration` is a disabled skeleton for stage 6: it runs only when the repository variable
   `MYPASS_WINDOWS_INTEGRATION_TESTS` is `true`, otherwise it is skipped.
 - `ci` is the aggregator and the required status check. It needs every other job (`changes`, `lint`,
-  `test`, `i18n`, `ui`, `windows-integration`, `crosscompat`); a gated job may be `skipped`, every other result
+  `test`, `js`, `ui`, `windows-integration`, `crosscompat`); a gated job may be `skipped`, every other result
   (`lint` and `test` included) must be `success`. A job added later must be wired into it
   (pinned by `ci_aggregator_needs_every_job`).
 - `.github/workflows/codeql.yml` is a separate workflow (push to `main`, weekly, manual; never on pull
@@ -219,7 +222,7 @@ change is done.
 - **Shell.** Decisions are plain functions, the Tauri glue is thin: `shell.rs` (settings effects, close
   and quit rules, login-item reconcile, `WindowOps`), `tray.rs` (menu model and ids), `hotkeys.rs`
   (plan, `HotkeyRegistry` seam), `lifecycle.rs` (platform events into auto-lock, the quit flow,
-  the external-change watcher, `ShellEffects`, tray refresh) and `i18n.rs` (the shared catalogs, `{0}`
+  the external-change watcher, `ShellEffects`, tray refresh) and `bridge.rs` (the browser bridge: pairing window and unlock-focus rules, start and quit, over the `BridgeEvents` seam; `commands/browser.rs` holds the `browser_*` commands) and `i18n.rs` (the shared catalogs, `{0}`
   substitution, English fallback) and `navigation.rs` (a webview may navigate only to the app's own origin); only `shell_runtime.rs` touches the runtime. Webviews hold
   `core:event:default`, so no Rust listener acts on a webview-emittable event: every trigger is
   a Rust call (session observer, platform sink, menu, tray, window or run-event callback). Tray
@@ -237,8 +240,27 @@ change is done.
   cleared on close, save and lock, and the single `{@html}` site renders sanitised markdown. The main
   window reports whether its editor holds unsaved changes (`app_set_editor_dirty`), and the quit flow
   asks before discarding them.
+  `browser_proposal_take` is the one command that hands a browser's proposed password to the webview, once, after
+  the user opened the proposal; like typed input it may land in an encrypted editor draft. `browser_status` never
+  returns a secret or a hash.
+- **Browser bridge.** Three hops: the extension talks to `mypass-host` (native messaging, one host process per
+  message), the host to the app's loopback server (`127.0.0.1`, `mypass_bridge::server`, thread per connection, no async
+  runtime). The host never links the session, core or KDBX crates. Each launch draws a fresh token and port and
+  publishes them as an endpoint record in the hardened 0600 file store under `AppPaths::secrets_shared`
+  (read by the host); the pairing hashes live in the app-only Keychain and the host can never read them. A connection
+  starts with a handshake: the host sends a hello with a fresh nonce, the server answers with an HMAC proof over
+  the token, and only after the host verified it does the host send a token-bearing request, so a squatter on a stale
+  port never receives the token; unauthenticated connections have an absolute deadline. The gate order is quitting,
+  locked, then pairing; gating `match`es stay exhaustive (no wildcard arm), so a new request type is a compile error
+  until it is classified. Residual risk: a process of the same user can read the endpoint file and request pairing
+  (pairing still needs the code shown in the app), and by rewriting the endpoint record or replacing the host copy the manifests point at
+  it can capture the extension's pairing secret and then read every credential, the same exposure as the extension's own `chrome.storage`; stage 5 closes it, it is not optional hardening, and moves
+  the endpoint into a Keychain item that trusts only the signed host and points the manifests at the host inside the
+  bundle (ROADMAP). The earlier idea of a shared Keychain access group was dropped.
 - **Signing.** The stable team `W645B93PPQ` arrives in stage 5. Never sign ad-hoc: it breaks the
   Keychain access that guards the unlock key.
+- **Manual checks and the old app.** The manual checks of every stage live in `RUN.md` (Ukrainian). Never run the old
+  Swift MyPass side by side with this app, and open only a copy of a real vault.
 
 ---
 
@@ -384,9 +406,9 @@ skipped. Pause, re-read this file, dispatch the next chunk.
 
 English for code, comments, commit messages, docs, plans and specs. Cyrillic appears only inside tests
 as `\u{..}` escapes, in `*.xcstrings` and in the root `RUN.md` (the Ukrainian manual checklist,
-never translated). Literal Cyrillic is also allowed in the translation files
+never translated). Literal Cyrillic is also allowed in the extension files `extension/shared/{form-detection,page-identifier}.js` and `extension/tests/{formDetection,inlineIcon,pageIdentifier}.test.js` (localized keyword lists and their tests; the extension is vendored as copied), and in the translation files
 `src/lib/i18n/locales/{uk,ru}.json` and `src-tauri/resources/macos/{uk,ru}.lproj/InfoPlist.strings`
-(exactly these four; the English files stay Cyrillic-free, and the Node tests read their expectations
+(exactly these four of the translation files; the English files stay Cyrillic-free, and the Node tests read their expectations
 from the catalogs), in `crates/mypass-kdbx/tests/unicode.rs`,
 vendored upstream data under `crates/mypass-core/resources/`, and opaque binary fixtures
 `crates/mypass-kdbx/tests/fixtures/*.kdbx` (fixture README and generator files follow the text rules).
@@ -440,7 +462,7 @@ MyPass is Apache-2.0. Whenever a dependency or a vendored file is added, removed
 ## Never commit
 
 Everything in `.gitignore` (`/docs/superpowers/`, `.superpowers/`, `/target/`, `node_modules/`,
-`/dist/`, `.DS_Store`, `.worktrees/`, `*.profraw`), vault files with real data, and secrets.
+`/dist/`, `/src-tauri/binaries/`, `/src-tauri/gen/`, `.DS_Store`, `.worktrees/`, `*.profraw`), vault files with real data, and secrets.
 
 ## Real data
 
