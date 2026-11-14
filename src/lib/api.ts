@@ -115,6 +115,7 @@ export const api = {
   entryList: wrap(commands.entryList),
   entryMove: wrap(commands.entryMove),
   entryNewModel: wrap(commands.entryNewModel),
+  entryPasskeyDetails: wrap(commands.entryPasskeyDetails),
   entryPurge: wrap(commands.entryPurge),
   entryRecent: wrap(commands.entryRecent),
   entryRestore: wrap(commands.entryRestore),

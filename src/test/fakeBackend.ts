@@ -37,6 +37,7 @@ import type {
 import {
   BIN_GROUP_ID,
   FIXTURE_MASTER_PASSWORD,
+  FIXTURE_PASSKEY_CREDENTIAL_ID,
   PERSONAL_GROUP_ID,
   ROOT_GROUP_ID,
   defaultSettings,
@@ -554,7 +555,15 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         customFields: [],
         attachments: [],
         attachmentOps: [],
+        passkey: null,
+        removePasskey: false,
       };
+    },
+    // Like `queries::passkey_details`: the metadata plus the public credential id, never the key.
+    entryPasskeyDetails: ({ id }) => {
+      requireUnlocked();
+      const found = findEntry(id);
+      return found.passkey ? { ...structuredClone(found.passkey), credentialId: FIXTURE_PASSKEY_CREDENTIAL_ID } : null;
     },
     entryPurge: ({ id }) => {
       requireUnlocked();
@@ -616,9 +625,14 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       for (const op of model.attachmentOps) if (op.kind === "add") pickedFiles.delete(op.path);
       const title =
         model.entryType === "address" && model.title.trim() === "" ? (model.address?.label ?? "") : model.title.trim();
-      const saved = { ...structuredClone(model), title, attachments, attachmentOps: [] };
       const found = model.id ? findEntry(model.id) : null;
+      // Like `editing::apply`: `passkey` is display data and never an input; only `removePasskey`
+      // changes the stored passkey, and only on save.
+      const passkey = found && !model.removePasskey ? found.passkey : null;
+      const saved = { ...structuredClone(model), title, attachments, attachmentOps: [], passkey, removePasskey: false };
       if (found) {
+        found.passkey = passkey;
+        if (model.removePasskey) found.summary.hasPasskey = false;
         // Every save of an existing entry snapshots the previous state into its history.
         found.history.push({ modified: found.modified, model: structuredClone(found.model) });
         found.model = saved;

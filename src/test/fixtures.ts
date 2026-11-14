@@ -26,6 +26,9 @@ export const FIXTURE_CARD_NUMBER = "4111111111111111";
 export const FIXTURE_CARD_CVV = "737";
 export const FIXTURE_VAULT_PATH = "/vaults/test.kdbx";
 
+/** The credential id `entry_passkey_details` reports for every fixture passkey (base64url). */
+export const FIXTURE_PASSKEY_CREDENTIAL_ID = "AQIDBAUGBwg";
+
 export const ROOT_GROUP_ID = "group-root";
 export const PERSONAL_GROUP_ID = "group-personal";
 export const WORK_GROUP_ID = "group-work";
@@ -151,6 +154,8 @@ export function makeEntry(spec: EntrySpec): FixtureEntry {
       customFields: spec.customFields ?? [],
       attachments: spec.attachments ?? [],
       attachmentOps: [],
+      passkey: spec.passkey ?? null,
+      removePasskey: false,
     },
   };
   const versions: HistorySpec[] =

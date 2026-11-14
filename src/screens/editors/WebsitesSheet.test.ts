@@ -23,6 +23,8 @@ function model(urls: string[], mode = "registrable-domain"): EntryEditModel_Seri
     customFields: [],
     attachments: [],
     attachmentOps: [],
+    passkey: null,
+    removePasskey: false,
   };
 }
 

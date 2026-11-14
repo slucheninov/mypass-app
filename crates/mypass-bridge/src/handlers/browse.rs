@@ -133,9 +133,10 @@ pub(crate) fn search_entries(ctx: &Ctx<'_>, query: &str) -> Response {
 mod tests {
     use super::*;
     use crate::protocol::Request;
-    use crate::testing::{credential_rows, fx, sample_fx, send};
+    use crate::testing::{credential_rows, fx, fx_with_db, sample_fx, send, RecordingPasskeys};
     use crate::views::wire_id;
     use mypass_session::session::LockReason;
+    use std::sync::Arc;
 
     fn creds(url: &str) -> impl FnOnce(String, Option<String>) -> Request + '_ {
         move |token, pairing| Request::GetCredentials {
@@ -167,6 +168,80 @@ mod tests {
 
     fn titles(r: &Response) -> Vec<String> {
         credential_rows(r).iter().map(|c| c.title.clone()).collect()
+    }
+
+    #[test]
+    fn passkeys_category_count_matches_list_and_bridge_summary() {
+        use mypass_session::dto::{Category, EntryQuery, Scope, SortKey};
+        use mypass_session::queries::{self, SearchScope};
+        let (db, expected) = mypass_session::testing::passkey_category_database();
+        let sorted_ids = |wire: bool| {
+            let mut v: Vec<String> = expected
+                .iter()
+                .map(|id| {
+                    if wire {
+                        wire_id(*id)
+                    } else {
+                        id.simple().to_string()
+                    }
+                })
+                .collect();
+            v.sort();
+            v
+        };
+        let (want_app, want) = (sorted_ids(false), sorted_ids(true));
+        // The app: the Passkeys category, its sidebar count and the list badge.
+        let (app_list, app_count, app_badged) = {
+            let query = EntryQuery {
+                scope: Scope::Category {
+                    category: Category::Passkeys,
+                },
+                search: String::new(),
+                sort: SortKey::Title,
+            };
+            let mut listed: Vec<String> = queries::list_entries(&db, &query, SearchScope::App)
+                .into_iter()
+                .map(|s| s.id)
+                .collect();
+            listed.sort();
+            let count = queries::sidebar(&db)
+                .categories
+                .into_iter()
+                .find(|c| c.category == Category::Passkeys)
+                .and_then(|c| c.count);
+            let all = EntryQuery {
+                scope: Scope::Category {
+                    category: Category::All,
+                },
+                ..query
+            };
+            let mut badged: Vec<String> = queries::list_entries(&db, &all, SearchScope::App)
+                .into_iter()
+                .filter(|s| s.has_passkey)
+                .map(|s| s.id)
+                .collect();
+            badged.sort();
+            (listed, count, badged)
+        };
+        // Session ids are simple UUIDs, wire ids hyphenated upper case: the same entries.
+        assert_eq!(app_list, want_app);
+        assert_eq!(app_badged, want_app);
+        assert_eq!(app_count, Some(2));
+        // The bridge: the popup's Passkeys category and the `hasPasskey` flag of every row.
+        let f = fx_with_db(Arc::new(RecordingPasskeys::default()), db);
+        let r = send(&f, list("passkeys"));
+        let mut bridge: Vec<String> = credential_rows(&r).iter().map(|c| c.id.clone()).collect();
+        bridge.sort();
+        assert_eq!(bridge, want);
+        assert!(credential_rows(&r).iter().all(|c| c.has_passkey));
+        let all = send(&f, list("all"));
+        let mut flagged: Vec<String> = credential_rows(&all)
+            .iter()
+            .filter(|c| c.has_passkey)
+            .map(|c| c.id.clone())
+            .collect();
+        flagged.sort();
+        assert_eq!(flagged, want);
     }
 
     #[test]

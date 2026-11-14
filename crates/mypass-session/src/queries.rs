@@ -9,17 +9,19 @@
 
 use crate::dto::{
     timestamp_ms, AddressDto, AttachmentMeta, CardDto, Category, CategoryCount, CustomFieldDto,
-    EntryDetailDto, EntryQuery, EntrySummary, EntryTypeDto, GroupNode, PasskeyMeta, Scope,
-    SecurityFlag, Sidebar, SortKey, TotpDto,
+    EntryDetailDto, EntryQuery, EntrySummary, EntryTypeDto, GroupNode, PasskeyDetails, PasskeyMeta,
+    Scope, SecurityFlag, Sidebar, SortKey, TotpDto,
 };
 use crate::fields::{
     bin_id, is_history_group, EntryFields, ADDRESS_FIELDS, ADDRESS_LABELS, ADDRESS_PREFIX,
     CARD_CVV, CARD_EXPIRY, CARD_HOLDER, CARD_NUMBER, GROUP_EMOJI, NOTES_BODY, PASSKEY_CREATED,
     PASSKEY_RELYING_PARTY, PASSKEY_USERNAME,
 };
+use crate::session::SessionError;
 use mypass_core::entry_ext::{EntryExt, EntryType};
 use mypass_core::matcher::host_of;
-use mypass_kdbx::{Database, Entry, Group, Timestamp};
+use mypass_core::passkey::{b64url, parse_created, PasskeyRecord};
+use mypass_kdbx::{Database, Entry, Group};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
@@ -488,14 +490,7 @@ pub fn entry_detail(db: &Database, id: Uuid) -> Option<EntryDetailDto> {
     let entry_type = entry.entry_type();
     let urls = entry.urls();
     let totp = entry.totp();
-    let passkey = entry.has_passkey().then(|| PasskeyMeta {
-        relying_party: entry.field(PASSKEY_RELYING_PARTY).unwrap_or("").to_owned(),
-        username: entry.field(PASSKEY_USERNAME).unwrap_or("").to_owned(),
-        created: entry
-            .field(PASSKEY_CREATED)
-            .and_then(Timestamp::parse_iso8601)
-            .map(timestamp_ms),
-    });
+    let passkey = passkey_meta(entry);
     let card = (entry_type == EntryType::Card).then(|| CardDto {
         holder: entry.field(CARD_HOLDER).unwrap_or("").to_owned(),
         number_last4: last_digits(entry.field(CARD_NUMBER).unwrap_or("")),
@@ -547,6 +542,38 @@ pub fn entry_detail(db: &Database, id: Uuid) -> Option<EntryDetailDto> {
         history_count: count_u32(entry.history.len()),
         in_recycle_bin: db.is_in_recycle_bin(id),
     })
+}
+
+/// The secret-free passkey metadata of `entry` (relying party, account name, creation time), or
+/// `None` unless it carries a usable passkey (the one `has_passkey` predicate). Shared by the
+/// detail DTO and the edit model.
+pub fn passkey_meta(entry: &Entry) -> Option<PasskeyMeta> {
+    entry.has_passkey().then(|| PasskeyMeta {
+        relying_party: entry.field(PASSKEY_RELYING_PARTY).unwrap_or("").to_owned(),
+        username: entry.field(PASSKEY_USERNAME).unwrap_or("").to_owned(),
+        created: entry
+            .field(PASSKEY_CREATED)
+            .and_then(parse_created)
+            .map(timestamp_ms),
+    })
+}
+
+/// The passkey of entry `id` with its credential id, after an explicit click: `NotFound` for an
+/// unknown entry, `None` for an entry without a usable passkey. Never the PEM or the user handle.
+pub fn passkey_details(db: &Database, id: Uuid) -> Result<Option<PasskeyDetails>, SessionError> {
+    let entry = db.find_entry(id).ok_or(SessionError::NotFound)?;
+    let Some(meta) = passkey_meta(entry) else {
+        return Ok(None);
+    };
+    let Some(credential_id) = PasskeyRecord::credential_id(entry) else {
+        return Ok(None);
+    };
+    Ok(Some(PasskeyDetails {
+        relying_party: meta.relying_party,
+        username: meta.username,
+        created: meta.created,
+        credential_id: b64url::encode(&credential_id),
+    }))
 }
 
 /// The current TOTP code of an entry, from its own `otp` parameters (digits, period, algorithm).
@@ -949,6 +976,204 @@ mod tests {
             }
             assert_eq!(e.has_passkey(), expected, "{fields:?}");
         }
+    }
+
+    #[test]
+    fn has_passkey_shared_test_extended_with_undecodable_credential_id() {
+        let cases = has_passkey_cases();
+        // The shared table carries the undecodable and the empty-after-decode rows, both false
+        // next to a usable PEM, and the core predicate agrees with `EntryFields` on every row.
+        for id in ["!!", ""] {
+            assert!(
+                cases.iter().any(|(fields, expected)| !expected
+                    && fields.contains(&(PASSKEY_CREDENTIAL_ID, id))
+                    && fields.contains(&(PASSKEY_PRIVATE_KEY_PEM, "pem"))),
+                "{id:?}"
+            );
+        }
+        for (fields, expected) in cases {
+            let mut e = Entry::new(NOW);
+            for (k, v) in &fields {
+                e.set_field(k, v, true);
+            }
+            assert_eq!(
+                mypass_core::passkey::has_passkey(&e),
+                expected,
+                "{fields:?}"
+            );
+            assert_eq!(e.has_passkey(), expected, "{fields:?}");
+            assert_eq!(passkey_meta(&e).is_some(), expected, "{fields:?}");
+        }
+    }
+
+    fn sorted(mut v: Vec<String>) -> Vec<String> {
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn category_passkeys_requires_usable_passkey_and_excludes_bin_and_history() {
+        let (db, expected) = crate::testing::passkey_category_database();
+        // The fixture really holds every case (a failed setup step would make this vacuous).
+        let mut total = 0;
+        let mut stack = vec![&db.root];
+        while let Some(g) = stack.pop() {
+            total += g.entries.len();
+            stack.extend(g.groups.iter());
+        }
+        assert_eq!(total, 9);
+        let listed = list_entries(&db, &cat(Category::Passkeys, ""), SearchScope::App);
+        let want = sorted(expected.iter().copied().map(simple).collect());
+        assert_eq!(sorted(ids(&listed)), want);
+        let count = sidebar(&db)
+            .categories
+            .into_iter()
+            .find(|c| c.category == Category::Passkeys)
+            .unwrap()
+            .count;
+        assert_eq!(count, Some(2));
+        // Search narrows the category.
+        let only = list_entries(&db, &cat(Category::Passkeys, "only"), SearchScope::App);
+        assert_eq!(ids(&only), [simple(expected[0])]);
+    }
+
+    #[test]
+    fn passkey_badge_on_summaries_matches_the_category() {
+        let (db, expected) = crate::testing::passkey_category_database();
+        let all = list_entries(&db, &cat(Category::All, ""), SearchScope::App);
+        let badged: Vec<String> = all
+            .iter()
+            .filter(|s| s.has_passkey)
+            .map(|s| s.id.clone())
+            .collect();
+        assert_eq!(
+            sorted(badged),
+            sorted(expected.into_iter().map(simple).collect())
+        );
+    }
+
+    #[test]
+    fn detail_dto_passkey_meta_has_rp_username_created() {
+        let mut db = fast_database("p");
+        let root = db.root_id();
+        let mut e = entry("pk");
+        crate::testing::add_test_passkey(&mut e, true);
+        let id = e.uuid;
+        db.add_entry(root, e, NOW).unwrap();
+        let meta = entry_detail(&db, id).unwrap().passkey.unwrap();
+        assert_eq!(
+            meta,
+            PasskeyMeta {
+                relying_party: "example.com".into(),
+                username: "alice@example.com".into(),
+                created: Some(1_700_000_000_000.0),
+            }
+        );
+        // The detail never shows a passkey field as a custom field, nor any of its secrets.
+        let json = serde_json::to_string(&entry_detail(&db, id).unwrap()).unwrap();
+        for secret in [
+            crate::testing::TEST_PASSKEY_PEM,
+            crate::testing::TEST_PASSKEY_CREDENTIAL_ID,
+            crate::testing::TEST_PASSKEY_USER_HANDLE,
+            "KPEX_",
+        ] {
+            assert!(!json.contains(secret), "{secret}");
+        }
+    }
+
+    #[test]
+    fn passkey_details_never_contain_private_key() {
+        let mut db = fast_database("p");
+        let root = db.root_id();
+        let mut e = entry("pk");
+        crate::testing::add_test_passkey(&mut e, true);
+        let id = e.uuid;
+        db.add_entry(root, e, NOW).unwrap();
+        let details = passkey_details(&db, id).unwrap().unwrap();
+        assert_eq!(details.relying_party, "example.com");
+        assert_eq!(details.username, "alice@example.com");
+        assert_eq!(details.created, Some(1_700_000_000_000.0));
+        assert_eq!(
+            details.credential_id,
+            crate::testing::TEST_PASSKEY_CREDENTIAL_ID
+        );
+        let json = serde_json::to_string(&details).unwrap();
+        for secret in [
+            "BEGIN",
+            "PRIVATE",
+            "TestPasskeyBodyXyz",
+            crate::testing::TEST_PASSKEY_PEM,
+            crate::testing::TEST_PASSKEY_USER_HANDLE,
+            "dXNlci1oYW5kbGU",
+        ] {
+            assert!(!json.contains(secret), "{secret}");
+        }
+        let keys: Vec<String> = serde_json::to_value(&details)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(
+            sorted(keys),
+            ["created", "credentialId", "relyingParty", "username"]
+        );
+    }
+
+    #[test]
+    fn passkey_details_credential_id_is_canonical_base64url() {
+        // A KeePassXC-style padded / standard-alphabet id reads leniently and shows canonically.
+        let mut db = fast_database("p");
+        let root = db.root_id();
+        let mut e = entry("pk");
+        crate::testing::add_test_passkey(&mut e, false);
+        e.set_field(PASSKEY_CREDENTIAL_ID, "+/8=", true);
+        let id = e.uuid;
+        db.add_entry(root, e, NOW).unwrap();
+        assert_eq!(
+            passkey_details(&db, id).unwrap().unwrap().credential_id,
+            "-_8"
+        );
+    }
+
+    #[test]
+    fn passkey_details_for_keepassxc_passkey_has_no_created_date() {
+        let mut db = fast_database("p");
+        let root = db.root_id();
+        let mut e = entry("pk");
+        crate::testing::add_test_passkey(&mut e, false);
+        let id = e.uuid;
+        db.add_entry(root, e, NOW).unwrap();
+        let details = passkey_details(&db, id).unwrap().unwrap();
+        assert_eq!(details.created, None);
+        assert_eq!(details.relying_party, "example.com");
+        assert_eq!(
+            entry_detail(&db, id).unwrap().passkey.unwrap().created,
+            None
+        );
+    }
+
+    #[test]
+    fn passkey_details_none_for_entry_without_passkey_and_not_found_for_unknown() {
+        let s = sample_database();
+        // `a` has no passkey; `b` has one with the minimal fixture fields.
+        assert_eq!(passkey_details(&s.db, s.a).unwrap(), None);
+        assert!(passkey_details(&s.db, s.b).unwrap().is_some());
+        let (db, _) = crate::testing::passkey_category_database();
+        // An entry with a PEM but an undecodable credential id is not a passkey here either.
+        let malformed = db
+            .root
+            .entries
+            .iter()
+            .find(|e| e.title() == "Malformed ID")
+            .unwrap()
+            .uuid;
+        assert_eq!(passkey_details(&db, malformed).unwrap(), None);
+        assert!(matches!(
+            passkey_details(&s.db, Uuid::new_v4()),
+            Err(SessionError::NotFound)
+        ));
     }
 
     #[test]

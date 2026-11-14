@@ -2,14 +2,15 @@
 //!
 //! Secrets leave Rust only through the commands that say so: `entry_reveal` (one value after an
 //! explicit click), `entry_edit_model` (the editor, dropped by the UI on close, save and lock)
-//! and `entry_totp` (a display code).
+//! and `entry_totp` (a display code). `entry_passkey_details` adds only the public credential id
+//! to the passkey metadata.
 
 use super::{blocking, ensure_unlocked};
 use crate::files::FileGrants;
 use crate::state::{AppState, ShellState};
 use mypass_session::dto::{
     EntryDetailDto, EntryEditModel, EntryQuery, EntrySummary, EntryTypeDto, FieldRef, HistoryItem,
-    TotpDto,
+    PasskeyDetails, TotpDto,
 };
 use mypass_session::ApiError;
 use tauri::State;
@@ -33,6 +34,17 @@ pub fn entry_recent(state: State<'_, AppState>, limit: u32) -> Result<Vec<EntryS
 #[specta::specta]
 pub fn entry_get(state: State<'_, AppState>, id: String) -> Result<EntryDetailDto, ApiError> {
     state.0.entry_get(&id)
+}
+
+/// The passkey with its credential id, after the user's explicit click on the Passkey row;
+/// `null` when the entry has none. Never the private key or the user handle.
+#[tauri::command]
+#[specta::specta]
+pub fn entry_passkey_details(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Option<PasskeyDetails>, ApiError> {
+    state.0.entry_passkey_details(&id)
 }
 
 #[tauri::command]
