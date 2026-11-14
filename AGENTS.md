@@ -278,7 +278,9 @@ change is done.
   one session call. A lock bumps the service epoch, so a phase one that raced a lock never parks, and every phase two
   starts with `vault_matches(db)` (the root UUID recorded in phase one) before any check or write. A create is durable
   before the response (`flush`), and a failed flush rolls the entry back. The `passkey_proxy_enabled` setting (default
-  on) detaches the extension's WebAuthn proxy when off or locked.
+  on) detaches the extension's WebAuthn proxy when off. Locking does not detach it: while MyPass is locked the
+  proxy stays as it was, and the bridge gate answers every passkey request `locked`, so the page gets
+  `NotAllowedError` "MyPass is locked".
   - **Residual risks (owner-accepted, stage 5 closes the first two).**
     1. User verification is "vault unlocked plus a click in the extension popup"; there is no in-app prompt and no
        re-authentication per ceremony. A paired extension, or a same-user process holding the bridge token and the
@@ -290,12 +292,15 @@ change is done.
     3. The pending table fails closed: an evicted or expired item answers `NotAllowedError`. Two copies of the same
        vault share a root UUID, so `vault_matches` cannot tell them apart; the lock observer clears pending items on a
        switch, which leaves only a narrow window.
-    4. A get with a non-empty `allowCredentials` and no match answers immediately, and a get with `allowCredentials`
-       is a yes or no oracle for a credential id of that relying party (a timing and answer difference an extension
-       can see). Candidate rows reuse the stage 3 summaries (title, user name, non-protected fields); credential ids
+    4. Any get with no matching passkey answers `NotAllowedError` immediately, with or without `allowCredentials`,
+       while a get with a match waits for the user in the popup. The website itself sees that difference (an
+       immediate rejection against a promise that stays pending), without a user gesture, so a relying party can
+       silently probe whether this browser's MyPass holds a passkey for it and, with `allowCredentials`, test a
+       given credential id. Candidate rows reuse the stage 3 summaries (title, user name, non-protected fields); credential ids
        and user handles never leave the entry.
-    5. While the proxy is attached, hardware keys and other providers are unavailable to Chrome, and a conflicting
-       proxy-owning extension surfaces as `attachment-error`. Passkeys work only on `https` sites.
+    5. While the proxy is attached, hardware keys and other providers are unavailable to Chrome, also while MyPass
+       is locked (the proxy stays attached and every request fails with "MyPass is locked"; only the toggle
+       detaches it), and a conflicting proxy-owning extension surfaces as `attachment-error`. Passkeys work only on `https` sites.
 - **Signing.** The stable team `W645B93PPQ` arrives in stage 5. Never sign ad-hoc: it breaks the
   Keychain access that guards the unlock key.
 - **Manual checks and the old app.** The manual checks of every stage live in `RUN.md` (Ukrainian). Never run the old
