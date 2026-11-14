@@ -51,7 +51,7 @@ use mypass_platform::AppPaths;
 use mypass_sync::{
     EchoFilter, FileCheckpointStore, FolderWatcher, LocalFolderBackend, MergedRemote,
     StorageBackend, StorageError, SyncCheckpoint, SyncCheckpointStore, SyncEngine, SyncError,
-    SyncResult, WATCH_DEBOUNCE,
+    SyncMode, SyncResult, WATCH_DEBOUNCE,
 };
 use serde::Serialize;
 use std::fs;
@@ -193,8 +193,12 @@ enum RunKind {
 }
 
 impl RunKind {
-    fn push_local(self) -> bool {
-        self != RunKind::Pull
+    fn mode(self) -> SyncMode {
+        if self == RunKind::Pull {
+            SyncMode::Pull
+        } else {
+            SyncMode::Push
+        }
     }
 }
 
@@ -657,11 +661,17 @@ impl SecondarySync {
                 if vault_id_of(db) != key.vault_id || path != Some(key.primary.as_path()) {
                     return None;
                 }
-                Some(engine.sync(db, password, kind.push_local()))
+                Some(engine.sync(db, password, kind.mode()))
             });
         let outcome = match synced {
             Ok(Some(Ok(SyncResult::Merged(merged)))) => self.adopt(&engine, &key, *merged),
-            Ok(Some(Ok(_))) => Outcome::Synced,
+            Ok(Some(Ok(result))) => match result.into_parts() {
+                (_, None) => Outcome::Synced,
+                (_, Some(pending)) => match engine.commit(pending) {
+                    Ok(()) => Outcome::Synced,
+                    Err(e) => Outcome::Failed(e),
+                },
+            },
             Ok(Some(Err(e))) => Outcome::Failed(e),
             Ok(None) | Err(_) => Outcome::Stale,
         };
@@ -690,7 +700,7 @@ impl SecondarySync {
             Ok(((), true))
         });
         match adopted {
-            Ok(()) => match engine.commit_merged(pending) {
+            Ok(()) => match engine.commit(pending) {
                 Ok(()) => Outcome::Synced,
                 Err(e) => Outcome::Failed(e),
             },
@@ -844,8 +854,12 @@ fn failure_status(e: &SyncError) -> SecondaryStatus {
         SyncError::RemoteUnsupported(_) => SecondaryError::Unsupported,
         SyncError::RemoteCorrupt(_) => SecondaryError::Corrupt,
         SyncError::RemoteIsDifferentVault => SecondaryError::DifferentVault,
-        SyncError::RemoteChangedDuringSync => SecondaryError::RemoteBusy,
-        SyncError::Checkpoint(_) | SyncError::Encode(_) => SecondaryError::Io,
+        SyncError::RemoteChangedDuringSync | SyncError::ConcurrentCopyKept => {
+            SecondaryError::RemoteBusy
+        }
+        SyncError::Checkpoint(_) | SyncError::Encode(_) | SyncError::Cancelled => {
+            SecondaryError::Io
+        }
     };
     SecondaryStatus::Error { code }
 }

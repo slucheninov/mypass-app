@@ -4,7 +4,7 @@
 //! Every remote read is bounded and refuses anything that is not a regular file (R20): the file
 //! is untrusted input, and a FIFO, a device or a huge file in a sync folder must not hang the app
 //! or exhaust memory. Errors carry codes and paths only, never file bytes (R37).
-use mypass_kdbx::{FileIo, KdbxError, MAX_VAULT_FILE_BYTES};
+use mypass_kdbx::{FileIo, KdbxError, ReplaceOutcome, MAX_VAULT_FILE_BYTES};
 use std::{
     fmt,
     io::ErrorKind,
@@ -52,8 +52,42 @@ pub trait StorageBackend: Send + Sync {
     fn modification_date(&self) -> Result<Option<SystemTime>, StorageError>;
     /// The file's bytes, bounded and regular-file only; `None` when the file is missing.
     fn read(&self) -> Result<Option<Vec<u8>>, StorageError>;
-    /// Replace the file atomically (a reader sees the old or the new bytes, never a mix).
+    /// Replace the file atomically (a reader sees the old or the new bytes, never a mix),
+    /// whatever it holds. Only for a file nobody else writes; the sync engine never uses it.
     fn write(&self, bytes: &[u8]) -> Result<(), StorageError>;
+    /// Replace the file with `bytes` only while it still holds the content whose SHA-256 is
+    /// `expected` (`None`: only while the file is missing, never replacing one that appeared).
+    /// A writer that slipped in after the final check is returned as
+    /// [`WriteOutcome::Displaced`] instead of being destroyed where the storage can swap
+    /// atomically; see `mypass_kdbx::PlainFileIo::replace_if` for the remaining window elsewhere.
+    fn write_if(
+        &self,
+        expected: Option<&[u8; 32]>,
+        bytes: &[u8],
+    ) -> Result<WriteOutcome, StorageError>;
+}
+
+/// What a guarded write ([`StorageBackend::write_if`]) did.
+#[derive(Clone, PartialEq, Eq)]
+pub enum WriteOutcome {
+    /// The bytes replaced exactly the expected content (or created the missing file).
+    Written,
+    /// The file no longer holds the expected content; nothing was written.
+    Conflict,
+    /// The bytes are in place, but they displaced a version another writer committed in the
+    /// last instant. That version (empty when unreadable) must be merged back; the storage also
+    /// kept it on disk.
+    Displaced(Vec<u8>),
+}
+
+impl fmt::Debug for WriteOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Written => f.write_str("Written"),
+            Self::Conflict => f.write_str("Conflict"),
+            Self::Displaced(bytes) => write!(f, "Displaced({} bytes)", bytes.len()),
+        }
+    }
 }
 
 /// A [`StorageBackend`] over any [`FileIo`] and one path (R20): `LocalFolderBackend` uses it over
@@ -193,6 +227,30 @@ impl StorageBackend for FileIoBackend {
             .write_atomic(&self.path, bytes)
             .map_err(|e| write_error(e, &self.path))
     }
+
+    fn write_if(
+        &self,
+        expected: Option<&[u8; 32]>,
+        bytes: &[u8],
+    ) -> Result<WriteOutcome, StorageError> {
+        match self
+            .io
+            .replace_if(&self.path, expected, bytes, self.max_len)
+        {
+            Ok(ReplaceOutcome::Replaced) => Ok(WriteOutcome::Written),
+            Ok(ReplaceOutcome::Conflict) => Ok(WriteOutcome::Conflict),
+            Ok(ReplaceOutcome::Displaced { bytes, .. }) => Ok(WriteOutcome::Displaced(bytes)),
+            Err(e) => Err(match e {
+                // Refusals of the current content (too large, not a regular file) are read
+                // errors; everything else is a write error.
+                e @ KdbxError::Io {
+                    kind: ErrorKind::FileTooLarge | ErrorKind::InvalidInput,
+                    ..
+                } => read_error(e, self.max_len),
+                e => write_error(e, &self.path),
+            }),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -278,6 +336,52 @@ mod tests {
     fn read_limit_never_rises_above_the_named_cap() {
         let backend = FileIoBackend::new(Arc::new(PlainFileIo), "x").with_read_limit(u64::MAX);
         assert_eq!(backend.read_limit(), MAX_VAULT_FILE_BYTES);
+    }
+
+    fn digest(bytes: &[u8]) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(bytes).into()
+    }
+
+    #[test]
+    fn write_if_writes_only_over_the_expected_content() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("vault.kdbx");
+        let backend = FileIoBackend::new(Arc::new(PlainFileIo), &path);
+        assert_eq!(backend.write_if(None, b"first"), Ok(WriteOutcome::Written));
+        assert_eq!(backend.write_if(None, b"again"), Ok(WriteOutcome::Conflict));
+        assert_eq!(
+            backend.write_if(Some(&digest(b"other")), b"second"),
+            Ok(WriteOutcome::Conflict)
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"first");
+        assert_eq!(
+            backend.write_if(Some(&digest(b"first")), b"second"),
+            Ok(WriteOutcome::Written)
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"second");
+    }
+
+    #[test]
+    fn write_if_maps_refusals_and_failures() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = FileIoBackend::new(Arc::new(PlainFileIo), d.path());
+        assert_eq!(
+            dir.write_if(Some(&digest(b"x")), b"y"),
+            Err(StorageError::NotRegularFile)
+        );
+        let path = d.path().join("vault.kdbx");
+        fs::write(&path, [7u8; 32]).unwrap();
+        let small = FileIoBackend::new(Arc::new(PlainFileIo), &path).with_read_limit(31);
+        assert_eq!(
+            small.write_if(Some(&digest(&[7u8; 32])), b"y"),
+            Err(StorageError::TooLarge { max_bytes: 31 })
+        );
+        let io = Arc::new(FailingFileIo::new(Arc::new(PlainFileIo)));
+        io.fail_write_atomic(ErrorKind::PermissionDenied);
+        let failing = FileIoBackend::new(io, &path);
+        assert_eq!(failing.write_if(None, b"y"), Err(StorageError::ReadOnly));
+        assert_eq!(fs::read(&path).unwrap(), [7u8; 32]);
     }
 
     #[test]

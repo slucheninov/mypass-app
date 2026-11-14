@@ -4,7 +4,7 @@
 //! It is a [`FileIoBackend`] over `PlainFileIo` (R20) plus a folder check before every operation:
 //! a missing folder (an unplugged volume, an unmounted share) is `Unavailable` and is never created,
 //! because creating it would write the vault onto whatever disk now sits under that path.
-use crate::backend::{FileIoBackend, StorageBackend, StorageError};
+use crate::backend::{FileIoBackend, StorageBackend, StorageError, WriteOutcome};
 use mypass_kdbx::PlainFileIo;
 use std::{
     fs,
@@ -102,6 +102,15 @@ impl StorageBackend for LocalFolderBackend {
     fn write(&self, bytes: &[u8]) -> Result<(), StorageError> {
         self.check_dir()?;
         self.inner.write(bytes)
+    }
+
+    fn write_if(
+        &self,
+        expected: Option<&[u8; 32]>,
+        bytes: &[u8],
+    ) -> Result<WriteOutcome, StorageError> {
+        self.check_dir()?;
+        self.inner.write_if(expected, bytes)
     }
 }
 

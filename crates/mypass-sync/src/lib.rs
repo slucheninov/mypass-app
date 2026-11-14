@@ -11,12 +11,12 @@ pub mod engine;
 pub mod local_folder;
 pub mod watcher;
 
-pub use backend::{FileIoBackend, StorageBackend, StorageError};
+pub use backend::{FileIoBackend, StorageBackend, StorageError, WriteOutcome};
 pub use checkpoint::{
     FileCheckpointStore, InMemoryCheckpointStore, SyncCheckpoint, SyncCheckpointStore,
 };
 pub use engine::{
-    MergedRemote, PendingCheckpoint, SyncEngine, SyncError, SyncResult, MAX_SYNC_ATTEMPTS,
+    MergedRemote, PendingCheckpoint, SyncEngine, SyncError, SyncMode, SyncResult, MAX_SYNC_ATTEMPTS,
 };
 pub use local_folder::LocalFolderBackend;
 pub use watcher::{Debouncer, EchoFilter, FolderWatcher, WATCH_DEBOUNCE};
