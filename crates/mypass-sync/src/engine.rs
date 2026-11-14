@@ -13,6 +13,7 @@
 use crate::{
     backend::{StorageBackend, StorageError},
     checkpoint::{SyncCheckpoint, SyncCheckpointStore},
+    watcher::EchoFilter,
 };
 use mypass_core::merge::merge;
 use mypass_kdbx::{Database, KdbxError};
@@ -114,6 +115,7 @@ impl PendingCheckpoint {
 pub struct SyncEngine {
     remote: Arc<dyn StorageBackend>,
     checkpoints: Arc<dyn SyncCheckpointStore>,
+    echo: Option<Arc<EchoFilter>>,
     gate: Mutex<()>,
 }
 
@@ -157,8 +159,16 @@ impl SyncEngine {
         Self {
             remote,
             checkpoints,
+            echo: None,
             gate: Mutex::new(()),
         }
+    }
+
+    /// Note every remote write in `echo` just before it happens, so the folder watcher's event
+    /// for this device's own upload is recognised and skipped.
+    pub fn with_echo_filter(mut self, echo: Arc<EchoFilter>) -> Self {
+        self.echo = Some(echo);
+        self
     }
 
     /// Reconcile `local` with the remote copy; `push_local` writes the local vault over a remote
@@ -209,7 +219,7 @@ impl SyncEngine {
             if self.remote.read()?.is_some() {
                 return Ok(Attempt::Raced);
             }
-            self.remote.write(&bytes)?;
+            self.write_remote(&bytes)?;
             self.store_checkpoint(&bytes, vault)?;
             return Ok(Attempt::Done(SyncResult::UploadedInitial));
         };
@@ -226,7 +236,7 @@ impl SyncEngine {
             if !self.remote_still(&remote_bytes)? {
                 return Ok(Attempt::Raced);
             }
-            self.remote.write(&bytes)?;
+            self.write_remote(&bytes)?;
             self.store_checkpoint(&bytes, vault)?;
             return Ok(Attempt::Done(SyncResult::UploadedLocal));
         }
@@ -256,7 +266,7 @@ impl SyncEngine {
         if !self.remote_still(&remote_bytes)? {
             return Ok(Attempt::Raced);
         }
-        self.remote.write(&bytes)?;
+        self.write_remote(&bytes)?;
         if local_has_all {
             // The local vault already held everything: nothing to adopt.
             self.store_checkpoint(&bytes, vault)?;
@@ -267,6 +277,13 @@ impl SyncEngine {
             database: merged,
             checkpoint: PendingCheckpoint(cp),
         }))))
+    }
+
+    fn write_remote(&self, bytes: &[u8]) -> Result<(), StorageError> {
+        if let Some(echo) = &self.echo {
+            echo.note_own_write(SyncCheckpoint::of_bytes(bytes, None));
+        }
+        self.remote.write(bytes)
     }
 
     /// Whether the remote still holds exactly `expected` (re-read right before a write).

@@ -623,3 +623,24 @@ fn failed_checkpoint_after_upload_leads_to_a_merge_not_a_blind_push() {
     assert_eq!(titles(m.database()), ["Mine", "Theirs"]);
     assert_eq!(titles(&fx.remote_db()), ["Mine", "Theirs"]);
 }
+
+#[test]
+fn engine_notes_its_own_writes_in_the_echo_filter() {
+    let fx = Fx::new();
+    let echo = Arc::new(crate::watcher::EchoFilter::new());
+    let engine = SyncEngine::new(fx.probe.clone(), Arc::new(InMemoryCheckpointStore::new()))
+        .with_echo_filter(echo.clone());
+    let mut local = fast_db("v");
+    add(&mut local, "A");
+    engine.sync(&local, &pw(), false).unwrap();
+    let ours = SyncCheckpoint::of_bytes(&fx.remote_bytes(), None);
+    assert!(echo.is_echo(&ours));
+    let mut theirs = fx.remote_db();
+    add(&mut theirs, "B");
+    fx.external_write(&theirs);
+    assert!(!echo.is_echo(&SyncCheckpoint::of_bytes(&fx.remote_bytes(), None)));
+    // The merge upload is noted too.
+    add(&mut local, "C");
+    let _ = merged(engine.sync(&local, &pw(), false).unwrap());
+    assert!(echo.is_echo(&SyncCheckpoint::of_bytes(&fx.remote_bytes(), None)));
+}

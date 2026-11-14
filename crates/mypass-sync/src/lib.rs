@@ -9,6 +9,7 @@ pub mod backend;
 pub mod checkpoint;
 pub mod engine;
 pub mod local_folder;
+pub mod watcher;
 
 pub use backend::{FileIoBackend, StorageBackend, StorageError};
 pub use checkpoint::{
@@ -18,3 +19,4 @@ pub use engine::{
     MergedRemote, PendingCheckpoint, SyncEngine, SyncError, SyncResult, MAX_SYNC_ATTEMPTS,
 };
 pub use local_folder::LocalFolderBackend;
+pub use watcher::{Debouncer, EchoFilter, FolderWatcher, WATCH_DEBOUNCE};
