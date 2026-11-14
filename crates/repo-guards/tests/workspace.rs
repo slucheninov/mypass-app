@@ -708,3 +708,153 @@ fn toolchain_pins_agree() {
         }
     }
 }
+
+/// Crates that open outbound HTTP connections. Only `mypass-update` may name one, as an optional
+/// dependency behind its `github` feature (R23).
+const HTTP_CLIENT_CRATES: [&str; 7] = [
+    "ureq",
+    "reqwest",
+    "hyper",
+    "isahc",
+    "attohttpc",
+    "surf",
+    "curl",
+];
+
+fn collect_dependency_names(table: &Table, out: &mut Vec<(String, Value)>) {
+    for (key, value) in table {
+        if key.ends_with("dependencies") {
+            if let Some(deps) = value.as_table() {
+                for (name, spec) in deps {
+                    out.push((name.clone(), spec.clone()));
+                }
+            }
+        } else if let Some(nested) = value.as_table() {
+            // `[target.'cfg(..)'.dependencies]` and similar nested tables.
+            collect_dependency_names(nested, out);
+        }
+    }
+}
+
+fn dependencies_of(manifest: &Table) -> Vec<(String, Value)> {
+    let mut out = Vec::new();
+    collect_dependency_names(manifest, &mut out);
+    out
+}
+
+#[test]
+fn http_client_only_behind_the_update_crate_github_feature() {
+    for (path, manifest) in member_manifests() {
+        let package = manifest["package"]["name"].as_str().unwrap().to_owned();
+        let deps = dependencies_of(&manifest);
+        for (name, spec) in &deps {
+            if HTTP_CLIENT_CRATES.contains(&name.as_str()) {
+                assert_eq!(
+                    package, "mypass-update",
+                    "{path}: {name} is an HTTP client; only mypass-update may depend on one"
+                );
+                assert_eq!(
+                    spec.get("optional").and_then(Value::as_bool),
+                    Some(true),
+                    "{path}: {name} must be optional (behind the `github` feature)"
+                );
+            }
+        }
+        if package != "mypass-update" {
+            // Only the app shell enables the client; nobody else may even ask for the feature, and
+            // the host never links the update crate at all.
+            for (name, spec) in &deps {
+                if name != "mypass-update" {
+                    continue;
+                }
+                assert!(
+                    matches!(package.as_str(), "mypass-app" | "mypass-session"),
+                    "{path}: {package} must not depend on mypass-update"
+                );
+                let features: Vec<&str> = spec
+                    .get("features")
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter().filter_map(Value::as_str).collect())
+                    .unwrap_or_default();
+                if package != "mypass-app" {
+                    assert!(
+                        features.is_empty(),
+                        "{path}: only mypass-app may enable mypass-update features"
+                    );
+                }
+            }
+            continue;
+        }
+        // The update crate itself: the client is opt-in and it depends on no MyPass crate.
+        let features = manifest.get("features").and_then(Value::as_table);
+        let default_enables_github = features
+            .and_then(|f| f.get("default"))
+            .and_then(Value::as_array)
+            .is_some_and(|a| a.iter().any(|v| v.as_str() == Some("github")));
+        assert!(
+            !default_enables_github,
+            "{path}: `github` must stay out of the default features"
+        );
+        let github: Vec<&str> = features
+            .and_then(|f| f.get("github"))
+            .and_then(Value::as_array)
+            .expect("mypass-update has a `github` feature")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(
+            github,
+            ["dep:ureq"],
+            "{path}: the github feature enables ureq only"
+        );
+        for (name, _) in &deps {
+            assert!(
+                !name.starts_with("mypass-"),
+                "{path}: mypass-update must depend on no MyPass crate (found {name})"
+            );
+        }
+    }
+}
+
+#[test]
+fn http_client_code_only_in_update_github_rs() {
+    let Some(files) = tracked_files() else {
+        println!("skipped: not a git checkout");
+        return;
+    };
+    // The loopback bridge opens connections to 127.0.0.1 only; that is the one other user of a
+    // raw socket (its tests are skipped below with every other `tests/` file).
+    const LOOPBACK_FILES: [&str; 3] = [
+        "crates/mypass-bridge/src/server.rs",
+        "crates/mypass-bridge/src/relay.rs",
+        "src-tauri/src/bridge.rs",
+    ];
+    let mut offenders = Vec::new();
+    for path in files {
+        let rel = rel_str(&path);
+        let ours = rel.starts_with("crates/") || rel.starts_with("src-tauri/");
+        if !ours
+            || !rel.ends_with(".rs")
+            || rel.contains("/tests/")
+            || rel.starts_with("crates/repo-guards/")
+            || rel == "crates/mypass-update/src/github.rs"
+        {
+            continue;
+        }
+        let code = strip_comments_and_strings(&read(&rel));
+        for word in HTTP_CLIENT_CRATES {
+            if word_positions(&code, word).next().is_some() {
+                offenders.push(format!("{rel}: names the HTTP client `{word}`"));
+            }
+        }
+        if code.contains("TcpStream::connect") && !LOOPBACK_FILES.contains(&rel.as_str()) {
+            offenders.push(format!("{rel}: opens a raw TCP connection"));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "HTTP clients and raw sockets belong in crates/mypass-update/src/github.rs and the loopback \
+         bridge only:\n{}",
+        offenders.join("\n")
+    );
+}
