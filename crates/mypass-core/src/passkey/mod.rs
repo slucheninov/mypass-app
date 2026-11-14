@@ -3,9 +3,9 @@
 
 /// Unpadded base64url encoding and a lenient decoder.
 pub mod b64url;
-// Consumed by the ceremony module (next task); only the tests use it until then.
-#[allow(dead_code)]
 pub(crate) mod cbor;
+/// The authenticator side of create and get: authenticator data, attestation and ES256 signing.
+pub mod ceremony;
 /// Origin and relying-party-id validation; `ValidatedOrigin` gates every signature.
 pub mod origin;
 /// The `KPEX_PASSKEY_*` field names and the single `has_passkey` predicate.
@@ -14,6 +14,10 @@ pub mod record;
 /// WebAuthn create and get request parsing with size and text caps.
 pub mod request;
 
+pub use ceremony::{
+    client_data_json, perform_create, perform_create_with, perform_get, BackupFlags, CreateOutcome,
+    GetOutcome, PasskeySigningKey,
+};
 pub use origin::ValidatedOrigin;
 pub use record::has_passkey;
 pub use request::{
@@ -46,6 +50,9 @@ pub enum PasskeyError {
     /// The relying party id is not valid for the caller origin.
     #[error("relying party id not authorized")]
     RpIdNotAuthorized,
+    /// The credential is not one the request's `allowCredentials` names.
+    #[error("passkey credential not allowed")]
+    CredentialNotAllowed,
     /// A cryptographic operation failed.
     #[error("passkey cryptographic failure")]
     Crypto,
@@ -71,6 +78,7 @@ mod tests {
             PasskeyError::OriginMismatch,
             PasskeyError::CrossOrigin,
             PasskeyError::RpIdNotAuthorized,
+            PasskeyError::CredentialNotAllowed,
             PasskeyError::Crypto,
         ] {
             let text = e.to_string();
