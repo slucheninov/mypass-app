@@ -297,14 +297,15 @@ const OWN_LINTS_MEMBER: &str = "mypass-platform";
 
 /// Files of our crates where `unsafe` code may appear: the macOS glue of `mypass-platform`, one
 /// file per framework whose bindings are `unsafe` (stage 5 added the ServiceManagement login item,
-/// the LocalAuthentication device unlock and the Foundation file coordination for iCloud Drive;
-/// ruling R1 of the stage 5 plan). Stage 6 adds `crates/mypass-platform/src/windows.rs` for the
+/// the LocalAuthentication device unlock, the Foundation file coordination for iCloud Drive and
+/// the Keychain access list of the bridge endpoint; ruling R1 of the stage 5 plan). Stage 6 adds `crates/mypass-platform/src/windows.rs` for the
 /// Win32 calls. Never a file outside `mypass-platform`.
 const UNSAFE_ALLOWED_FILES: &[&str] = &[
     "crates/mypass-platform/src/macos.rs",
     "crates/mypass-platform/src/macos_login_item.rs",
     "crates/mypass-platform/src/macos_device_unlock.rs",
     "crates/mypass-platform/src/macos_icloud.rs",
+    "crates/mypass-platform/src/macos_keychain_acl.rs",
 ];
 
 /// Blanks out comments (line, nested block), string literals (plain and raw) and char literals,

@@ -473,8 +473,9 @@ move together with the Rust `tauri` family (the CLI rejects mismatched minors).
   exception: `mypass-platform` carries its own `[lints]` tables, an exact copy of the workspace
   tables except `unsafe_code = "deny"`, and only the allow-listed macOS glue files of that crate
   lift it with a module-level `#![allow(unsafe_code)]` for the Objective-C, Carbon and Security
-  calls: `src/macos.rs`, `src/macos_login_item.rs`, `src/macos_device_unlock.rs` and
-  `src/macos_icloud.rs` (stage 6 may add `windows.rs` the same way). Every `unsafe` block there is minimal, wrapped in a small safe
+  calls: `src/macos.rs`, `src/macos_login_item.rs`, `src/macos_device_unlock.rs`,
+  `src/macos_icloud.rs` and `src/macos_keychain_acl.rs` (stage 6 may add `windows.rs` the same
+  way). Every `unsafe` block there is minimal, wrapped in a small safe
   function and carries a `// SAFETY:` comment stating the invariant. Pinned by
   `workspace_lints_forbid_unsafe` and `unsafe_only_in_allow_listed_modules`.
 - No `unwrap`, `expect` or indexing in non-test code (`clippy::unwrap_used`, `expect_used` and

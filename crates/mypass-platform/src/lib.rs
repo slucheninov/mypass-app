@@ -7,6 +7,7 @@
 mod clipboard;
 mod coordinated;
 mod device_unlock;
+mod endpoint_store;
 mod error;
 mod events;
 mod fallback;
@@ -28,6 +29,8 @@ mod macos_icloud;
 #[cfg(target_os = "macos")]
 mod macos_keychain;
 #[cfg(target_os = "macos")]
+mod macos_keychain_acl;
+#[cfg(target_os = "macos")]
 mod macos_login_item;
 mod paths;
 mod secrets;
@@ -42,6 +45,10 @@ pub use coordinated::{
     CoordinatedFiles, DownloadState, UnsupportedCoordinatedFiles,
 };
 pub use device_unlock::{DeviceUnlock, DeviceUnlockAvailability, DeviceUnlockMode};
+pub use endpoint_store::{
+    app_shared_store, host_shared_store, select_shared_store, SharedStoreKind, SignatureProbe,
+    StoreSide, APP_REQUIREMENT, HOST_IDENTIFIER, HOST_REQUIREMENT, TEAM_ID,
+};
 pub use error::{PlatformError, PlatformResult};
 pub use events::{Subscription, SystemEvent, SystemEvents};
 pub use file_store::{shared_store, FileSecretStore};
