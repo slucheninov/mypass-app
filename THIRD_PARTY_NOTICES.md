@@ -734,7 +734,7 @@ neither is linked or shipped. Fixture passwords and contents are documented in t
 
 `repo-guards` is a test-only workspace crate (`publish = false`) and is never shipped. The
 dev-only crates used by tests, the oracle and the repository guards (`proptest`, `keepass`, `toml`,
-`serde_yaml_ng`) are linked into test artifacts only, never shipped.
+`serde_yaml_ng`, `ciborium`) are linked into test artifacts only, never shipped.
 
 ### Test-only KDBX oracle
 

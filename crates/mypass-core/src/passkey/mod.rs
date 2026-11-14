@@ -6,10 +6,17 @@ pub mod b64url;
 // Consumed by the ceremony module (next task); only the tests use it until then.
 #[allow(dead_code)]
 pub(crate) mod cbor;
+/// Origin and relying-party-id validation; `ValidatedOrigin` gates every signature.
+pub mod origin;
 /// The `KPEX_PASSKEY_*` field names and the single `has_passkey` predicate.
 pub mod record;
 
+/// WebAuthn create and get request parsing with size and text caps.
+pub mod request;
+
+pub use origin::{validate_origin, ValidatedOrigin};
 pub use record::has_passkey;
+pub use request::{parse_create_request, parse_get_request, CreateContext, GetContext};
 
 /// The AAGUID MyPass reports in the attested credential data of every passkey it creates
 /// (`94803471-f8b4-48f9-98ff-fc4ac1a92af8`). It is a fixed random v4 UUID owned by MyPass, the

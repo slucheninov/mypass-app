@@ -34,6 +34,9 @@ pub mod matcher;
 /// Pure UUID-keyed two-way vault merge.
 pub mod merge;
 
+/// Length and character rules for text from less trusted callers.
+pub mod text;
+
 /// Passkey building blocks: base64url, CBOR encoder, AAGUID and the stored-field contract.
 pub mod passkey;
 
