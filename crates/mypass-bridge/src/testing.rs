@@ -6,7 +6,7 @@
 use crate::diagnostics::DiagnosticsStore;
 use crate::pairing::PairingManager;
 use crate::pairing::{PairedBrowserStore, PairingChallenge, StartOutcome};
-use crate::passkeys::{NotSupportedPasskeys, PasskeyContext, PasskeyHandler};
+use crate::passkeys::{NotSupportedPasskeys, PasskeyContext, PasskeyHandler, PasskeyService};
 use crate::protocol::{
     BrowserDiagnosticsReport, ExtensionScanState, PermissionState, ProxyState, Request, Response,
 };
@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
 use uuid::Uuid;
 
-/// Records every call; does not override `passkey_proxy_changed`.
+/// Records every call.
 #[derive(Default)]
 pub(crate) struct RecordingUi {
     calls: Mutex<Vec<String>>,
@@ -76,6 +76,9 @@ impl BridgeUi for RecordingUi {
     fn credential_filled(&self, _id: Uuid) {
         self.note("credential_filled");
     }
+    fn passkey_proxy_changed(&self, enabled: bool) {
+        self.note_with("passkey_proxy_changed", &enabled.to_string());
+    }
 }
 
 #[derive(Default)]
@@ -100,6 +103,7 @@ pub(crate) struct Fx {
     pub(crate) sched: Arc<ManualScheduler>,
     pub(crate) ui: Arc<RecordingUi>,
     pub(crate) proposals: Arc<ProposalStore>,
+    pub(crate) settings: SettingsStore,
     pub(crate) secret: String,
     pub(crate) _dir: tempfile::TempDir,
 }
@@ -115,6 +119,31 @@ pub(crate) fn fx_with(passkeys: Arc<dyn PasskeyHandler>) -> Fx {
 }
 
 pub(crate) fn fx_with_db(passkeys: Arc<dyn PasskeyHandler>, db: mypass_kdbx::Database) -> Fx {
+    fx_build(db, |_, _| passkeys)
+}
+
+/// An `Fx` whose passkey handler is a real [`PasskeyService`] on the fixture's clock and UI.
+pub(crate) fn passkey_fx() -> (Fx, Arc<PasskeyService>) {
+    let mut db = fast_database("Passkey Test");
+    let now = Timestamp::now();
+    let mut e = Entry::new(now);
+    e.set_field("Title", "SecretTitleXyz", false);
+    let root = db.root_id();
+    db.add_entry(root, e, now).unwrap();
+    let mut service = None;
+    let f = fx_build(db, |sched, ui| {
+        let s = PasskeyService::new(sched, ui);
+        service = Some(s.clone());
+        s
+    });
+    (f, service.unwrap())
+}
+
+/// Builds the fixture; `make_passkeys` gets the fixture's scheduler and UI.
+fn fx_build(
+    db: mypass_kdbx::Database,
+    make_passkeys: impl FnOnce(Arc<ManualScheduler>, Arc<RecordingUi>) -> Arc<dyn PasskeyHandler>,
+) -> Fx {
     let dir = tempfile::tempdir().unwrap();
     let settings = SettingsStore::in_memory();
     settings
@@ -143,11 +172,12 @@ pub(crate) fn fx_with_db(passkeys: Arc<dyn PasskeyHandler>, db: mypass_kdbx::Dat
         StartOutcome::Throttled => panic!("throttled"),
     };
     let ui = Arc::new(RecordingUi::default());
+    let passkeys = make_passkeys(sched.clone(), ui.clone());
     let proposals = Arc::new(ProposalStore::new(sched.clone()));
     let svc = BridgeService::new(BridgeDeps {
         session: session.clone(),
         autolock,
-        settings,
+        settings: settings.clone(),
         scheduler: sched.clone(),
         pairing,
         diagnostics: Arc::new(DiagnosticsStore::new()),
@@ -168,6 +198,7 @@ pub(crate) fn fx_with_db(passkeys: Arc<dyn PasskeyHandler>, db: mypass_kdbx::Dat
         sched,
         ui,
         proposals,
+        settings,
         secret,
         _dir: dir,
     }

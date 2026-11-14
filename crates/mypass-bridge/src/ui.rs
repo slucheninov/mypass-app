@@ -20,7 +20,8 @@ pub trait BridgeUi: Send + Sync {
     fn open_app_requested(&self);
     fn open_browser_settings_requested(&self);
     fn credential_filled(&self, id: Uuid);
-    /// Stage 3 never calls it; stage 4 overrides it and calls it from its handler.
+    /// The extension changed the app-side passkey toggle (`PasskeyService`, only on a real
+    /// change); the app re-emits its settings so open windows show the new value.
     fn passkey_proxy_changed(&self, _enabled: bool) {}
 }
 

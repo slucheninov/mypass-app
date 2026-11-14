@@ -171,6 +171,16 @@ pub struct Settings {
     pub shortcut_lock: String,
     pub shortcut_show: String,
     pub generator: GeneratorOptionsDto,
+    // The app-side "Use MyPass for Chrome passkeys" opt-in. It is the canonical value the bridge
+    // uses: browser reports are snapshots and never overwrite it, and the extension's own flag is
+    // only a cache of this one (the status poll reports it, even while locked, so the extension
+    // resyncs). The default is ON. It is a field default (the one `Default` impl plus the
+    // struct-level `serde(default)`), not a default registered at startup: the Swift app had to
+    // read `object(forKey:) as? Bool ?? true` because `UserDefaults.bool(forKey:)` cannot tell a
+    // never-written key from an explicit "off", and a registered default depends on launch order
+    // (it must run before the first read, in every process and test). Here a missing or unreadable
+    // value falls back to `true` on its own, field by field, and an explicit `false` always wins.
+    // A plain comment, not a doc comment, so the generated bindings do not change.
     pub passkey_proxy_enabled: bool,
     pub unlock_touch_id_enabled: bool,
     pub unlock_mac_password_enabled: bool,
@@ -793,6 +803,69 @@ mod tests {
             })
             .unwrap();
         assert_eq!(s.generator, one_class);
+    }
+
+    #[test]
+    fn passkey_proxy_defaults_to_true_for_fresh_and_legacy_settings_files() {
+        assert!(Settings::default().passkey_proxy_enabled);
+        assert!(SettingsStore::in_memory().get().passkey_proxy_enabled);
+        let dir = tempfile::tempdir().unwrap();
+        // No file at all.
+        assert!(
+            SettingsStore::load(dir.path().join("missing.json"))
+                .get()
+                .passkey_proxy_enabled
+        );
+        // A legacy file written before the field existed (the 2a test's file).
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{"language":"uk","trayClickAction":"openApp"}"#).unwrap();
+        assert!(
+            SettingsStore::load(path.clone())
+                .get()
+                .passkey_proxy_enabled
+        );
+        // A bad value falls back to the default alone; the other fields keep their values.
+        fs::write(&path, r#"{"language":"uk","passkeyProxyEnabled":"yes"}"#).unwrap();
+        let s = SettingsStore::load(path).get();
+        assert!(s.passkey_proxy_enabled);
+        assert_eq!(s.language, Language::Uk);
+    }
+
+    #[test]
+    fn explicit_false_stays_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{"passkeyProxyEnabled":false}"#).unwrap();
+        assert!(
+            !SettingsStore::load(path.clone())
+                .get()
+                .passkey_proxy_enabled
+        );
+        fs::write(&path, r#"{"passkeyProxyEnabled":true}"#).unwrap();
+        assert!(SettingsStore::load(path).get().passkey_proxy_enabled);
+    }
+
+    #[test]
+    fn patch_sets_the_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let store = SettingsStore::load(path.clone());
+        let patch = |on| SettingsPatch {
+            passkey_proxy_enabled: Some(on),
+            ..SettingsPatch::default()
+        };
+        assert!(!store.update(patch(false)).unwrap().passkey_proxy_enabled);
+        assert!(!store.get().passkey_proxy_enabled);
+        let on_disk: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(on_disk["passkeyProxyEnabled"], serde_json::json!(false));
+        assert!(
+            !SettingsStore::load(path.clone())
+                .get()
+                .passkey_proxy_enabled
+        );
+        assert!(store.update(patch(true)).unwrap().passkey_proxy_enabled);
+        assert!(SettingsStore::load(path).get().passkey_proxy_enabled);
     }
 
     #[test]

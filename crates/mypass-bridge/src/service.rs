@@ -72,7 +72,7 @@ impl std::fmt::Debug for BridgeService {
 
 impl BridgeService {
     /// Builds the service and registers the session observer that drops pending proposals and
-    /// tells the passkey handler when the vault stops being unlocked.
+    /// tells the passkey handler when the vault stops being unlocked or is switched.
     pub fn new(deps: BridgeDeps) -> Arc<Self> {
         let service = Self::new_unobserved(deps);
         service.register_observer();
@@ -94,7 +94,9 @@ impl BridgeService {
         let proposals = self.deps.proposals.clone();
         let passkeys = self.deps.passkeys.clone();
         // A direct switch from one unlocked vault to another emits only `StateChanged(Unlocked)`
-        // with a new path: a proposal made for the old vault must not be taken into the new one.
+        // with a new path: a proposal made for the old vault must not be taken into the new one,
+        // and a pending passkey ceremony (its candidates are entry ids of the old vault) must not
+        // be confirmed or approved against the new one.
         let open_path: Mutex<Option<String>> = Mutex::new(None);
         self.deps
             .session
@@ -108,6 +110,7 @@ impl BridgeService {
                     } else {
                         if open.is_some() && *open != status.vault_path {
                             proposals.clear();
+                            passkeys.on_session_locked();
                         }
                         *open = status.vault_path.clone();
                     }
