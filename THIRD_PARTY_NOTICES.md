@@ -195,8 +195,10 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `flate2` | 1.1.11 | MIT OR Apache-2.0 |
 | `fnv` | 1.0.7 | Apache-2.0 / MIT |
 | `foldhash` | 0.2.0 | Zlib |
+| `foreign-types` | 0.3.2 | MIT/Apache-2.0 |
 | `foreign-types` | 0.5.0 | MIT/Apache-2.0 |
 | `foreign-types-macros` | 0.2.4 | MIT/Apache-2.0 |
+| `foreign-types-shared` | 0.1.1 | MIT/Apache-2.0 |
 | `foreign-types-shared` | 0.3.1 | MIT/Apache-2.0 |
 | `form_urlencoded` | 1.2.2 | MIT OR Apache-2.0 |
 | `futures-channel` | 0.3.34 | MIT OR Apache-2.0 |
@@ -301,6 +303,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `miniz_oxide` | 0.9.1 | MIT OR Zlib OR Apache-2.0 |
 | `mio` | 1.2.4 | MIT |
 | `muda` | 0.20.0 | Apache-2.0 OR MIT |
+| `native-tls` | 0.2.18 | MIT OR Apache-2.0 |
 | `ndk` | 0.9.0 | MIT OR Apache-2.0 |
 | `ndk-context` | 0.1.1 | MIT OR Apache-2.0 |
 | `ndk-sys` | 0.6.0+11769913 | MIT OR Apache-2.0 |
@@ -330,6 +333,10 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `objc2-web-kit` | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | `once_cell` | 1.21.4 | MIT OR Apache-2.0 |
 | `open` | 5.4.5 | MIT |
+| `openssl` | 0.10.82 | Apache-2.0 |
+| `openssl-macros` | 0.1.1 | MIT/Apache-2.0 |
+| `openssl-probe` | 0.2.2 | MIT OR Apache-2.0 |
+| `openssl-sys` | 0.9.118 | MIT |
 | `option-ext` | 0.2.0 | MPL-2.0 |
 | `ordered-stream` | 0.2.0 | MIT OR Apache-2.0 |
 | `p256` | 0.14.0 | Apache-2.0 OR MIT |
@@ -389,9 +396,11 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `rfd` | 0.17.2 | MIT |
 | `rustc-hash` | 2.1.3 | Apache-2.0 OR MIT |
 | `rustix` | 1.1.6 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| `rustls-pki-types` | 1.16.0 | MIT OR Apache-2.0 |
 | `rustversion` | 1.0.23 | MIT OR Apache-2.0 |
 | `salsa20` | 0.11.0 | MIT OR Apache-2.0 |
 | `same-file` | 1.0.6 | Unlicense/MIT |
+| `schannel` | 0.1.30 | MIT |
 | `schemars` | 0.8.22 | MIT |
 | `schemars_derive` | 0.8.22 | MIT |
 | `scopeguard` | 1.2.0 | MIT OR Apache-2.0 |
@@ -498,8 +507,11 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `unicode-ident` | 1.0.27 | (MIT OR Apache-2.0) AND Unicode-3.0 |
 | `unicode-segmentation` | 1.13.3 | MIT OR Apache-2.0 |
 | `universal-hash` | 0.6.1 | MIT OR Apache-2.0 |
+| `ureq` | 3.5.2 | MIT OR Apache-2.0 |
+| `ureq-proto` | 0.7.1 | MIT OR Apache-2.0 |
 | `url` | 2.5.8 | MIT OR Apache-2.0 |
 | `urlpattern` | 0.6.0 | MIT |
+| `utf8-zero` | 0.8.1 | MIT OR Apache-2.0 |
 | `utf8_iter` | 1.1.0 | Apache-2.0 OR MIT |
 | `utf_types` | 1.0.0 | Apache-2.0 OR MIT |
 | `uuid` | 1.29.2 | Apache-2.0 OR MIT |
@@ -659,6 +671,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `twofish` | 0.8.0 | MIT OR Apache-2.0 |
 | `unarray` | 0.1.4 | MIT OR Apache-2.0 |
 | `unsafe-libyaml` | 0.2.11 | MIT |
+| `vcpkg` | 0.2.15 | MIT/Apache-2.0 |
 | `version-compare` | 0.2.1 | MIT |
 | `version_check` | 0.9.5 | MIT/Apache-2.0 |
 | `vswhom` | 0.1.0 | MIT |

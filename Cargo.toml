@@ -98,6 +98,14 @@ libc = "0.2.191"
 # feature), `ReadDirectoryChangesW` on Windows.
 notify = "=8.2.2"
 
+# --- Stage 5: update check ---
+# HTTPS client of the GitHub release check, behind the `github` feature of `mypass-update` (only
+# `src-tauri` enables it). TLS is the OS one (Security.framework on macOS, SChannel on Windows)
+# and the roots are the OS trust store: `default-features = false` drops rustls and the bundled
+# Mozilla root list, and the client config selects `RootCerts::PlatformVerifier` explicitly (the
+# `WebPki` default would panic without the bundled list). No gzip, no cookies, no JSON feature.
+ureq = { version = "=3.5.2", default-features = false, features = ["native-tls-no-default"] }
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
