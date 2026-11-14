@@ -34,6 +34,9 @@ pub mod matcher;
 /// Pure UUID-keyed two-way vault merge.
 pub mod merge;
 
+/// Passkey building blocks: base64url, CBOR encoder, AAGUID and the stored-field contract.
+pub mod passkey;
+
 #[cfg(test)]
 mod tests {
     use super::CRATE_NAME;

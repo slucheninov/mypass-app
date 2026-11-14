@@ -18,13 +18,11 @@ pub const CARD_EXPIRY: &str = "MyPass.ExpiryDate";
 pub const CARD_CVV: &str = "MyPass.CVV";
 pub const NOTES_BODY: &str = "MyPass.NotesBody";
 pub const ADDRESS_PREFIX: &str = "MyPass.Address.";
-pub const PASSKEY_PREFIX: &str = "KPEX_PASSKEY_";
-pub const PASSKEY_CREDENTIAL_ID: &str = "KPEX_PASSKEY_CREDENTIAL_ID";
-pub const PASSKEY_PRIVATE_KEY_PEM: &str = "KPEX_PASSKEY_PRIVATE_KEY_PEM";
-pub const PASSKEY_RELYING_PARTY: &str = "KPEX_PASSKEY_RELYING_PARTY";
-pub const PASSKEY_USERNAME: &str = "KPEX_PASSKEY_USERNAME";
-/// MyPass's own addition (an ISO 8601 timestamp); KeePassXC ignores it.
-pub const PASSKEY_CREATED: &str = "KPEX_PASSKEY_CREATED";
+// The passkey field names and the `has_passkey` predicate are owned by `mypass_core::passkey`.
+pub use mypass_core::passkey::record::{
+    PASSKEY_CREATED, PASSKEY_CREDENTIAL_ID, PASSKEY_FLAG_BE, PASSKEY_FLAG_BS, PASSKEY_PREFIX,
+    PASSKEY_PRIVATE_KEY_PEM, PASSKEY_RELYING_PARTY, PASSKEY_USERNAME, PASSKEY_USER_HANDLE,
+};
 /// Group custom-data key holding a group's emoji.
 pub const GROUP_EMOJI: &str = "MyPass.GroupEmoji";
 /// Group custom-data key that marks the generator history group (besides its fixed UUID).
@@ -152,8 +150,8 @@ pub trait EntryFields {
     fn otp_source(&self) -> Option<&str>;
     /// The parsed TOTP configuration, `None` when absent or unparseable.
     fn totp(&self) -> Option<TotpConfig>;
-    /// A usable passkey: both the credential id and the private key are non-empty. This is the
-    /// one definition; the app, the bridge and the passkey stage all call it.
+    /// A usable passkey, delegating to `mypass_core::passkey::has_passkey`, the one definition
+    /// the app, the bridge and the passkey stage all share.
     fn has_passkey(&self) -> bool;
     /// Whether `key` has a dedicated UI (or is a managed marker) and so is not a custom field.
     fn is_reserved_key(key: &str) -> bool;
@@ -181,8 +179,7 @@ impl EntryFields for Entry {
     }
 
     fn has_passkey(&self) -> bool {
-        let non_empty = |key: &str| self.field(key).is_some_and(|v| !v.is_empty());
-        non_empty(PASSKEY_CREDENTIAL_ID) && non_empty(PASSKEY_PRIVATE_KEY_PEM)
+        mypass_core::passkey::has_passkey(self)
     }
 
     fn is_reserved_key(key: &str) -> bool {
