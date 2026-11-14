@@ -1,5 +1,6 @@
-//! Passkey building blocks: base64url, a minimal CBOR encoder, the authenticator AAGUID and the
-//! KeePassXC-compatible field names with the one `has_passkey` predicate.
+//! Passkeys: base64url, a minimal CBOR encoder, the authenticator AAGUID, request parsing with
+//! origin validation, the ES256 ceremonies, and the KeePassXC-compatible entry fields with the
+//! one `has_passkey` predicate.
 
 /// Unpadded base64url encoding and a lenient decoder.
 pub mod b64url;
@@ -8,7 +9,8 @@ pub(crate) mod cbor;
 pub mod ceremony;
 /// Origin and relying-party-id validation; `ValidatedOrigin` gates every signature.
 pub mod origin;
-/// The `KPEX_PASSKEY_*` field names and the single `has_passkey` predicate.
+/// The `KPEX_PASSKEY_*` field names, the single `has_passkey` predicate and the
+/// KeePassXC-compatible [`PasskeyRecord`] codec.
 pub mod record;
 
 /// WebAuthn create and get request parsing with size and text caps.
@@ -19,7 +21,7 @@ pub use ceremony::{
     GetOutcome, PasskeySigningKey,
 };
 pub use origin::ValidatedOrigin;
-pub use record::has_passkey;
+pub use record::{format_created, has_passkey, parse_created, PasskeyRecord};
 pub use request::{
     parse_create, parse_get, CreateContext, GetContext, ValidatedCreate, ValidatedGet,
 };

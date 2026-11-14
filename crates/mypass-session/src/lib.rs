@@ -57,6 +57,22 @@ pub mod testing {
                 vec![(PASSKEY_CREDENTIAL_ID, ""), (PASSKEY_PRIVATE_KEY_PEM, "")],
                 false,
             ),
+            // A credential id that is not base64 at all.
+            (
+                vec![
+                    (PASSKEY_CREDENTIAL_ID, "!!"),
+                    (PASSKEY_PRIVATE_KEY_PEM, "pem"),
+                ],
+                false,
+            ),
+            // A credential id that decodes to zero bytes, next to a usable PEM.
+            (
+                vec![
+                    (PASSKEY_CREDENTIAL_ID, ""),
+                    (PASSKEY_PRIVATE_KEY_PEM, "pem"),
+                ],
+                false,
+            ),
             (vec![], false),
         ]
     }
