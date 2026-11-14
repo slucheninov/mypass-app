@@ -262,6 +262,8 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `indexmap` | 1.9.3 | Apache-2.0 OR MIT |
 | `indexmap` | 2.14.2 | Apache-2.0 OR MIT |
 | `infer` | 0.22.0 | MIT |
+| `inotify` | 0.11.5 | ISC |
+| `inotify-sys` | 0.1.8 | ISC |
 | `inout` | 0.2.6 | MIT OR Apache-2.0 |
 | `ipnet` | 2.12.2 | MIT OR Apache-2.0 |
 | `is-docker` | 0.2.0 | MIT |
@@ -278,6 +280,8 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `jsonptr` | 0.7.1 | MIT OR Apache-2.0 |
 | `keyboard-types` | 0.7.0 | MIT OR Apache-2.0 |
 | `keyboard-types` | 0.8.3 | MIT OR Apache-2.0 |
+| `kqueue` | 1.2.1 | MIT |
+| `kqueue-sys` | 1.1.2 | MIT |
 | `libappindicator` | 0.9.0 | Apache-2.0 OR MIT |
 | `libappindicator-sys` | 0.9.0 | Apache-2.0 OR MIT |
 | `libc` | 0.2.191 | MIT OR Apache-2.0 |
@@ -301,6 +305,8 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `ndk-context` | 0.1.1 | MIT OR Apache-2.0 |
 | `ndk-sys` | 0.6.0+11769913 | MIT OR Apache-2.0 |
 | `new_debug_unreachable` | 1.0.6 | MIT |
+| `notify` | 8.2.2 | CC0-1.0 |
+| `notify-types` | 2.3.0 | MIT OR Apache-2.0 |
 | `num-conv` | 0.2.2 | MIT OR Apache-2.0 |
 | `num-traits` | 0.2.19 | MIT OR Apache-2.0 |
 | `num_enum` | 0.7.6 | BSD-3-Clause OR MIT OR Apache-2.0 |
@@ -313,6 +319,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `objc2-core-graphics` | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | `objc2-core-image` | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | `objc2-core-location` | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
+| `objc2-core-services` | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | `objc2-core-text` | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | `objc2-encode` | 4.1.0 | MIT |
 | `objc2-exception-helper` | 0.1.1 | Zlib OR Apache-2.0 OR MIT |

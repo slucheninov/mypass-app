@@ -30,6 +30,9 @@ APPROVED = {
     # Added with the platform crate (stage 2a): `clipboard-win` and `error-code`, the Windows
     # backend of `arboard`. The Boost Software License is permissive (no binary attribution).
     "BSL-1.0",
+    # Added with the sync crate (stage 5): `notify`, the folder watcher. CC0-1.0 is a public-domain
+    # dedication with a permissive fallback licence (no attribution or source obligation).
+    "CC0-1.0",
 }
 
 
