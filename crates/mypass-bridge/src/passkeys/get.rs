@@ -24,11 +24,12 @@
 //! `fillCredential` uses: signing in does not mark the vault dirty or schedule a save. No counter
 //! is stored (R12: the signature counter is always 0). The touch re-checks the vault binding, so a
 //! switch that lands after the signing never touches an entry in another vault.
+use mypass_core::passkey::record::PASSKEY_USERNAME;
 use mypass_core::passkey::{
     parse_get, perform_get, PasskeyError, PasskeyRecord, PasskeySigningKey,
 };
 use mypass_core::psl::canonical_host;
-use mypass_kdbx::Database;
+use mypass_kdbx::{Database, Entry};
 use uuid::Uuid;
 
 use super::candidates::passkey_entries;
@@ -36,7 +37,7 @@ use super::create::NO_PENDING;
 use super::errors::{get_error, page_error, NOT_ALLOWED};
 use super::pending::PendingGet;
 use super::{PasskeyContext, PasskeyService};
-use crate::protocol::Response;
+use crate::protocol::{ExtensionCredentialSummary, Response};
 use crate::views::{parse_wire_id, summary};
 
 /// The answer when no stored passkey matches the request.
@@ -71,7 +72,7 @@ pub(crate) fn handle_get(
         if found.is_empty() {
             return None;
         }
-        let matches = found.iter().map(|e| summary(e)).collect::<Vec<_>>();
+        let matches = found.iter().map(|e| candidate_row(e)).collect::<Vec<_>>();
         let ids = found.iter().map(|e| e.uuid).collect();
         Some((matches, PendingGet::new(db, request.clone(), ids)))
     });
@@ -92,13 +93,26 @@ pub(crate) fn handle_get(
     }
 }
 
+/// A chooser row: the stage 3 summary, with the passkey's own user name when the entry has no
+/// `UserName` (a KeePassXC import often has none), so several passkeys of one site stay apart.
+fn candidate_row(e: &Entry) -> ExtensionCredentialSummary {
+    let mut row = summary(e);
+    if row.username.is_empty() {
+        if let Some(name) = e.field(PASSKEY_USERNAME) {
+            name.clone_into(&mut row.username);
+        }
+    }
+    row
+}
+
 /// The entries a `passkeyGet` offers: the passkeys stored for `rp_id`, narrowed to `allow` (as
 /// decoded bytes) when it is non-empty.
-fn get_candidates<'a>(
-    db: &'a Database,
-    rp_id: &str,
-    allow: &[Vec<u8>],
-) -> Vec<&'a mypass_kdbx::Entry> {
+///
+/// A discoverable request (empty `allow`) also offers a passkey stored without a user handle
+/// (hand-edited or foreign entries; MyPass and KeePassXC always store one). Deliberate: most
+/// relying parties look the credential up by its id, so hiding it would lose a working sign-in,
+/// while one that needs the handle fails visibly on its own side.
+fn get_candidates<'a>(db: &'a Database, rp_id: &str, allow: &[Vec<u8>]) -> Vec<&'a Entry> {
     passkey_entries(db, rp_id)
         .into_iter()
         .filter(|e| allowed(allow, PasskeyRecord::credential_id(e).as_deref()))

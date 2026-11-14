@@ -1028,3 +1028,28 @@ fn on_disk(f: &Fx) -> Database {
     )
     .unwrap()
 }
+
+#[test]
+fn get_rows_fall_back_to_the_passkey_user_name_when_the_entry_has_none() {
+    // Task 8 M3: a KeePassXC import often has an empty UserName; the chooser still shows who.
+    let (mut db, ids) = sample();
+    let now = Timestamp::now();
+    db.update_entry(ids.a, now, |a| a.set_field("UserName", "", false))
+        .unwrap();
+    let (f, _svc) = passkey_fx_with_db(db);
+    let r = get(&f, 90, &[]);
+    let Response::PasskeyGetPending { matches, .. } = &r else {
+        panic!("{r:?}");
+    };
+    let by_id = |id: Uuid| {
+        matches
+            .iter()
+            .find(|m| m.id == crate::views::wire_id(id))
+            .unwrap()
+            .username
+            .clone()
+    };
+    // `a` has no UserName: the passkey's own name; `b` keeps its entry UserName.
+    assert_eq!(by_id(ids.a), "alice");
+    assert_eq!(by_id(ids.b), "someone");
+}
