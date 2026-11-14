@@ -4,7 +4,16 @@
 //! reaches [`PasskeyHandler::handle`] (only `getPasskeyProxyStatus` passes the locked gate).
 //! Inside the handler the app-side toggle is checked first, before any parsing: Chrome's attach
 //! state can lag the setting, so the app refuses `passkeyCreate` / `passkeyGet` on its own
-//! whenever the feature is off, whatever the extension believes.
+//! whenever the feature is off, whatever the extension believes. Confirm and approve re-check it,
+//! because "off" set in the app's Settings window does not clear the pending table.
+//!
+//! Phase two (confirm, approve) must follow this pattern, in this order:
+//! 1. toggle check (done in `handle`);
+//! 2. `take_create(id)` / `take_get(id)`, `None` answers "request expired";
+//! 3. inside the ONE `session.mutate` (confirm) or `session.with_db` (approve, the key read)
+//!    closure, first `pending.vault_matches(db)`, and on `false` return an error that maps to
+//!    `NotAllowedError` without reading or writing anything; then the R8 / R11 checks and the
+//!    write. The epoch alone does not bind phase two (see the `pending` module docs).
 //!
 //! Idle timer: `passkeyCreate`, `passkeyGet`, the status poll, the toggle and cancel never reset
 //! the auto-lock timer (`Request::resets_auto_lock_timer`): a page or the background script can
@@ -179,10 +188,20 @@ impl PasskeyHandler for PasskeyService {
                 }
                 get_error(*request_id, NOT_ALLOWED, NOT_SUPPORTED)
             }
+            // Phase two re-checks the toggle too: "off" set in the app's Settings window does not
+            // clear the table, so a ceremony started before it must not complete after it.
             Request::PasskeyCreateConfirm { request_id, .. } => {
+                if !toggle_on() {
+                    self.pending().remove_both(*request_id);
+                    return create_error(*request_id, NOT_ALLOWED, TURNED_OFF);
+                }
                 create_error(*request_id, NOT_ALLOWED, NOT_SUPPORTED)
             }
             Request::PasskeyGetApprove { request_id, .. } => {
+                if !toggle_on() {
+                    self.pending().remove_both(*request_id);
+                    return get_error(*request_id, NOT_ALLOWED, TURNED_OFF);
+                }
                 get_error(*request_id, NOT_ALLOWED, NOT_SUPPORTED)
             }
             // Not passkey requests: the service never routes them here.

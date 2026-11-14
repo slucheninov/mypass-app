@@ -14,6 +14,18 @@
 //! table runs after the session lock is released and takes this mutex, so holding both would
 //! invert the lock order.
 //!
+//! **Vault binding.** The epoch guards phase one only. Session observers run after the session
+//! lock is released, so right after a direct switch from vault A to vault B there is a window in
+//! which B is live and the table still holds A's ceremonies (the clear has not run yet), and a
+//! confirm may also have taken its ceremony just before the switch. Every entry therefore records
+//! the root group UUID of the vault it was started on ([`PendingCreate::new`] takes the `&Database`
+//! and must be called inside the phase-one `with_db` closure), and phase two must call
+//! `vault_matches(db)` INSIDE its own `mutate` / `with_db` closure, where the database cannot change
+//! under it, and refuse on `false` before reading or writing anything. The root UUID is what
+//! `VaultSession::vault_id` reports and the only identity visible inside the closure (the path is
+//! not); it is stable across lock, unlock, save and relocate. Two copies of one vault share it, so
+//! a switch between copies is caught only by the observer clear (residual, narrow).
+//!
 //! Entries hold no key material: the request (rpId, challenge, client data inputs, user
 //! fields) and the candidate entry ids only. The private key is read from the entry at confirm
 //! or approve time and dropped right after signing.
@@ -21,6 +33,7 @@
 use std::time::Duration;
 
 use mypass_core::passkey::{ValidatedCreate, ValidatedGet};
+use mypass_kdbx::Database;
 use uuid::Uuid;
 
 /// How long a ceremony waits for the user, in seconds (the extension's own watchdog is 120 s).
@@ -37,6 +50,28 @@ pub struct PendingCreate {
     pub request: ValidatedCreate,
     /// The entries offered as save targets; confirm accepts only one of these (or a new entry).
     pub candidates: Vec<Uuid>,
+    /// Root group UUID of the vault the ceremony was started on (see the module docs).
+    vault_root: Uuid,
+}
+
+impl PendingCreate {
+    /// Binds the ceremony to `db`. Call it inside the phase-one `with_db` closure, from the same
+    /// read that produced `candidates`.
+    #[must_use]
+    pub fn new(db: &Database, request: ValidatedCreate, candidates: Vec<Uuid>) -> Self {
+        Self {
+            request,
+            candidates,
+            vault_root: db.root_id(),
+        }
+    }
+
+    /// Whether `db` is the vault this ceremony was started on. Call it inside the phase-two
+    /// `mutate` closure and refuse (`NotAllowedError`, "request expired") on `false`.
+    #[must_use]
+    pub fn vault_matches(&self, db: &Database) -> bool {
+        self.vault_root == db.root_id()
+    }
 }
 
 /// A `passkeyGet` waiting for the user to pick an entry.
@@ -45,6 +80,27 @@ pub struct PendingGet {
     pub request: ValidatedGet,
     /// The entries offered for sign-in; approve accepts only one of these.
     pub candidates: Vec<Uuid>,
+    /// Root group UUID of the vault the ceremony was started on (see the module docs).
+    vault_root: Uuid,
+}
+
+impl PendingGet {
+    /// Binds the ceremony to `db`; see [`PendingCreate::new`].
+    #[must_use]
+    pub fn new(db: &Database, request: ValidatedGet, candidates: Vec<Uuid>) -> Self {
+        Self {
+            request,
+            candidates,
+            vault_root: db.root_id(),
+        }
+    }
+
+    /// Whether `db` is the vault this ceremony was started on. Call it inside the phase-two
+    /// `with_db` (or `mutate`) closure that reads the key, and refuse on `false`.
+    #[must_use]
+    pub fn vault_matches(&self, db: &Database) -> bool {
+        self.vault_root == db.root_id()
+    }
 }
 
 /// A snapshot of the table's epoch, taken before the vault read of a phase-one handler.
@@ -189,18 +245,37 @@ pub(crate) mod tests {
         parse_get(ORIGIN, &json).unwrap()
     }
 
+    /// A fixed vault for the table-only tests.
+    fn vault() -> &'static Database {
+        static DB: std::sync::OnceLock<Database> = std::sync::OnceLock::new();
+        DB.get_or_init(|| Database::new("Pending"))
+    }
+
     pub(crate) fn pc() -> PendingCreate {
-        PendingCreate {
-            request: create_request(),
-            candidates: vec![Uuid::from_u128(1)],
-        }
+        pc_for(vault())
     }
 
     pub(crate) fn pg() -> PendingGet {
-        PendingGet {
-            request: get_request(),
-            candidates: vec![Uuid::from_u128(2)],
-        }
+        pg_for(vault())
+    }
+
+    pub(crate) fn pc_for(db: &Database) -> PendingCreate {
+        PendingCreate::new(db, create_request(), vec![Uuid::from_u128(1)])
+    }
+
+    pub(crate) fn pg_for(db: &Database) -> PendingGet {
+        PendingGet::new(db, get_request(), vec![Uuid::from_u128(2)])
+    }
+
+    #[test]
+    fn entries_match_only_the_vault_they_were_started_on() {
+        let a = Database::new("A");
+        let b = Database::new("B");
+        assert_ne!(a.root_id(), b.root_id());
+        assert!(pc_for(&a).vault_matches(&a));
+        assert!(!pc_for(&a).vault_matches(&b));
+        assert!(pg_for(&a).vault_matches(&a));
+        assert!(!pg_for(&a).vault_matches(&b));
     }
 
     const T0: Duration = Duration::from_secs(1_000);

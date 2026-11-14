@@ -1,10 +1,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)] // test-only
 
-use super::pending::tests::{pc, pg};
+use super::pending::tests::{pc, pc_for, pg, pg_for};
 use super::pending::PENDING_TTL;
 use super::*;
 use crate::testing::*;
-use mypass_session::session::LockReason;
+use mypass_session::session::{LockReason, SessionError};
 use mypass_session::testing::fast_database;
 use secrecy::SecretString;
 use std::time::Duration;
@@ -302,9 +302,9 @@ fn create_get_toggle_and_cancel_never_reset_idle_timer() {
         "passkeyGet",
         "setPasskeyProxyEnabled",
         "passkeyCancel",
-        "passkeyCreateConfirm",
-        "passkeyGetApprove",
     ] {
+        // Confirm and approve are gesture-gated: they reset the timer when served (Tasks 7 and 8
+        // pin that), so they are not listed here.
         let (f, _svc) = passkey_fx();
         let request = named(name, Some(&f.secret));
         assert!(
@@ -407,4 +407,76 @@ fn ceremony_arms_answer_a_placeholder_error_until_implemented() {
         };
         assert!(ok, "{name}: {r:?}");
     }
+}
+
+/// R7 / review I1: phase two is bound to the vault the ceremony was started on. After a direct
+/// switch A -> B (never through Locked) and before the observer clears the table, a confirm can
+/// still take A's ceremony; the check inside its `mutate` must refuse and leave B untouched.
+#[test]
+fn ceremony_taken_after_a_direct_vault_switch_cannot_mutate_the_new_vault() {
+    let (f, _observed) = passkey_fx();
+    // Not registered with the session: stands for the window before the observer's clear runs.
+    let svc = PasskeyService::new(f.sched.clone(), f.ui.clone());
+    let epoch = svc.epoch();
+    let create = f.session.with_db(pc_for).unwrap();
+    let get = f.session.with_db(pg_for).unwrap();
+    assert!(svc.put_create(epoch, 1, create));
+    assert!(svc.put_get(epoch, 1, get));
+
+    let dir = tempfile::tempdir().unwrap();
+    f.session
+        .create_vault_with(
+            &dir.path().join("b.kdbx"),
+            SecretString::from("pw".to_owned()),
+            fast_database("Vault B"),
+        )
+        .unwrap();
+    assert!(f.session.is_unlocked());
+    let b_before = f.session.with_db(Clone::clone).unwrap();
+
+    let create = svc
+        .take_create(1)
+        .expect("the clear has not run for this table");
+    let written = f.session.mutate(|db, now| {
+        if !create.vault_matches(db) {
+            return Err(SessionError::InvalidInput("request expired".into()));
+        }
+        let mut e = mypass_kdbx::Entry::new(now);
+        e.set_field("Title", "Passkey from vault A", false);
+        let root = db.root_id();
+        db.add_entry(root, e, now)
+            .map_err(|_| SessionError::InvalidInput("add".into()))?;
+        Ok(())
+    });
+    assert_eq!(
+        written,
+        Err(SessionError::InvalidInput("request expired".into()))
+    );
+    let get = svc.take_get(1).unwrap();
+    assert!(!f.session.with_db(|db| get.vault_matches(db)).unwrap());
+    assert_eq!(f.session.with_db(Clone::clone).unwrap(), b_before);
+
+    // Control: a ceremony started on B matches B.
+    let on_b = f.session.with_db(pc_for).unwrap();
+    assert!(f.session.with_db(|db| on_b.vault_matches(db)).unwrap());
+}
+
+/// Review M1: "off" set in the app (not through the extension) leaves the table alone, so
+/// confirm and approve re-check the toggle and drop the ceremony.
+#[test]
+fn toggle_off_in_the_app_refuses_confirm_and_approve() {
+    let (f, svc) = passkey_fx();
+    // `named` uses request id 7 for both.
+    fill(&svc, &[7]);
+    set_toggle(&f.settings, false);
+    assert_eq!(svc.pending_len(), (1, 1));
+    assert_eq!(
+        f.svc.handle(named("passkeyCreateConfirm", Some(&f.secret))),
+        errors::create_error(7, "NotAllowedError", TURNED_OFF)
+    );
+    assert_eq!(
+        f.svc.handle(named("passkeyGetApprove", Some(&f.secret))),
+        errors::get_error(7, "NotAllowedError", TURNED_OFF)
+    );
+    assert_eq!(svc.pending_len(), (0, 0));
 }
