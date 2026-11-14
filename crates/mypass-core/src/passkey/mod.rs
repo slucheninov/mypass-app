@@ -16,9 +16,11 @@ pub mod record;
 /// WebAuthn create and get request parsing with size and text caps.
 pub mod request;
 
+#[cfg(feature = "test-util")]
+pub use ceremony::perform_create_with;
 pub use ceremony::{
-    client_data_json, perform_create, perform_create_with, perform_get, BackupFlags, CreateOutcome,
-    GetOutcome, PasskeySigningKey,
+    client_data_json, perform_create, perform_get, BackupFlags, CreateOutcome, GetOutcome,
+    PasskeySigningKey,
 };
 pub use origin::ValidatedOrigin;
 pub use record::{format_created, has_passkey, parse_created, PasskeyRecord};

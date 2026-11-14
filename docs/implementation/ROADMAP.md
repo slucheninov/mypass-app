@@ -4,7 +4,7 @@
 its tests pass, or, for manual-only items, once the manual check has actually been walked. History
 lives in `git log`, not here.
 
-Last updated: 2026-11-13
+Last updated: 2026-11-14
 
 ---
 
@@ -19,6 +19,9 @@ Last updated: 2026-11-13
   `RngCore`, `OsRng` and `rand::Error`, and the lockfile still carries `rand_core` 0.6 next to 0.10,
   so check that the RustCrypto crates agree on one trait set first. Update the generator tests
   (`BoundaryRng`) and `THIRD_PARTY_NOTICES.md` in the same change.
+- [ ] Zeroize a protected field value when `Entry::set_field` replaces or removes it. Today the old
+  `String` is freed without a wipe, so a replaced passkey private key PEM (or password) can linger
+  in freed memory.
 
 ## Stage 2a backend
 

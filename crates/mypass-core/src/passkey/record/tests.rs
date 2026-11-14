@@ -552,3 +552,21 @@ fn write_then_save_then_open_roundtrip_through_database() {
         assert_eq!(protected(e, key), Some(false), "{key}");
     }
 }
+
+/// Review M4 (Tasks 3+4): an undecodable or empty USER_HANDLE reads as `None` and the entry still
+/// counts as a passkey (Swift behaved the same); the get response then carries no `userHandle`.
+#[test]
+fn undecodable_user_handle_reads_as_none_and_keeps_the_passkey() {
+    for bad in ["!!", "", "=="] {
+        let e = entry(&[
+            (PASSKEY_RELYING_PARTY, "example.com"),
+            (PASSKEY_CREDENTIAL_ID, "AQIDBA"),
+            (PASSKEY_PRIVATE_KEY_PEM, A25_PKCS8),
+            (PASSKEY_USER_HANDLE, bad),
+        ]);
+        assert!(has_passkey(&e), "{bad:?}");
+        let r = PasskeyRecord::read(&e).unwrap();
+        assert_eq!(r.user_handle, None, "{bad:?}");
+        assert_eq!(r.credential_id, vec![1, 2, 3, 4]);
+    }
+}

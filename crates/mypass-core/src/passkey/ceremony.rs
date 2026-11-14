@@ -193,7 +193,10 @@ impl PasskeySigningKey {
 /// `clientDataJSON` in the WebAuthn-recommended member order `type, challenge, origin,
 /// crossOrigin`, with no escaping of `/`. The Swift app used `JSONSerialization`, which escaped
 /// slashes (`https:\/\/x`): valid JSON, but not the canonical form some relying party libraries
-/// byte-compare against. Strings are escaped by `serde_json`, which never escapes `/`.
+/// byte-compare against. Strings are escaped by `serde_json`, which never escapes `/`. It
+/// writes control characters as short escapes (`\n`) where WebAuthn's `CCDToString` wants
+/// `\u000a`; no value that reaches this function can hold one (the type is fixed, the challenge
+/// is base64url, the origin an ASCII serialisation), so the output is canonical for its inputs.
 #[must_use]
 pub fn client_data_json(kind: &str, challenge: &[u8], origin: &str) -> Vec<u8> {
     let quoted = |s: &str| Value::String(s.to_owned()).to_string();
@@ -214,16 +217,26 @@ pub fn perform_create(request: &ValidatedCreate) -> Result<CreateOutcome, Passke
     let key = random_secret_key()?;
     let mut credential_id = [0u8; CREDENTIAL_ID_LEN];
     getrandom::fill(&mut credential_id).map_err(|_| PasskeyError::Crypto)?;
-    perform_create_with(request, key, credential_id)
+    create_with(request, key, credential_id)
 }
 
 /// [`perform_create`] with a caller-chosen key and credential id: the deterministic seam for
 /// known-answer vectors (signatures are RFC 6979, so the whole outcome is a pure function of the
-/// inputs). Production code calls [`perform_create`].
+/// inputs). Behind the `test-util` feature: production code calls [`perform_create`] and can
+/// never choose the key.
 ///
 /// # Errors
 /// `Crypto` when a key cannot be encoded.
+#[cfg(feature = "test-util")]
 pub fn perform_create_with(
+    request: &ValidatedCreate,
+    key: SecretKey,
+    credential_id: [u8; CREDENTIAL_ID_LEN],
+) -> Result<CreateOutcome, PasskeyError> {
+    create_with(request, key, credential_id)
+}
+
+fn create_with(
     request: &ValidatedCreate,
     key: SecretKey,
     credential_id: [u8; CREDENTIAL_ID_LEN],
@@ -373,6 +386,9 @@ fn sign(key: &SigningKey, auth_data: &[u8], client_data_json: &[u8]) -> Vec<u8> 
     let mut message = Vec::with_capacity(auth_data.len() + 32);
     message.extend_from_slice(auth_data);
     message.extend_from_slice(&Sha256::digest(client_data_json));
+    // p256 does not normalise S, so about half of the signatures are high-S. That is
+    // deliberate: P-256 WebAuthn verifiers do not require low-S (the Swift app's CryptoKit
+    // signatures were the same), and normalising would change the pinned RFC 6979 vector.
     let signature: DerSignature = key.sign(&message);
     signature.as_bytes().to_vec()
 }

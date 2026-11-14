@@ -8,6 +8,12 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+default = []
+# Deterministic seams for known-answer tests (`passkey::perform_create_with`); never enabled by a
+# shipped crate.
+test-util = []
+
 [dependencies]
 idna.workspace = true
 mypass-kdbx = { path = "../mypass-kdbx" }
@@ -30,6 +36,7 @@ serde_json.workspace = true
 workspace = true
 
 [dev-dependencies]
+mypass-core = { path = ".", features = ["test-util"] }
 proptest.workspace = true
 ciborium.workspace = true
 secrecy.workspace = true

@@ -2700,6 +2700,7 @@ dependencies = [
  "getrandom 0.4.3",
  "hmac",
  "idna",
+ "mypass-core",
  "mypass-kdbx",
  "p256",
  "proptest",
