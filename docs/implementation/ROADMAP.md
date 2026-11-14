@@ -93,8 +93,6 @@ Last updated: 2026-11-14
 
 - [ ] Manual: walk the Stage 4 passkey checklist in `RUN.md` (P1 to P13, on a public https demo site,
   with a copy of the owner's vault and KeePassXC interop) and record the results in the PR.
-- [ ] Independent oracle in CI: verify our registration and assertion bytes and the `KPEX_PASSKEY_*`
-  fields with Yubico `python-fido2` and `pykeepass` in the crosscompat job.
 
 ## Stage 5 macOS release
 

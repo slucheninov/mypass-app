@@ -484,6 +484,26 @@ fn crosscompat_is_path_gated_and_runs_both_directions() {
         .map(|s| run_text(s))
         .collect::<Vec<_>>()
         .join("\n");
+    let requirements = read("crates/mypass-core/tests/crosscompat/requirements.txt");
+    for pin in ["fido2==", "cryptography==", "pykeepass==4.2.0"] {
+        assert!(
+            requirements.contains(pin),
+            "passkey oracle requirements must pin {pin}"
+        );
+    }
+    let all_steps = steps(cross);
+    let oracle_step = all_steps
+        .iter()
+        .find(|s| run_text(s).contains("passkey_oracle_check.sh"))
+        .expect("crosscompat runs the passkey oracle");
+    assert_eq!(
+        oracle_step
+            .get("env")
+            .and_then(|e| e.get("CI"))
+            .and_then(Value::as_str),
+        Some("true"),
+        "the passkey oracle step must set CI=true so it is never skipped"
+    );
     for command in [
         "pykeepass==4.2.0",
         "--example write_crosscompat",
@@ -491,6 +511,8 @@ fn crosscompat_is_path_gated_and_runs_both_directions() {
         "crates/mypass-kdbx/tests/crosscompat/pykeepass_make.py",
         "MYPASS_PYKEEPASS_VAULT=",
         "--test pykeepass_generated",
+        "crates/mypass-core/tests/crosscompat/requirements.txt",
+        "crates/mypass-core/tests/crosscompat/passkey_oracle_check.sh",
     ] {
         assert!(runs.contains(command), "crosscompat missing {command}");
     }

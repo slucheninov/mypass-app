@@ -1,0 +1,4 @@
+# CI-only independent oracles for the passkey ceremonies (never shipped, never a Cargo dependency).
+fido2==2.2.1
+cryptography==50.0.2
+pykeepass==4.2.0

@@ -762,6 +762,16 @@ into the shipped product.
 Python environment, never linked into or shipped with MyPass. Optional local verification uses
 an external scratch venv. It is not a Cargo dependency. Upstream: https://github.com/libkeepass/pykeepass.
 
+The passkey oracle (`crates/mypass-core/tests/crosscompat/passkey_oracle.py`, pins in
+`crates/mypass-core/tests/crosscompat/requirements.txt`) adds two more CI-only Python packages next
+to `pykeepass==4.2.0`, installed into the same crosscompat job environment and never linked into or
+shipped with MyPass:
+
+- `fido2==2.2.1` (Yubico python-fido2; BSD-2-Clause, Apache-2.0 or MPL-2.0, MyPass selects
+  BSD-2-Clause). Upstream: https://github.com/Yubico/python-fido2.
+- `cryptography==50.0.2` (Apache-2.0 OR BSD-3-Clause, MyPass selects BSD-3-Clause). Upstream:
+  https://github.com/pyca/cryptography.
+
 ## npm packages (user interface)
 
 This section is maintained by hand (the generated Cargo tables above are produced by

@@ -114,6 +114,13 @@ jobs are independent and run in parallel, so the wall-clock time is the slowest 
   Python reads, then Python writes / Rust reads. It is path-gated on pull requests through
   `changes.outputs.crosscompat` and always runs on main pushes and manual dispatch.
   The env-gated Rust test prints a skip locally unless `MYPASS_PYKEEPASS_VAULT` is set.
+  It also runs the passkey oracle (`crates/mypass-core/tests/crosscompat/passkey_oracle_check.sh`, packages
+  pinned in `crates/mypass-core/tests/crosscompat/requirements.txt`): the `write_passkey_vectors` example writes our
+  create and get responses and a vault; `python3 -I passkey_oracle.py` verifies them with Yubico `fido2`
+  (`register_complete`, `authenticate_complete`), `pykeepass` and `cryptography`, and writes a KeePassXC-style vault
+  that the env-gated `tests/passkey_pykeepass.rs` reads back. The oracle only verifies; the known-answer vectors are
+  pinned in `tests/passkey_vectors.rs`. Locally the script skips with a message when python or a package is absent;
+  with `CI=true` (always set in the job) a skip is a failure.
 - `js` runs on Ubuntu with Node from `.nvmrc` (`actions/setup-node`): `bash scripts/test.sh --ci
   --only js`, i.e. `node --test scripts/` (the xcstrings converter and the catalog completeness
   tests) and `scripts/test-extension.sh` (the extension suites); built-in runner, no dependencies, no package install. It always runs and must be `success`.
