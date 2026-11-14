@@ -22,6 +22,7 @@ use crate::autolock::AutoLock;
 use crate::backups::{BackupManager, BackupStatus};
 use crate::clipboard_service::ClipboardService;
 use crate::csv_import::{self, CsvImportError};
+use crate::device_unlock::DeviceUnlockService;
 use crate::drafts::{self, DraftStore, DraftVersionDto};
 use crate::dto::{
     AppInfo, CsvPreview, EntryDetailDto, EntryEditModel, EntryQuery, EntrySummary, EntryTypeDto,
@@ -87,7 +88,7 @@ pub struct ApiError {
 }
 
 impl ApiError {
-    fn new(code: ErrorCode, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: ErrorCode, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
@@ -183,6 +184,8 @@ pub struct AppCore {
     pub clipboard: ClipboardService,
     pub backups: BackupManager,
     pub unlock_requests: UnlockRequestState,
+    /// Device unlock (status, enrolment, the explicit prompt); observes the session.
+    pub device_unlock: DeviceUnlockService,
     platform: Platform,
     scheduler: Arc<dyn Scheduler>,
     paths: AppPaths,
@@ -244,9 +247,19 @@ impl AppCore {
             clipboard_scheduler,
             settings.clone(),
         );
+        let unlock_requests = UnlockRequestState::new(scheduler.clone());
+        let device_unlock = DeviceUnlockService::new(
+            session.clone(),
+            settings.clone(),
+            platform.device_unlock.clone(),
+            scheduler.clone(),
+            unlock_requests.clone(),
+            &paths,
+        );
         Self {
             backups: session.backups(),
-            unlock_requests: UnlockRequestState::new(scheduler.clone()),
+            unlock_requests,
+            device_unlock,
             session,
             settings,
             autolock,
