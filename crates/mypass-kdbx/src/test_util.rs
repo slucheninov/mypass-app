@@ -78,6 +78,14 @@ impl FileIo for FailingFileIo {
         }
         self.inner.read(path)
     }
+    fn read_limited(&self, path: &Path, max_len: u64) -> Result<Vec<u8>> {
+        self.reads.fetch_add(1, Ordering::Relaxed);
+        let failure = self.failures().read;
+        if let Some(kind) = failure {
+            return Err(io_error(kind.into()));
+        }
+        self.inner.read_limited(path, max_len)
+    }
     fn write_atomic(&self, path: &Path, bytes: &[u8]) -> Result<()> {
         self.writes.fetch_add(1, Ordering::Relaxed);
         let failure = self.failures().write;

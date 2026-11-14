@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::{
     fmt,
     fs::{self, OpenOptions},
-    io::{self, Write},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, SystemTime},
@@ -47,6 +47,24 @@ pub trait FileIo: Send + Sync {
     fn write_atomic(&self, path: &Path, bytes: &[u8]) -> Result<()>;
     /// Read length and modification time, following the resolved target.
     fn metadata(&self, path: &Path) -> Result<FileMeta>;
+    /// Read the encoded vault bytes of a regular file of at most `max_len` bytes.
+    ///
+    /// For vault files that other software writes (a sync folder, iCloud Drive, a migration
+    /// target). Refusals are [`KdbxError::Io`] with `ErrorKind::FileTooLarge` past `max_len` and
+    /// `ErrorKind::InvalidInput` for anything that is not a regular file (directory, FIFO,
+    /// device); a missing file stays `ErrorKind::NotFound`. The default checks the reported
+    /// length before and after [`FileIo::read`]; a backend that can bound the read itself
+    /// overrides it, because a FIFO, a device or a growing file can report a small length.
+    fn read_limited(&self, path: &Path, max_len: u64) -> Result<Vec<u8>> {
+        if self.metadata(path)?.len > max_len {
+            return Err(too_large(max_len));
+        }
+        let bytes = self.read(path)?;
+        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_len {
+            return Err(too_large(max_len));
+        }
+        Ok(bytes)
+    }
 }
 /// Production filesystem backend with atomic replacement.
 #[derive(Debug, Clone, Copy, Default)]
@@ -65,6 +83,47 @@ impl FileIo for PlainFileIo {
             modified: Some(meta.modified().map_err(io_error)?),
         })
     }
+    fn read_limited(&self, path: &Path, max_len: u64) -> Result<Vec<u8>> {
+        read_regular_limited(path, max_len)
+    }
+}
+fn too_large(max_len: u64) -> KdbxError {
+    io_error(io::Error::new(
+        io::ErrorKind::FileTooLarge,
+        format!("file is larger than {max_len} bytes"),
+    ))
+}
+fn not_regular() -> KdbxError {
+    io_error(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "not a regular file",
+    ))
+}
+/// The bounded read behind [`PlainFileIo::read_limited`]. Symlinks are followed; the target must
+/// be a regular file.
+fn read_regular_limited(path: &Path, max_len: u64) -> Result<Vec<u8>> {
+    // Check by path first: opening a FIFO for reading would block until a writer appears.
+    if !fs::metadata(path).map_err(io_error)?.is_file() {
+        return Err(not_regular());
+    }
+    let file = fs::File::open(path).map_err(io_error)?;
+    // Check the opened handle again: the path may have been replaced since the first check.
+    let meta = file.metadata().map_err(io_error)?;
+    if !meta.is_file() {
+        return Err(not_regular());
+    }
+    if meta.len() > max_len {
+        return Err(too_large(max_len));
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(meta.len()).unwrap_or(0));
+    // One byte past the limit tells a file that grew after `metadata` from one that fits.
+    file.take(max_len.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(io_error)?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_len {
+        return Err(too_large(max_len));
+    }
+    Ok(bytes)
 }
 pub(crate) fn io_error(e: io::Error) -> KdbxError {
     KdbxError::Io {
