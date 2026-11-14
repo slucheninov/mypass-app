@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn cancel_quit_restores_service_answers() {
-        let f = fx();
+        let (f, _svc) = passkey_fx();
         let r = || named("getPasskeyProxyStatus", Some(&f.secret));
         f.session.begin_quit();
         assert!(matches!(f.svc.handle(r()), Response::Error { .. }));
@@ -430,8 +430,8 @@ mod tests {
     }
 
     #[test]
-    fn passkey_status_placeholder_reports_disabled_and_stays_locked_safe() {
-        let f = fx();
+    fn passkey_status_answers_while_locked_from_the_real_service() {
+        let (f, _svc) = passkey_fx();
         f.session.lock(LockReason::Manual);
         assert_eq!(
             f.svc
@@ -440,41 +440,44 @@ mod tests {
                 unlocked: false,
                 paired: true,
                 attach_allowed: false,
-                enabled: false
+                enabled: true
             }
         );
     }
 
     #[test]
-    fn set_passkey_proxy_enabled_placeholder_answers_disabled() {
-        let f = fx();
-        assert_eq!(
-            f.svc
-                .handle(named("setPasskeyProxyEnabled", Some(&f.secret))),
-            Response::PasskeyProxyEnabled { enabled: false }
-        );
-    }
-
-    #[test]
-    fn passkey_placeholder_cases_return_not_supported_error() {
-        let f = fx();
-        for name in [
-            "passkeyCreate",
-            "passkeyCreateConfirm",
-            "passkeyGet",
-            "passkeyGetApprove",
-        ] {
-            let r = f.svc.handle(named(name, Some(&f.secret)));
-            assert_eq!(
-                error_message(&r),
-                "passkeys are not supported by this version of MyPass yet"
-            );
+    fn passkey_requests_but_the_status_answer_locked_while_locked() {
+        // R4: the lock gate answers first, whatever the toggle says.
+        for toggle in [true, false] {
+            let (f, svc) = passkey_fx();
+            f.settings
+                .update(mypass_session::settings::SettingsPatch {
+                    passkey_proxy_enabled: Some(toggle),
+                    ..mypass_session::settings::SettingsPatch::default()
+                })
+                .unwrap();
+            f.session.lock(LockReason::Manual);
+            for name in [
+                "setPasskeyProxyEnabled",
+                "passkeyCreate",
+                "passkeyCreateConfirm",
+                "passkeyGet",
+                "passkeyGetApprove",
+                "passkeyCancel",
+            ] {
+                assert_eq!(
+                    f.svc.handle(named(name, Some(&f.secret))),
+                    Response::Locked,
+                    "{name}"
+                );
+            }
+            assert_eq!(svc.pending_len(), (0, 0));
         }
     }
 
     #[test]
-    fn passkey_cancel_placeholder_answers_cancelled_with_same_id() {
-        let f = fx();
+    fn passkey_cancel_answers_cancelled_with_same_id() {
+        let (f, _svc) = passkey_fx();
         assert_eq!(
             f.svc.handle(named("passkeyCancel", Some(&f.secret))),
             Response::PasskeyCancelled { request_id: -9 }
@@ -483,10 +486,17 @@ mod tests {
 
     #[test]
     fn passkey_confirm_never_resets_timer_when_error() {
-        let f = fx();
+        let (f, _svc) = passkey_fx();
         let confirm = named("passkeyCreateConfirm", Some(&f.secret));
         assert!(!resets_timer(&f, || {
-            assert!(matches!(f.svc.handle(confirm), Response::Error { .. }));
+            assert!(matches!(
+                f.svc.handle(confirm),
+                Response::PasskeyCreateComplete {
+                    error: Some(_),
+                    response_json: None,
+                    ..
+                }
+            ));
         }));
     }
 

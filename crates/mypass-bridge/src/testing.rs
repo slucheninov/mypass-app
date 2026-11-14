@@ -6,7 +6,7 @@
 use crate::diagnostics::DiagnosticsStore;
 use crate::pairing::PairingManager;
 use crate::pairing::{PairedBrowserStore, PairingChallenge, StartOutcome};
-use crate::passkeys::{NotSupportedPasskeys, PasskeyContext, PasskeyHandler, PasskeyService};
+use crate::passkeys::{PasskeyContext, PasskeyHandler, PasskeyService};
 use crate::protocol::{
     BrowserDiagnosticsReport, ExtensionScanState, PermissionState, ProxyState, Request, Response,
 };
@@ -209,8 +209,11 @@ fn fx_build(
     }
 }
 
+/// The default fixture: passkey requests reach a [`RecordingPasskeys`] (it answers
+/// `Acknowledged`), so a gating test sees whether a request got through, never a canned answer
+/// that could pass vacuously. [`passkey_fx`] gives the real service.
 pub(crate) fn fx() -> Fx {
-    fx_with(Arc::new(NotSupportedPasskeys))
+    fx_with(Arc::new(RecordingPasskeys::default()))
 }
 
 pub(crate) fn report() -> BrowserDiagnosticsReport {
@@ -576,7 +579,7 @@ pub(crate) fn sample_database() -> (mypass_kdbx::Database, Ids) {
 /// An `Fx` over [`sample_database`].
 pub(crate) fn sample_fx() -> (Fx, Ids) {
     let (db, ids) = sample_database();
-    (fx_with_db(Arc::new(NotSupportedPasskeys), db), ids)
+    (fx_with_db(Arc::new(RecordingPasskeys::default()), db), ids)
 }
 
 /// Dispatches a request built by `make` with the fixture's pairing secret.

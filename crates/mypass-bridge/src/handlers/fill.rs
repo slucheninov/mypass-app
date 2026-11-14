@@ -150,9 +150,10 @@ pub(crate) fn get_totp(ctx: &Ctx<'_>, id: &str, url: &str) -> Response {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
-    use crate::passkeys::NotSupportedPasskeys;
     use crate::protocol::Request;
-    use crate::testing::{fx_with_db, resets_timer, sample_database, sample_fx, send, Fx, Ids};
+    use crate::testing::{
+        fx_with_db, resets_timer, sample_database, sample_fx, send, Fx, Ids, RecordingPasskeys,
+    };
     use crate::views::wire_id;
     use mypass_core::TotpConfig;
     use mypass_session::session::SaveState;
@@ -208,7 +209,7 @@ mod tests {
         db.find_entry_mut(ids.a)
             .unwrap()
             .set_field("otp", otp, true);
-        let f = fx_with_db(Arc::new(NotSupportedPasskeys), db);
+        let f = fx_with_db(Arc::new(RecordingPasskeys::default()), db);
         f.sched.set_wall_clock(UNIX_EPOCH + Duration::from_secs(t));
         (f, ids)
     }
@@ -373,7 +374,7 @@ mod tests {
     fn get_totp_without_secret_error() {
         let (mut db, ids) = sample_database();
         db.find_entry_mut(ids.a).unwrap().remove_field("otp");
-        let f = fx_with_db(Arc::new(NotSupportedPasskeys), db);
+        let f = fx_with_db(Arc::new(RecordingPasskeys::default()), db);
         let r = send(&f, totp(ids.a, GITHUB));
         assert_eq!(msg(&r), "entry has no TOTP secret");
         // An unparseable secret is the same answer, and fill serves no code.
@@ -432,7 +433,7 @@ mod tests {
         let root = db.root_id();
         db.add_entry(root, extra, now).unwrap();
         db.delete_entry(binned, now).unwrap();
-        let f = fx_with_db(Arc::new(NotSupportedPasskeys), db);
+        let f = fx_with_db(Arc::new(RecordingPasskeys::default()), db);
         for id in [ids.a, ids.d, ids.f, binned] {
             let r = send(&f, address_req(id, "https://x.com"));
             assert_eq!(msg(&r), "Address not found");
@@ -480,7 +481,7 @@ mod tests {
         for (k, v) in keys {
             entry.set_field(&format!("MyPass.Address.{k}"), v, true);
         }
-        let f = fx_with_db(Arc::new(NotSupportedPasskeys), db);
+        let f = fx_with_db(Arc::new(RecordingPasskeys::default()), db);
         let r = send(&f, address_req(ids.c, "https://x.com"));
         let json = serde_json::to_value(&r).unwrap();
         let a = &json["address"];

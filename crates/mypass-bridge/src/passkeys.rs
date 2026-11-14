@@ -1,4 +1,5 @@
-//! The passkey seam and its stage 4 implementation, [`PasskeyService`].
+//! The passkey seam and its implementation, [`PasskeyService`] (the app wires it into the bridge;
+//! tests may inject a recording handler).
 //!
 //! Gate order: the bridge service answers quitting, then locked, then pairing, before a request
 //! reaches [`PasskeyHandler::handle`] (only `getPasskeyProxyStatus` passes the locked gate).
@@ -256,58 +257,6 @@ impl PasskeyHandler for PasskeyService {
 
     fn on_session_locked(&self) {
         self.pending().clear();
-    }
-}
-
-/// The stage 3 placeholder: the proxy reports itself disabled and not attachable, creates and
-/// gets fail with a fixed message.
-pub struct NotSupportedPasskeys;
-
-const NOT_SUPPORTED: &str = "passkeys are not supported by this version of MyPass yet";
-
-impl PasskeyHandler for NotSupportedPasskeys {
-    fn handle(&self, ctx: &PasskeyContext<'_>, request: &Request) -> Response {
-        match request {
-            Request::GetPasskeyProxyStatus { .. } => Response::PasskeyProxyStatus {
-                unlocked: ctx.unlocked,
-                paired: true,
-                attach_allowed: false,
-                enabled: false,
-            },
-            Request::SetPasskeyProxyEnabled { .. } => {
-                Response::PasskeyProxyEnabled { enabled: false }
-            }
-            Request::PasskeyCancel { request_id, .. } => Response::PasskeyCancelled {
-                request_id: *request_id,
-            },
-            Request::PasskeyCreate { .. }
-            | Request::PasskeyCreateConfirm { .. }
-            | Request::PasskeyGet { .. }
-            | Request::PasskeyGetApprove { .. } => error(NOT_SUPPORTED),
-            // Not passkey requests: the service never routes them here.
-            Request::GetCredentials { .. }
-            | Request::GetFavorites { .. }
-            | Request::ListEntries { .. }
-            | Request::SearchEntries { .. }
-            | Request::CreateEntry { .. }
-            | Request::FillAddress { .. }
-            | Request::FillCredential { .. }
-            | Request::GetTotp { .. }
-            | Request::ProposeSaveLogin { .. }
-            | Request::AddEntryIdentifier { .. }
-            | Request::ProposeSaveTotp { .. }
-            | Request::StartPairing { .. }
-            | Request::CompletePairing { .. }
-            | Request::RequestUnlock { .. }
-            | Request::LockVault { .. }
-            | Request::OpenApp { .. }
-            | Request::OpenBrowserSettings { .. }
-            | Request::ReportBrowserDiagnostics { .. }
-            | Request::GeneratePassword { .. }
-            | Request::RecordGeneratedPassword { .. }
-            | Request::GetGeneratedPasswordHistory { .. }
-            | Request::DeleteGeneratedPassword { .. } => error("unsupported request"),
-        }
     }
 }
 

@@ -9,7 +9,8 @@ use zeroize::Zeroizing;
 
 use crate::pairing::PairingChallenge;
 
-/// The complete UI surface of the bridge. Stage 4 adds no methods.
+/// The complete UI surface of the bridge. Passkey ceremonies need no UI call of their own (the
+/// consent is a click in the extension popup); only the toggle reaches the app's windows.
 pub trait BridgeUi: Send + Sync {
     fn pairing_code(&self, c: &PairingChallenge);
     fn pairing_finished(&self);
