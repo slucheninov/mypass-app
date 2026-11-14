@@ -220,10 +220,9 @@ pub fn parse_created(s: &str) -> Option<Timestamp> {
 /// A stored backup flag: `"1"` / `"true"` and `"0"` / `"false"`; absent or anything else is the
 /// default `true`.
 fn parse_flag(value: Option<&str>) -> bool {
-    match value.map(str::trim) {
-        Some(v) if v == "0" || v.eq_ignore_ascii_case("false") => false,
-        _ => true,
-    }
+    !value
+        .map(str::trim)
+        .is_some_and(|v| v == "0" || v.eq_ignore_ascii_case("false"))
 }
 
 fn flag(on: bool) -> &'static str {
