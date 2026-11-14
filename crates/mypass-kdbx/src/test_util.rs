@@ -1,5 +1,5 @@
 //! Feature-gated failure injection for downstream dev-dependencies. Never enable in production.
-use crate::{file::io_error, FileIo, FileMeta, Result};
+use crate::{file::io_error, FileIo, FileMeta, OpenedFile, ReplaceOutcome, Result};
 use std::{
     io::ErrorKind,
     path::Path,
@@ -85,6 +85,28 @@ impl FileIo for FailingFileIo {
             return Err(io_error(kind.into()));
         }
         self.inner.read_limited(path, max_len)
+    }
+    fn open_read(&self, path: &Path) -> Result<OpenedFile> {
+        self.reads.fetch_add(1, Ordering::Relaxed);
+        let failure = self.failures().read;
+        if let Some(kind) = failure {
+            return Err(io_error(kind.into()));
+        }
+        self.inner.open_read(path)
+    }
+    fn replace_if(
+        &self,
+        path: &Path,
+        expected: Option<&[u8; 32]>,
+        bytes: &[u8],
+        max_len: u64,
+    ) -> Result<ReplaceOutcome> {
+        self.writes.fetch_add(1, Ordering::Relaxed);
+        let failure = self.failures().write;
+        if let Some(kind) = failure {
+            return Err(io_error(kind.into()));
+        }
+        self.inner.replace_if(path, expected, bytes, max_len)
     }
     fn write_atomic(&self, path: &Path, bytes: &[u8]) -> Result<()> {
         self.writes.fetch_add(1, Ordering::Relaxed);

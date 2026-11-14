@@ -3,14 +3,18 @@
 //! `FileIo::read_limited`: the bounded, regular-file-only read for vault files that other software
 //! writes (sync folders, iCloud Drive, migration targets).
 use mypass_kdbx::{
-    test_util::FailingFileIo, FileIo, FileMeta, KdbxError, PlainFileIo, Result,
+    test_util::FailingFileIo, FileIo, FileMeta, KdbxError, OpenedFile, PlainFileIo, Result,
     MAX_VAULT_FILE_BYTES,
 };
 use std::{
     fs,
-    io::ErrorKind,
+    io::{self, ErrorKind, Read},
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
 };
 
 fn kind<T: std::fmt::Debug>(r: Result<T>) -> ErrorKind {
@@ -103,16 +107,116 @@ impl FileIo for DefaultOnly {
 }
 
 #[test]
-fn default_read_limited_refuses_by_reported_length_before_reading() {
+fn default_read_limited_fails_closed_without_a_bounded_open() {
+    // A backend that never implemented `open_read` must not serve untrusted reads through its
+    // unbounded `read` (a FIFO or `/dev/zero` behind it would hang or exhaust memory).
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("vault.kdbx");
     fs::write(&p, b"0123456789A").unwrap();
     let io = DefaultOnly {
         events: Mutex::new(vec![]),
     };
-    assert_eq!(kind(io.read_limited(&p, 10)), ErrorKind::FileTooLarge);
-    assert_eq!(*io.events.lock().unwrap(), ["metadata"]);
-    assert_eq!(io.read_limited(&p, 11).unwrap(), b"0123456789A");
+    assert_eq!(kind(io.read_limited(&p, 100)), ErrorKind::Unsupported);
+    assert_eq!(
+        kind(io.replace_if(&p, None, b"x", 100)),
+        ErrorKind::Unsupported
+    );
+    assert!(io.events.lock().unwrap().is_empty(), "never read or stat");
+    assert_eq!(fs::read(&p).unwrap(), b"0123456789A");
+}
+
+/// An endless reader that counts the bytes handed out.
+struct Endless(Arc<AtomicU64>);
+impl Read for Endless {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        buf.fill(7);
+        self.0.fetch_add(buf.len() as u64, Ordering::SeqCst);
+        Ok(buf.len())
+    }
+}
+
+/// A backend whose `open_read` hands out a handle that lies about its length.
+struct Lying {
+    regular: bool,
+    served: Arc<AtomicU64>,
+}
+impl FileIo for Lying {
+    fn read(&self, _: &Path) -> Result<Vec<u8>> {
+        panic!("the unbounded read is never used");
+    }
+    fn write_atomic(&self, _: &Path, _: &[u8]) -> Result<()> {
+        Ok(())
+    }
+    fn metadata(&self, _: &Path) -> Result<FileMeta> {
+        panic!("the path is never trusted");
+    }
+    fn open_read(&self, _: &Path) -> Result<OpenedFile> {
+        Ok(OpenedFile::new(
+            Box::new(Endless(self.served.clone())),
+            self.regular,
+            0,
+        ))
+    }
+}
+
+#[test]
+fn default_read_limited_bounds_the_read_whatever_the_handle_reports() {
+    let served = Arc::new(AtomicU64::new(0));
+    let io = Lying {
+        regular: true,
+        served: served.clone(),
+    };
+    assert_eq!(
+        kind(io.read_limited(Path::new("growing"), 1000)),
+        ErrorKind::FileTooLarge
+    );
+    // `take(limit + 1)` caps what is pulled from the reader (one buffer of slack at most).
+    assert!(served.load(Ordering::SeqCst) <= 1001 + 64 * 1024);
+}
+
+#[test]
+fn default_read_limited_refuses_a_non_regular_handle_before_reading() {
+    let served = Arc::new(AtomicU64::new(0));
+    let io = Lying {
+        regular: false,
+        served: served.clone(),
+    };
+    assert_eq!(
+        kind(io.read_limited(Path::new("device"), 1000)),
+        ErrorKind::InvalidInput
+    );
+    assert_eq!(served.load(Ordering::SeqCst), 0);
+}
+
+/// Runs `f` on a helper thread; a hang (the bug) fails the test instead of blocking it forever.
+fn bounded<R: Send + 'static>(f: impl FnOnce() -> R + Send + 'static) -> R {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(Duration::from_secs(20))
+        .expect("the bounded read blocked (deadlock bound, not timing)")
+}
+
+#[cfg(unix)]
+#[test]
+fn plain_read_limited_refuses_a_fifo_without_blocking_on_the_open() {
+    // There is no path check before the open any more: the open itself is nonblocking and the
+    // type check runs on the opened handle, so a path swapped for a FIFO at any moment (here:
+    // one that is a FIFO from the start, the worst case of that race) is refused at once.
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("vault.kdbx");
+    let status = std::process::Command::new("mkfifo")
+        .arg(&p)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let path = p.clone();
+    let result = bounded(move || PlainFileIo.read_limited(&path, 1 << 20));
+    assert_eq!(kind(result), ErrorKind::InvalidInput);
+    let path = p.clone();
+    let result = bounded(move || PlainFileIo.replace_if(&path, Some(&[0; 32]), b"new", 1 << 20));
+    assert_eq!(kind(result), ErrorKind::InvalidInput);
 }
 
 #[test]

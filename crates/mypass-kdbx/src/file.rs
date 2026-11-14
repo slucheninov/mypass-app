@@ -47,25 +47,108 @@ pub trait FileIo: Send + Sync {
     fn write_atomic(&self, path: &Path, bytes: &[u8]) -> Result<()>;
     /// Read length and modification time, following the resolved target.
     fn metadata(&self, path: &Path) -> Result<FileMeta>;
+    /// Open `path` for a bounded read, without blocking: a FIFO or a device never hangs the open.
+    /// The returned type and length describe the OPENED handle (`fstat`), never a path checked
+    /// before the open, so a path swapped for a FIFO or a device in between is still refused.
+    ///
+    /// The default refuses with `ErrorKind::Unsupported` (fail closed): a backend that cannot open
+    /// without blocking and inspect the handle must not serve reads of untrusted files.
+    fn open_read(&self, path: &Path) -> Result<OpenedFile> {
+        let _ = path;
+        Err(unsupported("this file backend has no bounded read"))
+    }
     /// Read the encoded vault bytes of a regular file of at most `max_len` bytes.
     ///
     /// For vault files that other software writes (a sync folder, iCloud Drive, a migration
     /// target). Refusals are [`KdbxError::Io`] with `ErrorKind::FileTooLarge` past `max_len` and
     /// `ErrorKind::InvalidInput` for anything that is not a regular file (directory, FIFO,
-    /// device); a missing file stays `ErrorKind::NotFound`. The default checks the reported
-    /// length before and after [`FileIo::read`]; a backend that can bound the read itself
-    /// overrides it, because a FIFO, a device or a growing file can report a small length.
+    /// device); a missing file stays `ErrorKind::NotFound`. The default reads through
+    /// [`FileIo::open_read`]: the type check is on the opened handle and the read goes through
+    /// `take(max_len + 1)`, so neither a device nor a growing file can allocate past the limit.
     fn read_limited(&self, path: &Path, max_len: u64) -> Result<Vec<u8>> {
-        if self.metadata(path)?.len > max_len {
-            return Err(too_large(max_len));
-        }
-        let bytes = self.read(path)?;
-        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_len {
-            return Err(too_large(max_len));
-        }
-        Ok(bytes)
+        read_opened(self.open_read(path)?, max_len)
+    }
+    /// Replace `path` with `bytes` only while it still holds the content whose SHA-256 is
+    /// `expected` (`None`: only while the file is missing, never replacing one that appeared).
+    /// The current content is read as by [`FileIo::read_limited`] with `max_len`.
+    ///
+    /// For files other software writes: a writer that changed the file before the final check
+    /// gets [`ReplaceOutcome::Conflict`] (nothing written), and one that slipped in between the
+    /// final check and the replacement is returned as [`ReplaceOutcome::Displaced`] and kept on
+    /// disk instead of being destroyed, where the platform can swap atomically (see
+    /// [`PlainFileIo`] for the remaining window elsewhere).
+    ///
+    /// The default refuses with `ErrorKind::Unsupported` (fail closed).
+    fn replace_if(
+        &self,
+        path: &Path,
+        expected: Option<&[u8; 32]>,
+        bytes: &[u8],
+        max_len: u64,
+    ) -> Result<ReplaceOutcome> {
+        let _ = (path, expected, bytes, max_len);
+        Err(unsupported("this file backend has no guarded replacement"))
     }
 }
+
+/// A file opened for a bounded read ([`FileIo::open_read`]). `regular` and `len` describe the
+/// opened handle, never a path checked before the open.
+pub struct OpenedFile {
+    reader: Box<dyn Read + Send>,
+    regular: bool,
+    len: u64,
+}
+impl OpenedFile {
+    /// `regular` and `len` must come from the opened handle (`fstat`), not from the path.
+    pub fn new(reader: Box<dyn Read + Send>, regular: bool, len: u64) -> Self {
+        Self {
+            reader,
+            regular,
+            len,
+        }
+    }
+}
+impl fmt::Debug for OpenedFile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OpenedFile")
+            .field("regular", &self.regular)
+            .field("len", &self.len)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What a guarded replacement ([`FileIo::replace_if`]) did.
+#[derive(Clone, PartialEq, Eq)]
+pub enum ReplaceOutcome {
+    /// The new bytes replaced exactly the expected content (or created the missing file).
+    Replaced,
+    /// The file no longer holds the expected content (or exists although it was expected to be
+    /// missing); nothing was written.
+    Conflict,
+    /// The new bytes are in place, but another writer replaced the file in the instant between
+    /// the final check and the replacement. Its content was not destroyed: it is returned in
+    /// `bytes` (empty when it could not be read back) and kept on disk at `kept`.
+    Displaced {
+        /// The displaced content, bounded like [`FileIo::read_limited`].
+        bytes: Vec<u8>,
+        /// Where the displaced file was kept (a hidden name next to the target).
+        kept: PathBuf,
+    },
+}
+impl fmt::Debug for ReplaceOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Replaced => f.write_str("Replaced"),
+            Self::Conflict => f.write_str("Conflict"),
+            Self::Displaced { bytes, kept } => f
+                .debug_struct("Displaced")
+                .field("len", &bytes.len())
+                .field("kept", kept)
+                .finish(),
+        }
+    }
+}
+
 /// Production filesystem backend with atomic replacement.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PlainFileIo;
@@ -83,9 +166,43 @@ impl FileIo for PlainFileIo {
             modified: Some(meta.modified().map_err(io_error)?),
         })
     }
-    fn read_limited(&self, path: &Path, max_len: u64) -> Result<Vec<u8>> {
-        read_regular_limited(path, max_len)
+    fn open_read(&self, path: &Path) -> Result<OpenedFile> {
+        let file = open_for_read(path).map_err(io_error)?;
+        let meta = file.metadata().map_err(io_error)?;
+        Ok(OpenedFile::new(Box::new(file), meta.is_file(), meta.len()))
     }
+    /// The check of the current content and the replacement are not one atomic step on every
+    /// file system, so the guarantee depends on the platform:
+    ///
+    /// - **Unix, where `renameat2(RENAME_EXCHANGE)` (Linux) or `renamex_np(RENAME_SWAP)` (macOS:
+    ///   APFS, HFS+) is supported:** the new file is swapped in atomically and whatever was at the
+    ///   path at that instant comes back under the temp name. If that is not the expected
+    ///   content, a writer slipped in after the final check: its file is kept as
+    ///   `.<name>.displaced-<pid>.<nanos>` and returned as [`ReplaceOutcome::Displaced`].
+    ///   Nothing is destroyed.
+    /// - **Elsewhere (Windows, SMB/NFS/FAT volumes that refuse the swap):** the identity of the
+    ///   file checked (device, inode, length, modification and change time; length and
+    ///   modification time on Windows) is compared once more immediately before a plain rename.
+    ///   A writer that replaces the file in the window between that `stat` and the `rename`
+    ///   (two system calls, plus the Windows sharing-violation retries of the rename) is
+    ///   overwritten. This window cannot be closed without an atomic swap or a lock that every
+    ///   writer honours.
+    ///
+    /// A missing file (`expected` is `None`) is created without ever replacing one that appeared:
+    /// `RENAME_NOREPLACE`/`RENAME_EXCL`, else a hard link (fails on an existing name), else a
+    /// check-then-rename with the same `stat`-to-`rename` window as above.
+    fn replace_if(
+        &self,
+        path: &Path,
+        expected: Option<&[u8; 32]>,
+        bytes: &[u8],
+        max_len: u64,
+    ) -> Result<ReplaceOutcome> {
+        replace_if_with(path, expected, bytes, max_len, &mut || {}, true)
+    }
+}
+fn unsupported(message: &str) -> KdbxError {
+    io_error(io::Error::new(io::ErrorKind::Unsupported, message))
 }
 fn too_large(max_len: u64) -> KdbxError {
     io_error(io::Error::new(
@@ -99,25 +216,45 @@ fn not_regular() -> KdbxError {
         "not a regular file",
     ))
 }
-/// The bounded read behind [`PlainFileIo::read_limited`]. Symlinks are followed; the target must
-/// be a regular file.
-fn read_regular_limited(path: &Path, max_len: u64) -> Result<Vec<u8>> {
-    // Check by path first: opening a FIFO for reading would block until a writer appears.
-    if !fs::metadata(path).map_err(io_error)?.is_file() {
+/// Opens for reading without blocking: `O_NONBLOCK` makes the open of a FIFO without a writer
+/// return at once (the handle check then refuses it), and `O_NOCTTY` keeps a terminal device
+/// from becoming the controlling terminal. Regular-file reads are unaffected by `O_NONBLOCK`.
+#[cfg(unix)]
+fn open_for_read(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let flags = (rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOCTTY).bits();
+    let flags = i32::try_from(flags).map_err(|_| io::Error::other("open flags out of range"))?;
+    OpenOptions::new().read(true).custom_flags(flags).open(path)
+}
+/// Windows has no FIFOs in the file namespace, and opening a file never waits for a writer, so
+/// a path check before the open cannot be raced into a hang. It only turns a directory (whose
+/// plain open fails with "access denied") into the "not a regular file" refusal; the handle is
+/// still checked after the open.
+#[cfg(not(unix))]
+fn open_for_read(path: &Path) -> io::Result<fs::File> {
+    if !fs::metadata(path)?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ));
+    }
+    fs::File::open(path)
+}
+/// The bounded read behind [`FileIo::read_limited`]: refuses a non-regular handle before
+/// reading, and never allocates more than `max_len + 1` bytes whatever the handle reports.
+fn read_opened(opened: OpenedFile, max_len: u64) -> Result<Vec<u8>> {
+    if !opened.regular {
         return Err(not_regular());
     }
-    let file = fs::File::open(path).map_err(io_error)?;
-    // Check the opened handle again: the path may have been replaced since the first check.
-    let meta = file.metadata().map_err(io_error)?;
-    if !meta.is_file() {
-        return Err(not_regular());
-    }
-    if meta.len() > max_len {
+    if opened.len > max_len {
         return Err(too_large(max_len));
     }
-    let mut bytes = Vec::with_capacity(usize::try_from(meta.len()).unwrap_or(0));
-    // One byte past the limit tells a file that grew after `metadata` from one that fits.
-    file.take(max_len.saturating_add(1))
+    let capacity = usize::try_from(opened.len.min(max_len)).unwrap_or(0);
+    let mut bytes = Vec::with_capacity(capacity);
+    // One byte past the limit tells a file that grew after `fstat` from one that fits.
+    opened
+        .reader
+        .take(max_len.saturating_add(1))
         .read_to_end(&mut bytes)
         .map_err(io_error)?;
     if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_len {
@@ -354,6 +491,15 @@ fn write_atomic_with_sync(
 ) -> Result<()> {
     // Windows canonicalization opens a handle and can itself hit a sharing violation.
     let target = resolve_using(|| resolve_target(path), &mut sleep).map_err(io_error)?;
+    let (parent, name) = split_target(&target)?;
+    let mut cleanup = write_temp_sibling(&target, parent, name, bytes)?;
+    let temp = cleanup.path.clone();
+    retry_rename(|| rename(&temp, &target), &mut sleep).map_err(io_error)?;
+    // Rename transferred ownership; this name may now belong to another writer.
+    cleanup.armed = false;
+    finish_directory_sync(sync(parent))
+}
+fn split_target(target: &Path) -> Result<(&Path, &std::ffi::OsStr)> {
     let parent = target
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -364,14 +510,28 @@ fn write_atomic_with_sync(
             "missing file name",
         ))
     })?;
+    Ok((parent, name))
+}
+/// A hidden sibling name `.<name>.<pid>.<nanos><suffix>` in `parent`.
+fn sibling_name(parent: &Path, name: &std::ffi::OsStr, suffix: &str) -> Result<PathBuf> {
     let nanos = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_err(|_| io_error(io::Error::other("system clock before epoch")))?
         .as_nanos();
     let mut temp_name = std::ffi::OsString::from(".");
     temp_name.push(name);
-    temp_name.push(format!(".{}.{nanos}.tmp", std::process::id()));
-    let temp = parent.join(temp_name);
+    temp_name.push(format!(".{}.{nanos}{suffix}", std::process::id()));
+    Ok(parent.join(temp_name))
+}
+/// Writes `bytes` to a fresh temp file next to `target` and syncs it. The returned guard deletes
+/// the temp file on drop until it is disarmed (after a rename handed the name over).
+fn write_temp_sibling(
+    target: &Path,
+    parent: &Path,
+    name: &std::ffi::OsStr,
+    bytes: &[u8],
+) -> Result<TempCleanup> {
+    let temp = sibling_name(parent, name, ".tmp")?;
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -381,8 +541,8 @@ fn write_atomic_with_sync(
     }
     // Install cleanup only after create_new succeeds: never delete a pre-planted file.
     let file = options.open(&temp).map_err(io_error)?;
-    let mut cleanup = TempCleanup {
-        path: temp.clone(),
+    let cleanup = TempCleanup {
+        path: temp,
         armed: true,
     };
     // Drop the open handle before cleanup on all pre-rename failure paths.
@@ -391,7 +551,7 @@ fn write_atomic_with_sync(
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        match fs::metadata(&target) {
+        match fs::metadata(target) {
             // Preserve owner read/write restrictions; discard group/other and special bits.
             Ok(meta) => file
                 .set_permissions(fs::Permissions::from_mode(
@@ -404,20 +564,226 @@ fn write_atomic_with_sync(
     }
     file.sync_all().map_err(io_error)?;
     drop(file);
-    retry_rename(|| rename(&temp, &target), &mut sleep).map_err(io_error)?;
-    // Rename transferred ownership; this name may now belong to another writer.
-    cleanup.armed = false;
-    match sync(parent) {
-        Ok(()) => {}
+    Ok(cleanup)
+}
+fn finish_directory_sync(result: io::Result<()>) -> Result<()> {
+    match result {
+        Ok(()) => Ok(()),
         // Some network/FUSE volumes and macOS filesystems cannot sync directories.
         Err(e)
             if matches!(
                 e.kind(),
                 io::ErrorKind::Unsupported | io::ErrorKind::InvalidInput
-            ) => {}
-        Err(e) => return Err(io_error(e)),
+            ) =>
+        {
+            Ok(())
+        }
+        Err(e) => Err(io_error(e)),
     }
-    Ok(())
+}
+
+/// What identifies one version of a file for the fallback check right before a plain rename.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileIdentity {
+    len: u64,
+    modified: Option<SystemTime>,
+    #[cfg(unix)]
+    node: (u64, u64, i64, i64),
+}
+fn identity_of(meta: &fs::Metadata) -> FileIdentity {
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+    FileIdentity {
+        len: meta.len(),
+        modified: meta.modified().ok(),
+        #[cfg(unix)]
+        node: (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec()),
+    }
+}
+/// The current content of `path` (bounded, regular, read on the opened handle) and the identity
+/// of that handle; `None` when the file is missing.
+fn read_current(path: &Path, max_len: u64) -> Result<Option<(Vec<u8>, FileIdentity)>> {
+    let file = match open_for_read(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(io_error(e)),
+    };
+    let meta = file.metadata().map_err(io_error)?;
+    let identity = identity_of(&meta);
+    let bytes = read_opened(
+        OpenedFile::new(Box::new(file), meta.is_file(), meta.len()),
+        max_len,
+    )?;
+    Ok(Some((bytes, identity)))
+}
+/// The identity of `path` right now; `None` when it is missing.
+fn identity_now(path: &Path) -> Result<Option<FileIdentity>> {
+    match fs::metadata(path) {
+        Ok(meta) => Ok(Some(identity_of(&meta))),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(io_error(e)),
+    }
+}
+
+/// How the atomic rename step ended on this platform and volume.
+#[cfg(unix)]
+enum Swap {
+    Done,
+    /// The volume or kernel does not support the flag: use the portable fallback.
+    Unsupported,
+    /// `ENOENT` for an exchange (the target vanished), `EEXIST` for a no-replace rename.
+    Refused,
+}
+#[cfg(unix)]
+fn rename_with(from: &Path, to: &Path, flags: rustix::fs::RenameFlags) -> Result<Swap> {
+    use rustix::io::Errno;
+    match rustix::fs::renameat_with(rustix::fs::CWD, from, rustix::fs::CWD, to, flags) {
+        Ok(()) => Ok(Swap::Done),
+        Err(e) if e == Errno::NOENT || e == Errno::EXIST => Ok(Swap::Refused),
+        Err(e)
+            if e == Errno::INVAL
+                || e == Errno::NOSYS
+                || e == Errno::NOTSUP
+                || e == Errno::OPNOTSUPP
+                || e == Errno::XDEV =>
+        {
+            Ok(Swap::Unsupported)
+        }
+        Err(e) => Err(io_error(e.into())),
+    }
+}
+
+/// The guarded replacement behind [`PlainFileIo::replace_if`]. `before_install` runs right
+/// after the final check (a test seam for a writer racing the last step); `exchange: false`
+/// forces the portable fallback.
+fn replace_if_with(
+    path: &Path,
+    expected: Option<&[u8; 32]>,
+    bytes: &[u8],
+    max_len: u64,
+    before_install: &mut dyn FnMut(),
+    exchange: bool,
+) -> Result<ReplaceOutcome> {
+    // Resolved once: a symlink retargeted later cannot redirect the replacement to another file.
+    let target = resolve_using(|| resolve_target(path), std::thread::sleep).map_err(io_error)?;
+    let (parent, name) = split_target(&target)?;
+    // The slow part (writing and syncing the new bytes) happens before the final check.
+    let cleanup = write_temp_sibling(&target, parent, name, bytes)?;
+    let outcome = match expected {
+        None => install_new(&target, cleanup, before_install, exchange)?,
+        Some(expected) => replace_expected(
+            &target,
+            parent,
+            name,
+            cleanup,
+            expected,
+            max_len,
+            before_install,
+            exchange,
+        )?,
+    };
+    if outcome != ReplaceOutcome::Conflict {
+        finish_directory_sync(sync_directory(parent))?;
+    }
+    Ok(outcome)
+}
+
+/// Creates the missing `target` from the temp file, never replacing a file that appeared.
+fn install_new(
+    target: &Path,
+    mut cleanup: TempCleanup,
+    before_install: &mut dyn FnMut(),
+    exchange: bool,
+) -> Result<ReplaceOutcome> {
+    if identity_now(target)?.is_some() {
+        return Ok(ReplaceOutcome::Conflict);
+    }
+    before_install();
+    let temp = cleanup.path.clone();
+    #[cfg(unix)]
+    if exchange {
+        match rename_with(&temp, target, rustix::fs::RenameFlags::NOREPLACE)? {
+            Swap::Done => {
+                cleanup.armed = false;
+                return Ok(ReplaceOutcome::Replaced);
+            }
+            Swap::Refused => return Ok(ReplaceOutcome::Conflict),
+            Swap::Unsupported => {}
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = exchange;
+    // A hard link fails on an existing name; the temp name is then removed by `cleanup`.
+    match fs::hard_link(&temp, target) {
+        Ok(()) => return Ok(ReplaceOutcome::Replaced),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return Ok(ReplaceOutcome::Conflict),
+        // FAT, exFAT and some network volumes have no hard links: check, then rename.
+        Err(_) => {}
+    }
+    if identity_now(target)?.is_some() {
+        return Ok(ReplaceOutcome::Conflict);
+    }
+    retry_rename(|| fs::rename(&temp, target), std::thread::sleep).map_err(io_error)?;
+    cleanup.armed = false;
+    Ok(ReplaceOutcome::Replaced)
+}
+
+/// Replaces `target` only while it holds `expected`; see [`PlainFileIo::replace_if`].
+#[allow(clippy::too_many_arguments)]
+fn replace_expected(
+    target: &Path,
+    parent: &Path,
+    name: &std::ffi::OsStr,
+    mut cleanup: TempCleanup,
+    expected: &[u8; 32],
+    max_len: u64,
+    before_install: &mut dyn FnMut(),
+    exchange: bool,
+) -> Result<ReplaceOutcome> {
+    // The final check: exactly the expected content, read on the opened handle.
+    let Some((current, checked)) = read_current(target, max_len)? else {
+        return Ok(ReplaceOutcome::Conflict);
+    };
+    if hash(&current) != *expected {
+        return Ok(ReplaceOutcome::Conflict);
+    }
+    before_install();
+    let temp = cleanup.path.clone();
+    #[cfg(unix)]
+    if exchange {
+        match rename_with(&temp, target, rustix::fs::RenameFlags::EXCHANGE)? {
+            Swap::Done => {
+                // `temp` now names whatever was at the target at the instant of the swap.
+                let displaced = read_current(&temp, max_len).ok().flatten();
+                if displaced
+                    .as_ref()
+                    .is_some_and(|(bytes, _)| hash(bytes) == *expected)
+                {
+                    // The expected content: `cleanup` removes it.
+                    return Ok(ReplaceOutcome::Replaced);
+                }
+                let kept = sibling_name(parent, name, ".displaced")?;
+                fs::rename(&temp, &kept).map_err(io_error)?;
+                cleanup.armed = false;
+                return Ok(ReplaceOutcome::Displaced {
+                    bytes: displaced.map(|(bytes, _)| bytes).unwrap_or_default(),
+                    kept,
+                });
+            }
+            Swap::Refused => return Ok(ReplaceOutcome::Conflict),
+            Swap::Unsupported => {}
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (parent, name, exchange);
+    // Portable fallback: the file is still the one checked, then a plain rename. The window
+    // between this `stat` and the `rename` is the documented residual.
+    if identity_now(target)? != Some(checked) {
+        return Ok(ReplaceOutcome::Conflict);
+    }
+    retry_rename(|| fs::rename(&temp, target), std::thread::sleep).map_err(io_error)?;
+    cleanup.armed = false;
+    Ok(ReplaceOutcome::Replaced)
 }
 
 #[cfg(test)]
@@ -1048,5 +1414,180 @@ mod tests {
         result.unwrap();
         assert_eq!(fs::read(&p).unwrap(), b"new");
         only_target(&d);
+    }
+
+    // --- Guarded replacement (`replace_if`) ---
+
+    const LIMIT: u64 = 1 << 20;
+
+    fn replace(
+        p: &Path,
+        expected: Option<&[u8]>,
+        bytes: &[u8],
+        hook: &mut dyn FnMut(),
+        exchange: bool,
+    ) -> ReplaceOutcome {
+        let expected = expected.map(hash);
+        replace_if_with(p, expected.as_ref(), bytes, LIMIT, hook, exchange).unwrap()
+    }
+    fn modes() -> Vec<bool> {
+        if cfg!(unix) {
+            vec![true, false]
+        } else {
+            vec![false]
+        }
+    }
+    #[test]
+    fn replace_if_writes_only_over_the_expected_content() {
+        for exchange in modes() {
+            let d = tempfile::tempdir().unwrap();
+            let p = d.path().join("vault");
+            fs::write(&p, b"old").unwrap();
+            assert_eq!(
+                replace(&p, Some(b"other"), b"new", &mut || {}, exchange),
+                ReplaceOutcome::Conflict
+            );
+            assert_eq!(fs::read(&p).unwrap(), b"old");
+            only_target(&d);
+            assert_eq!(
+                replace(&p, Some(b"old"), b"new", &mut || {}, exchange),
+                ReplaceOutcome::Replaced
+            );
+            assert_eq!(fs::read(&p).unwrap(), b"new");
+            only_target(&d);
+            // Through the trait as well.
+            assert_eq!(
+                PlainFileIo
+                    .replace_if(&p, Some(&hash(b"new")), b"newer", LIMIT)
+                    .unwrap(),
+                ReplaceOutcome::Replaced
+            );
+            assert_eq!(fs::read(&p).unwrap(), b"newer");
+        }
+    }
+    #[test]
+    fn replace_if_missing_target_is_created_but_never_clobbered() {
+        for exchange in modes() {
+            let d = tempfile::tempdir().unwrap();
+            let p = d.path().join("vault");
+            assert_eq!(
+                replace(&p, None, b"ours", &mut || {}, exchange),
+                ReplaceOutcome::Replaced
+            );
+            assert_eq!(fs::read(&p).unwrap(), b"ours");
+            only_target(&d);
+            // A file that exists is never replaced by an initial upload.
+            assert_eq!(
+                replace(&p, None, b"again", &mut || {}, exchange),
+                ReplaceOutcome::Conflict
+            );
+            assert_eq!(fs::read(&p).unwrap(), b"ours");
+            only_target(&d);
+        }
+    }
+    #[test]
+    fn file_created_during_an_initial_upload_is_never_clobbered() {
+        for exchange in modes() {
+            let d = tempfile::tempdir().unwrap();
+            let p = d.path().join("vault");
+            let racer = p.clone();
+            let outcome = replace(
+                &p,
+                None,
+                b"ours",
+                &mut || write_atomic(&racer, b"theirs").unwrap(),
+                exchange,
+            );
+            assert_eq!(outcome, ReplaceOutcome::Conflict, "exchange={exchange}");
+            assert_eq!(fs::read(&p).unwrap(), b"theirs");
+            only_target(&d);
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn writer_racing_the_final_step_is_kept_and_returned_not_destroyed() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("vault");
+        fs::write(&p, b"old").unwrap();
+        let racer = p.clone();
+        let outcome = replace(
+            &p,
+            Some(b"old"),
+            b"new",
+            &mut || write_atomic(&racer, b"theirs").unwrap(),
+            true,
+        );
+        let ReplaceOutcome::Displaced { bytes, kept } = outcome else {
+            panic!("expected Displaced, got {outcome:?}");
+        };
+        assert_eq!(bytes, b"theirs");
+        assert_eq!(fs::read(&p).unwrap(), b"new");
+        assert_eq!(fs::read(&kept).unwrap(), b"theirs", "kept on disk");
+        assert_eq!(
+            kept.parent(),
+            Some(d.path().canonicalize().unwrap().as_path())
+        );
+        assert_eq!(fs::read_dir(d.path()).unwrap().count(), 2);
+    }
+    #[test]
+    fn fallback_refuses_when_the_file_changed_before_its_final_stat() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("vault");
+        fs::write(&p, b"old").unwrap();
+        let racer = p.clone();
+        let outcome = replace(
+            &p,
+            Some(b"old"),
+            b"new",
+            &mut || write_atomic(&racer, b"theirs").unwrap(),
+            false,
+        );
+        assert_eq!(outcome, ReplaceOutcome::Conflict);
+        assert_eq!(fs::read(&p).unwrap(), b"theirs");
+        only_target(&d);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn retargeted_symlink_does_not_redirect_the_replacement() {
+        let d = tempfile::tempdir().unwrap();
+        let a = d.path().join("a.kdbx");
+        let b = d.path().join("b.kdbx");
+        let link = d.path().join("vault.kdbx");
+        fs::write(&a, b"old").unwrap();
+        fs::write(&b, b"other vault").unwrap();
+        std::os::unix::fs::symlink(&a, &link).unwrap();
+        let (l, target) = (link.clone(), b.clone());
+        let outcome = replace(
+            &link,
+            Some(b"old"),
+            b"new",
+            &mut || {
+                fs::remove_file(&l).unwrap();
+                std::os::unix::fs::symlink(&target, &l).unwrap();
+            },
+            true,
+        );
+        assert_eq!(outcome, ReplaceOutcome::Replaced);
+        assert_eq!(fs::read(&a).unwrap(), b"new");
+        assert_eq!(fs::read(&b).unwrap(), b"other vault");
+    }
+    #[test]
+    fn replace_if_refuses_a_non_regular_target() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("vault");
+        fs::create_dir(&p).unwrap();
+        io_kind(
+            replace_if_with(&p, Some(&hash(b"x")), b"new", LIMIT, &mut || {}, true),
+            ErrorKind::InvalidInput,
+        );
+        assert!(p.is_dir());
+    }
+    #[test]
+    fn displaced_outcome_debug_shows_no_bytes() {
+        let outcome = ReplaceOutcome::Displaced {
+            bytes: b"secret-bytes".to_vec(),
+            kept: PathBuf::from("k"),
+        };
+        assert!(!format!("{outcome:?}").contains("secret"));
     }
 }

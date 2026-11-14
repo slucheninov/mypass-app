@@ -30,6 +30,9 @@ pub use model::*;
 mod ops;
 
 mod file;
-pub use file::{write_atomic, FileIo, FileMeta, FileStamp, PlainFileIo, SaveOutcome, VaultFile};
+pub use file::{
+    write_atomic, FileIo, FileMeta, FileStamp, OpenedFile, PlainFileIo, ReplaceOutcome,
+    SaveOutcome, VaultFile,
+};
 #[cfg(feature = "test-util")]
 pub mod test_util;
