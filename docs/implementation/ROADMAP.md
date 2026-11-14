@@ -36,7 +36,8 @@ Last updated: 2026-11-14
 - [ ] Per-window command access: every window (main, settings, tray panel) can call every app
   command (`app_quit` and `app_show_main` included); add per-window command permissions through a
   `tauri_build` app manifest so the tray panel and settings window get only what they use. This
-  includes the `browser_*` commands: `browser_proposal_take` returns a proposal's password, so only
+  includes `entry_passkey_details` (it returns a passkey's credential id, so only the main window
+  should call it) and the `browser_*` commands: `browser_proposal_take` returns a proposal's password, so only
   the main window should be able to call it (and `browser_pairing_cancel`); `browser_status`,
   `browser_revoke`, `browser_reset_pairings`, `browser_reinstall_host` and
   `browser_show_extension_folder` are used by the Settings Browser pane, so they belong to the
@@ -90,10 +91,10 @@ Last updated: 2026-11-14
 
 ## Stage 4 passkeys
 
-- [ ] WebAuthn create and get ceremonies (ES256) through the extension, stored in
-  KeePassXC-compatible custom fields, with strict origin and relying-party validation and a
-  consent-gated flow.
-- [ ] Passkey UI: detail row, editor actions, Passkeys category and the app-side proxy toggle.
+- [ ] Manual: walk the Stage 4 passkey checklist in `RUN.md` (P1 to P13, on a public https demo site,
+  with a copy of the owner's vault and KeePassXC interop) and record the results in the PR.
+- [ ] Independent oracle in CI: verify our registration and assertion bytes and the `KPEX_PASSKEY_*`
+  fields with Yubico `python-fido2` and `pykeepass` in the crosscompat job.
 
 ## Stage 5 macOS release
 
