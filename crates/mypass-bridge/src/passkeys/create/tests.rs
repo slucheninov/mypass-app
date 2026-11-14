@@ -1099,7 +1099,8 @@ fn flush_failure_after_replace_restores_the_old_key_which_still_signs() {
     let r = confirm_into(&f, 58, ids.login, true);
     assert_failure(&r, "NotAllowedError", COULD_NOT_SAVE);
     // The entry is back exactly as registered, history included: no copy of the new key left.
-    assert!(entry_of(&f, ids.login) == registered);
+    // Only `modified` moves: the undo is a fresh edit.
+    assert!(same_but_modified(&entry_of(&f, ids.login), &registered));
 
     // The restored key still signs for the public key the site holds.
     let pem = registered.field("KPEX_PASSKEY_PRIVATE_KEY_PEM").unwrap();
@@ -1111,7 +1112,130 @@ fn flush_failure_after_replace_restores_the_old_key_which_still_signs() {
     io.heal();
     f.session.flush().unwrap();
     let disk = on_disk(&f);
-    assert!(disk.find_entry(ids.login).unwrap() == &registered);
+    assert!(same_but_modified(
+        disk.find_entry(ids.login).unwrap(),
+        &registered
+    ));
+}
+
+/// `a` equals `b` apart from the `modified` stamp.
+fn same_but_modified(a: &Entry, b: &Entry) -> bool {
+    let mut a = a.clone();
+    a.modified = b.modified;
+    a == *b
+}
+
+/// Test-only IO whose first `metadata` after an armed `write_atomic` fails: the error after
+/// commit of `VaultFile::save`, with the new bytes already on disk.
+#[derive(Default)]
+struct FailAfterCommitIo {
+    /// (armed, written)
+    state: Mutex<(bool, bool)>,
+}
+
+impl FileIo for FailAfterCommitIo {
+    fn read(&self, path: &Path) -> mypass_kdbx::Result<Vec<u8>> {
+        PlainFileIo.read(path)
+    }
+    fn write_atomic(&self, path: &Path, bytes: &[u8]) -> mypass_kdbx::Result<()> {
+        PlainFileIo.write_atomic(path, bytes)?;
+        let mut g = self.state.lock().unwrap();
+        if g.0 {
+            *g = (false, true);
+        }
+        Ok(())
+    }
+    fn metadata(&self, path: &Path) -> mypass_kdbx::Result<FileMeta> {
+        let mut g = self.state.lock().unwrap();
+        if g.1 {
+            g.1 = false;
+            return Err(mypass_kdbx::KdbxError::Io {
+                kind: ErrorKind::Other,
+                message: "metadata refresh failed".into(),
+            });
+        }
+        drop(g);
+        PlainFileIo.metadata(path)
+    }
+}
+
+/// M1 (b): the failed flush did reach the file. The undo must win the merge of the next save,
+/// so the registered key stays live on disk and the unregistered one never comes back.
+#[test]
+fn rollback_after_an_error_after_commit_wins_the_next_merge() {
+    let (f, _svc, ids) = sample_fx();
+    create(&f, 66, &[]);
+    success(&confirm_into(&f, 66, ids.login, false));
+    let registered = entry_of(&f, ids.login);
+    let registered_pem = registered
+        .field("KPEX_PASSKEY_PRIVATE_KEY_PEM")
+        .unwrap()
+        .to_owned();
+    // The replace lands later than the registration, as it would in use.
+    f.sched.jump_wall_clock(Duration::from_secs(60));
+
+    let io = Arc::new(FailAfterCommitIo::default());
+    f.session.set_file_io(io.clone());
+    io.state.lock().unwrap().0 = true;
+    create(&f, 67, &[]);
+    let r = confirm_into(&f, 67, ids.login, true);
+    assert_failure(&r, "NotAllowedError", COULD_NOT_SAVE);
+    // The new key did reach the file.
+    let new_pem = on_disk(&f)
+        .find_entry(ids.login)
+        .unwrap()
+        .field("KPEX_PASSKEY_PRIVATE_KEY_PEM")
+        .unwrap()
+        .to_owned();
+    assert_ne!(new_pem, registered_pem);
+    // In memory the registered key is back.
+    assert!(same_but_modified(&entry_of(&f, ids.login), &registered));
+
+    // The next save sees the file changed, merges it in and writes the result.
+    f.session.flush().unwrap();
+    let disk = on_disk(&f);
+    let live = disk.find_entry(ids.login).unwrap();
+    assert_eq!(
+        live.field("KPEX_PASSKEY_PRIVATE_KEY_PEM"),
+        Some(registered_pem.as_str())
+    );
+    assert_eq!(
+        PasskeyRecord::credential_id(live),
+        PasskeyRecord::credential_id(&registered)
+    );
+    assert_eq!(
+        entry_of(&f, ids.login).field("KPEX_PASSKEY_PRIVATE_KEY_PEM"),
+        Some(registered_pem.as_str())
+    );
+}
+
+/// M1 (a): a lock lands after the confirm's write and before its flush (here from a session
+/// observer, which runs on the confirm thread right after the write). The lock saves the edit,
+/// the flush is then `Ok` with nothing left to write, and the confirm must answer success.
+#[test]
+fn lock_between_write_and_flush_still_answers_success() {
+    let (f, _svc, _ids) = sample_fx();
+    create(&f, 68, &[]);
+    let armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let session = f.session.clone();
+    let flag = armed.clone();
+    f.session.add_observer(Arc::new(
+        move |e: &mypass_session::session::SessionEvent| {
+            if matches!(e, mypass_session::session::SessionEvent::VaultChanged)
+                && flag.swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                session.lock(LockReason::Manual);
+            }
+        },
+    ));
+    let r = confirm(&f, 68, None, false);
+    assert!(
+        !armed.load(std::sync::atomic::Ordering::SeqCst),
+        "the lock ran"
+    );
+    assert!(!f.session.is_unlocked());
+    let credential = b64_field(&success(&r), &["rawId"]);
+    assert!(entry_with_credential(&on_disk(&f), &credential).is_some());
 }
 
 /// The undo only reverses its own write: an entry changed after the write is left alone.
@@ -1136,7 +1260,14 @@ fn undo_leaves_an_entry_changed_after_the_write() {
         let mut undone = db.clone();
         undo_in_vault(&mut undone, now, &pending, &written.undo).unwrap();
         match target {
-            Some(id) => assert!(undone.find_entry(id) == original.find_entry(id)),
+            Some(id) => {
+                let restored = undone.find_entry(id).unwrap();
+                assert_eq!(restored.modified, now);
+                assert!(same_but_modified(
+                    restored,
+                    original.find_entry(id).unwrap()
+                ));
+            }
             None => assert!(undone.find_entry(written.entry).is_none()),
         }
 

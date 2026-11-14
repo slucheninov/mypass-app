@@ -72,6 +72,13 @@ impl PendingCreate {
     pub fn vault_matches(&self, db: &Database) -> bool {
         self.vault_root == db.root_id()
     }
+
+    /// Whether `vault_id` (the session's `vault_id()`, kept while locked) names the vault this
+    /// ceremony was started on; for the post-flush check when the session is locked.
+    #[must_use]
+    pub fn vault_id_is(&self, vault_id: &str) -> bool {
+        self.vault_root.simple().to_string() == vault_id
+    }
 }
 
 /// A `passkeyGet` waiting for the user to pick an entry.

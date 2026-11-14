@@ -34,10 +34,18 @@
 //! app is quitting in between), the write stays in memory as before; on Replace the old key is
 //! still in the entry's history.
 //!
+//! The undo is stamped with the time it runs (`modified` = now): when the failed save still
+//! reached the file (an error after commit), the next save two-way merges the file back in, and
+//! the merge keeps the later side, so the restored entry wins over the written one on disk. The
+//! merge then keeps the written version in the entry's history, as it does for any losing side.
+//!
 //! **Same vault after the flush.** A vault switch can land between the write and the flush, and
 //! the flush then reports on the other vault. The binding is re-checked after the flush; when it
 //! no longer holds, the answer is "Could not save the passkey", since nothing proves the write
-//! reached the file. A switch away and back to the same vault in that window is not detected.
+//! reached the file. A lock in that window (the flush first waits for an in-flight write, and a
+//! lock saves first) is not a failure: the session keeps the vault identity while locked, and a
+//! matching identity after an `Ok` flush means the edit is on disk. A switch away and back to the
+//! same vault in that window is not detected.
 use mypass_core::passkey::{parse_create, perform_create, BackupFlags, PasskeyRecord};
 use mypass_kdbx::{Database, Entry, Timestamp};
 use mypass_session::session::SessionError;
@@ -208,7 +216,7 @@ pub(crate) fn handle_confirm(
         return Refusal::Failed.answer(request_id);
     }
     // The flush reported on the vault open now; it must still be the one written to.
-    if ctx.session.with_db(|db| pending.vault_matches(db)) != Ok(true) {
+    if !same_vault_after_flush(ctx, &pending) {
         return Refusal::Failed.answer(request_id);
     }
     svc.ui.credential_filled(written.entry);
@@ -216,6 +224,21 @@ pub(crate) fn handle_confirm(
         request_id,
         response_json: Some(written.response_json),
         error: None,
+    }
+}
+
+/// Whether the vault the successful flush reported on is the one the confirm wrote to. A lock
+/// that lands while the flush waits for an in-flight write saves the edit itself (or keeps it and
+/// the flush writes it), so a locked session still answers from the vault identity, which the
+/// session keeps while locked.
+fn same_vault_after_flush(ctx: &PasskeyContext<'_>, pending: &PendingCreate) -> bool {
+    match ctx.session.with_db(|db| pending.vault_matches(db)) {
+        Ok(same) => same,
+        Err(SessionError::Locked) => ctx
+            .session
+            .vault_id()
+            .is_some_and(|id| pending.vault_id_is(&id)),
+        Err(_) => false,
     }
 }
 
@@ -256,6 +279,11 @@ fn undo_in_vault(
     match &undo.before {
         Some(before) => {
             *live = before.clone();
+            // A fresh edit, not a step back in time: when the failed save did reach the file
+            // (an error after commit, `VaultFile::save`), the next save sees the file changed and
+            // two-way merges it, and the merge keeps the side modified later. With the old stamp
+            // the written entry on disk would win and bring the unregistered key back.
+            live.modified = now;
             Ok(())
         }
         None => db.purge_entry(id, now).map_err(|_| Kept::Changed),
