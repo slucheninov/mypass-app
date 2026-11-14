@@ -980,18 +980,26 @@ export type SettingsPaneEvent = {
 };
 
 /**
- *  A partial update: every field of [`Settings`] except `recent_vaults` (owned by
- *  [`SettingsStore::remember_vault`] / [`SettingsStore::forget_vault`]). `None` leaves a field
- *  untouched; `vault_path` and `secondary_folder` use `Some(None)` (JSON `null`) to clear;
- *  `generator` replaces the whole options object.
+ *  A partial update from the webview: every field of [`Settings`] except `recent_vaults` (owned by
+ *  [`SettingsStore::remember_vault`] / [`SettingsStore::forget_vault`]), the two device-unlock
+ *  toggles and `secondary_folder`. Those three change only through Rust
+ *  ([`SettingsStore::set_device_unlock_toggles`] behind the device-unlock enrolment,
+ *  [`SettingsStore::set_secondary_folder`] behind the sync commands), so no window can switch
+ *  device unlock on without an enrolment or point sync at a folder it typed. `None` leaves a field
+ *  untouched; `vault_path` uses `Some(None)` (JSON `null`) to clear; `generator` replaces the whole
+ *  options object.
  */
 export type SettingsPatch = SettingsPatch_Serialize | SettingsPatch_Deserialize;
 
 /**
- *  A partial update: every field of [`Settings`] except `recent_vaults` (owned by
- *  [`SettingsStore::remember_vault`] / [`SettingsStore::forget_vault`]). `None` leaves a field
- *  untouched; `vault_path` and `secondary_folder` use `Some(None)` (JSON `null`) to clear;
- *  `generator` replaces the whole options object.
+ *  A partial update from the webview: every field of [`Settings`] except `recent_vaults` (owned by
+ *  [`SettingsStore::remember_vault`] / [`SettingsStore::forget_vault`]), the two device-unlock
+ *  toggles and `secondary_folder`. Those three change only through Rust
+ *  ([`SettingsStore::set_device_unlock_toggles`] behind the device-unlock enrolment,
+ *  [`SettingsStore::set_secondary_folder`] behind the sync commands), so no window can switch
+ *  device unlock on without an enrolment or point sync at a folder it typed. `None` leaves a field
+ *  untouched; `vault_path` uses `Some(None)` (JSON `null`) to clear; `generator` replaces the whole
+ *  options object.
  */
 export type SettingsPatch_Deserialize = {
 	language?: Language | null,
@@ -1008,20 +1016,21 @@ export type SettingsPatch_Deserialize = {
 	shortcutShow?: string | null,
 	generator?: GeneratorOptionsDto_Deserialize | null,
 	passkeyProxyEnabled?: boolean | null,
-	unlockTouchIdEnabled?: boolean | null,
-	unlockMacPasswordEnabled?: boolean | null,
 	unlockWithDeviceWindow?: UnlockWithDeviceWindow | null,
 	requireAccountPasswordWindow?: RequireAccountPasswordWindow | null,
-	secondaryFolder?: string | null,
 	updateCheckEnabled?: boolean | null,
 	vaultPath?: string | null,
 };
 
 /**
- *  A partial update: every field of [`Settings`] except `recent_vaults` (owned by
- *  [`SettingsStore::remember_vault`] / [`SettingsStore::forget_vault`]). `None` leaves a field
- *  untouched; `vault_path` and `secondary_folder` use `Some(None)` (JSON `null`) to clear;
- *  `generator` replaces the whole options object.
+ *  A partial update from the webview: every field of [`Settings`] except `recent_vaults` (owned by
+ *  [`SettingsStore::remember_vault`] / [`SettingsStore::forget_vault`]), the two device-unlock
+ *  toggles and `secondary_folder`. Those three change only through Rust
+ *  ([`SettingsStore::set_device_unlock_toggles`] behind the device-unlock enrolment,
+ *  [`SettingsStore::set_secondary_folder`] behind the sync commands), so no window can switch
+ *  device unlock on without an enrolment or point sync at a folder it typed. `None` leaves a field
+ *  untouched; `vault_path` uses `Some(None)` (JSON `null`) to clear; `generator` replaces the whole
+ *  options object.
  */
 export type SettingsPatch_Serialize = {
 	language?: Language,
@@ -1038,11 +1047,8 @@ export type SettingsPatch_Serialize = {
 	shortcutShow?: string,
 	generator?: GeneratorOptionsDto_Serialize,
 	passkeyProxyEnabled?: boolean,
-	unlockTouchIdEnabled?: boolean,
-	unlockMacPasswordEnabled?: boolean,
 	unlockWithDeviceWindow?: UnlockWithDeviceWindow,
 	requireAccountPasswordWindow?: RequireAccountPasswordWindow,
-	secondaryFolder?: string,
 	updateCheckEnabled?: boolean,
 	vaultPath?: string,
 };
