@@ -2767,6 +2767,7 @@ dependencies = [
  "block2",
  "core-foundation",
  "libc",
+ "mypass-platform",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
