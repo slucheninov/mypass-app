@@ -23,6 +23,7 @@ pub mod import;
 pub mod platform;
 pub mod settings;
 pub mod sidebar;
+pub mod sync;
 pub mod vault;
 
 use mypass_session::{ApiError, ErrorCode};

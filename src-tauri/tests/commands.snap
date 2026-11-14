@@ -58,6 +58,9 @@ settings_login_item_status
 settings_update
 shortcut_conflicts_take
 sidebar_get
+sync_disconnect_secondary
+sync_now
+sync_status
 vault_create
 vault_find_files
 vault_forget

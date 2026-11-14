@@ -95,6 +95,10 @@ pub struct ProposalEvent {
 #[derive(Serialize, Deserialize, specta::Type, tauri_specta::Event, Clone, Debug)]
 pub struct UnlockRequestedEvent;
 
+/// The secondary-folder sync status changed.
+#[derive(Serialize, specta::Type, tauri_specta::Event, Clone, Debug)]
+pub struct SyncStatusChanged(pub mypass_session::SecondaryStatus);
+
 /// The settings window, already open, should select `pane` (for example `browser`).
 #[derive(Serialize, Deserialize, specta::Type, tauri_specta::Event, Clone, PartialEq, Debug)]
 pub struct SettingsPaneEvent {

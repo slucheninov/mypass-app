@@ -123,6 +123,21 @@ describe("fake backend", () => {
     expect(await commands.appRevealBackups()).toEqual({ status: "ok", data: null });
   });
 
+  it("fake_sync_commands_match_the_backend", async () => {
+    const fake = createFakeBackend({ session: "locked" });
+    renderWithBackend(MainApp, {}, fake);
+    // No folder: `off`, checked before the lock state, like Rust.
+    expect(await commands.syncStatus()).toEqual({ status: "ok", data: { state: "off" } });
+    expect(await commands.syncNow()).toEqual({ status: "ok", data: { state: "off" } });
+    fake.state.settings.secondaryFolder = "/Volumes/Backup";
+    expect(await commands.syncNow()).toMatchObject({ status: "error", error: { code: "locked" } });
+    fake.state.session.state = "unlocked";
+    expect(await commands.syncNow()).toEqual({ status: "ok", data: { state: "idle", lastSync: 1_700_000_000_000 } });
+    expect(await commands.syncDisconnectSecondary()).toEqual({ status: "ok", data: null });
+    expect(fake.state.settings.secondaryFolder).toBeNull();
+    expect(await commands.syncStatus()).toEqual({ status: "ok", data: { state: "off" } });
+  });
+
   it("an unknown command or an unhandled plugin call throws and names itself", async () => {
     renderWithBackend(MainApp, {}, createFakeBackend());
     await expect(invoke("no_such_command")).rejects.toThrow("NotImplementedInFake(unknown command no_such_command)");

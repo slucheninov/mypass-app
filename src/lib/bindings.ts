@@ -88,6 +88,9 @@ export const commands = {
 	 */
 	shortcutConflictsTake: () => __TAURI_INVOKE<ShortcutConflictEvent[]>("shortcut_conflicts_take"),
 	sidebarGet: () => typedError<Sidebar_Serialize, ApiError>(__TAURI_INVOKE("sidebar_get")),
+	syncDisconnectSecondary: () => typedError<null, ApiError>(__TAURI_INVOKE("sync_disconnect_secondary")),
+	syncNow: () => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_now")),
+	syncStatus: () => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_status")),
 	vaultCreate: (path: string, password: string, name: string) => typedError<SessionStatus_Serialize, ApiError>(__TAURI_INVOKE("vault_create", { path, password, name })),
 	vaultFindFiles: () => typedError<FoundVaultFileDto[], ApiError>(__TAURI_INVOKE("vault_find_files")),
 	vaultForget: (path: string) => typedError<null, ApiError>(__TAURI_INVOKE("vault_forget", { path })),
@@ -111,6 +114,7 @@ export const events = {
 	settingsChanged: makeEvent<SettingsChanged_Serialize, SettingsChanged_Deserialize>("settings-changed"),
 	settingsPaneEvent: makeEvent<SettingsPaneEvent, SettingsPaneEvent>("settings-pane-event"),
 	shortcutConflictEvent: makeEvent<ShortcutConflictEvent, ShortcutConflictEvent>("shortcut-conflict-event"),
+	syncStatusChanged: makeEvent<SyncStatusChanged_Serialize, SyncStatusChanged_Deserialize>("sync-status-changed"),
 	unlockRequestedEvent: makeEvent<UnlockRequestedEvent, UnlockRequestedEvent>("unlock-requested-event"),
 	vaultChanged: makeEvent<VaultChanged, VaultChanged>("vault-changed"),
 };
@@ -925,6 +929,73 @@ export type SaveStatus_Serialize = {
 
 export type Scope = { kind: "category"; category: Category } | { kind: "group"; groupId: string };
 
+/**  Why the last secondary sync failed (a localisable code). The remote was left as it was. */
+export type SecondaryError = 
+/**  The copy does not open with the session password. */
+"wrongPassword" | 
+/**  The file is not a KDBX vault. */
+"notAVault" | 
+/**  A vault format this app does not read. */
+"unsupported" | 
+/**  The copy is damaged. */
+"corrupt" | 
+/**  The file is a different vault (another root group). */
+"differentVault" | 
+/**  The file is larger than any vault this app opens. */
+"tooLarge" | 
+/**  The path is not a regular file (a folder, a device, a pipe). */
+"notRegularFile" | 
+/**  The copy kept changing while it was synced. */
+"remoteBusy" | 
+/**  A read, write or checkpoint failure. */
+"io";
+
+/**  What the Settings sync pane shows (the `SyncStatusChanged` event payload). */
+export type SecondaryStatus = SecondaryStatus_Serialize | SecondaryStatus_Deserialize;
+
+/**  What the Settings sync pane shows (the `SyncStatusChanged` event payload). */
+export type SecondaryStatus_Deserialize = 
+/**  No secondary folder is configured. */
+{ state: "off" } | 
+/**
+ *  Configured and not running; `last_sync` is the time of the last success for this vault
+ *  and folder in this run of the app, in unix milliseconds.
+ */
+{ state: "idle"; lastSync?: number | null } | 
+/**  A sync is running. */
+{ state: "syncing" } | 
+/**  The folder cannot be used; retried every [`SECONDARY_RETRY`] except for `invalidFolder`. */
+{ state: "unavailable"; reason: SecondaryUnavailable } | 
+/**  The last sync failed; the remote and the primary are untouched. */
+{ state: "error"; code: SecondaryError };
+
+/**  What the Settings sync pane shows (the `SyncStatusChanged` event payload). */
+export type SecondaryStatus_Serialize = 
+/**  No secondary folder is configured. */
+{ state: "off" } | 
+/**
+ *  Configured and not running; `last_sync` is the time of the last success for this vault
+ *  and folder in this run of the app, in unix milliseconds.
+ */
+{ state: "idle"; lastSync: number | null } | 
+/**  A sync is running. */
+{ state: "syncing" } | 
+/**  The folder cannot be used; retried every [`SECONDARY_RETRY`] except for `invalidFolder`. */
+{ state: "unavailable"; reason: SecondaryUnavailable } | 
+/**  The last sync failed; the remote and the primary are untouched. */
+{ state: "error"; code: SecondaryError };
+
+/**  Why the secondary folder cannot be used right now (a localisable code). */
+export type SecondaryUnavailable = 
+/**  Not absolute, not a directory, or the primary vault's own folder. */
+"invalidFolder" | 
+/**  The folder does not exist (an unmounted drive, a deleted folder). */
+"folderMissing" | 
+/**  The folder or the copy in it cannot be written. */
+"readOnly" | 
+/**  The storage did not answer in time. */
+"timedOut";
+
 export type SecurityFlag = "reused" | "weak" | "emptyPassword" | "insecureUrl";
 
 /**  Lock state, vault or path changed. */
@@ -1174,6 +1245,15 @@ export type SkippedRow = {
 };
 
 export type SortKey = "title" | "modified";
+
+/**  The secondary-folder sync status changed. */
+export type SyncStatusChanged = SyncStatusChanged_Serialize | SyncStatusChanged_Deserialize;
+
+/**  The secondary-folder sync status changed. */
+export type SyncStatusChanged_Deserialize = SecondaryStatus_Deserialize;
+
+/**  The secondary-folder sync status changed. */
+export type SyncStatusChanged_Serialize = SecondaryStatus_Serialize;
 
 export type Theme = "system" | "light" | "dark";
 

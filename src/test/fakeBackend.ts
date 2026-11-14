@@ -28,6 +28,7 @@ import type {
   PickedFile,
   RecentVaultDto,
   RulesSummary_Serialize,
+  SecondaryStatus_Serialize,
   SessionState,
   SessionStatus_Serialize,
   Settings_Serialize,
@@ -164,6 +165,8 @@ export interface FakeState {
   shortcutConflicts: ShortcutConflictEvent[];
   /** Ids `entry_touch` was called with, in order. */
   touched: string[];
+  /** What `sync_status` answers; `sync_now` and `sync_disconnect_secondary` edit it. */
+  sync: SecondaryStatus_Serialize;
 }
 
 export interface FakeBackend {
@@ -223,6 +226,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     csvFailure: null,
     touched: [],
     shortcutConflicts: [],
+    sync: { state: "off" },
   };
   /** Like the Rust grant: set by a successful preview, spent by the next commit. */
   let csvRemembered: CsvPreview | null = null;
@@ -883,6 +887,26 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     },
     // Take-once like the Rust list: what the hotkey layer could not register at startup.
     shortcutConflictsTake: () => state.shortcutConflicts.splice(0),
+    // Like Rust: `off` without a folder (checked first), otherwise the vault must be open; a
+    // successful sync reports `idle` with the fake's fixed clock.
+    syncNow: () => {
+      if (state.settings.secondaryFolder === null) {
+        state.sync = { state: "off" };
+        return structuredClone(state.sync);
+      }
+      requireUnlocked();
+      state.sync = { state: "idle", lastSync: 1_700_000_000_000 };
+      publish("syncStatusChanged", structuredClone(state.sync));
+      return structuredClone(state.sync);
+    },
+    syncStatus: () => structuredClone(state.sync),
+    // Like Rust: forgets the folder (the copy in it stays) and reports `off`.
+    syncDisconnectSecondary: () => {
+      state.settings.secondaryFolder = null;
+      state.sync = { state: "off" };
+      publish("syncStatusChanged", structuredClone(state.sync));
+      return null;
+    },
     sidebarGet: () => {
       requireUnlocked();
       return fixtureSidebar(state.entries, state.groups, state.recycleBinEnabled);

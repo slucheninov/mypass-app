@@ -6,7 +6,9 @@
 //! [`ShellState`] is the real [`ShellEffects`] built here.
 
 use crate::bridge::{build_state, BridgeEvents, TauriBridgeEvents};
-use crate::events::{ClipboardClearedEvent, SaveStateChanged, SessionChanged, VaultChanged};
+use crate::events::{
+    ClipboardClearedEvent, SaveStateChanged, SessionChanged, SyncStatusChanged, VaultChanged,
+};
 use crate::files::{FileGrants, TauriFilePicker};
 use crate::hotkeys::ConflictGate;
 use crate::lifecycle::{ExitGate, QuitPort};
@@ -140,6 +142,12 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         }));
     core.clipboard
         .set_cleared_sink(Arc::new(EmitCleared(handle.clone())));
+    let sync_handle = handle.clone();
+    core.secondary
+        .add_observer(Arc::new(move |status: &mypass_session::SecondaryStatus| {
+            // A window that is gone is not an error of the backend.
+            let _ = SyncStatusChanged(status.clone()).emit(&sync_handle);
+        }));
 
     let conflicts = Arc::new(ConflictGate::default());
     let target = Arc::new(TauriTarget::new(

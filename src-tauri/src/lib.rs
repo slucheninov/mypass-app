@@ -28,7 +28,7 @@ use tauri_specta::{collect_commands, collect_events, Builder, Commands};
 /// Every command, in one place (the tests read their names from here).
 pub fn commands() -> Commands<tauri::Wry> {
     use commands::{app, attachment, backup, browser, draft, entry, generator, group, import};
-    use commands::{platform, settings, sidebar, vault};
+    use commands::{platform, settings, sidebar, sync, vault};
     collect_commands![
         app::app_info,
         app::app_open_entry,
@@ -90,6 +90,9 @@ pub fn commands() -> Commands<tauri::Wry> {
         settings::settings_update,
         settings::shortcut_conflicts_take,
         sidebar::sidebar_get,
+        sync::sync_disconnect_secondary,
+        sync::sync_now,
+        sync::sync_status,
         vault::vault_create,
         vault::vault_find_files,
         vault::vault_forget,
@@ -108,7 +111,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
     use events::{
         BridgeChangedEvent, ClipboardClearedEvent, OpenEntryEvent, PairingChallengeEvent,
         ProposalEvent, SaveStateChanged, SessionChanged, SettingsChanged, SettingsPaneEvent,
-        ShortcutConflictEvent, UnlockRequestedEvent, VaultChanged,
+        ShortcutConflictEvent, SyncStatusChanged, UnlockRequestedEvent, VaultChanged,
     };
     Builder::<tauri::Wry>::new()
         .commands(commands())
@@ -123,6 +126,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             SettingsChanged,
             SettingsPaneEvent,
             ShortcutConflictEvent,
+            SyncStatusChanged,
             UnlockRequestedEvent,
             VaultChanged,
         ])
@@ -269,7 +273,7 @@ mod tests {
 
     #[test]
     fn command_names_follow_domain_verb_convention() {
-        const DOMAINS: [&str; 14] = [
+        const DOMAINS: [&str; 15] = [
             "vault",
             "entry",
             "group",
@@ -284,6 +288,7 @@ mod tests {
             "platform",
             "shortcut",
             "browser",
+            "sync",
         ];
         let names = command_names();
         assert!(!names.is_empty());
@@ -375,6 +380,7 @@ mod tests {
         assert_eq!(events::ProposalEvent::NAME, "proposal-event");
         assert_eq!(events::UnlockRequestedEvent::NAME, "unlock-requested-event");
         assert_eq!(events::SettingsPaneEvent::NAME, "settings-pane-event");
+        assert_eq!(events::SyncStatusChanged::NAME, "sync-status-changed");
     }
 
     #[test]
