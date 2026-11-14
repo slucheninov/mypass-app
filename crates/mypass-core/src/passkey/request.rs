@@ -5,9 +5,11 @@
 //! land in entry titles, user names and the pending ceremony table. Anything over a cap or with
 //! characters the UI must not show is `InvalidRequest`; nothing over a cap is stored or echoed.
 
+use super::origin::{validate_origin_in, ValidatedOrigin};
 use super::{b64url, PasskeyError};
-use crate::text::{is_clean_line, MAX_TITLE_CHARS, MAX_USERNAME_CHARS};
+use crate::text::{is_clean_line, MAX_TITLE_CHARS, MAX_URL_CHARS, MAX_USERNAME_CHARS};
 use serde_json::{Map, Value};
+use std::fmt;
 
 /// Largest `requestDetailsJson` accepted, in bytes.
 pub const MAX_REQUEST_JSON_BYTES: usize = 64 * 1024;
@@ -30,15 +32,14 @@ pub const MAX_PUB_KEY_CRED_PARAMS: usize = 32;
 /// COSE algorithm identifier of ES256 (ECDSA P-256 with SHA-256), the only one MyPass signs with.
 const COSE_ALG_ES256: i64 = -7;
 
-/// A parsed `navigator.credentials.create()` request.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A parsed `navigator.credentials.create()` request, without its relying party id.
+///
+/// The page's raw `rp.id` is deliberately not kept: the only rpId is the one bound to the
+/// request in [`ValidatedCreate::rp_id`]. `Debug` prints sizes only (the challenge, user handle
+/// and names are page data and personal data, never log material).
+#[derive(Clone, PartialEq, Eq)]
 pub struct CreateContext {
-    /// `rp.id` as the page sent it, or `None` when it was omitted. It is not authoritative:
-    /// `validate_origin` turns it (or, when absent, the origin host) into the canonical rpId,
-    /// and only `ValidatedOrigin::rp_id` is hashed and stored.
-    pub rp_id: Option<String>,
-    /// `rp.name`, falling back to `rp.id`, or empty when both are absent (callers then show the
-    /// validated rpId).
+    /// `rp.name`, falling back to the validated rpId.
     pub rp_name: String,
     /// The challenge bytes.
     pub challenge: Vec<u8>,
@@ -56,11 +57,21 @@ pub struct CreateContext {
     pub attestation: String,
 }
 
-/// A parsed `navigator.credentials.get()` request.
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl fmt::Debug for CreateContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CreateContext")
+            .field("challenge_len", &self.challenge.len())
+            .field("user_id_len", &self.user_id.len())
+            .field("exclude_credentials", &self.exclude_credential_ids.len())
+            .field("attestation", &self.attestation)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A parsed `navigator.credentials.get()` request, without its relying party id (see
+/// [`CreateContext`]). `Debug` prints sizes only.
+#[derive(Clone, PartialEq, Eq)]
 pub struct GetContext {
-    /// `rpId` as the page sent it, or `None` when it was omitted; see `CreateContext::rp_id`.
-    pub rp_id: Option<String>,
     /// The challenge bytes.
     pub challenge: Vec<u8>,
     /// Decoded ids of the `public-key` entries of `allowCredentials`; empty means any credential
@@ -68,12 +79,81 @@ pub struct GetContext {
     pub allow_credential_ids: Vec<Vec<u8>>,
 }
 
-/// Parse a create request. Ports `PasskeyCeremony.parseCreateRequest`.
+impl fmt::Debug for GetContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GetContext")
+            .field("challenge_len", &self.challenge.len())
+            .field("allow_credentials", &self.allow_credential_ids.len())
+            .finish()
+    }
+}
+
+/// A create request bound to the origin it was validated for. The only way to get one is
+/// [`parse_create`], which parses the JSON once and validates the origin and rpId against it.
+///
+/// Hashing (`rpIdHash`), storing (`KPEX_PASSKEY_RELYING_PARTY`) and comparing relying party ids
+/// use only [`ValidatedCreate::rp_id`], the canonical lowercase ACE rpId that was authorised for
+/// the origin; the page's raw `rp.id` is not reachable from here.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ValidatedCreate {
+    request: CreateContext,
+    origin: ValidatedOrigin,
+}
+
+impl ValidatedCreate {
+    /// The parsed request fields.
+    #[must_use]
+    pub fn request(&self) -> &CreateContext {
+        &self.request
+    }
+    /// The validated origin (`clientDataJSON.origin`) and its authorised rpId.
+    #[must_use]
+    pub fn origin(&self) -> &ValidatedOrigin {
+        &self.origin
+    }
+    /// The canonical rpId authorised for the origin: the only rpId to hash, store or compare.
+    #[must_use]
+    pub fn rp_id(&self) -> &str {
+        self.origin.rp_id()
+    }
+}
+
+/// A get request bound to the origin it was validated for; see [`ValidatedCreate`]. Hashing,
+/// storing and comparing relying party ids use only [`ValidatedGet::rp_id`].
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ValidatedGet {
+    request: GetContext,
+    origin: ValidatedOrigin,
+}
+
+impl ValidatedGet {
+    /// The parsed request fields.
+    #[must_use]
+    pub fn request(&self) -> &GetContext {
+        &self.request
+    }
+    /// The validated origin (`clientDataJSON.origin`) and its authorised rpId.
+    #[must_use]
+    pub fn origin(&self) -> &ValidatedOrigin {
+        &self.origin
+    }
+    /// The canonical rpId authorised for the origin: the only rpId to hash, store or compare.
+    #[must_use]
+    pub fn rp_id(&self) -> &str {
+        self.origin.rp_id()
+    }
+}
+
+/// Parse a create request and validate its origin and rpId, parsing the JSON once. Ports
+/// `PasskeyCeremony.parseCreateRequest` followed by `validateOrigin`.
 ///
 /// # Errors
-/// `UnsupportedAlgorithm` when `pubKeyCredParams` is non-empty and offers no ES256 `public-key`
-/// entry; `InvalidRequest` for everything else that is missing, malformed or over a cap.
-pub fn parse_create_request(json: &str) -> Result<CreateContext, PasskeyError> {
+/// From the request: `UnsupportedAlgorithm` when `pubKeyCredParams` is non-empty and offers no
+/// ES256 `public-key` entry; `InvalidRequest` for everything else that is missing, malformed or
+/// over a cap. Then from the origin check: `OriginMismatch`, `CrossOrigin`, `RpIdNotAuthorized`
+/// (see [`super::origin`]).
+pub fn parse_create(origin_url: &str, json: &str) -> Result<ValidatedCreate, PasskeyError> {
+    check_origin_len(origin_url)?;
     let root = parse_object(json)?;
     let challenge = challenge(&root)?;
 
@@ -82,11 +162,11 @@ pub fn parse_create_request(json: &str) -> Result<CreateContext, PasskeyError> {
         .and_then(Value::as_object)
         .ok_or(PasskeyError::InvalidRequest)?;
     let rp_id = optional_rp_id(rp.get("id"))?;
-    let rp_name = match rp.get("name").and_then(Value::as_str) {
-        Some(name) => name.to_owned(),
-        None => rp_id.clone().unwrap_or_default(),
-    };
-    if !is_clean_line(&rp_name, MAX_TITLE_CHARS) {
+    let rp_name = optional_string(rp.get("name"))?;
+    if rp_name
+        .as_deref()
+        .is_some_and(|name| !is_clean_line(name, MAX_TITLE_CHARS))
+    {
         return Err(PasskeyError::InvalidRequest);
     }
 
@@ -100,15 +180,9 @@ pub fn parse_create_request(json: &str) -> Result<CreateContext, PasskeyError> {
         .and_then(b64url::decode)
         .filter(|id| (1..=MAX_USER_ID_BYTES).contains(&id.len()))
         .ok_or(PasskeyError::InvalidRequest)?;
-    let user_name = user
-        .get("name")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
-    let user_display_name = user
-        .get("displayName")
-        .and_then(Value::as_str)
-        .map_or_else(|| user_name.clone(), str::to_owned);
+    let user_name = optional_string(user.get("name"))?.unwrap_or_default();
+    let user_display_name =
+        optional_string(user.get("displayName"))?.unwrap_or_else(|| user_name.clone());
     if !is_clean_line(&user_name, MAX_USERNAME_CHARS)
         || !is_clean_line(&user_display_name, MAX_USERNAME_CHARS)
     {
@@ -131,19 +205,24 @@ pub fn parse_create_request(json: &str) -> Result<CreateContext, PasskeyError> {
         Some(list) => credential_descriptors(list)?,
     };
 
-    Ok(CreateContext {
-        rp_id,
-        rp_name,
-        challenge,
-        user_id,
-        user_name,
-        user_display_name,
-        exclude_credential_ids,
-        attestation,
+    let origin = validate_origin_in(&root, origin_url, rp_id.as_deref())?;
+    let rp_name = rp_name.unwrap_or_else(|| origin.rp_id().to_owned());
+    Ok(ValidatedCreate {
+        request: CreateContext {
+            rp_name,
+            challenge,
+            user_id,
+            user_name,
+            user_display_name,
+            exclude_credential_ids,
+            attestation,
+        },
+        origin,
     })
 }
 
-/// Parse a get request. Ports `PasskeyCeremony.parseGetRequest`.
+/// Parse a get request and validate its origin and rpId, parsing the JSON once. Ports
+/// `PasskeyCeremony.parseGetRequest` followed by `validateOrigin`.
 ///
 /// `allowCredentials` is held to the same descriptor rules as `excludeCredentials`: a malformed
 /// list fails the request, and so does a non-empty list none of whose entries is a `public-key`
@@ -151,8 +230,10 @@ pub fn parse_create_request(json: &str) -> Result<CreateContext, PasskeyError> {
 /// unusable ids into an empty one, and an empty list means "any credential of the relying party".
 ///
 /// # Errors
-/// `InvalidRequest` when anything is missing, malformed or over a cap.
-pub fn parse_get_request(json: &str) -> Result<GetContext, PasskeyError> {
+/// `InvalidRequest` when anything is missing, malformed or over a cap; then the origin errors of
+/// [`parse_create`].
+pub fn parse_get(origin_url: &str, json: &str) -> Result<ValidatedGet, PasskeyError> {
+    check_origin_len(origin_url)?;
     let root = parse_object(json)?;
     let challenge = challenge(&root)?;
     let rp_id = optional_rp_id(root.get("rpId"))?;
@@ -167,15 +248,36 @@ pub fn parse_get_request(json: &str) -> Result<GetContext, PasskeyError> {
             ids
         }
     };
-    Ok(GetContext {
-        rp_id,
-        challenge,
-        allow_credential_ids,
+    let origin = validate_origin_in(&root, origin_url, rp_id.as_deref())?;
+    Ok(ValidatedGet {
+        request: GetContext {
+            challenge,
+            allow_credential_ids,
+        },
+        origin,
     })
 }
 
+/// The origin URL is page-reachable input too: refuse an oversized one before any work.
+fn check_origin_len(origin_url: &str) -> Result<(), PasskeyError> {
+    if origin_url.chars().count() > MAX_URL_CHARS {
+        Err(PasskeyError::InvalidRequest)
+    } else {
+        Ok(())
+    }
+}
+
+/// An absent member is `None`; a present one must be a string.
+fn optional_string(value: Option<&Value>) -> Result<Option<String>, PasskeyError> {
+    match value {
+        None => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.clone())),
+        Some(_) => Err(PasskeyError::InvalidRequest),
+    }
+}
+
 /// The request JSON as an object, refusing oversized input before parsing it.
-pub(crate) fn parse_object(json: &str) -> Result<Map<String, Value>, PasskeyError> {
+fn parse_object(json: &str) -> Result<Map<String, Value>, PasskeyError> {
     if json.len() > MAX_REQUEST_JSON_BYTES {
         return Err(PasskeyError::InvalidRequest);
     }
@@ -262,6 +364,31 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    const ORIGIN: &str = "https://example.com";
+
+    /// Stamps the Chrome origin extension into an object payload (other input is left as is).
+    fn stamp(json: &str) -> String {
+        match serde_json::from_str::<Value>(json) {
+            Ok(Value::Object(mut root)) => {
+                root.insert(
+                    "extensions".to_owned(),
+                    json!({ "remoteDesktopClientOverride":
+                        { "origin": ORIGIN, "sameOriginWithAncestors": true } }),
+                );
+                Value::Object(root).to_string()
+            }
+            _ => json.to_owned(),
+        }
+    }
+
+    fn parse_create_request(json: &str) -> Result<ValidatedCreate, PasskeyError> {
+        parse_create(ORIGIN, &stamp(json))
+    }
+
+    fn parse_get_request(json: &str) -> Result<ValidatedGet, PasskeyError> {
+        parse_get(ORIGIN, &stamp(json))
+    }
+
     fn challenge16() -> Vec<u8> {
         (0..16u8).collect()
     }
@@ -283,7 +410,7 @@ mod tests {
         v
     }
 
-    fn create(v: &Value) -> Result<CreateContext, PasskeyError> {
+    fn create(v: &Value) -> Result<ValidatedCreate, PasskeyError> {
         parse_create_request(&v.to_string())
     }
 
@@ -302,14 +429,14 @@ mod tests {
     #[test]
     fn create_extracts_rp_and_user() {
         let ctx = create(&create_json(&[-7], Some("none"))).unwrap();
-        assert_eq!(ctx.rp_id.as_deref(), Some("example.com"));
-        assert_eq!(ctx.rp_name, "Example");
-        assert_eq!(ctx.user_name, "alice");
-        assert_eq!(ctx.user_display_name, "Alice");
-        assert_eq!(ctx.challenge, challenge16());
-        assert_eq!(ctx.user_id, vec![1, 2, 3, 4]);
-        assert_eq!(ctx.attestation, "none");
-        assert!(ctx.exclude_credential_ids.is_empty());
+        assert_eq!(ctx.rp_id(), "example.com");
+        assert_eq!(ctx.request().rp_name, "Example");
+        assert_eq!(ctx.request().user_name, "alice");
+        assert_eq!(ctx.request().user_display_name, "Alice");
+        assert_eq!(ctx.request().challenge, challenge16());
+        assert_eq!(ctx.request().user_id, vec![1, 2, 3, 4]);
+        assert_eq!(ctx.request().attestation, "none");
+        assert!(ctx.request().exclude_credential_ids.is_empty());
     }
 
     #[test]
@@ -322,7 +449,7 @@ mod tests {
         ]);
         let ctx = create(&v).unwrap();
         assert_eq!(
-            ctx.exclude_credential_ids,
+            ctx.request().exclude_credential_ids,
             vec![vec![0xfb, 0xff], vec![1, 2]]
         );
     }
@@ -420,10 +547,15 @@ mod tests {
             "pubKeyCredParams": [{ "type": "public-key", "alg": -7 }],
         });
         let ctx = create(&v).unwrap();
-        assert_eq!(ctx.attestation, "none");
-        assert_eq!(ctx.rp_name, "example.com", "rp name falls back to rp id");
+        assert_eq!(ctx.request().attestation, "none");
         assert_eq!(
-            ctx.user_display_name, "alice",
+            ctx.request().rp_name,
+            "example.com",
+            "rp name falls back to rp id"
+        );
+        assert_eq!(
+            ctx.request().user_display_name,
+            "alice",
             "display name falls back to name"
         );
     }
@@ -440,24 +572,27 @@ mod tests {
             ("", "none"),
         ] {
             let ctx = create(&create_json(&[-7], Some(given))).unwrap();
-            assert_eq!(ctx.attestation, want, "{given}");
+            assert_eq!(ctx.request().attestation, want, "{given}");
         }
         let mut v = create_json(&[-7], None);
         v["attestation"] = json!(5);
-        assert_eq!(create(&v).unwrap().attestation, "none");
+        assert_eq!(create(&v).unwrap().request().attestation, "none");
     }
 
     #[test]
-    fn create_without_rp_id_leaves_it_to_origin_validation() {
+    fn create_without_rp_id_binds_the_origin_host() {
         let mut v = create_json(&[-7], None);
         v["rp"] = json!({ "name": "Example" });
         let ctx = create(&v).unwrap();
-        assert_eq!(ctx.rp_id, None);
-        assert_eq!(ctx.rp_name, "Example");
+        assert_eq!(ctx.rp_id(), "example.com", "the origin host");
+        assert_eq!(ctx.request().rp_name, "Example");
         v["rp"] = json!({});
-        assert_eq!(create(&v).unwrap().rp_name, "");
+        assert_eq!(create(&v).unwrap().request().rp_name, "example.com");
         v["rp"] = json!({ "id": 5 });
         assert_eq!(create(&v), Err(PasskeyError::InvalidRequest));
+        // An rpId the origin rules refuse never becomes a fallback name.
+        v["rp"] = json!({ "id": "a\nb" });
+        assert_eq!(create(&v), Err(PasskeyError::RpIdNotAuthorized));
     }
 
     #[test]
@@ -510,8 +645,16 @@ mod tests {
                 Box::new(|v| v["user"]["displayName"] = json!("a\u{200D}b")),
             ),
             (
-                "rp id fallback name with a newline",
-                Box::new(|v| v["rp"] = json!({ "id": "a\nb" })),
+                "rp name not a string",
+                Box::new(|v| v["rp"]["name"] = json!(5)),
+            ),
+            (
+                "user name not a string",
+                Box::new(|v| v["user"]["name"] = json!(null)),
+            ),
+            (
+                "display name not a string",
+                Box::new(|v| v["user"]["displayName"] = json!(["Alice"])),
             ),
         ];
         for (label, mutate) in cases {
@@ -559,16 +702,19 @@ mod tests {
     #[test]
     fn get_extracts_rp_and_allow_list() {
         let ctx = parse_get_request(&get_json(&[&[5, 6, 7]]).to_string()).unwrap();
-        assert_eq!(ctx.rp_id.as_deref(), Some("example.com"));
-        assert_eq!(ctx.challenge, challenge16());
-        assert_eq!(ctx.allow_credential_ids, vec![vec![5, 6, 7]]);
+        assert_eq!(ctx.rp_id(), "example.com");
+        assert_eq!(ctx.request().challenge, challenge16());
+        assert_eq!(ctx.request().allow_credential_ids, vec![vec![5, 6, 7]]);
 
         let mut v = get_json(&[]);
         v.as_object_mut().unwrap().remove("allowCredentials");
         let ctx = parse_get_request(&v.to_string()).unwrap();
-        assert!(ctx.allow_credential_ids.is_empty());
+        assert!(ctx.request().allow_credential_ids.is_empty());
         v.as_object_mut().unwrap().remove("rpId");
-        assert_eq!(parse_get_request(&v.to_string()).unwrap().rp_id, None);
+        assert_eq!(
+            parse_get_request(&v.to_string()).unwrap().rp_id(),
+            "example.com"
+        );
         v.as_object_mut().unwrap().remove("challenge");
         assert_eq!(
             parse_get_request(&v.to_string()),
@@ -589,7 +735,7 @@ mod tests {
             }],
         });
         let ctx = parse_get_request(&v.to_string()).unwrap();
-        assert_eq!(ctx.allow_credential_ids, vec![vec![5, 6, 7]]);
+        assert_eq!(ctx.request().allow_credential_ids, vec![vec![5, 6, 7]]);
     }
 
     #[test]
@@ -618,7 +764,7 @@ mod tests {
             { "type": "public-key", "id": "Ag" },
         ]);
         let ctx = parse_get_request(&v.to_string()).unwrap();
-        assert_eq!(ctx.allow_credential_ids, vec![vec![2]]);
+        assert_eq!(ctx.request().allow_credential_ids, vec![vec![2]]);
     }
 
     #[test]
@@ -657,31 +803,49 @@ mod tests {
     }
 
     #[test]
+    fn debug_prints_sizes_not_page_data() {
+        let create = create(&create_json(&[-7], None)).unwrap();
+        let get = parse_get_request(&get_json(&[&[5, 6, 7]]).to_string()).unwrap();
+        for text in [format!("{create:?}"), format!("{get:?}")] {
+            for leak in [
+                "alice",
+                "Alice",
+                "Example\"",
+                "AAECAwQFBgcICQoLDA0ODw",
+                "[0, 1, 2",
+            ] {
+                assert!(!text.contains(leak), "{leak} in {text}");
+            }
+            assert!(text.contains("example.com"), "{text}");
+        }
+    }
+
+    #[test]
     fn chrome_shaped_fixtures_parse() {
         let create = parse_create_request(include_str!(
             "../../tests/fixtures/passkey/chrome_create_request.json"
         ))
         .unwrap();
-        assert_eq!(create.rp_id.as_deref(), Some("example.com"));
-        assert_eq!(create.rp_name, "Example");
-        assert_eq!(create.user_name, "alice@example.com");
-        assert_eq!(create.user_display_name, "Alice");
-        assert_eq!(create.challenge.len(), 32);
-        assert_eq!(create.user_id.len(), 16);
-        assert_eq!(create.exclude_credential_ids.len(), 1);
-        assert_eq!(create.exclude_credential_ids[0].len(), 32);
-        assert_eq!(create.attestation, "none");
+        assert_eq!(create.rp_id(), "example.com");
+        assert_eq!(create.request().rp_name, "Example");
+        assert_eq!(create.request().user_name, "alice@example.com");
+        assert_eq!(create.request().user_display_name, "Alice");
+        assert_eq!(create.request().challenge.len(), 32);
+        assert_eq!(create.request().user_id.len(), 16);
+        assert_eq!(create.request().exclude_credential_ids.len(), 1);
+        assert_eq!(create.request().exclude_credential_ids[0].len(), 32);
+        assert_eq!(create.request().attestation, "none");
 
         let get = parse_get_request(include_str!(
             "../../tests/fixtures/passkey/chrome_get_request.json"
         ))
         .unwrap();
-        assert_eq!(get.rp_id.as_deref(), Some("example.com"));
-        assert_eq!(get.challenge.len(), 32);
-        assert_eq!(get.allow_credential_ids.len(), 1);
+        assert_eq!(get.rp_id(), "example.com");
+        assert_eq!(get.request().challenge.len(), 32);
+        assert_eq!(get.request().allow_credential_ids.len(), 1);
         assert_eq!(
-            get.allow_credential_ids[0],
-            create.exclude_credential_ids[0]
+            get.request().allow_credential_ids[0],
+            create.request().exclude_credential_ids[0]
         );
     }
 }

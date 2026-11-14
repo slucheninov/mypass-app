@@ -1,36 +1,55 @@
 //! Origin and relying-party-id validation for passkey ceremonies.
 //!
-//! Nothing signs for an origin that did not pass [`validate_origin`]: the signing API takes only
-//! the [`ValidatedOrigin`] it returns, and that type has no public constructor.
+//! Nothing signs for an origin that did not pass this validation: the signing API takes only a
+//! [`ValidatedOrigin`] (inside a `ValidatedCreate` or `ValidatedGet` from
+//! [`parse_create`](super::request::parse_create) / [`parse_get`](super::request::parse_get)),
+//! and that type has no public constructor.
 //!
 //! ```
-//! use mypass_core::passkey::origin::{validate_origin, ValidatedOrigin};
-//! let json = r#"{"extensions":{"remoteDesktopClientOverride":{"origin":"https://example.com"}}}"#;
-//! let origin: ValidatedOrigin = validate_origin("https://example.com", json, Some("example.com")).unwrap();
-//! assert_eq!(origin.as_str(), "https://example.com");
-//! assert_eq!(origin.rp_id(), "example.com");
+//! use mypass_core::passkey::{parse_get, ValidatedOrigin};
+//! let json = r#"{"challenge":"AAECAwQFBgcICQoLDA0ODw","rpId":"EXAMPLE.com",
+//!     "extensions":{"remoteDesktopClientOverride":
+//!         {"origin":"https://login.example.com","sameOriginWithAncestors":true}}}"#;
+//! let get = parse_get("https://login.example.com", json).unwrap();
+//! let origin: &ValidatedOrigin = get.origin();
+//! assert_eq!(origin.as_str(), "https://login.example.com");
+//! assert_eq!(get.rp_id(), "example.com");
 //! ```
 //!
 //! A `ValidatedOrigin` cannot be built from a string by hand:
 //!
 //! ```compile_fail,E0451
-//! use mypass_core::passkey::origin::ValidatedOrigin;
+//! use mypass_core::passkey::ValidatedOrigin;
 //! let forged = ValidatedOrigin { origin: "https://evil.example".into(), rp_id: "bank.com".into() };
 //! ```
 //!
 //! ```compile_fail,E0277
-//! use mypass_core::passkey::origin::ValidatedOrigin;
+//! use mypass_core::passkey::ValidatedOrigin;
 //! let forged = ValidatedOrigin::from(String::from("https://evil.example"));
 //! ```
+//!
+//! Nor can a bound request (its fields are private); reading its parts is fine:
+//!
+//! ```
+//! use mypass_core::passkey::{GetContext, ValidatedGet, ValidatedOrigin};
+//! fn parts(get: &ValidatedGet) -> (GetContext, ValidatedOrigin) {
+//!     (get.request().clone(), get.origin().clone())
+//! }
+//! ```
+//!
+//! ```compile_fail,E0451
+//! use mypass_core::passkey::{GetContext, ValidatedGet, ValidatedOrigin};
+//! fn forge(request: GetContext, origin: ValidatedOrigin) -> ValidatedGet {
+//!     ValidatedGet { request, origin }
+//! }
+//! ```
 
-use super::request::{parse_object, MAX_REQUEST_JSON_BYTES};
 use super::PasskeyError;
 use crate::psl::{canonical_host, registrable_domain};
-use crate::text::MAX_URL_CHARS;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use url::{Host, Url};
 
-/// An origin that passed [`validate_origin`], with the canonical rpId it was authorised for.
+/// An origin that passed origin and rpId validation, with the canonical rpId it was authorised for.
 ///
 /// The origin keeps its port: it goes into `clientDataJSON.origin`, while the port never takes
 /// part in rpId matching. The rpId is the lowercase ACE form, which is what gets hashed into
@@ -61,12 +80,12 @@ impl ValidatedOrigin {
 /// verifying the signature we hand back. Two independent checks, both required, plus the
 /// hardening below.
 ///
-/// Check 1 re-parses `request_details_json` and compares `origin_url` against the origin the
-/// extension's own `background.js` (`originFromRequestDetails()`) stamped into
-/// `extensions.remoteDesktopClientOverride.origin` inside that same payload, failing closed when
-/// the field is absent. This check is weak on its own: a fully compromised extension controls
-/// both copies and can simply lie in agreement (and today the extension reads `origin_url` from
-/// that very field, so the two agree by construction). What it actually buys is cheap: it stops
+/// Check 1 compares `origin_url` against `extensions.remoteDesktopClientOverride.origin` inside
+/// the same request payload (the parsed `root`), failing closed when the field is absent. Chrome
+/// injects that field; the extension's `background.js` (`originFromRequestDetails()`) only reads
+/// it and sends it on as `origin_url`. This check is weak on its own: a fully compromised
+/// extension controls both copies and can simply lie in agreement (and today the extension takes
+/// `origin_url` from that very field, so the two agree by construction). What it actually buys is cheap: it stops
 /// a *partially* wrong message (a bug or a rewrite of only one of the two fields in transit) and
 /// keeps the two copies from silently drifting apart, which would otherwise mask the exact class
 /// of bug this hardening exists to catch.
@@ -81,6 +100,10 @@ impl ValidatedOrigin {
 /// with `".co.uk"`; `"co.uk"` is a public suffix, not a domain anyone registers under.
 ///
 /// Hardening over the Swift app:
+/// - `remoteDesktopClientOverride.sameOriginWithAncestors` must be exactly `true`; absent, `false`
+///   or any other value is `CrossOrigin`. A ceremony from a cross-origin iframe would otherwise be
+///   signed with `clientDataJSON.crossOrigin: false` (the proxy payload carries no top origin to
+///   report), and a relying party that refuses framed ceremonies would be told it was top level;
 /// - the origin must be a bare `https` origin (no userinfo, path, query or fragment; its
 ///   serialisation equals the input) whose host is a domain, not an IP literal, with no trailing
 ///   dot. There is no `localhost` exception (neither `http` nor `https`, nor `*.localhost`):
@@ -96,30 +119,35 @@ impl ValidatedOrigin {
 /// `rp_id` is the rpId the request named, or `None` when it omitted it; WebAuthn then uses the
 /// origin's host.
 ///
+/// The size caps on `origin_url` and the JSON are enforced by the callers before parsing.
+///
 /// # Errors
-/// `InvalidRequest` when an input is over its size cap; `OriginMismatch` when check 1 fails;
-/// `RpIdNotAuthorized` for every other refusal.
-pub fn validate_origin(
+/// `OriginMismatch` when check 1 fails; `CrossOrigin` when the request does not come from a
+/// frame same-origin with all its ancestors; `RpIdNotAuthorized` for every other refusal.
+pub(crate) fn validate_origin_in(
+    root: &Map<String, Value>,
     origin_url: &str,
-    request_details_json: &str,
     rp_id: Option<&str>,
 ) -> Result<ValidatedOrigin, PasskeyError> {
-    if origin_url.chars().count() > MAX_URL_CHARS
-        || request_details_json.len() > MAX_REQUEST_JSON_BYTES
-    {
-        return Err(PasskeyError::InvalidRequest);
-    }
-    let root = parse_object(request_details_json).map_err(|_| PasskeyError::OriginMismatch)?;
+    let client_override = root
+        .get("extensions")
+        .and_then(|e| e.get("remoteDesktopClientOverride"));
 
     // Check 1: the wire origin must match the payload's own origin, byte for byte.
-    let payload_origin = root
-        .get("extensions")
-        .and_then(|e| e.get("remoteDesktopClientOverride"))
+    let payload_origin = client_override
         .and_then(|o| o.get("origin"))
         .and_then(Value::as_str)
         .ok_or(PasskeyError::OriginMismatch)?;
     if payload_origin != origin_url {
         return Err(PasskeyError::OriginMismatch);
+    }
+
+    // Only top-level or same-origin-framed ceremonies: we cannot report crossOrigin truthfully.
+    let same_origin_with_ancestors = client_override
+        .and_then(|o| o.get("sameOriginWithAncestors"))
+        .and_then(Value::as_bool);
+    if same_origin_with_ancestors != Some(true) {
+        return Err(PasskeyError::CrossOrigin);
     }
 
     // Check 2: a bare https origin on a domain, and an rpId it may claim.
@@ -221,17 +249,45 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+    use crate::passkey::request::{parse_create, parse_get, MAX_REQUEST_JSON_BYTES};
+    use crate::text::MAX_URL_CHARS;
 
-    /// A request payload whose `extensions.remoteDesktopClientOverride.origin` is `origin`;
-    /// `None` omits the whole `extensions` block, as in a payload the extension never stamped.
+    /// A request payload whose `extensions.remoteDesktopClientOverride.origin` is `origin`, sent
+    /// from a top-level frame; `None` omits the whole `extensions` block, as in a payload Chrome
+    /// never stamped.
     fn origin_json(origin: Option<&str>) -> String {
         match origin {
             None => "{}".to_owned(),
             Some(o) => serde_json::json!({
-                "extensions": { "remoteDesktopClientOverride": { "origin": o } }
+                "extensions": {
+                    "remoteDesktopClientOverride": { "origin": o, "sameOriginWithAncestors": true }
+                }
             })
             .to_string(),
         }
+    }
+
+    /// Runs the origin rules alone over an already parsed payload.
+    fn validate_origin(
+        origin_url: &str,
+        json: &str,
+        rp_id: Option<&str>,
+    ) -> Result<ValidatedOrigin, PasskeyError> {
+        match serde_json::from_str::<Value>(json) {
+            Ok(Value::Object(root)) => validate_origin_in(&root, origin_url, rp_id),
+            _ => Err(PasskeyError::InvalidRequest),
+        }
+    }
+
+    /// A get request for `rp_id` whose payload names `payload_origin`.
+    fn get_json(payload_origin: &str, rp_id: Option<&str>) -> serde_json::Value {
+        let mut v: serde_json::Value =
+            serde_json::from_str(&origin_json(Some(payload_origin))).unwrap();
+        v["challenge"] = serde_json::json!("AAECAwQFBgcICQoLDA0ODw");
+        if let Some(rp) = rp_id {
+            v["rpId"] = serde_json::json!(rp);
+        }
+        v
     }
 
     fn check(origin: &str, rp_id: &str) -> Result<ValidatedOrigin, PasskeyError> {
@@ -343,8 +399,7 @@ mod tests {
             r#"{"extensions":{}}"#.to_owned(),
             r#"{"extensions":{"remoteDesktopClientOverride":{}}}"#.to_owned(),
             r#"{"extensions":{"remoteDesktopClientOverride":{"origin":5}}}"#.to_owned(),
-            "not json".to_owned(),
-            "[]".to_owned(),
+            r#"{"extensions":{"remoteDesktopClientOverride":"https://example.com"}}"#.to_owned(),
         ] {
             assert_eq!(
                 validate_origin(o, &json, Some("example.com")),
@@ -352,6 +407,35 @@ mod tests {
                 "{json}"
             );
         }
+    }
+
+    #[test]
+    fn cross_origin_or_unknown_frame_context_is_refused() {
+        let o = "https://example.com";
+        for same_origin in [
+            Some(serde_json::json!(false)),
+            None,
+            Some(serde_json::json!("true")),
+            Some(serde_json::json!(1)),
+            Some(serde_json::Value::Null),
+        ] {
+            let mut v = get_json(o, Some("example.com"));
+            let rdco = &mut v["extensions"]["remoteDesktopClientOverride"];
+            match &same_origin {
+                Some(value) => rdco["sameOriginWithAncestors"] = value.clone(),
+                None => {
+                    rdco.as_object_mut()
+                        .unwrap()
+                        .remove("sameOriginWithAncestors");
+                }
+            }
+            assert_eq!(
+                parse_get(o, &v.to_string()),
+                Err(PasskeyError::CrossOrigin),
+                "{same_origin:?}"
+            );
+        }
+        assert!(parse_get(o, &get_json(o, Some("example.com")).to_string()).is_ok());
     }
 
     #[test]
@@ -471,15 +555,42 @@ mod tests {
     fn oversized_inputs_are_invalid_requests() {
         let long = format!("https://{}.com", "a".repeat(MAX_URL_CHARS));
         assert_eq!(
-            validate_origin(&long, &origin_json(Some(&long)), Some("example.com")),
+            parse_get(&long, &get_json(&long, None).to_string()),
             Err(PasskeyError::InvalidRequest)
         );
         let o = "https://example.com";
-        let mut v: serde_json::Value = serde_json::from_str(&origin_json(Some(o))).unwrap();
+        let mut v = get_json(o, Some("example.com"));
         v["padding"] = serde_json::json!("x".repeat(MAX_REQUEST_JSON_BYTES));
         assert_eq!(
-            validate_origin(o, &v.to_string(), Some("example.com")),
+            parse_get(o, &v.to_string()),
             Err(PasskeyError::InvalidRequest)
+        );
+        for garbage in ["not json", "[]"] {
+            assert_eq!(parse_get(o, garbage), Err(PasskeyError::InvalidRequest));
+        }
+    }
+
+    #[test]
+    fn bound_request_carries_only_the_canonical_rp_id() {
+        let o = "https://login.example.com";
+        let get = parse_get(o, &get_json(o, Some("EXAMPLE.Com")).to_string()).unwrap();
+        assert_eq!(get.rp_id(), "example.com");
+        assert_eq!(get.origin().rp_id(), "example.com");
+        assert_eq!(get.origin().as_str(), o);
+        // An omitted rpId binds the origin host.
+        let get = parse_get(o, &get_json(o, None).to_string()).unwrap();
+        assert_eq!(get.rp_id(), "login.example.com");
+        // The origin rules run on the same parse: a refused rpId refuses the request.
+        assert_eq!(
+            parse_get(o, &get_json(o, Some("evil.com")).to_string()),
+            Err(PasskeyError::RpIdNotAuthorized)
+        );
+        assert_eq!(
+            parse_get(
+                "https://evil.com",
+                &get_json(o, Some("example.com")).to_string()
+            ),
+            Err(PasskeyError::OriginMismatch)
         );
     }
 
@@ -487,9 +598,10 @@ mod tests {
     fn chrome_shaped_fixtures_validate() {
         let create = include_str!("../../tests/fixtures/passkey/chrome_create_request.json");
         let get = include_str!("../../tests/fixtures/passkey/chrome_get_request.json");
-        for json in [create, get] {
-            let v = validate_origin("https://example.com", json, Some("example.com")).unwrap();
-            assert_eq!(v.rp_id(), "example.com");
-        }
+        let create = parse_create("https://example.com", create).unwrap();
+        assert_eq!(create.rp_id(), "example.com");
+        assert_eq!(create.origin().as_str(), "https://example.com");
+        let get = parse_get("https://example.com", get).unwrap();
+        assert_eq!(get.rp_id(), "example.com");
     }
 }

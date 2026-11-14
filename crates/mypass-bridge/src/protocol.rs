@@ -440,6 +440,10 @@ fn is_format_char(c: char) -> bool {
 }
 
 /// Control (Cc) or format (Cf) characters, which no name or label shown in the UI may contain.
+///
+/// `mypass_core::text::is_unsafe_text_char` is the same rule for the app side (the host must not
+/// link mypass-core); `handlers::text::tests::host_and_core_unsafe_text_rules_agree_on_every_char`
+/// pins that the two agree, so change both together.
 #[must_use]
 pub fn is_unsafe_text_char(c: char) -> bool {
     c.is_control() || is_format_char(c)

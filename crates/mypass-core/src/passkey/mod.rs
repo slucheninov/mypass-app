@@ -14,9 +14,11 @@ pub mod record;
 /// WebAuthn create and get request parsing with size and text caps.
 pub mod request;
 
-pub use origin::{validate_origin, ValidatedOrigin};
+pub use origin::ValidatedOrigin;
 pub use record::has_passkey;
-pub use request::{parse_create_request, parse_get_request, CreateContext, GetContext};
+pub use request::{
+    parse_create, parse_get, CreateContext, GetContext, ValidatedCreate, ValidatedGet,
+};
 
 /// The AAGUID MyPass reports in the attested credential data of every passkey it creates
 /// (`94803471-f8b4-48f9-98ff-fc4ac1a92af8`). It is a fixed random v4 UUID owned by MyPass, the
@@ -38,6 +40,9 @@ pub enum PasskeyError {
     /// The caller origin is not acceptable.
     #[error("passkey origin mismatch")]
     OriginMismatch,
+    /// The request came from a frame that is not same-origin with all its ancestors.
+    #[error("passkey request from a cross-origin frame")]
+    CrossOrigin,
     /// The relying party id is not valid for the caller origin.
     #[error("relying party id not authorized")]
     RpIdNotAuthorized,
@@ -64,6 +69,7 @@ mod tests {
             PasskeyError::InvalidRequest,
             PasskeyError::UnsupportedAlgorithm,
             PasskeyError::OriginMismatch,
+            PasskeyError::CrossOrigin,
             PasskeyError::RpIdNotAuthorized,
             PasskeyError::Crypto,
         ] {
