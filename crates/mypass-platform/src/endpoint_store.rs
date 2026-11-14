@@ -7,12 +7,13 @@
 //! app's and the host's, both pinned to the team `W645B93PPQ`. Never a path or a cdhash: the item
 //! keeps working across updates and refuses a binary that merely sits at the right path.
 //!
-//! Both sides must pick the same store, so both use one predicate: the Keychain is used only when
-//! the running binary satisfies its own team requirement **and** the peer binary on disk
-//! satisfies the peer's. An unsigned development build (or a signed host next to an unsigned app)
-//! falls back to the file store on both sides. The decision is pure ([`select_shared_store`]) and
-//! tested with a fake [`SignatureProbe`]; the macOS probe and the Keychain store live in
-//! `macos_keychain_acl.rs`.
+//! The choice fails closed: a binary that satisfies its own team requirement always uses the
+//! Keychain, never the file store. When its peer is missing or not team-signed, writing the record
+//! fails (the bridge does not start) instead of downgrading to a store any process can rewrite.
+//! Only an unsigned or ad-hoc signed development binary uses the file store, so development runs
+//! sign both binaries or neither (a signed host next to an unsigned app cannot reach it). The
+//! decision is pure ([`select_shared_store`]) and tested with a fake [`SignatureProbe`]; the macOS
+//! probe and the Keychain store live in `macos_keychain_acl.rs`.
 //!
 //! The app switch-over (writing the endpoint here, deleting the old file record) and locating the
 //! peer binary are the app's and the host's (batch H); this module only answers "which store".
@@ -78,27 +79,21 @@ impl StoreSide {
     }
 }
 
-/// The one predicate both sides use: the Keychain only when this binary and the peer binary at
-/// `peer` are both team-signed with the expected identifiers; otherwise (no peer found, either one
-/// unsigned or ad-hoc signed) the file store.
-pub fn select_shared_store(
-    probe: &dyn SignatureProbe,
-    side: StoreSide,
-    peer: Option<&Path>,
-) -> SharedStoreKind {
-    let (own, peer_requirement) = side.requirements();
-    match peer {
-        Some(peer)
-            if probe.running_binary_satisfies(own)
-                && probe.binary_satisfies(peer, peer_requirement) =>
-        {
-            SharedStoreKind::Keychain
-        }
-        _ => SharedStoreKind::File,
+/// The one predicate both sides use: the Keychain whenever this binary is team-signed with its
+/// expected identifier (fail closed: the peer is checked when the record is written, and a
+/// missing or foreign peer makes that write fail rather than choosing the file store); the file
+/// store only for an unsigned or ad-hoc signed development binary.
+pub fn select_shared_store(probe: &dyn SignatureProbe, side: StoreSide) -> SharedStoreKind {
+    let (own, _) = side.requirements();
+    if probe.running_binary_satisfies(own) {
+        SharedStoreKind::Keychain
+    } else {
+        SharedStoreKind::File
     }
 }
 
-/// The endpoint store of the app; `host_exe` is the bundled host binary.
+/// The endpoint store of the app; `host_exe` is the bundled host binary, trusted next to the app
+/// (`None`: not found, so a signed app cannot write the record).
 pub fn app_shared_store(
     paths: &AppPaths,
     host_exe: Option<&Path>,
@@ -107,7 +102,7 @@ pub fn app_shared_store(
 }
 
 /// The endpoint store of the native messaging host; `app_exe` is the app binary of the bundle
-/// the host belongs to.
+/// the host belongs to (only needed if the host ever writes the record).
 pub fn host_shared_store(
     paths: &AppPaths,
     app_exe: Option<&Path>,
@@ -121,12 +116,13 @@ fn shared_store_for(
     peer: Option<&Path>,
 ) -> (SharedStoreKind, Arc<dyn SecretStore>) {
     #[cfg(target_os = "macos")]
-    if let (SharedStoreKind::Keychain, Some(peer)) = (
-        select_shared_store(&crate::macos_keychain_acl::MacSignatureProbe, side, peer),
-        peer,
-    ) {
-        let store =
-            crate::macos_keychain_acl::MacEndpointKeychainStore::new(peer.to_path_buf(), side);
+    if select_shared_store(&crate::macos_keychain_acl::MacSignatureProbe, side)
+        == SharedStoreKind::Keychain
+    {
+        let store = crate::macos_keychain_acl::MacEndpointKeychainStore::new(
+            peer.map(Path::to_path_buf),
+            side,
+        );
         return (SharedStoreKind::Keychain, Arc::new(store));
     }
     #[cfg(not(target_os = "macos"))]
@@ -258,36 +254,34 @@ mod tests {
             own: vec![],
             on_disk: vec![],
         };
-        // A signed host next to an unsigned (development) app: both sides must pick the file.
+        // A signed host next to an unsigned (development) app: they disagree, and the bridge
+        // fails rather than letting the signed host trust a rewritable file.
         let only_host_signed = TableProbe {
             own: vec![HOST_REQUIREMENT],
             on_disk: vec![(host(), HOST_REQUIREMENT)],
         };
-        // The host was swapped for another binary at the same path.
+        // A signed app whose host was swapped: still the Keychain (the write then fails).
         let host_swapped = TableProbe {
             own: vec![APP_REQUIREMENT],
             on_disk: vec![],
         };
         use SharedStoreKind::{File, Keychain};
         use StoreSide::{App, Host};
-        let cases: [(&TableProbe, StoreSide, Option<PathBuf>, SharedStoreKind); 9] = [
-            (&both_signed, App, Some(host()), Keychain),
-            (&both_signed, Host, Some(app()), Keychain),
-            (&both_signed, App, None, File),
-            (&both_signed, App, Some(app()), File),
-            (&unsigned, App, Some(host()), File),
-            (&unsigned, Host, Some(app()), File),
-            (&only_host_signed, App, Some(host()), File),
-            (&only_host_signed, Host, Some(app()), File),
-            (&host_swapped, App, Some(host()), File),
+        let cases: [(&TableProbe, StoreSide, SharedStoreKind); 6] = [
+            (&both_signed, App, Keychain),
+            (&both_signed, Host, Keychain),
+            (&unsigned, App, File),
+            (&unsigned, Host, File),
+            (&only_host_signed, Host, Keychain),
+            (&host_swapped, App, Keychain),
         ];
-        for (i, (probe, side, peer, expected)) in cases.into_iter().enumerate() {
-            assert_eq!(
-                select_shared_store(probe, side, peer.as_deref()),
-                expected,
-                "case {i}"
-            );
+        for (i, (probe, side, expected)) in cases.into_iter().enumerate() {
+            assert_eq!(select_shared_store(probe, side), expected, "case {i}");
         }
+        // The app requirement never satisfies the host side and the other way round.
+        assert_eq!(select_shared_store(&only_host_signed, App), File);
+        assert_eq!(select_shared_store(&host_swapped, Host), File);
+        assert!(!both_signed.binary_satisfies(&app(), HOST_REQUIREMENT));
     }
 
     struct FakeOps {
@@ -385,7 +379,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn without_a_peer_both_sides_use_the_file_store() {
+    fn unsigned_test_binary_uses_the_file_store_on_both_sides() {
         let tmp = tempfile::tempdir().unwrap();
         let paths = AppPaths::macos(tmp.path());
         let (kind, store) = app_shared_store(&paths, None);

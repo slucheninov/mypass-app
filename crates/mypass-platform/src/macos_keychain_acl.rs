@@ -177,7 +177,7 @@ fn access_for(peer: &Path, label: &str) -> PlatformResult<CFType> {
 /// The endpoint record's Keychain store; see the module docs.
 #[derive(Debug, Clone)]
 pub(crate) struct MacEndpointKeychainStore {
-    peer: PathBuf,
+    peer: Option<PathBuf>,
     side: StoreSide,
 }
 
@@ -186,18 +186,26 @@ const ITEM_LABEL: &str = "MyPass browser bridge endpoint";
 
 impl MacEndpointKeychainStore {
     /// The store of `side`; `peer` is the other binary (the host for the app, the app for the
-    /// host), trusted next to the running binary.
-    pub(crate) fn new(peer: PathBuf, side: StoreSide) -> Self {
+    /// host), trusted next to the running binary. Without a peer every write fails.
+    pub(crate) fn new(peer: Option<PathBuf>, side: StoreSide) -> Self {
         Self { peer, side }
+    }
+
+    /// The peer binary, or the error that stops a write (fail closed).
+    fn peer(&self) -> PlatformResult<&Path> {
+        self.peer
+            .as_deref()
+            .ok_or_else(|| PlatformError::Failed("the other MyPass binary was not found".into()))
     }
 
     /// The running binary and the peer are both team-signed with team-based designated
     /// requirements; otherwise nothing is written.
     fn verify_signatures(&self) -> PlatformResult<()> {
+        let peer = self.peer()?;
         let (own_requirement, peer_requirement) = self.side.requirements();
         let probe = MacSignatureProbe;
         if !probe.running_binary_satisfies(own_requirement)
-            || !probe.binary_satisfies(&self.peer, peer_requirement)
+            || !probe.binary_satisfies(peer, peer_requirement)
         {
             return Err(PlatformError::Failed(
                 "the app or the host is not signed by the MyPass team".into(),
@@ -206,10 +214,7 @@ impl MacEndpointKeychainStore {
         let own_id = requirement_identifier(own_requirement).unwrap_or_default();
         let peer_id = requirement_identifier(peer_requirement).unwrap_or_default();
         if !designated_requirement_is_team_based(&own_designated_requirement()?, own_id)
-            || !designated_requirement_is_team_based(
-                &designated_requirement_of(&self.peer)?,
-                peer_id,
-            )
+            || !designated_requirement_is_team_based(&designated_requirement_of(peer)?, peer_id)
         {
             return Err(PlatformError::Failed(
                 "a designated requirement is not pinned to the MyPass team".into(),
@@ -252,7 +257,13 @@ impl ItemOps for AclItem<'_> {
 impl SecretStore for MacEndpointKeychainStore {
     fn set(&self, service: &str, account: &str, secret: &[u8]) -> PlatformResult<()> {
         self.verify_signatures()?;
-        let access = access_for(&self.peer, ITEM_LABEL)?;
+        let access = access_for(self.peer()?, ITEM_LABEL)?;
+        // `SecTrustedApplicationCreateFromPath` records whatever code sits at the path when it
+        // runs, so a binary swapped in after the first check would be trusted. Check again now
+        // that the access list exists: a swap must then also be undone inside this window, by a
+        // process that can already write into the app bundle. Residual risk, recorded in the
+        // stage 5 report; the public API offers no way to read the recorded requirement back.
+        self.verify_signatures()?;
         delete_then_add(&AclItem {
             service,
             account,
@@ -328,9 +339,19 @@ mod tests {
     /// Refused before any Keychain call: the test binary and `/bin/ls` are not team-signed.
     #[test]
     fn unsigned_binaries_are_refused_before_any_keychain_call() {
-        let store = MacEndpointKeychainStore::new(PathBuf::from(SYSTEM_BINARY), StoreSide::App);
+        let store =
+            MacEndpointKeychainStore::new(Some(PathBuf::from(SYSTEM_BINARY)), StoreSide::App);
         let err = store.verify_signatures().unwrap_err();
         assert!(matches!(err, PlatformError::Failed(ref m) if m.contains("not signed")));
+    }
+
+    #[test]
+    fn a_missing_peer_fails_closed() {
+        let store = MacEndpointKeychainStore::new(None, StoreSide::App);
+        let err = store
+            .set("com.mypass.tests.never", "loopback", b"x")
+            .unwrap_err();
+        assert!(matches!(err, PlatformError::Failed(ref m) if m.contains("not found")));
     }
 
     /// The real access list: needs `MYPASS_KEYCHAIN_TESTS=1`, a team-signed test binary (run
@@ -353,7 +374,7 @@ mod tests {
             return;
         }
         let service = format!("com.mypass.tests.endpoint.{}", std::process::id());
-        let store = MacEndpointKeychainStore::new(PathBuf::from(peer), StoreSide::App);
+        let store = MacEndpointKeychainStore::new(Some(PathBuf::from(peer)), StoreSide::App);
         store.set(&service, "loopback", b"{\"port\":1}").unwrap();
         let read = store.get(&service, "loopback");
         let dump = std::process::Command::new("security")
