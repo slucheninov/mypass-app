@@ -7,9 +7,9 @@
 //! involved, and no `kSecAttrAccessible` class is set (file-keychain items never sync to iCloud, so
 //! "this device only" is inherent, and the attribute is rejected or ignored there).
 //!
-//! Items are created with the default access (only the creating application is trusted). There is
-//! no store shared with the native host yet: trusting a host binary needs the signed app bundle
-//! (ROADMAP, Stage 3).
+//! Items are created with the default access (only the creating application is trusted). The
+//! store shared with the native host, whose access list also trusts the team-signed host, is
+//! `macos_keychain_acl.rs` (stage 5, ruling R4).
 //!
 //! Everything goes through the safe `security-framework` crate; this module has no `unsafe`.
 //! No secret ever reaches an error or a `Debug` output: errors carry the numeric `OSStatus` only.
