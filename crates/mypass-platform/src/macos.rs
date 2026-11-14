@@ -22,8 +22,9 @@
 // `unsafe_only_in_allow_listed_modules` keeps `unsafe` out of every other file.
 #![allow(unsafe_code)]
 
-use crate::fallback::{UnsupportedDeviceUnlock, UnsupportedLaunchAtLogin};
+use crate::fallback::UnsupportedDeviceUnlock;
 use crate::macos_keychain::MacKeychainSecretStore;
+use crate::macos_login_item::MacLaunchAtLogin;
 use crate::{
     AppPaths, ClipboardStamp, KeyboardLayout, Platform, PlatformError, PlatformResult,
     SecureClipboard, Subscription, SystemEvent, SystemEvents,
@@ -63,8 +64,8 @@ pub(crate) const INPUT_SOURCE_CHANGED: &str =
 const MAIN_THREAD_WAIT: Duration = Duration::from_millis(500);
 
 /// The real macOS platform: events, clipboard, keyboard layout and the app-private Keychain store;
-/// the 0600 file store shared with the native host; the native host registrar; `Unsupported`
-/// placeholders for device unlock and launch at login (stage 5).
+/// the 0600 file store shared with the native host; the native host registrar; the
+/// `SMAppService` login item (`macos_login_item.rs`); an `Unsupported` device-unlock placeholder.
 pub(crate) fn platform(paths: &AppPaths) -> Platform {
     Platform {
         events: Arc::new(MacSystemEvents),
@@ -73,7 +74,7 @@ pub(crate) fn platform(paths: &AppPaths) -> Platform {
         shared_secrets: Arc::new(crate::file_store::shared_store(paths)),
         device_unlock: Arc::new(UnsupportedDeviceUnlock),
         host_registrar: Arc::new(crate::MacHostRegistrar::new(paths.clone())),
-        launch_at_login: Arc::new(UnsupportedLaunchAtLogin),
+        launch_at_login: Arc::new(MacLaunchAtLogin),
         keyboard_layout: Arc::new(MacKeyboardLayout),
     }
 }

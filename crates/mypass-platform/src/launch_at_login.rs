@@ -29,3 +29,31 @@ pub trait LaunchAtLogin: Send + Sync {
     /// Turns the login item on or off.
     fn set_enabled(&self, enabled: bool) -> PlatformResult<()>;
 }
+
+/// Maps a raw `SMAppServiceStatus` value (ServiceManagement, macOS 13+) onto [`LoginItemStatus`]:
+/// `0` NotRegistered, `1` Enabled, `2` RequiresApproval, `3` NotFound. A value a later macOS adds
+/// counts as [`LoginItemStatus::Disabled`], so the setting never claims a login item it cannot
+/// confirm. Pure, so the table is tested on every platform.
+pub fn map_sm_status(raw: i64) -> LoginItemStatus {
+    match raw {
+        1 => LoginItemStatus::Enabled,
+        2 => LoginItemStatus::RequiresApproval,
+        3 => LoginItemStatus::NotFound,
+        _ => LoginItemStatus::Disabled,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sm_status_mapping_table() {
+        assert_eq!(map_sm_status(0), LoginItemStatus::Disabled);
+        assert_eq!(map_sm_status(1), LoginItemStatus::Enabled);
+        assert_eq!(map_sm_status(2), LoginItemStatus::RequiresApproval);
+        assert_eq!(map_sm_status(3), LoginItemStatus::NotFound);
+        assert_eq!(map_sm_status(4), LoginItemStatus::Disabled);
+        assert_eq!(map_sm_status(-1), LoginItemStatus::Disabled);
+    }
+}

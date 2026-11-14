@@ -19,6 +19,8 @@ mod macos;
 mod macos_host_install;
 #[cfg(target_os = "macos")]
 mod macos_keychain;
+#[cfg(target_os = "macos")]
+mod macos_login_item;
 mod paths;
 mod secrets;
 
@@ -36,7 +38,7 @@ pub use host_registrar::{
     NativeHostRegistrar, RegistrationState, BUNDLED_HOST_FILE, EXTENSION_ID, HOST_NAME,
 };
 pub use keyboard_layout::KeyboardLayout;
-pub use launch_at_login::{LaunchAtLogin, LoginItemStatus};
+pub use launch_at_login::{map_sm_status, LaunchAtLogin, LoginItemStatus};
 #[cfg(unix)]
 pub use macos_host_install::MacHostRegistrar;
 pub use paths::{AppPaths, Browser, VaultId, BUNDLE_ID, HOST_MANIFEST_FILE};

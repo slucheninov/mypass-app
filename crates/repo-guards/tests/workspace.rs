@@ -295,9 +295,14 @@ fn workspace_lints_forbid_unsafe() {
 /// The only member allowed its own `[lints]` tables (see `workspace_lints_forbid_unsafe`).
 const OWN_LINTS_MEMBER: &str = "mypass-platform";
 
-/// Files of our crates where `unsafe` code may appear. Stage 6 adds
-/// `crates/mypass-platform/src/windows.rs` here for the Win32 calls; nothing else, ever.
-const UNSAFE_ALLOWED_FILES: &[&str] = &["crates/mypass-platform/src/macos.rs"];
+/// Files of our crates where `unsafe` code may appear: the macOS glue of `mypass-platform`, one
+/// file per framework whose bindings are `unsafe` (stage 5 added the ServiceManagement login item;
+/// ruling R1 of the stage 5 plan). Stage 6 adds `crates/mypass-platform/src/windows.rs` for the
+/// Win32 calls. Never a file outside `mypass-platform`.
+const UNSAFE_ALLOWED_FILES: &[&str] = &[
+    "crates/mypass-platform/src/macos.rs",
+    "crates/mypass-platform/src/macos_login_item.rs",
+];
 
 /// Blanks out comments (line, nested block), string literals (plain and raw) and char literals,
 /// keeping every other byte, so token scans see code only. Lifetimes (`'a`) are left alone.
