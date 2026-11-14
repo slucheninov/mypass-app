@@ -12,9 +12,14 @@ mod fallback;
 mod file_store;
 mod host_registrar;
 mod keyboard_layout;
+// The portable core of the macOS device unlock (tested on every platform).
+#[cfg(any(target_os = "macos", test))]
+mod keychain_device_unlock;
 mod launch_at_login;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+mod macos_device_unlock;
 #[cfg(unix)]
 mod macos_host_install;
 #[cfg(target_os = "macos")]

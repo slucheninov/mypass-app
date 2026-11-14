@@ -296,12 +296,13 @@ fn workspace_lints_forbid_unsafe() {
 const OWN_LINTS_MEMBER: &str = "mypass-platform";
 
 /// Files of our crates where `unsafe` code may appear: the macOS glue of `mypass-platform`, one
-/// file per framework whose bindings are `unsafe` (stage 5 added the ServiceManagement login item;
-/// ruling R1 of the stage 5 plan). Stage 6 adds `crates/mypass-platform/src/windows.rs` for the
+/// file per framework whose bindings are `unsafe` (stage 5 added the ServiceManagement login item
+/// and the LocalAuthentication device unlock; ruling R1 of the stage 5 plan). Stage 6 adds `crates/mypass-platform/src/windows.rs` for the
 /// Win32 calls. Never a file outside `mypass-platform`.
 const UNSAFE_ALLOWED_FILES: &[&str] = &[
     "crates/mypass-platform/src/macos.rs",
     "crates/mypass-platform/src/macos_login_item.rs",
+    "crates/mypass-platform/src/macos_device_unlock.rs",
 ];
 
 /// Blanks out comments (line, nested block), string literals (plain and raw) and char literals,

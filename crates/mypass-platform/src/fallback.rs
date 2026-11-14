@@ -7,11 +7,12 @@
 use crate::SecretStore;
 #[cfg(any(not(target_os = "macos"), test))]
 use crate::{BrowserRegistration, HostRegistrationReport, NativeHostRegistrar};
+#[cfg(any(not(target_os = "macos"), test, feature = "test-util"))]
 use crate::{
-    DeviceUnlock, DeviceUnlockAvailability, DeviceUnlockMode, PlatformError, PlatformResult,
+    DeviceUnlock, DeviceUnlockAvailability, DeviceUnlockMode, LaunchAtLogin, LoginItemStatus,
+    PlatformError, PlatformResult,
 };
 #[cfg(any(not(target_os = "macos"), test, feature = "test-util"))]
-use crate::{LaunchAtLogin, LoginItemStatus};
 use secrecy::SecretString;
 #[cfg(any(not(target_os = "macos"), test))]
 use std::path::Path;
@@ -53,10 +54,13 @@ impl SecretStore for UnsupportedSecretStore {
     }
 }
 
-/// No device unlock on this platform yet (macOS stage 5).
+/// No device unlock on this platform yet (Windows stage 6); macOS has `macos_device_unlock.rs` and
+/// keeps this stub only for the contract suite.
 #[derive(Debug, Default)]
+#[cfg(any(not(target_os = "macos"), test, feature = "test-util"))]
 pub(crate) struct UnsupportedDeviceUnlock;
 
+#[cfg(any(not(target_os = "macos"), test, feature = "test-util"))]
 impl DeviceUnlock for UnsupportedDeviceUnlock {
     fn availability(&self) -> DeviceUnlockAvailability {
         DeviceUnlockAvailability::Unavailable

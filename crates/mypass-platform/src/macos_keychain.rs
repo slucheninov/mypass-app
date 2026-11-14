@@ -14,9 +14,10 @@
 //! Everything goes through the safe `security-framework` crate; this module has no `unsafe`.
 //! No secret ever reaches an error or a `Debug` output: errors carry the numeric `OSStatus` only.
 
+use crate::keychain_device_unlock::ItemStore;
 use crate::{PlatformError, PlatformResult, SecretStore};
 use core_foundation::data::CFData;
-use security_framework::item::{ItemAddOptions, ItemAddValue, ItemClass};
+use security_framework::item::{ItemAddOptions, ItemAddValue, ItemClass, ItemSearchOptions, Limit};
 use security_framework::passwords::{delete_generic_password, get_generic_password};
 
 /// `errSecItemNotFound`.
@@ -133,6 +134,31 @@ impl SecretStore for MacKeychainSecretStore {
     }
 }
 
+/// The `kSecAttrAccount` key of a search-result attribute dictionary.
+const ACCOUNT_ATTRIBUTE: &str = "acct";
+
+impl ItemStore for MacKeychainSecretStore {
+    /// Lists the accounts under `service` from the item attributes only (`kSecReturnAttributes`,
+    /// no data), which never shows an access prompt, also for items of other applications.
+    fn accounts(&self, service: &str) -> PlatformResult<Vec<String>> {
+        let results = ItemSearchOptions::new()
+            .class(ItemClass::generic_password())
+            .service(service)
+            .load_attributes(true)
+            .limit(Limit::All)
+            .search();
+        match results {
+            Ok(results) => Ok(results
+                .iter()
+                .filter_map(|r| r.simplify_dict())
+                .filter_map(|mut attributes| attributes.remove(ACCOUNT_ATTRIBUTE))
+                .collect()),
+            Err(e) if is_not_found(e.code()) => Ok(Vec::new()),
+            Err(e) => Err(failed(e.code())),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,8 +237,10 @@ mod tests {
             store.get(&service, account),
             Ok(Some(b"second \x00\xff".to_vec()))
         );
+        assert_eq!(store.accounts(&service), Ok(vec![account.to_owned()]));
         store.delete(&service, account).unwrap();
         assert_eq!(store.get(&service, account), Ok(None));
+        assert_eq!(store.accounts(&service), Ok(Vec::new()));
         store.delete(&service, account).unwrap();
     }
 }
