@@ -2,4 +2,19 @@
 //! iCloud Drive `FileIo` over the `mypass-platform` coordinated-file seam.
 //!
 //! Safe code only (`unsafe_code = "forbid"` through `[workspace.lints]`): every Objective-C call
-//! stays in `mypass-platform`. The modules land in later stage 5 tasks; this is the scaffold.
+//! stays in `mypass-platform`. Portable: nothing here depends on the platform or session crates.
+//! Logs and errors carry codes and paths only, never vault bytes or passwords (R37).
+
+pub mod backend;
+pub mod checkpoint;
+pub mod engine;
+pub mod local_folder;
+
+pub use backend::{FileIoBackend, StorageBackend, StorageError};
+pub use checkpoint::{
+    FileCheckpointStore, InMemoryCheckpointStore, SyncCheckpoint, SyncCheckpointStore,
+};
+pub use engine::{
+    MergedRemote, PendingCheckpoint, SyncEngine, SyncError, SyncResult, MAX_SYNC_ATTEMPTS,
+};
+pub use local_folder::LocalFolderBackend;
