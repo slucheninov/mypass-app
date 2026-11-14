@@ -73,6 +73,12 @@ objc2-local-authentication = { workspace = true, features = [
     "LAContext",
     "LAError",
 ] }
+objc2-service-management = { workspace = true, features = [
+    "std",
+    "objc2",
+    "objc2-foundation",
+    "SMAppService",
+] }
 
 [dev-dependencies]
 # The integration tests (the device-unlock contract suite) use `testing`, which needs the feature.

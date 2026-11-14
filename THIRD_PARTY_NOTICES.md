@@ -329,6 +329,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `objc2-foundation` | 0.3.2 | MIT |
 | `objc2-local-authentication` | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | `objc2-quartz-core` | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
+| `objc2-service-management` | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | `objc2-ui-kit` | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | `objc2-user-notifications` | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | `objc2-web-kit` | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
@@ -639,6 +640,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `jiff-tzdb-platform` | 0.1.3 | Unlicense OR MIT |
 | `keepass` | 0.17.0 | MIT |
 | `objc2-io-surface` | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
+| `objc2-security` | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | `phf_codegen` | 0.13.1 | MIT |
 | `phf_codegen` | 0.14.0 | MIT |
 | `pkg-config` | 0.3.34 | MIT OR Apache-2.0 |
