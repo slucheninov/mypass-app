@@ -66,23 +66,74 @@ impl ReleaseFeed for NoopFeed {
 /// The URL is later opened in the user's browser (from Rust, never from a webview), so a
 /// compromised or confused answer must not point the user at another host, another repository, a
 /// non-release page or a non-web scheme. Required: scheme `https`, host exactly `github.com`
-/// (so `github.com.evil.test` and `evilgithub.com` fail), default port, no user info, and a path
-/// under `/slucheninov/mypass-app/releases/`. The query and fragment are dropped.
+/// (so `github.com.evil.test` and `evilgithub.com` fail), no port (not even `:443`), no user
+/// info, and a path under `/slucheninov/mypass-app/releases/`. The query and fragment are
+/// dropped.
+///
+/// Two layers, because `Url::parse` quietly rewrites some inputs before the parsed checks could
+/// see them (a backslash becomes `/`, tabs and newlines vanish, dot segments are resolved, and
+/// `%2F` / `%5C` stay encoded so a prefix check passes while a later decoder reads a separator):
+///
+/// 1. The raw text ([`raw_shape_is_plain`]): no control character, whitespace or backslash
+///    anywhere; no `%` before the query (so no encoded separator, encoded dot or double encoding
+///    in either hex case); no `:` or `@` in the authority (no port, no user info); no `.` or `..`
+///    path segment.
+/// 2. The parsed URL: the checks above, and every segment after the prefix is non-empty, made only
+///    of ASCII letters, digits, `.`, `_` and `-`, and not a dot segment.
 pub fn validate_release_url(raw: &str) -> Option<String> {
+    if !raw_shape_is_plain(raw) {
+        return None;
+    }
     let mut url = Url::parse(raw).ok()?;
     if url.scheme() != "https"
         || url.host_str() != Some("github.com")
         || url.port().is_some()
         || !url.username().is_empty()
         || url.password().is_some()
-        || !url.path().starts_with(RELEASES_PATH_PREFIX)
-        || url.path().len() == RELEASES_PATH_PREFIX.len()
     {
+        return None;
+    }
+    let suffix = url.path().strip_prefix(RELEASES_PATH_PREFIX)?;
+    if suffix.is_empty() || !suffix.split('/').all(is_plain_segment) {
         return None;
     }
     url.set_query(None);
     url.set_fragment(None);
     Some(url.into())
+}
+
+/// The raw-text layer of [`validate_release_url`]: what must be refused before `Url::parse`
+/// normalises it away.
+fn raw_shape_is_plain(raw: &str) -> bool {
+    if raw
+        .chars()
+        .any(|c| c.is_control() || c.is_whitespace() || c == '\\')
+    {
+        return false;
+    }
+    let before_query = raw.split(['?', '#']).next().unwrap_or_default();
+    if before_query.contains('%') {
+        return false;
+    }
+    let Some(rest) = before_query.strip_prefix("https://") else {
+        return false;
+    };
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    if authority.contains([':', '@']) {
+        return false;
+    }
+    path.split('/')
+        .all(|segment| segment != "." && segment != "..")
+}
+
+/// One path segment after the releases prefix: non-empty, `[A-Za-z0-9._-]` only, not `.` or `..`.
+fn is_plain_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment != "."
+        && segment != ".."
+        && segment
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
 #[derive(Deserialize)]
@@ -166,10 +217,92 @@ mod tests {
         let url = format!("{GOOD}?utm=1#frag");
         assert_eq!(validate_release_url(&url).as_deref(), Some(GOOD));
         assert_eq!(
-            validate_release_url("https://GitHub.com:443/slucheninov/mypass-app/releases/latest")
+            validate_release_url("https://GitHub.com/slucheninov/mypass-app/releases/latest")
                 .as_deref(),
             Some("https://github.com/slucheninov/mypass-app/releases/latest")
         );
+    }
+
+    #[test]
+    fn release_url_refuses_encoded_separators_and_path_tricks() {
+        const P: &str = "https://github.com/slucheninov/mypass-app/releases/";
+        let mut bad: Vec<String> = [
+            // Encoded separators in both hex cases, alone and as traversal payloads.
+            "%2f..%2f..%2fissues/1",
+            "%2F..%2F..%2Fissues/1",
+            "%5c..%5c..%5cissues/1",
+            "%5C..%5C..%5Cissues/1",
+            "tag/v1%2F2",
+            "tag/v1%2f2",
+            "tag/v1%5C2",
+            "tag/v1%5c2",
+            // Double encoding and encoded dots.
+            "%252f..%252f..%252fissues/1",
+            "tag/v1%252F2",
+            "%2e%2e/%2e%2e/issues/1",
+            "tag/%2E%2E/latest",
+            "tag/v0.7.1%00",
+            "tag/v%30.7.1",
+            // Backslashes, which the parser would turn into separators.
+            "tag\\v0.7.1",
+            "..\\..\\issues/1",
+            // Dot segments that resolve inside or outside the prefix.
+            "tag/../latest",
+            "./tag/v0.7.1",
+            "tag/./v0.7.1",
+            "tag/v0.7.1/..",
+            // Empty segments, whitespace and control characters the parser strips.
+            "tag//v0.7.1",
+            "tag/v0.7.1/",
+            "tag/v0.7.1\tx",
+            "tag/\n../../issues/1",
+            "tag/v 0.7.1",
+            // Non-ASCII that would be percent-encoded by the parser.
+            "tag/v\u{2215}0.7.1",
+        ]
+        .iter()
+        .map(|suffix| format!("{P}{suffix}"))
+        .collect();
+        bad.extend(
+            [
+                // User info and ports, also the default one and an empty one.
+                "https://a@github.com/slucheninov/mypass-app/releases/tag/v0.7.1",
+                "https://:@github.com/slucheninov/mypass-app/releases/tag/v0.7.1",
+                "https://github.com:443/slucheninov/mypass-app/releases/tag/v0.7.1",
+                "https://github.com:/slucheninov/mypass-app/releases/tag/v0.7.1",
+                // Other hosts and spellings of the host.
+                "https://github.com./slucheninov/mypass-app/releases/tag/v0.7.1",
+                "https://api.github.com/slucheninov/mypass-app/releases/tag/v0.7.1",
+                "https://140.82.112.3/slucheninov/mypass-app/releases/tag/v0.7.1",
+                "https://xn--github-xyz.com/slucheninov/mypass-app/releases/tag/v0.7.1",
+                "https://github%2Ecom/slucheninov/mypass-app/releases/tag/v0.7.1",
+                // An encoded separator before the prefix.
+                "https://github.com/slucheninov%2Fmypass-app/releases/tag/v0.7.1",
+                "https:\\\\github.com/slucheninov/mypass-app/releases/tag/v0.7.1",
+                "HTTPS://github.com/slucheninov/mypass-app/releases/tag/v0.7.1",
+            ]
+            .map(String::from),
+        );
+        for url in &bad {
+            assert_eq!(validate_release_url(url), None, "{url:?} must be refused");
+            assert_eq!(
+                parse_release_payload(&body("v0.7.1", url)),
+                Err(ReleaseFeedError::Malformed),
+                "{url:?} must be refused in a payload"
+            );
+        }
+        // Plain release pages, with a percent sign only in the dropped query, stay accepted.
+        for good in [
+            GOOD.to_string(),
+            format!("{P}latest"),
+            format!("{P}tag/v0.7.1_rc-1"),
+            format!("{GOOD}?q=%2F#%5C"),
+        ] {
+            assert!(
+                validate_release_url(&good).is_some(),
+                "{good:?} must be accepted"
+            );
+        }
     }
 
     #[test]

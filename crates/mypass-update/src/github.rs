@@ -229,6 +229,23 @@ mod tests {
     }
 
     #[test]
+    fn encoded_separator_release_urls_from_the_server_are_malformed() {
+        for url in [
+            "https://github.com/slucheninov/mypass-app/releases/%2f..%2f..%2fissues/1",
+            "https://github.com/slucheninov/mypass-app/releases/%5C..%5C..%5Cissues/1",
+            "https://github.com/slucheninov/mypass-app/releases/tag/v1%2F2",
+            "https://github.com/slucheninov/mypass-app/releases/tag/v1%252F2",
+        ] {
+            let (base, _) = serve(http("200 OK", "application/json", &json("v0.7.1", url)));
+            assert_eq!(
+                client(&base).latest(),
+                Err(ReleaseFeedError::Malformed),
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
     fn status_checked_before_body_parse() {
         // A 503 whose body would parse as a release is still a status error.
         let (base, _) = serve(http(
