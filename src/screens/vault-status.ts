@@ -1,7 +1,7 @@
 import type { VaultFileStatus } from "../lib/bindings";
 import { t } from "../lib/i18n/index.svelte";
 
-export type VaultStatusKind = "connected" | "missing" | "unreadable";
+export type VaultStatusKind = "connected" | "missing" | "unreadable" | "downloading";
 
 /** The dot of the vault status card; `null` when the session has no vault. */
 export function statusKind(status: VaultFileStatus): VaultStatusKind | null {
@@ -16,6 +16,8 @@ export function statusLabel(kind: VaultStatusKind): string {
       return t("File not found");
     case "unreadable":
       return t("File is not readable");
+    case "downloading":
+      return t("In iCloud, not downloaded yet");
   }
 }
 

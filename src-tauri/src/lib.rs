@@ -101,6 +101,7 @@ pub fn commands() -> Commands<tauri::Wry> {
         vault::vault_open_warnings,
         vault::vault_recent,
         vault::vault_status,
+        vault::vault_storage_status,
         vault::vault_unlock,
     ]
 }
@@ -111,7 +112,8 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
     use events::{
         BridgeChangedEvent, ClipboardClearedEvent, OpenEntryEvent, PairingChallengeEvent,
         ProposalEvent, SaveStateChanged, SessionChanged, SettingsChanged, SettingsPaneEvent,
-        ShortcutConflictEvent, SyncStatusChanged, UnlockRequestedEvent, VaultChanged,
+        ShortcutConflictEvent, StorageStatusChanged, SyncStatusChanged, UnlockRequestedEvent,
+        VaultChanged,
     };
     Builder::<tauri::Wry>::new()
         .commands(commands())
@@ -126,6 +128,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             SettingsChanged,
             SettingsPaneEvent,
             ShortcutConflictEvent,
+            StorageStatusChanged,
             SyncStatusChanged,
             UnlockRequestedEvent,
             VaultChanged,
@@ -381,6 +384,7 @@ mod tests {
         assert_eq!(events::UnlockRequestedEvent::NAME, "unlock-requested-event");
         assert_eq!(events::SettingsPaneEvent::NAME, "settings-pane-event");
         assert_eq!(events::SyncStatusChanged::NAME, "sync-status-changed");
+        assert_eq!(events::StorageStatusChanged::NAME, "storage-status-changed");
     }
 
     #[test]

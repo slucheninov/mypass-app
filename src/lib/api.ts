@@ -43,6 +43,8 @@ const MESSAGES: Record<ErrorCode, () => string> = {
   unsupported: () => t("Not supported on this system"),
   changedOnDisk: () => t("The vault changed on disk"),
   io: () => t("Something went wrong"),
+  downloading: () =>
+    t("The vault at that location is still downloading from iCloud. Wait until it finishes, then try again."),
   quitting: () => t("MyPass is quitting"),
   generatorNoClass: () => t("Turn on at least one character type in the generator"),
   generatorUnsatisfiable: () => t("This site's password requirements could not be satisfied"),
@@ -153,6 +155,7 @@ export const api = {
   vaultOpenWarnings: wrap(commands.vaultOpenWarnings),
   vaultRecent: wrap(commands.vaultRecent),
   vaultStatus: wrap(commands.vaultStatus),
+  vaultStorageStatus: wrap(commands.vaultStorageStatus),
   vaultUnlock: wrap(commands.vaultUnlock),
   shortcutConflictsTake,
 } satisfies Record<keyof typeof commands, unknown>;

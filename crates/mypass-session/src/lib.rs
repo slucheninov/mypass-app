@@ -21,6 +21,7 @@ pub mod secondary;
 pub mod session;
 pub mod settings;
 pub mod shortcut;
+pub mod storage;
 pub mod unlock_request;
 pub mod vault_files;
 
@@ -34,6 +35,7 @@ pub use settings::{
     BackupInterval, GeneratorOptionsDto, IdleTimeout, Language, RequireAccountPasswordWindow,
     Settings, SettingsPatch, Theme, UnlockWithDeviceWindow,
 };
+pub use storage::{ResolvedStorage, StorageStatus};
 pub use vault_files::VaultFileStatus;
 
 /// Test support shared by this crate's tests and by later crates' tests. Not part of the app.

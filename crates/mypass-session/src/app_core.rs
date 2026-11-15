@@ -67,6 +67,8 @@ pub enum ErrorCode {
     Unsupported,
     ChangedOnDisk,
     Io,
+    /// The vault is in iCloud Drive and did not download in time, try again later.
+    Downloading,
     Quitting,
     GeneratorNoClass,
     GeneratorUnsatisfiable,
@@ -113,6 +115,8 @@ impl From<SessionError> for ApiError {
             S::Unsupported(m) => (C::Unsupported, m.clone()),
             S::ChangedOnDisk => (C::ChangedOnDisk, e.to_string()),
             S::Io(m) => (C::Io, m.clone()),
+            // A bare code: the UI explains it.
+            S::Downloading => (C::Downloading, String::new()),
             S::Quitting => (C::Quitting, e.to_string()),
             // Bare codes: the UI has its own wording for both.
             S::GeneratorRules(GeneratorRulesError::NoClass) => (C::GeneratorNoClass, String::new()),
@@ -222,7 +226,7 @@ impl AppCore {
         let clipboard_scheduler = worker("mypass-clipboard")?;
         let sync_scheduler = worker("mypass-sync")?;
         let settings = SettingsStore::load(paths.config_dir.join("settings.json"));
-        Ok(Self::assemble(
+        let core = Self::assemble(
             paths,
             platform,
             Schedulers {
@@ -231,7 +235,18 @@ impl AppCore {
                 sync: sync_scheduler,
             },
             settings,
-        ))
+        );
+        // Vaults in iCloud Drive go through the file coordinator, with the offline copy under
+        // `<data dir>/icloud-cache` (stage 5, T8).
+        core.session
+            .set_io_resolver(Some(crate::storage::icloud_resolver(
+                mypass_platform::coordinated_files(),
+                core.paths.home().to_path_buf(),
+                core.paths
+                    .data_dir
+                    .join(mypass_sync::icloud::ICLOUD_CACHE_DIR),
+            )));
+        Ok(core)
     }
 
     /// Wiring for tests: every timer on `scheduler` (a `ManualScheduler`), settings as given.
@@ -444,6 +459,12 @@ impl AppCore {
         Ok(self.session.status())
     }
 
+    /// Where the open vault is stored (local or iCloud Drive) and whether it is served from the
+    /// offline copy or still downloading.
+    pub fn vault_storage_status(&self) -> Result<crate::storage::StorageStatus, ApiError> {
+        Ok(self.session.storage_status())
+    }
+
     pub fn vault_create(
         &self,
         path: &str,
@@ -503,7 +524,6 @@ impl AppCore {
         let current = std::env::current_exe().unwrap_or_default();
         Ok(vault_files::open_warnings(
             Path::new(path),
-            self.paths.home(),
             self.processes.as_ref(),
             &current,
         ))
@@ -1064,6 +1084,7 @@ mod tests {
             ),
             (SessionError::ChangedOnDisk, ErrorCode::ChangedOnDisk),
             (SessionError::Io("x".into()), ErrorCode::Io),
+            (SessionError::Downloading, ErrorCode::Downloading),
             (SessionError::Quitting, ErrorCode::Quitting),
             (
                 SessionError::GeneratorRules(G::NoClass),
@@ -1539,7 +1560,7 @@ mod tests {
             f.core
                 .vault_open_warnings(icloud.to_str().unwrap())
                 .unwrap(),
-            vec![OpenWarning::Icloud]
+            Vec::<OpenWarning>::new()
         );
         f.core
             .set_process_lookup(Arc::new(Old(PathBuf::from("/Applications/Old/MyPass"))));

@@ -504,8 +504,6 @@ pub struct RecentVaultDto {
 #[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq, Debug)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum OpenWarning {
-    /// The file lives under `~/Library/Mobile Documents` (iCloud Drive).
-    Icloud,
     /// Another `com.mypass.app` process, with a different executable (the old Swift app), runs.
     OldAppRunning { executable: String },
 }

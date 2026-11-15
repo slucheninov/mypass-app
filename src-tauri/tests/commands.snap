@@ -69,4 +69,5 @@ vault_open
 vault_open_warnings
 vault_recent
 vault_status
+vault_storage_status
 vault_unlock

@@ -694,8 +694,7 @@ impl VaultSession {
                             .backups
                             .snapshot_before_save(id, file.path(), now, true);
                     }
-                    self.0
-                        .io
+                    file.io()
                         .write_atomic(file.path(), &bytes)
                         .map(|()| true)
                         .map_err(SessionError::from)
@@ -869,7 +868,7 @@ impl VaultSession {
                     .backups
                     .snapshot_before_save(id, file.path(), now, true);
             }
-            self.0.io.write_atomic(file.path(), backup)?;
+            file.io().write_atomic(file.path(), backup)?;
             written.store(true, std::sync::atomic::Ordering::SeqCst);
             file.reload(&password)
         });
@@ -902,7 +901,7 @@ impl VaultSession {
     /// the rules). A reload that fails with `WrongPassword` (the password was changed elsewhere)
     /// is returned as such and leaves the session untouched.
     pub fn check_external_change(&self) -> Result<ExternalChange, SessionError> {
-        let (mut guard, password) = {
+        let (mut guard, password, conflicts) = {
             let mut inner = self.wait_idle(lock(&self.0.inner));
             let Some(password) = inner.password.clone() else {
                 return Err(inner.not_unlocked());
@@ -910,15 +909,22 @@ impl VaultSession {
             let Some(file) = inner.file.take() else {
                 return Err(inner.not_unlocked());
             };
+            let conflicts = self.conflict_resolver_for(inner.storage.as_ref());
             (
                 InFlight::begin(self, &mut inner, file, Slot::File),
                 password,
+                conflicts,
             )
         };
-        let result = guard.run(|file| match file.has_changed_on_disk() {
-            Ok(false) => Ok(None),
-            Ok(true) => file.reload(&password).map(Some),
-            Err(e) => Err(e),
+        let result = guard.run(|file| {
+            // iCloud conflict versions and offline edits are merged into the file first, so the
+            // check below sees (and applies) the merge, never a single side of it.
+            Self::merge_conflicts_before_read(conflicts.as_ref(), file.path(), &password);
+            match file.has_changed_on_disk() {
+                Ok(false) => Ok(None),
+                Ok(true) => file.reload(&password).map(Some),
+                Err(e) => Err(e),
+            }
         });
         let mut out = Outbox::default();
         let mut hook = None;

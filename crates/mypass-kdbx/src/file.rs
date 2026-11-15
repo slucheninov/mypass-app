@@ -333,6 +333,10 @@ impl VaultFile {
     pub fn path(&self) -> &Path {
         &self.path
     }
+    /// The IO seam this file reads and writes through.
+    pub fn io(&self) -> &Arc<dyn FileIo> {
+        &self.io
+    }
     /// Compare metadata and, when metadata ties, the encoded content digest.
     /// Missing files count as changed; other I/O errors propagate.
     pub fn has_changed_on_disk(&self) -> Result<bool> {

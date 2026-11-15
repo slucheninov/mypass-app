@@ -7,7 +7,8 @@
 
 use crate::bridge::{build_state, BridgeEvents, TauriBridgeEvents};
 use crate::events::{
-    ClipboardClearedEvent, SaveStateChanged, SessionChanged, SyncStatusChanged, VaultChanged,
+    ClipboardClearedEvent, SaveStateChanged, SessionChanged, StorageStatusChanged,
+    SyncStatusChanged, VaultChanged,
 };
 use crate::files::{FileGrants, TauriFilePicker};
 use crate::hotkeys::ConflictGate;
@@ -147,6 +148,12 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .add_observer(Arc::new(move |status: &mypass_session::SecondaryStatus| {
             // A window that is gone is not an error of the backend.
             let _ = SyncStatusChanged(status.clone()).emit(&sync_handle);
+        }));
+    let storage_handle = handle.clone();
+    core.session
+        .add_storage_observer(Arc::new(move |status: &mypass_session::StorageStatus| {
+            // A window that is gone is not an error of the backend.
+            let _ = StorageStatusChanged(*status).emit(&storage_handle);
         }));
 
     let conflicts = Arc::new(ConflictGate::default());

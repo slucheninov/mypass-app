@@ -66,6 +66,9 @@ describe("errorMessage", () => {
     expect(errorMessage(new ApiFailure("locked"))).toBe(t("Vault is locked"));
     expect(errorMessage(new ApiFailure("wrongPassword"))).toBe(t("Wrong master password"));
     expect(errorMessage(new ApiFailure("io", "x"))).toBe(t("Something went wrong"));
+    expect(errorMessage(new ApiFailure("downloading"))).toBe(
+      t("The vault at that location is still downloading from iCloud. Wait until it finishes, then try again."),
+    );
     expect(errorMessage(new Error("boom"))).toBe(t("Something went wrong"));
     expect(errorMessage("plain")).toBe(t("Something went wrong"));
   });

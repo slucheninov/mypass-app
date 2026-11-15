@@ -191,7 +191,7 @@ const SCENARIOS: Record<string, Scenario> = {
   },
   "src/screens/OpenWarningDialog.svelte#copy.title": async (user) => {
     vi.mocked(open).mockResolvedValue("/vaults/B.kdbx");
-    await renderMainApp({ session: "noVault" }, (f) => (f.state.openWarnings = [{ kind: "icloud" }]));
+    await renderMainApp({ session: "noVault" }, (f) => (f.state.openWarnings = [{ kind: "oldAppRunning", executable: "MyPass-Swift" }]));
     const opener = await screen.findByRole("button", { name: "Open existing vault" });
     await click(user, opener);
     return { dialog: /./, opener };

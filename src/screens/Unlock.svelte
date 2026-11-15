@@ -238,6 +238,9 @@
   .dot.unreadable {
     background: var(--danger);
   }
+  .dot.downloading {
+    background: #2f7fd9;
+  }
   .meta {
     display: flex;
     gap: 12px;

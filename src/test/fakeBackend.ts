@@ -33,6 +33,7 @@ import type {
   SessionStatus_Serialize,
   Settings_Serialize,
   ShortcutConflictEvent,
+  StorageStatus,
   TotpDto,
 } from "../lib/bindings";
 import {
@@ -119,6 +120,8 @@ export interface FakeState {
   vaults: Record<string, { entries: FixtureEntry[]; groups: GroupNode_Serialize[]; masterPassword?: string }>;
   /** What `vault_open_warnings` answers for every path (default none). */
   openWarnings: OpenWarning[];
+  /** What `vault_storage_status` answers (default a local vault, all clear). */
+  storage: StorageStatus;
   /** The recent-vaults list `vault_recent` returns; `vault_forget` and a successful open/create edit it. */
   recents: RecentVaultDto[];
   /** What `vault_find_files` returns (default none). */
@@ -203,6 +206,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     masterPassword: FIXTURE_MASTER_PASSWORD,
     vaults: {},
     openWarnings: [],
+    storage: { location: "local", fallbackActive: false, cacheAhead: false, downloading: false },
     recents: [],
     foundFiles: [],
     existingFiles: [],
@@ -958,6 +962,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     vaultOpenWarnings: () => structuredClone(state.openWarnings),
     vaultRecent: () => structuredClone(state.recents),
     vaultStatus: () => structuredClone(state.session),
+    vaultStorageStatus: () => structuredClone(state.storage),
     vaultUnlock: ({ password }) => {
       if (state.session.state === "noVault") throw apiError("noVault");
       if (password !== state.masterPassword) throw apiError("wrongPassword");

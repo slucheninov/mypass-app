@@ -78,7 +78,7 @@ Last updated: 2026-11-14
 ## Stage 3 extension bridge
 
 - [ ] Manual: walk the Stage 3 checklist in `RUN.md` (registration, pairing, endpoint file, autofill,
-  save flows, lock behaviour, crash and quit, other browsers, iCloud guard) on a copy of the owner's
+  save flows, lock behaviour, crash and quit, other browsers, old-app guard) on a copy of the owner's
   vault and record the results in the PR.
 - [ ] `PairingManager`: add one atomic "clear all" (a single save plus the cache). `reset_pairings` on a
   running bridge revokes one browser at a time, so an error midway leaves a partial reset.
@@ -99,7 +99,13 @@ Last updated: 2026-11-14
 
 ## Stage 5 macOS release
 
-- [ ] iCloud Drive as a primary vault location with conflict merging and migration.
+- [ ] Migrate an open local vault into iCloud Drive (iCloud Drive as the primary location, with
+  conflict merging and the offline cache, has landed).
+- [ ] Owner hardware check of iCloud Drive storage on two Macs (RUN.md S1 to S6): NSFileVersion
+  conflict merging, download waits, the file presenter, TCC prompts, sign-out and the offline cache.
+  Known gaps to settle there: a master password changed on another Mac while the offline cache holds
+  edits not in iCloud keeps the vault on the cache until the user resolves it, and a vault deleted
+  from iCloud while the cache is ahead stays on the cache; neither loses data.
 - [ ] "Also sync to folder" secondary destination (`mypass-sync`).
 - [ ] Touch ID and device-password unlock, launch at login, and the daily update check.
 - [ ] Move the bridge endpoint from the 0600 file store into a Keychain item that trusts only the

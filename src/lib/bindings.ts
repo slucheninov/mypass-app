@@ -99,6 +99,11 @@ export const commands = {
 	vaultOpenWarnings: (path: string) => typedError<OpenWarning[], ApiError>(__TAURI_INVOKE("vault_open_warnings", { path })),
 	vaultRecent: () => typedError<RecentVaultDto[], ApiError>(__TAURI_INVOKE("vault_recent")),
 	vaultStatus: () => typedError<SessionStatus_Serialize, ApiError>(__TAURI_INVOKE("vault_status")),
+	/**
+	 *  Where the open vault is stored (local or iCloud Drive) and whether it is served from the
+	 *  offline copy or still downloading.
+	 */
+	vaultStorageStatus: () => typedError<StorageStatus, ApiError>(__TAURI_INVOKE("vault_storage_status")),
 	vaultUnlock: (password: string) => typedError<SessionStatus_Serialize, ApiError>(__TAURI_INVOKE("vault_unlock", { password })),
 };
 
@@ -114,6 +119,7 @@ export const events = {
 	settingsChanged: makeEvent<SettingsChanged_Serialize, SettingsChanged_Deserialize>("settings-changed"),
 	settingsPaneEvent: makeEvent<SettingsPaneEvent, SettingsPaneEvent>("settings-pane-event"),
 	shortcutConflictEvent: makeEvent<ShortcutConflictEvent, ShortcutConflictEvent>("shortcut-conflict-event"),
+	storageStatusChanged: makeEvent<StorageStatusChanged, StorageStatusChanged>("storage-status-changed"),
 	syncStatusChanged: makeEvent<SyncStatusChanged_Serialize, SyncStatusChanged_Deserialize>("sync-status-changed"),
 	unlockRequestedEvent: makeEvent<UnlockRequestedEvent, UnlockRequestedEvent>("unlock-requested-event"),
 	vaultChanged: makeEvent<VaultChanged, VaultChanged>("vault-changed"),
@@ -537,7 +543,9 @@ export type EntrySummary = {
 export type EntryTypeDto = "login" | "address" | "card" | "notes" | "files";
 
 /**  The stable error code the UI localises. Serialised in camelCase. */
-export type ErrorCode = "locked" | "noVault" | "wrongPassword" | "alreadyExists" | "notFound" | "invalidInput" | "limitExceeded" | "corrupt" | "unsupported" | "changedOnDisk" | "io" | "quitting" | "generatorNoClass" | "generatorUnsatisfiable" | "cancelled" | "lockout" | "invalidated" | "notEnrolledOnDevice" | "deviceUnlockUnavailable" | "internal";
+export type ErrorCode = "locked" | "noVault" | "wrongPassword" | "alreadyExists" | "notFound" | "invalidInput" | "limitExceeded" | "corrupt" | "unsupported" | "changedOnDisk" | "io" | 
+/**  The vault is in iCloud Drive and did not download in time, try again later. */
+"downloading" | "quitting" | "generatorNoClass" | "generatorUnsatisfiable" | "cancelled" | "lockout" | "invalidated" | "notEnrolledOnDevice" | "deviceUnlockUnavailable" | "internal";
 
 /**  A single field to reveal or copy. `Totp` resolves to the current code. */
 export type FieldRef = { kind: "username" } | { kind: "password" } | { kind: "url" } | { kind: "notesBody" } | { kind: "cardNumber" } | { kind: "cardCvv" } | { kind: "totp" } | { kind: "custom"; key: string };
@@ -695,8 +703,6 @@ export type OpenEntryEvent = {
 
 /**  A reason to ask for confirmation before creating or opening a vault (D6, D7). */
 export type OpenWarning = 
-/**  The file lives under `~/Library/Mobile Documents` (iCloud Drive). */
-{ kind: "icloud" } | 
 /**  Another `com.mypass.app` process, with a different executable (the old Swift app), runs. */
 { kind: "oldAppRunning"; executable: string };
 
@@ -1263,6 +1269,33 @@ export type SkippedRow = {
 
 export type SortKey = "title" | "modified";
 
+/**
+ *  Where the open vault is stored and how that storage is doing (the `StorageStatusChanged`
+ *  event payload).
+ */
+export type StorageStatus = {
+	/**  `local` also when no vault is open. */
+	location: VaultLocation,
+	/**
+	 *  The vault is served from the offline copy (iCloud Drive is unavailable, or the copy holds
+	 *  edits not in iCloud yet).
+	 */
+	fallbackActive: boolean,
+	/**
+	 *  The offline copy holds edits that are not in iCloud yet; they are merged into iCloud when
+	 *  it is available again.
+	 */
+	cacheAhead: boolean,
+	/**  The last read waited too long for iCloud to download the vault. */
+	downloading: boolean,
+};
+
+/**
+ *  Where the open vault is stored, or how that storage is doing, changed (iCloud Drive: served
+ *  from the offline copy, edits not in iCloud yet, still downloading).
+ */
+export type StorageStatusChanged = StorageStatus;
+
 /**  The secondary-folder sync status changed. */
 export type SyncStatusChanged = SyncStatusChanged_Serialize | SyncStatusChanged_Deserialize;
 
@@ -1306,7 +1339,19 @@ export type VaultFileStatus =
 /**  The path no longer exists (moved, deleted, unmounted). */
 { kind: "missing" } | 
 /**  The path exists but its metadata cannot be read. */
-{ kind: "unreadable"; message: string };
+{ kind: "unreadable"; message: string } | 
+/**
+ *  The vault is in iCloud Drive and not downloaded to this Mac yet (a placeholder), or the
+ *  last read timed out waiting for the download.
+ */
+{ kind: "downloading" };
+
+/**  Where a vault file is kept. */
+export type VaultLocation = 
+/**  A plain folder on this computer (or a drive the OS mounts as one). */
+"local" | 
+/**  iCloud Drive (any ubiquity container under `~/Library/Mobile Documents`). */
+"iCloudDrive";
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

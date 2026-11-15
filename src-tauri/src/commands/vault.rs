@@ -3,7 +3,7 @@
 use super::{blocking, into_secret};
 use crate::state::AppState;
 use mypass_session::dto::{FoundVaultFileDto, OpenWarning, RecentVaultDto};
-use mypass_session::{ApiError, SessionStatus};
+use mypass_session::{ApiError, SessionStatus, StorageStatus};
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, State};
 
@@ -11,6 +11,14 @@ use tauri::{AppHandle, Manager, State};
 #[specta::specta]
 pub fn vault_status(state: State<'_, AppState>) -> Result<SessionStatus, ApiError> {
     state.0.vault_status()
+}
+
+/// Where the open vault is stored (local or iCloud Drive) and whether it is served from the
+/// offline copy or still downloading.
+#[tauri::command]
+#[specta::specta]
+pub fn vault_storage_status(state: State<'_, AppState>) -> Result<StorageStatus, ApiError> {
+    state.0.vault_storage_status()
 }
 
 #[tauri::command]

@@ -24,8 +24,13 @@
 use crate::backups::BackupManager;
 use crate::scheduler::{lock, Scheduler, TaskHandle};
 use crate::settings::{SettingsPatch, SettingsStore};
+use crate::storage::{
+    ConflictResolver, IoResolver, ResolvedStorage, StorageObserver, StorageStatus,
+    REMOTE_CHANGE_DEBOUNCE,
+};
 use crate::vault_files::{file_status, VaultFileStatus};
 use mypass_kdbx::{Database, FileIo, FileMeta, KdbxError, Meta, Timestamp, VaultFile};
+use mypass_sync::icloud::merge_vault_bytes;
 use secrecy::{ExposeSecret, SecretString};
 use serde::Serialize;
 use std::io::ErrorKind;
@@ -177,6 +182,9 @@ pub enum SessionError {
     ChangedOnDisk,
     #[error("i/o error: {0}")]
     Io(String),
+    /// The vault is in iCloud Drive and did not download in time (R17); try again later.
+    #[error("the vault is still downloading from iCloud")]
+    Downloading,
     #[error("the app is quitting")]
     Quitting,
     #[error("generator: {0}")]
@@ -191,6 +199,11 @@ impl From<KdbxError> for SessionError {
             e @ KdbxError::NotKdbx => Self::Corrupt(e.to_string()),
             e @ KdbxError::UnsupportedVersion { .. } => Self::Unsupported(e.to_string()),
             KdbxError::Unsupported(m) => Self::Unsupported(m),
+            // A read that waited for iCloud (download or file coordination) too long.
+            KdbxError::Io {
+                kind: ErrorKind::TimedOut,
+                ..
+            } => Self::Downloading,
             KdbxError::Io { message, .. } => Self::Io(message),
             KdbxError::InvalidOperation(m) => Self::InvalidInput(m),
             e @ KdbxError::Random => Self::Io(e.to_string()),
@@ -349,6 +362,9 @@ pub(crate) struct Inner {
     /// the session, works outside the lock and comes back (the secondary sync) acts only while
     /// this is unchanged.
     pub(crate) incarnation: u64,
+    /// The storage the open vault was resolved to (kept while locked, so an unlock reads through
+    /// the same `FileIo`, cache and presenter).
+    pub(crate) storage: Option<ResolvedStorage>,
 }
 
 impl Inner {
@@ -377,6 +393,7 @@ impl Inner {
             snapshot_taken: false,
             disk_meta: None,
             incarnation: 0,
+            storage: None,
         }
     }
 
@@ -447,6 +464,16 @@ pub(crate) struct Shared {
     password_listeners: RwLock<Vec<PasswordListener>>,
     pub(crate) deps: SessionDeps,
     pub(crate) backups: BackupManager,
+    /// Resolves a vault path to its storage (iCloud Drive); `None`: the session's IO seam.
+    resolver: RwLock<Option<IoResolver>>,
+    /// The conflict resolver for vaults whose storage has none of its own.
+    conflict_resolver: RwLock<Option<ConflictResolver>>,
+    storage_observers: RwLock<Vec<StorageObserver>>,
+    /// The storage status last told to the observers.
+    last_storage: Mutex<Option<StorageStatus>>,
+    /// The debounced check after a remote-change notification. Its own small lock, never the
+    /// session's: the notification arrives on a platform thread that must not block.
+    remote_job: Mutex<Option<TaskHandle>>,
 }
 
 /// The vault session handle (cheap to clone; every clone is the same session).
@@ -497,6 +524,11 @@ impl VaultSession {
             password_listeners: RwLock::new(Vec::new()),
             deps,
             backups,
+            resolver: RwLock::new(None),
+            conflict_resolver: RwLock::new(None),
+            storage_observers: RwLock::new(Vec::new()),
+            last_storage: Mutex::new(None),
+            remote_job: Mutex::new(None),
         }))
     }
 
@@ -543,7 +575,7 @@ impl VaultSession {
 
     /// The current status (stats the vault file once, outside the session lock).
     pub fn status(&self) -> SessionStatus {
-        let (state, path, vault_name, lock_reason, save) = {
+        let (state, path, vault_name, lock_reason, save, storage) = {
             let inner = lock(&self.0.inner);
             (
                 inner.state(),
@@ -551,15 +583,187 @@ impl VaultSession {
                 inner.vault_name.clone(),
                 inner.lock_reason,
                 inner.save.clone(),
+                inner.storage.clone(),
             )
+        };
+        // Outside the session lock: the health of an iCloud vault looks at its cache files.
+        let health = storage.as_ref().map(ResolvedStorage::health);
+        let file_status = match (&storage, health) {
+            (_, Some(h)) if h.downloading => VaultFileStatus::Downloading,
+            // Served from the offline copy: that is the file the session works with.
+            (
+                Some(ResolvedStorage {
+                    icloud: Some(icloud),
+                    ..
+                }),
+                Some(h),
+            ) if h.fallback_active => file_status(Some(icloud.cache_path())),
+            _ => file_status(path.as_deref()),
         };
         SessionStatus {
             state,
             vault_path: path.as_deref().map(path_string),
             vault_name,
             lock_reason,
-            file_status: file_status(path.as_deref()),
+            file_status,
             save,
+        }
+    }
+
+    /// Where the open vault is stored and how that storage is doing.
+    pub fn storage_status(&self) -> StorageStatus {
+        let storage = lock(&self.0.inner).storage.clone();
+        storage
+            .as_ref()
+            .map(ResolvedStorage::status)
+            .unwrap_or_default()
+    }
+
+    /// Adds an observer of [`VaultSession::storage_status`] changes.
+    pub fn add_storage_observer(&self, o: StorageObserver) {
+        self.0
+            .storage_observers
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(o);
+    }
+
+    /// Tells the storage observers when the storage status changed since they were last told.
+    /// Called with the session lock released.
+    pub(crate) fn notify_storage(&self) {
+        let status = self.storage_status();
+        {
+            let mut last = lock(&self.0.last_storage);
+            if *last == Some(status) {
+                return;
+            }
+            *last = Some(status);
+        }
+        let observers = self
+            .0
+            .storage_observers
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        for o in &observers {
+            o(&status);
+        }
+    }
+
+    /// Installs the resolver of vault paths to their storage (production: iCloud Drive paths to
+    /// `ICloudFileIo`); applies from the next open. `None`: every vault uses the session's IO
+    /// seam.
+    pub fn set_io_resolver(&self, resolver: Option<IoResolver>) {
+        *self
+            .0
+            .resolver
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = resolver;
+    }
+
+    /// Installs the conflict resolver used for vaults whose storage has none of its own (an
+    /// iCloud vault always uses its `ICloudFileIo`). Default: none.
+    pub fn set_conflict_resolver(&self, resolver: Option<ConflictResolver>) {
+        *self
+            .0
+            .conflict_resolver
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = resolver;
+    }
+
+    /// The storage of the vault at `path`: the resolver's answer, else the session's IO seam.
+    fn resolve_storage(&self, path: &Path) -> ResolvedStorage {
+        let resolver = self
+            .0
+            .resolver
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        resolver
+            .and_then(|r| r(path))
+            .unwrap_or_else(|| ResolvedStorage::plain(self.0.io.clone()))
+    }
+
+    /// The conflict resolver for `storage`: its own, else the session-wide one.
+    pub(crate) fn conflict_resolver_for(
+        &self,
+        storage: Option<&ResolvedStorage>,
+    ) -> Option<ConflictResolver> {
+        storage.and_then(ResolvedStorage::conflicts).or_else(|| {
+            self.0
+                .conflict_resolver
+                .read()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
+        })
+    }
+
+    /// Merges the conflict versions of the vault at `path` into the file before it is read
+    /// (best effort: a failure leaves the versions for the next attempt, the read goes on). The
+    /// merge step uses `password`, which the caller already holds; it is never copied out.
+    pub(crate) fn merge_conflicts_before_read(
+        resolver: Option<&ConflictResolver>,
+        path: &Path,
+        password: &SecretString,
+    ) -> bool {
+        let Some(resolver) = resolver else {
+            return false;
+        };
+        let mut merge =
+            |current: &[u8], version: &[u8]| merge_vault_bytes(current, version, password);
+        resolver(path, &mut merge).unwrap_or(false)
+    }
+
+    /// Replaces the open vault's storage; stops the presenter of the one it replaced.
+    fn replace_storage(
+        &self,
+        inner: &mut Inner,
+        storage: ResolvedStorage,
+    ) -> Option<ResolvedStorage> {
+        let old = inner.storage.replace(storage);
+        match (&old, &inner.storage) {
+            (Some(old), Some(new)) if old.same_as(new) => None,
+            _ => old,
+        }
+    }
+
+    /// Called with the session lock released: stops `old`'s presenter and registers the open
+    /// vault's, which debounces a remote change onto the scheduler (the platform thread that
+    /// calls it never blocks on the session).
+    fn attach_presenter(&self, old: Option<ResolvedStorage>) {
+        if let Some(icloud) = old.and_then(|s| s.icloud) {
+            icloud.clear_on_remote_change();
+        }
+        let icloud = lock(&self.0.inner)
+            .storage
+            .as_ref()
+            .and_then(|s| s.icloud.clone());
+        if let Some(icloud) = icloud {
+            let weak = Arc::downgrade(&self.0);
+            // A platform without presenters (or a refusal) leaves the 30 s poll as the check.
+            let _ = icloud.set_on_remote_change(Arc::new(move || {
+                if let Some(shared) = weak.upgrade() {
+                    VaultSession(shared).remote_changed();
+                }
+            }));
+        }
+    }
+
+    /// A remote change was reported: (re)arms one check after [`REMOTE_CHANGE_DEBOUNCE`], so a
+    /// burst of notifications costs one check. Never takes the session lock.
+    pub(crate) fn remote_changed(&self) {
+        let weak = Arc::downgrade(&self.0);
+        let handle = self.0.deps.scheduler.schedule(
+            REMOTE_CHANGE_DEBOUNCE,
+            Box::new(move || {
+                if let Some(shared) = weak.upgrade() {
+                    // Locked or no vault: nothing to check; the next unlock reads the file.
+                    let _ = VaultSession(shared).check_external_change();
+                }
+            }),
+        );
+        if let Some(previous) = lock(&self.0.remote_job).replace(handle) {
+            previous.cancel();
         }
     }
 
@@ -578,6 +782,7 @@ impl VaultSession {
     }
 
     pub(crate) fn emit(&self, out: Outbox) {
+        self.notify_storage();
         let mut events = Vec::new();
         if out.state_changed {
             events.push(SessionEvent::StateChanged(self.status()));
@@ -627,9 +832,11 @@ impl VaultSession {
         db: Database,
         password: SecretString,
         fresh: bool,
+        storage: ResolvedStorage,
     ) -> Result<(), SessionError> {
         self.prepare_switch()?;
         let mut out = Outbox::default();
+        let old_storage;
         let path = {
             let mut inner = self.wait_quiescent(lock(&self.0.inner));
             if inner.quitting {
@@ -643,10 +850,12 @@ impl VaultSession {
             }
             inner.install(file, db, password);
             inner.fresh_file = fresh;
+            old_storage = self.replace_storage(&mut inner, storage);
             out.state_changed = true;
             out.vault_changed = true;
             (inner.path.clone(), inner.vault_id.clone())
         };
+        self.attach_presenter(old_storage);
         let (path, vault_id) = path;
         if let Some(p) = path {
             self.remember(&p);
@@ -693,9 +902,10 @@ impl VaultSession {
             return Err(SessionError::AlreadyExists);
         }
         let bytes = db.save(&password)?;
-        self.0.io.write_atomic(path, &bytes)?;
-        let (file, db) = VaultFile::open_with(self.0.io.clone(), path, &password)?;
-        self.finish_open(file, db, password, true)
+        let storage = self.resolve_storage(path);
+        storage.io.write_atomic(path, &bytes)?;
+        let (file, db) = VaultFile::open_with(storage.io.clone(), path, &password)?;
+        self.finish_open(file, db, password, true, storage)
     }
 
     /// Opens an existing vault file and makes it the unlocked session; also records it as the
@@ -724,9 +934,14 @@ impl VaultSession {
             }
         }
         // The KDF runs without the session lock, so status() stays responsive meanwhile.
+        let storage = self.resolve_storage(path);
+        // iCloud conflict versions (and offline edits) are merged into the file before it is
+        // read, with the password just typed.
+        let conflicts = self.conflict_resolver_for(Some(&storage));
+        Self::merge_conflicts_before_read(conflicts.as_ref(), path, &password);
         let (file, db) =
-            VaultFile::open_with(self.0.io.clone(), path, &password).map_err(open_error)?;
-        self.finish_open(file, db, password, false)
+            VaultFile::open_with(storage.io.clone(), path, &password).map_err(open_error)?;
+        self.finish_open(file, db, password, false, storage)
     }
 
     /// Unlocks the locked vault with `password`. Unlocking an unlocked session only verifies the
@@ -737,7 +952,12 @@ impl VaultSession {
     /// password that opens the disk but not the kept edits (or the reverse) is `WrongPassword`
     /// and keeps them; see the module docs for the recovery path.
     pub fn unlock(&self, password: SecretString) -> Result<(), SessionError> {
-        self.unlock_inner(password, None).map(|_| ())
+        let r = self.unlock_inner(password, None).map(|_| ());
+        if r.is_err() {
+            // A failed read may have changed the storage health (still downloading).
+            self.notify_storage();
+        }
+        r
     }
 
     /// The locked vault right now, as `(incarnation, vault id)`: what a device unlock binds its
@@ -787,7 +1007,7 @@ impl VaultSession {
         // The KDF runs without the session lock; a retry write that consumed the kept edits
         // meanwhile makes the loop start over with the new state.
         for _ in 0..3 {
-            let (path, pending, base) = {
+            let (path, pending, base, storage) = {
                 let inner = self.wait_idle(lock(&self.0.inner));
                 if inner.quitting {
                     return Err(SessionError::Quitting);
@@ -803,10 +1023,18 @@ impl VaultSession {
                     return Ok(ConditionalUnlock::Unlocked);
                 }
                 let path = inner.path.clone().ok_or(SessionError::NoVault)?;
-                (path, inner.pending_bytes.clone(), inner.disk_meta.clone())
+                (
+                    path,
+                    inner.pending_bytes.clone(),
+                    inner.disk_meta.clone(),
+                    inner.storage.clone(),
+                )
             };
+            let storage = storage.unwrap_or_else(|| self.resolve_storage(&path));
+            let conflicts = self.conflict_resolver_for(Some(&storage));
+            Self::merge_conflicts_before_read(conflicts.as_ref(), &path, &password);
             let (file, disk_db) =
-                VaultFile::open_with(self.0.io.clone(), &path, &password).map_err(open_error)?;
+                VaultFile::open_with(storage.io.clone(), &path, &password).map_err(open_error)?;
             let restored = match &pending {
                 Some(bytes) => Some(crate::saving::reconcile(
                     &Database::open(bytes, &password)?,
@@ -817,6 +1045,7 @@ impl VaultSession {
             };
             let had_pending = restored.is_some();
             let mut out = Outbox::default();
+            let old_storage;
             let vault_id = {
                 let mut inner = self.wait_quiescent(lock(&self.0.inner));
                 if inner.quitting {
@@ -849,10 +1078,12 @@ impl VaultSession {
                     }
                     None => inner.install(file, disk_db, password),
                 }
+                old_storage = self.replace_storage(&mut inner, storage);
                 out.state_changed = true;
                 out.vault_changed = true;
                 inner.vault_id.clone()
             };
+            self.attach_presenter(old_storage);
             self.emit(out);
             if expected.is_none() {
                 self.password_entered(vault_id);
@@ -1146,6 +1377,14 @@ impl VaultSession {
                 inner.path = Some(file.path().to_path_buf());
                 inner.file = Some(file);
                 inner.incarnation = inner.incarnation.wrapping_add(1);
+                // The new file is written through `io`: no iCloud cache or presenter follows it.
+                if let Some(icloud) = inner
+                    .storage
+                    .replace(ResolvedStorage::plain(self.0.io.clone()))
+                    .and_then(|s| s.icloud)
+                {
+                    icloud.clear_on_remote_change();
+                }
                 Ok(())
             }
             Err(e) => {
@@ -1545,6 +1784,13 @@ mod tests {
                 SessionError::Unsupported("u".into()),
             ),
             (io, SessionError::Io("denied".into())),
+            (
+                KdbxError::Io {
+                    kind: ErrorKind::TimedOut,
+                    message: "the vault did not download from iCloud in time".into(),
+                },
+                SessionError::Downloading,
+            ),
             (
                 KdbxError::InvalidOperation("op".into()),
                 SessionError::InvalidInput("op".into()),

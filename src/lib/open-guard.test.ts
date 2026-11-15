@@ -1,5 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenWarning } from "./bindings";
 import { FIXTURE_MASTER_PASSWORD } from "../test/fixtures";
@@ -10,10 +12,9 @@ import { calls, renderMainApp } from "../test/mainApp";
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
 import { open, save } from "@tauri-apps/plugin-dialog";
 
-const ICLOUD_TITLE = "This vault is in iCloud Drive";
 const OLD_TITLE = "Another copy of MyPass is running";
-const ICLOUD: OpenWarning = { kind: "icloud" };
 const OLD: OpenWarning = { kind: "oldAppRunning", executable: "MyPass-Swift" };
+const OTHER: OpenWarning = { kind: "oldAppRunning", executable: "MyPass-Legacy" };
 
 beforeEach(() => {
   vi.mocked(open).mockReset();
@@ -29,29 +30,28 @@ async function startOpenExisting(warnings: OpenWarning[], path = "/vaults/Other.
 }
 
 describe("open guard", () => {
-  it("open_guard_icloud_warning_blocks_until_continue", async () => {
-    const { user, fake } = await startOpenExisting([ICLOUD]);
-    const dialog = await screen.findByRole("dialog", { name: ICLOUD_TITLE });
-    expect(within(dialog).getByText(/iCloud Drive can sync a vault file/)).toBeTruthy();
+  it("open_guard_old_app_warning_blocks_until_continue", async () => {
+    const { user, fake } = await startOpenExisting([OLD]);
+    const dialog = await screen.findByRole("dialog", { name: OLD_TITLE });
     // Nothing is asked for before the user decides.
     expect(screen.queryByRole("dialog", { name: "Open vault" })).toBeNull();
     expect(calls(fake, "vaultOpen")).toHaveLength(0);
     await user.click(within(dialog).getByRole("button", { name: "Continue" }));
     expect(await screen.findByRole("dialog", { name: "Open vault" })).toBeTruthy();
-    expect(screen.queryByRole("dialog", { name: ICLOUD_TITLE })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: OLD_TITLE })).toBeNull();
   });
 
   it("open_guard_cancel_stops_the_flow", async () => {
-    const { user, fake } = await startOpenExisting([ICLOUD]);
-    const dialog = await screen.findByRole("dialog", { name: ICLOUD_TITLE });
+    const { user, fake } = await startOpenExisting([OLD]);
+    const dialog = await screen.findByRole("dialog", { name: OLD_TITLE });
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(calls(fake, "vaultOpen")).toHaveLength(0);
   });
 
   it("open_guard_escape_cancels", async () => {
-    const { user } = await startOpenExisting([ICLOUD]);
-    await screen.findByRole("dialog", { name: ICLOUD_TITLE });
+    const { user } = await startOpenExisting([OLD]);
+    await screen.findByRole("dialog", { name: OLD_TITLE });
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
@@ -62,27 +62,46 @@ describe("open guard", () => {
     expect(within(dialog).getByText(/An older MyPass \(MyPass-Swift\) is open\./)).toBeTruthy();
   });
 
+  it("open_dialog_has_no_icloud_branch_but_still_shows_old_app_warning", async () => {
+    // Stage 5 opens iCloud Drive vaults as primary storage: the iCloud warning and its copy are gone.
+    const source = readFileSync(resolve(process.cwd(), "src/screens/OpenWarningDialog.svelte"), "utf8");
+    expect(source).not.toMatch(/icloud/i);
+    await startOpenExisting([OLD]);
+    expect(await screen.findByRole("dialog", { name: OLD_TITLE })).toBeTruthy();
+    expect(screen.queryByText(/iCloud/)).toBeNull();
+  });
+
+  it("i18n_icloud_warning_keys_removed_from_all_three_locales", () => {
+    for (const locale of ["en", "uk", "ru"]) {
+      const catalog = JSON.parse(readFileSync(resolve(process.cwd(), `src/lib/i18n/locales/${locale}.json`), "utf8")) as Record<string, string>;
+      expect(catalog["This vault is in iCloud Drive"]).toBeUndefined();
+      expect(Object.keys(catalog).some((k) => k.startsWith("iCloud Drive can sync a vault file"))).toBe(false);
+    }
+  });
+
   it("open_guard_two_warnings_ask_in_order_and_cancel_stops_the_rest", async () => {
-    const { user } = await startOpenExisting([ICLOUD, OLD]);
-    const first = await screen.findByRole("dialog", { name: ICLOUD_TITLE });
+    const { user } = await startOpenExisting([OLD, OTHER]);
+    const first = await screen.findByRole("dialog", { name: OLD_TITLE });
+    expect(within(first).getByText(/MyPass-Swift/)).toBeTruthy();
     await user.click(within(first).getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(screen.queryByText(/MyPass-Swift/)).toBeNull());
     const second = await screen.findByRole("dialog", { name: OLD_TITLE });
+    expect(within(second).getByText(/MyPass-Legacy/)).toBeTruthy();
     await user.click(within(second).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
   it("open_guard_second_warning_not_shown_when_the_first_is_cancelled", async () => {
-    const { user } = await startOpenExisting([ICLOUD, OLD]);
-    const first = await screen.findByRole("dialog", { name: ICLOUD_TITLE });
+    const { user } = await startOpenExisting([OLD, OTHER]);
+    const first = await screen.findByRole("dialog", { name: OLD_TITLE });
     await user.click(within(first).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(screen.queryByRole("dialog", { name: OLD_TITLE })).toBeNull();
+    expect(screen.queryByText(/MyPass-Legacy/)).toBeNull();
   });
 
   it("open_guard_no_warnings_shows_no_dialog", async () => {
     await startOpenExisting([]);
     expect(await screen.findByRole("dialog", { name: "Open vault" })).toBeTruthy();
-    expect(screen.queryByRole("dialog", { name: ICLOUD_TITLE })).toBeNull();
     expect(screen.queryByRole("dialog", { name: OLD_TITLE })).toBeNull();
   });
 
