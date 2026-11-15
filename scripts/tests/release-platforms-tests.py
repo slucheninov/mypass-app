@@ -8,6 +8,7 @@ import subprocess
 import sys
 import unittest
 import zipfile
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location('fixtures', Path(__file__).with_name('release-tests.py'))
@@ -57,12 +58,12 @@ class ReleasePlatforms(fixtures.Fixture):
 set -euo pipefail
 echo "$*" >> "$GH_LOG"
 case "$1 $2" in
-  'release view') [[ "${GH_FAIL:-0}" == 0 ]] || exit 1; echo "${DRAFT:-true}" ;;
+  'release view') echo "${DRAFT-true}"; [[ "${GH_FAIL:-0}" == 0 ]] || exit 1 ;;
   'release download') [[ "${GH_DOWNLOAD_FAIL:-0}" == 0 ]] || exit 1; mkdir -p "$5"; cp "$ASSETS/"* "$5/" ;;
   'release edit') exit 0 ;;
   *) exit 99 ;;
 esac
-''')
+''', newline="\n")
         gh.chmod(0o755)
 
     def sums(self, manifest, names):
@@ -71,6 +72,55 @@ esac
 
     def publish(self, mac='success', win='success', ok=True):
         return self.run_script('publish-release.sh', f'v{self.version}', self.root / 'download', mac, win, ok=ok)
+
+    def test_shell_mocks_keep_lf_with_windows_default_newlines(self):
+        original = Path.write_text
+
+        def windows_write_text(path, data, *args, **kwargs):
+            kwargs.setdefault('newline', '\r\n')
+            return original(path, data, *args, **kwargs)
+
+        fixture = ReleasePlatforms('test_exact_modes_and_mapping')
+        self.addCleanup(fixture.doCleanups)
+        with patch.object(Path, 'write_text', windows_write_text):
+            fixture.setUp()
+        for name in ('gh', 'cargo'):
+            self.assertNotIn(b'\r', (fixture.root / 'stub-bin' / name).read_bytes())
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'Apple system Bash regression')
+    def test_system_bash_refusals_stop_before_download(self):
+        for draft, failure in [('false', '0'), ('', '0'), ('true', '1')]:
+            with self.subTest(draft=draft, api_failure=failure):
+                self.env.update(DRAFT=draft, GH_FAIL=failure)
+                result = subprocess.run(
+                    ['/bin/bash', 'scripts/publish-release.sh', f'v{self.version}',
+                     str(self.root / 'download'), 'success', 'success'],
+                    cwd=self.root, env=self.env, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual((self.root / 'gh.log').read_text().splitlines(),
+                                 [f'release view v{self.version} --json isDraft --jq .isDraft'])
+                (self.root / 'gh.log').unlink()
+
+    def test_failures_stop_even_when_caller_disables_errexit(self):
+        for failure in ('draft', 'api', 'download', 'assets'):
+            with self.subTest(failure=failure):
+                self.env.update(DRAFT='false' if failure == 'draft' else 'true',
+                                GH_FAIL='1' if failure == 'api' else '0',
+                                GH_DOWNLOAD_FAIL='1' if failure == 'download' else '0')
+                if failure == 'assets':
+                    (self.folder / self.win).unlink()
+                result = subprocess.run(
+                    [fixtures.BASH, '-c', 'if source "$0" "$@"; then exit 0; else exit $?; fi',
+                     'scripts/publish-release.sh', f'v{self.version}',
+                     str(self.root / 'download'), 'success', 'success'],
+                    cwd=self.root, env=self.env, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                log = (self.root / 'gh.log').read_text()
+                self.assertNotIn('--draft=false', log)
+                if failure in ('draft', 'api'):
+                    self.assertNotIn('release download', log)
+                (self.root / 'gh.log').unlink()
+                shutil.rmtree(self.root / 'download', ignore_errors=True)
 
     def test_exact_modes_and_mapping(self):
         self.assertEqual(self.release.expected_release_assets(self.version, ('windows-x64',)), [self.win, self.win + '.sha256'])

@@ -38,7 +38,7 @@ class Fixture(unittest.TestCase):
         bin_dir = self.root / 'stub-bin'
         bin_dir.mkdir()
         cargo = bin_dir / 'cargo'
-        cargo.write_text('#!/usr/bin/env bash\necho "$*" >> "$CARGO_TEST_LOG"\nexit "${CARGO_TEST_EXIT:-0}"\n')
+        cargo.write_text('#!/usr/bin/env bash\necho "$*" >> "$CARGO_TEST_LOG"\nexit "${CARGO_TEST_EXIT:-0}"\n', newline="\n")
         cargo.chmod(0o755)
         (bin_dir / 'cargo.cmd').write_text('@echo %*>>"%CARGO_TEST_LOG%"\n@exit /b %CARGO_TEST_EXIT%\n')
         self.env = dict(os.environ)
@@ -163,9 +163,9 @@ class PackageTests(Fixture):
         self.env['CODESIGN_LOG'] = str(self.root / 'codesign.log')
         self.env['MYPASS_SIGNING_IDENTITY'] = 'AbCdEf0123456789AbCdEf0123456789AbCdEf01'
         cargo = self.root / 'stub-bin/cargo'
-        cargo.write_text('#!/usr/bin/env bash\nif [[ "$1" == metadata ]]; then cat "$CARGO_METADATA_JSON"; fi\n')
+        cargo.write_text('#!/usr/bin/env bash\nif [[ "$1" == metadata ]]; then cat "$CARGO_METADATA_JSON"; fi\n', newline="\n")
         codesign = self.root / 'stub-bin/codesign'
-        codesign.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$CODESIGN_LOG"\n')
+        codesign.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$CODESIGN_LOG"\n', newline="\n")
         codesign.chmod(0o755)
         self.run_script('build-host.sh', '--release', '--target', 'aarch64-apple-darwin')
         args = (self.root / 'codesign.log').read_text().splitlines()

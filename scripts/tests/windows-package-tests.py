@@ -131,7 +131,7 @@ class WindowsPackageTests(fixture.Fixture):
         cargo.write_text("""#!/usr/bin/env bash
 echo "$*" >> "$CARGO_TEST_LOG"
 if [[ "$1" == metadata ]]; then python3 -c 'import json,os; print(json.dumps({"target_directory":os.environ["TEST_TARGET_DIR"]}))'; fi
-""")
+""", newline="\n")
         self.run_script('build-host.sh', '--release', '--target', 'x86_64-pc-windows-msvc')
         log = (self.root / 'cargo.log').read_text()
         self.assertIn('tree --locked -p mypass-host -e normal --target x86_64-pc-windows-msvc', log)
@@ -155,7 +155,7 @@ if [[ "$1" == metadata ]]; then python3 -c 'import json,os; print(json.dumps({"t
         }
         for name, body in stubs.items():
             path = self.root / 'stub-bin' / name
-            path.write_text('#!/usr/bin/env bash\n' + body + '\n')
+            path.write_text('#!/usr/bin/env bash\n' + body + '\n', newline="\n")
             path.chmod(0o755)
         for identity in ('-', 'Apple Development: ambiguous name', 'A' * 40):
             with self.subTest(identity=identity):
@@ -181,7 +181,7 @@ if [[ "$1" == metadata ]]; then python3 -c 'import json,os; print(json.dumps({"t
 
     def test_dependency_check_uses_requested_target_and_rejects_forbidden_tree(self):
         cargo = self.root / 'stub-bin/cargo'
-        cargo.write_text('#!/usr/bin/env bash\necho "$*" >> "$CARGO_TEST_LOG"\necho "${TEST_TREE:-mypass-host}"\n')
+        cargo.write_text('#!/usr/bin/env bash\necho "$*" >> "$CARGO_TEST_LOG"\necho "${TEST_TREE:-mypass-host}"\n', newline="\n")
         self.run_script('check-host-deps.sh', '--target', 'x86_64-pc-windows-msvc')
         self.assertIn('--target x86_64-pc-windows-msvc', (self.root / 'cargo.log').read_text())
         self.env['TEST_TREE'] = 'mypass-core'
