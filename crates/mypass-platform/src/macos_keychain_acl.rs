@@ -599,11 +599,123 @@ mod tests {
         store.delete(&service, "loopback").unwrap();
         assert_eq!(read.unwrap(), Some(b"{\"port\":1}".to_vec()));
         let dump = dump.unwrap();
-        let section = dump
-            .split("keychain: ")
-            .find(|s| s.contains(&service))
-            .expect("the item is in the dump");
-        assert!(section.contains(TEAM_ID), "{section}");
-        assert!(!section.contains("cdhash"), "{section}");
+        let record = item_record(&dump, &service, "loopback").expect("the item is in the dump");
+        assert_acl_trusts_exactly_app_and_host(record);
+    }
+
+    /// The record of the one item with exactly this service and account in the output of
+    /// `security dump-keychain -a` (every item starts with a `keychain: ` line), so neighbouring
+    /// items can never answer for it.
+    fn item_record<'a>(dump: &'a str, service: &str, account: &str) -> Option<&'a str> {
+        let service_line = format!("\"svce\"<blob>=\"{service}\"");
+        let account_line = format!("\"acct\"<blob>=\"{account}\"");
+        let mut starts: Vec<usize> = dump
+            .match_indices("keychain: ")
+            .filter(|(i, _)| *i == 0 || dump.get(i - 1..*i) == Some("\n"))
+            .map(|(i, _)| i)
+            .collect();
+        starts.push(dump.len());
+        let mut matching = starts
+            .windows(2)
+            .filter_map(|w| dump.get(*w.first()?..*w.get(1)?))
+            .filter(|record| {
+                let has = |wanted: &str| record.lines().any(|l| l.trim() == wanted);
+                has(&service_line) && has(&account_line)
+            });
+        let record = matching.next()?;
+        matching.next().is_none().then_some(record)
+    }
+
+    /// The `requirement:` lines of the access-list entries that may decrypt (read) the item.
+    fn decrypt_requirements(record: &str) -> Vec<String> {
+        let Some((_, access)) = record.split_once("\naccess:") else {
+            return Vec::new();
+        };
+        access
+            .split("entry ")
+            .filter(|entry| {
+                entry
+                    .lines()
+                    .any(|l| l.trim_start().starts_with("authorizations") && l.contains("decrypt"))
+            })
+            .flat_map(|entry| {
+                entry
+                    .lines()
+                    .filter_map(|l| l.trim().strip_prefix("requirement: "))
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// The item's read access trusts exactly the app and the host by their R27 requirements.
+    fn assert_acl_trusts_exactly_app_and_host(record: &str) {
+        let mut found = decrypt_requirements(record);
+        found.sort();
+        let mut expected = vec![
+            canonical_requirement(APP_REQUIREMENT).unwrap(),
+            canonical_requirement(HOST_REQUIREMENT).unwrap(),
+        ];
+        expected.sort();
+        assert_eq!(found, expected, "{record}");
+        assert!(!record.contains("cdhash"), "{record}");
+        assert!(!record.contains("subject.CN"), "{record}");
+    }
+
+    #[test]
+    fn dump_parser_isolates_the_item_from_its_neighbours() {
+        let app = canonical_requirement(APP_REQUIREMENT).unwrap();
+        let host = canonical_requirement(HOST_REQUIREMENT).unwrap();
+        let record = |service: &str, requirements: &[&str]| {
+            let apps: String = requirements
+                .iter()
+                .enumerate()
+                .map(|(i, r)| {
+                    format!(
+                        "            {i}: /Applications/x (OK)\n                requirement: {r}\n"
+                    )
+                })
+                .collect();
+            format!(
+                "keychain: \"/Users/u/Library/Keychains/login.keychain-db\"\nversion: 512\n\
+                 class: \"genp\"\nattributes:\n    \"acct\"<blob>=\"loopback\"\n    \
+                 \"svce\"<blob>=\"{service}\"\naccess: 2 entries\n    entry 0:\n        \
+                 authorizations (6): decrypt derive export_clear export_wrapped mac sign\n        \
+                 description: MyPass browser bridge endpoint\n        applications ({}):\n{apps}    \
+                 entry 1:\n        authorizations (1): encrypt\n        applications: <null>\n",
+                requirements.len()
+            )
+        };
+        let foreign_team =
+            format!("identifier \"com.other\" and certificate leaf[subject.OU] = {TEAM_ID}");
+        let neighbour_cdhash = "cdhash H\"0123456789abcdef0123456789abcdef01234567\"";
+        let ours = record("com.mypass.tests.endpoint.1", &[&app, &host]);
+        let dump = [
+            record("com.mypass.tests.endpoint.10", &[neighbour_cdhash]),
+            ours.clone(),
+            record("com.mypass.other", &[&foreign_team]),
+        ]
+        .concat();
+        let found = item_record(&dump, "com.mypass.tests.endpoint.1", "loopback").unwrap();
+        assert_eq!(found, ours);
+        assert_acl_trusts_exactly_app_and_host(found);
+        assert!(item_record(&dump, "com.mypass.tests.endpoint", "loopback").is_none());
+        assert!(item_record(&dump, "com.mypass.tests.endpoint.1", "other").is_none());
+
+        // A record that trusts only the app, or a CN pin, or one more application, fails.
+        for bad in [
+            record("svc", &[&app]),
+            record("svc", &[&app, &host, &foreign_team]),
+            record(
+                "svc",
+                &[
+                    &app,
+                    "identifier \"com.mypass.chromehost\" and certificate leaf[subject.CN] = \"X\"",
+                ],
+            ),
+        ] {
+            let result = std::panic::catch_unwind(|| assert_acl_trusts_exactly_app_and_host(&bad));
+            assert!(result.is_err(), "{bad}");
+        }
     }
 }
