@@ -423,7 +423,10 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{mpsc, Arc};
 
-    const T: Duration = Duration::from_secs(10);
+    // Foundation presenter registration is process-wide. Isolate native cases from each other,
+    // while each case still races its own holder and contender on separate threads.
+    static NATIVE_CASE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    const T: Duration = Duration::from_secs(60);
 
     /// Holds a coordinated write of `path` on another thread (another coordinator, as the sync
     /// daemon or a presenter would) until the returned sender is used or dropped.
@@ -435,17 +438,20 @@ mod tests {
             MacCoordinatedFiles
                 .coordinated_write(&path, T, &mut |_| {
                     let _ = held_tx.send(());
-                    let _ = release_rx.recv();
+                    let _ = release_rx.recv_timeout(T);
                     Ok(())
                 })
                 .unwrap();
         });
-        held_rx.recv().expect("the holder got the item");
+        held_rx.recv_timeout(T).expect("the holder got the item");
         (release_tx, holder)
     }
 
     #[test]
     fn a_read_waiting_for_a_held_item_times_out_and_never_runs() {
+        let _case = NATIVE_CASE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("vault.kdbx");
         std::fs::write(&path, b"x").unwrap();
@@ -470,6 +476,9 @@ mod tests {
 
     #[test]
     fn a_cancelled_write_never_runs_later() {
+        let _case = NATIVE_CASE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("vault.kdbx");
         std::fs::write(&path, b"original").unwrap();
@@ -496,6 +505,9 @@ mod tests {
 
     #[test]
     fn sdk_status_strings_match_the_mapping_constants() {
+        let _case = NATIVE_CASE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // SAFETY: immutable Foundation string constants.
         let (current, downloaded, not_downloaded) = unsafe {
             (
@@ -511,6 +523,9 @@ mod tests {
 
     #[test]
     fn coordinated_write_then_read_round_trips_on_a_plain_file() {
+        let _case = NATIVE_CASE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("vault.kdbx");
         let files = MacCoordinatedFiles;
@@ -529,6 +544,9 @@ mod tests {
 
     #[test]
     fn coordinated_read_of_a_missing_file_is_not_found() {
+        let _case = NATIVE_CASE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let err = MacCoordinatedFiles
             .coordinated_read(&tmp.path().join("missing.kdbx"), T, &mut |p| {
@@ -540,6 +558,9 @@ mod tests {
 
     #[test]
     fn accessor_errors_come_back_unchanged() {
+        let _case = NATIVE_CASE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("vault.kdbx");
         std::fs::write(&path, b"x").unwrap();
@@ -553,6 +574,9 @@ mod tests {
 
     #[test]
     fn accessor_panic_is_resumed_after_the_call() {
+        let _case = NATIVE_CASE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("vault.kdbx");
         std::fs::write(&path, b"x").unwrap();
@@ -565,6 +589,9 @@ mod tests {
 
     #[test]
     fn plain_file_is_not_ubiquitous_and_has_no_conflicts() {
+        let _case = NATIVE_CASE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("vault.kdbx");
         std::fs::write(&path, b"x").unwrap();
@@ -585,6 +612,9 @@ mod tests {
 
     #[test]
     fn download_state_of_a_missing_file_is_not_found() {
+        let _case = NATIVE_CASE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let err = MacCoordinatedFiles
             .download_state(&tmp.path().join("missing.kdbx"))
@@ -604,6 +634,9 @@ mod tests {
 
     #[test]
     fn presenter_is_registered_until_the_subscription_drops() {
+        let _case = NATIVE_CASE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("vault.kdbx");
         std::fs::write(&path, b"x").unwrap();
@@ -617,6 +650,9 @@ mod tests {
 
     #[test]
     fn presenter_hears_a_coordinated_write_from_another_coordinator() {
+        let _case = NATIVE_CASE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("vault.kdbx");
         std::fs::write(&path, b"one").unwrap();
@@ -633,12 +669,14 @@ mod tests {
         MacCoordinatedFiles
             .coordinated_write(&path, T, &mut |p| std::fs::write(p, b"two"))
             .unwrap();
-        rx.recv_timeout(Duration::from_secs(10))
-            .expect("the presenter heard the write");
+        rx.recv_timeout(T).expect("the presenter heard the write");
     }
 
     #[test]
     fn non_posix_errors_keep_the_system_text_and_code() {
+        let _case = NATIVE_CASE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let error = NSError::new(2, &NSString::from_str("SomeDomain"));
         let mapped = ns_error(&error);
         assert_eq!(mapped.kind(), io::ErrorKind::Other);
