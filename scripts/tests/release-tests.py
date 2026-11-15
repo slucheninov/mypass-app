@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import tomllib
 import sys
 sys.dont_write_bytecode = True
 import unittest
@@ -31,6 +32,9 @@ class Fixture(unittest.TestCase):
                             ignore=shutil.ignore_patterns('binaries', 'gen', 'icons', '__pycache__'))
         for name in ('Cargo.toml', 'Cargo.lock', 'package.json'):
             shutil.copy2(ROOT / name, self.root / name)
+        self.version = tomllib.loads((self.root / 'src-tauri/Cargo.toml').read_text())['package']['version']
+        major, minor, patch_version = map(int, self.version.split('.'))
+        self.next_version = f'{major}.{minor}.{patch_version + 1}'
         bin_dir = self.root / 'stub-bin'
         bin_dir.mkdir()
         cargo = bin_dir / 'cargo'
@@ -51,33 +55,33 @@ class Fixture(unittest.TestCase):
 
 class VersionTests(Fixture):
     def test_check_version_names_disagreeing_file_and_tag(self):
-        self.run_script('check-version.sh', '0.7.0')
-        self.run_script('check-version.sh', '9.0.0', ok=False)
+        self.run_script('check-version.sh', self.version)
+        self.run_script('check-version.sh', self.next_version, ok=False)
         path = self.root / 'extension/manifest.json'
-        data = json.loads(path.read_text()); data['version'] = '1.2.3'
+        data = json.loads(path.read_text()); data['version'] = self.next_version
         path.write_text(json.dumps(data))
         self.assertIn('extension/manifest.json', self.run_script('check-version.sh', ok=False))
 
     def test_bump_updates_versions_and_lock_offline(self):
-        self.run_script('bump-version.sh', '0.7.1')
-        self.run_script('check-version.sh', '0.7.1')
+        self.run_script('bump-version.sh', self.next_version)
+        self.run_script('check-version.sh', self.next_version)
         lock = (self.root / 'Cargo.lock').read_text()
-        self.assertIn('name = "mypass-app"\nversion = "0.7.1"', lock)
-        for version in ('0.7.1', '0.6.9', 'bad', '1.2', '01.2.3'):
+        self.assertIn(f'name = "mypass-app"\nversion = "{self.next_version}"', lock)
+        for version in (self.next_version, self.version, 'bad', '1.2', '01.2.3'):
             self.run_script('bump-version.sh', version, ok=False)
 
     def test_bump_rolls_back_when_cargo_fails(self):
         paths = ['src-tauri/Cargo.toml', 'Cargo.lock', 'package.json', 'extension/manifest.json']
         before = {p: (self.root / p).read_bytes() for p in paths}
         self.env['CARGO_TEST_EXIT'] = '1'
-        self.run_script('bump-version.sh', '0.7.1', ok=False)
+        self.run_script('bump-version.sh', self.next_version, ok=False)
         self.assertEqual(before, {p: (self.root / p).read_bytes() for p in paths})
 
     def test_bump_atomic_when_a_file_is_unwritable(self):
         paths = ['src-tauri/Cargo.toml', 'Cargo.lock', 'package.json', 'extension/manifest.json']
         before = {p: (self.root / p).read_bytes() for p in paths}
         (self.root / 'extension/manifest.json').chmod(0o444)
-        self.run_script('bump-version.sh', '0.7.1', ok=False)
+        self.run_script('bump-version.sh', self.next_version, ok=False)
         self.assertEqual(before, {p: (self.root / p).read_bytes() for p in paths})
 
 class PackageTests(Fixture):
@@ -106,7 +110,7 @@ class PackageTests(Fixture):
     def test_extension_zip_reproducible_and_staged_without_development_files(self):
         out = self.root / 'out'
         self.run_script('package-extension.sh', '--out', out)
-        path = out / 'MyPass-chrome-extension-0.7.0.zip'
+        path = out / f'MyPass-chrome-extension-{self.version}.zip'
         first = hashlib.sha256(path.read_bytes()).digest()
         with zipfile.ZipFile(path) as archive:
             names = archive.namelist()
@@ -117,7 +121,7 @@ class PackageTests(Fixture):
         self.assertEqual(first, hashlib.sha256(path.read_bytes()).digest())
         self.assertTrue((stage / 'manifest.json').is_file())
         manifest = self.root / 'extension/manifest.json'
-        manifest.write_text(manifest.read_text().replace('0.7.0', '9.9.9'))
+        manifest.write_text(manifest.read_text().replace(self.version, self.next_version))
         self.run_script('package-extension.sh', '--out', out, ok=False)
 
     def test_release_refuses_no_identity_and_dry_run_never_signs(self):
@@ -154,7 +158,7 @@ class PackageTests(Fixture):
             subprocess.run(['git', *args], cwd=self.root, check=True, capture_output=True)
         self.env['MYPASS_SIGNING_IDENTITY'] = 'A' * 40
         self.run_script('package-macos.sh', '--release', '--dry-run', ok=False)
-        subprocess.run(['git', 'tag', 'v0.7.0'], cwd=self.root, check=True)
+        subprocess.run(['git', 'tag', f'v{self.version}'], cwd=self.root, check=True)
         self.run_script('package-macos.sh', '--release', '--dry-run')
         (self.root / 'package.json').write_text('{}')
         self.run_script('package-macos.sh', '--release', '--dry-run', ok=False)
@@ -168,7 +172,7 @@ class VerifyTests(Fixture):
         self.app = self.root / 'MyPass.app'
         self.resources = self.app / 'Contents/Resources'
         self.resources.mkdir(parents=True)
-        info = {'CFBundleIdentifier': 'com.mypass.app', 'CFBundleShortVersionString': '0.7.0',
+        info = {'CFBundleIdentifier': 'com.mypass.app', 'CFBundleShortVersionString': self.version,
                 'LSMinimumSystemVersion': '14.0', 'CFBundleDevelopmentRegion': 'en',
                 'CFBundleLocalizations': ['en', 'uk', 'ru']}
         (self.app / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
@@ -179,7 +183,7 @@ class VerifyTests(Fixture):
             (self.resources / name).write_text('notice')
         self.run_script('package-extension.sh', '--out', self.root / 'out',
                         '--stage-dir', self.resources / 'extension')
-        self.zip = self.root / 'out/MyPass-chrome-extension-0.7.0.zip'
+        self.zip = self.root / f'out/MyPass-chrome-extension-{self.version}.zip'
         self.host = self.app / 'Contents/MacOS/mypass-native-host'
         self.host.parent.mkdir(); self.host.write_bytes(b'cargo-host')
         self.source = self.root / 'sidecar'; self.source.write_bytes(b'cargo-host')
@@ -238,13 +242,26 @@ class VerifyTests(Fixture):
 
     def test_asset_set_checks_relative_payload_hashes_and_rejects_extra_files(self):
         folder = self.root / 'out'
-        names = self.release.expected_release_assets('0.7.0')
+        names = self.release.expected_release_assets(self.version)
         (folder / names[0]).write_bytes(b'dmg')
         (folder / 'SHA256SUMS.txt').write_text(''.join(
             f'{hashlib.sha256((folder / n).read_bytes()).hexdigest()}  {n}\n' for n in names[:-1]))
-        self.release.assets_check(folder, '0.7.0')
+        self.release.assets_check(folder, self.version)
         (folder / 'unexpected').write_text('extra')
-        with self.assertRaisesRegex(ValueError, 'asset set'): self.release.assets_check(folder, '0.7.0')
+        with self.assertRaisesRegex(ValueError, 'asset set'): self.release.assets_check(folder, self.version)
+
+
+class VersionAgnosticTests(Fixture):
+    def test_release_suites_pass_after_a_version_bump(self):
+        # Exercise the real scripts and copied suites, not just version helpers. Explicit class
+        # selection prevents recursively invoking this regression in the disposable copy.
+        bumped = self.next_version
+        self.run_script('bump-version.sh', bumped)
+        self.run_script('check-version.sh', bumped)
+        result = subprocess.run([sys.executable, 'scripts/tests/release-tests.py',
+                                 'VersionTests', 'PackageTests', 'VerifyTests'],
+                                cwd=self.root, env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 if __name__ == '__main__':
     unittest.main()
