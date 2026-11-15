@@ -26,7 +26,7 @@ use crate::Subscription;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-#[cfg(any(target_os = "macos", test, feature = "test-util"))]
+#[cfg(any(target_os = "macos", test))]
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime};
 
@@ -162,7 +162,7 @@ pub(crate) fn coordination_timed_out() -> io::Error {
     )
 }
 
-#[cfg(any(target_os = "macos", test, feature = "test-util"))]
+#[cfg(any(target_os = "macos", test))]
 /// Where a coordinated access stands, as seen by the accessor and the deadline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum GateState {
@@ -177,7 +177,7 @@ enum GateState {
     Finished,
 }
 
-#[cfg(any(target_os = "macos", test, feature = "test-util"))]
+#[cfg(any(target_os = "macos", test))]
 /// Decides the race between the accessor starting and the deadline passing, under one lock, so
 /// exactly one of them wins: an accessor that entered is never cancelled, and an expired request
 /// never runs its accessor, even if the coordinator calls it afterwards.
@@ -187,7 +187,7 @@ pub(crate) struct DeadlineGate {
     changed: Condvar,
 }
 
-#[cfg(any(target_os = "macos", test, feature = "test-util"))]
+#[cfg(any(target_os = "macos", test))]
 impl DeadlineGate {
     fn state(&self) -> MutexGuard<'_, GateState> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
@@ -236,7 +236,7 @@ impl DeadlineGate {
     }
 }
 
-#[cfg(any(target_os = "macos", test, feature = "test-util"))]
+#[cfg(any(target_os = "macos", test))]
 /// Runs `body` (one coordination call) with a deadline: when the accessor has not entered the
 /// gate within `timeout`, the gate expires and `cancel` runs on a watcher thread (it cancels the
 /// pending coordination, which makes the blocked call return). Returns only after the watcher has
