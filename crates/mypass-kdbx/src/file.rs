@@ -323,7 +323,7 @@ impl VaultFile {
         password: &SecretString,
     ) -> Result<(Self, Database)> {
         // Path identity is resolved once; every later byte/metadata operation uses the seam.
-        let path = fs::canonicalize(path).map_err(io_error)?;
+        let path = resolve_vault_path(path).map_err(io_error)?;
         let bytes = io.read(&path)?;
         let db = Database::open(&bytes, password)?;
         let stamp = stamp(io.metadata(&path)?, &bytes);
@@ -446,6 +446,34 @@ impl Drop for TempCleanup {
         if self.armed {
             let _ = fs::remove_file(&self.path);
         }
+    }
+}
+/// The identity of a vault path: canonical when the file exists. A file that is not there (an
+/// iCloud Drive placeholder `.name.icloud`, or a vault whose folder is offline and served from a
+/// cache by the seam) resolves through its parent, and an absolute path whose parent is gone too
+/// is kept as written, so the `FileIo` seam decides whether it can be read. A dangling symlink
+/// stays an error. The seam's read still fails with `NotFound` for a plain missing file.
+fn resolve_vault_path(path: &Path) -> io::Result<PathBuf> {
+    let err = match fs::canonicalize(path) {
+        Ok(real) => return Ok(real),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => e,
+        Err(e) => return Err(e),
+    };
+    if fs::symlink_metadata(path).is_ok() {
+        return Err(err);
+    }
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(err);
+    };
+    if parent.as_os_str().is_empty() {
+        return Err(err);
+    }
+    match fs::canonicalize(parent) {
+        Ok(real) => Ok(real.join(name)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound && path.is_absolute() => {
+            Ok(path.to_path_buf())
+        }
+        Err(_) => Err(err),
     }
 }
 fn resolve_target(path: &Path) -> io::Result<PathBuf> {
@@ -1972,5 +2000,57 @@ mod tests {
             kept: PathBuf::from("k"),
         };
         assert!(!format!("{outcome:?}").contains("secret"));
+    }
+
+    /// Serves one vault's bytes for any path, like a seam that reads from an offline cache.
+    struct CachedIo(Vec<u8>);
+    impl FileIo for CachedIo {
+        fn read(&self, _path: &Path) -> Result<Vec<u8>> {
+            Ok(self.0.clone())
+        }
+        fn metadata(&self, _path: &Path) -> Result<FileMeta> {
+            Ok(FileMeta {
+                len: self.0.len() as u64,
+                modified: None,
+            })
+        }
+        fn write_atomic(&self, _path: &Path, _bytes: &[u8]) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn open_with_resolves_a_missing_file_for_the_seam_and_plain_io_still_reports_not_found() {
+        let dir = TempDir::new().unwrap();
+        let real_dir = fs::canonicalize(dir.path()).unwrap();
+        let bytes = Database::new("cached").save(&password()).unwrap();
+        let io: Arc<dyn FileIo> = Arc::new(CachedIo(bytes));
+        // Placeholder-only: the folder is there, the file is not.
+        let missing = dir.path().join("v.kdbx");
+        let (file, _) = VaultFile::open_with(io.clone(), &missing, &password()).unwrap();
+        assert_eq!(file.path(), real_dir.join("v.kdbx"));
+        // The folder is gone too (offline iCloud Drive): kept as written.
+        let offline = real_dir.join("gone").join("v.kdbx");
+        let (file, _) = VaultFile::open_with(io, &offline, &password()).unwrap();
+        assert_eq!(file.path(), offline);
+        // Plain I/O: still NotFound.
+        let err = VaultFile::open_with(Arc::new(PlainFileIo), &missing, &password()).unwrap_err();
+        assert!(matches!(
+            err,
+            KdbxError::Io {
+                kind: ErrorKind::NotFound,
+                ..
+            }
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_with_keeps_refusing_a_dangling_symlink() {
+        let dir = TempDir::new().unwrap();
+        let link = dir.path().join("v.kdbx");
+        std::os::unix::fs::symlink(dir.path().join("nowhere"), &link).unwrap();
+        let io: Arc<dyn FileIo> = Arc::new(CachedIo(Vec::new()));
+        assert!(VaultFile::open_with(io, &link, &password()).is_err());
     }
 }
