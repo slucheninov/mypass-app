@@ -170,25 +170,18 @@ pub(crate) fn delete_then_add(ops: &dyn ItemOps) -> PlatformResult<()> {
 }
 
 #[cfg(any(target_os = "macos", test))]
-/// Whether a designated requirement (as `SecRequirementCopyString` prints it) pins the code by
-/// team and identifier rather than by cdhash: the access list records the peer's designated
-/// requirement, so a cdhash one would break on every update and is refused.
-pub(crate) fn designated_requirement_is_team_based(text: &str, identifier: &str) -> bool {
-    !text.contains("cdhash")
-        && text.contains("anchor apple generic")
-        && text.contains(TEAM_ID)
-        && (text.contains(&format!("identifier \"{identifier}\""))
-            || text.contains(&format!("identifier {identifier} ")))
-}
-
-#[cfg(any(target_os = "macos", test))]
-/// The identifier a requirement constant names (`APP_REQUIREMENT` → `com.mypass.app`).
-pub(crate) fn requirement_identifier(requirement: &str) -> Option<&str> {
-    requirement
-        .strip_prefix("identifier \"")?
-        .split('"')
-        .next()
-        .filter(|id| !id.is_empty())
+/// Whether a designated requirement is exactly the expected one (R27): both arguments are
+/// canonical texts, as `SecRequirementCopyString` prints a compiled requirement (the macOS side
+/// compiles the expected constant and prints it back, so quoting and spacing never differ). The
+/// access list records the binary's own designated requirement, so anything but this exact
+/// expression is refused: an extra `or` branch (which trusts unrelated code), a `subject.CN` pin
+/// (which breaks on certificate renewal), a `cdhash` (which breaks on every update), another
+/// identifier or team, a negation or a missing anchor. Never a substring test.
+pub(crate) fn designated_requirement_is_exact(
+    actual_canonical: &str,
+    expected_canonical: &str,
+) -> bool {
+    !expected_canonical.trim().is_empty() && actual_canonical == expected_canonical
 }
 
 #[cfg(test)]
@@ -234,11 +227,8 @@ mod tests {
             "identifier \"com.mypass.chromehost\" and anchor apple generic and certificate \
              leaf[subject.OU] = \"W645B93PPQ\""
         );
-        assert_eq!(requirement_identifier(APP_REQUIREMENT), Some(BUNDLE_ID));
-        assert_eq!(
-            requirement_identifier(HOST_REQUIREMENT),
-            Some(HOST_IDENTIFIER)
-        );
+        assert!(APP_REQUIREMENT.starts_with(&format!("identifier \"{BUNDLE_ID}\" ")));
+        assert!(HOST_REQUIREMENT.starts_with(&format!("identifier \"{HOST_IDENTIFIER}\" ")));
         for r in [APP_REQUIREMENT, HOST_REQUIREMENT] {
             assert!(!r.contains("cdhash") && r.contains(TEAM_ID));
         }
@@ -353,28 +343,29 @@ mod tests {
     }
 
     #[test]
-    fn designated_requirement_check() {
-        let developer_id = "identifier \"com.mypass.chromehost\" and anchor apple generic and \
-            certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate \
-            leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate \
-            leaf[subject.OU] = W645B93PPQ";
-        assert!(designated_requirement_is_team_based(
-            developer_id,
-            HOST_IDENTIFIER
-        ));
-        assert!(!designated_requirement_is_team_based(
-            developer_id,
-            BUNDLE_ID
-        ));
-        assert!(!designated_requirement_is_team_based(
-            "cdhash H\"0123456789abcdef0123456789abcdef01234567\"",
-            HOST_IDENTIFIER
-        ));
-        let other_team = developer_id.replace(TEAM_ID, "ABCDE12345");
-        assert!(!designated_requirement_is_team_based(
-            &other_team,
-            HOST_IDENTIFIER
-        ));
+    fn designated_requirement_must_equal_the_expected_text() {
+        // The canonical texts come from the Security framework on macOS (tested there with the
+        // real compiler); here the comparison itself: equality, never containment.
+        let expected = "identifier \"com.mypass.chromehost\" and anchor apple generic and \
+            certificate leaf[subject.OU] = W645B93PPQ";
+        assert!(designated_requirement_is_exact(expected, expected));
+        for near_miss in [
+            format!("{expected} or anchor apple"),
+            format!("({expected}) or identifier \"com.evil\""),
+            format!("{expected} and certificate leaf[subject.CN] = \"Apple Development: X\""),
+            expected.replace("com.mypass.chromehost", "com.mypass.app"),
+            expected.replace(TEAM_ID, "ABCDE12345"),
+            expected.replace(" and anchor apple generic", ""),
+            format!("{expected} "),
+            String::new(),
+        ] {
+            assert!(
+                !designated_requirement_is_exact(&near_miss, expected),
+                "{near_miss}"
+            );
+        }
+        assert!(!designated_requirement_is_exact("", ""));
+        assert!(!designated_requirement_is_exact(" ", " "));
     }
 
     #[cfg(unix)]

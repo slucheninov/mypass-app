@@ -2,11 +2,13 @@
 //! trusts the running binary and one peer binary, each by its designated code requirement.
 //!
 //! `SecTrustedApplicationCreateFromPath` records the designated requirement of the code at a
-//! path; for our Developer ID builds that is `identifier ... and anchor apple generic and ... and
-//! certificate leaf[subject.OU] = W645B93PPQ`, which survives updates and refuses another binary
-//! put at the same path. Before trusting anything the store checks that both the running binary
-//! and the peer satisfy their team requirement **and** that both designated requirements are
-//! team-based (never a cdhash, which is what an ad-hoc signature would record). The access list
+//! path; our builds are signed with the explicit R27 requirement `identifier "<id>" and anchor
+//! apple generic and certificate leaf[subject.OU] = "W645B93PPQ"`, which survives updates and
+//! certificate renewals and refuses another binary put at the same path. Before trusting anything
+//! the store checks that both the running binary and the peer satisfy their team requirement
+//! **and** that the designated requirement each carries is exactly that expression, compared in
+//! the Security framework's canonical form (never a substring test: an extra `or` branch, a
+//! `subject.CN` pin or a cdhash, which an ad-hoc signature records, are all refused). The access list
 //! is set at creation (`kSecAttrAccess`), and the item is only ever deleted and re-added, never
 //! updated, so an item planted with a broader access list is never reused.
 //!
@@ -22,8 +24,7 @@
 #![allow(unsafe_code)]
 
 use crate::endpoint_store::{
-    delete_then_add, designated_requirement_is_team_based, requirement_identifier, ItemOps,
-    SignatureProbe, StoreSide,
+    delete_then_add, designated_requirement_is_exact, ItemOps, SignatureProbe, StoreSide,
 };
 use crate::macos_keychain::MacKeychainSecretStore;
 use crate::{PlatformError, PlatformResult, SecretStore};
@@ -110,19 +111,44 @@ fn add_keys() -> AddKeys {
     }
 }
 
-/// The designated requirement of `code` (a `SecCode` or `SecStaticCode`) as text.
+/// The designated requirement of `code` (a `SecCode` or `SecStaticCode`) as canonical text.
 fn designated_requirement_text(code: CFTypeRef) -> PlatformResult<String> {
     let mut requirement: CFTypeRef = ptr::null();
     // SAFETY: `code` is a live code object owned by the caller; the out pointer is valid.
     let status = unsafe { SecCodeCopyDesignatedRequirement(code, 0, &mut requirement) };
     let requirement = owned(status, requirement, "designated requirement")?;
+    requirement_text(requirement.as_CFTypeRef())
+}
+
+/// The canonical text of a compiled requirement (`SecRequirementCopyString`).
+fn requirement_text(requirement: CFTypeRef) -> PlatformResult<String> {
     let mut text: CFTypeRef = ptr::null();
-    // SAFETY: `requirement` is a live `SecRequirement`; the out pointer is valid.
-    let status = unsafe { SecRequirementCopyString(requirement.as_CFTypeRef(), 0, &mut text) };
+    // SAFETY: `requirement` is a live `SecRequirement` owned by the caller; the out pointer is
+    // valid.
+    let status = unsafe { SecRequirementCopyString(requirement, 0, &mut text) };
     let text = owned(status, text, "requirement text")?;
     text.downcast_into::<CFString>()
         .map(|s| s.to_string())
         .ok_or_else(|| PlatformError::Failed("requirement text is not a string".into()))
+}
+
+/// The canonical text of `requirement`: compiled by the Security framework
+/// (`SecRequirementCreateWithString`) and printed back, so it compares exactly with the text of a
+/// binary's designated requirement.
+pub(crate) fn canonical_requirement(requirement: &str) -> PlatformResult<String> {
+    let compiled = requirement
+        .parse::<SecRequirement>()
+        .map_err(|e| failed("requirement", e.code()))?;
+    requirement_text(compiled.as_CFTypeRef())
+}
+
+/// Whether `actual` (a designated requirement as printed by the Security framework) is exactly
+/// the requirement constant `expected`, compared in canonical form.
+fn designated_requirement_is(actual: &str, expected: &str) -> PlatformResult<bool> {
+    Ok(designated_requirement_is_exact(
+        actual,
+        &canonical_requirement(expected)?,
+    ))
 }
 
 /// The designated requirement of the binary at `path`.
@@ -198,8 +224,9 @@ impl MacEndpointKeychainStore {
             .ok_or_else(|| PlatformError::Failed("the other MyPass binary was not found".into()))
     }
 
-    /// The running binary and the peer are both team-signed with team-based designated
-    /// requirements; otherwise nothing is written.
+    /// The running binary and the peer both satisfy their team requirement, and the designated
+    /// requirement each one carries (the one the access list records) is exactly that
+    /// requirement (R27); otherwise nothing is written.
     fn verify_signatures(&self) -> PlatformResult<()> {
         let peer = self.peer()?;
         let (own_requirement, peer_requirement) = self.side.requirements();
@@ -211,10 +238,8 @@ impl MacEndpointKeychainStore {
                 "the app or the host is not signed by the MyPass team".into(),
             ));
         }
-        let own_id = requirement_identifier(own_requirement).unwrap_or_default();
-        let peer_id = requirement_identifier(peer_requirement).unwrap_or_default();
-        if !designated_requirement_is_team_based(&own_designated_requirement()?, own_id)
-            || !designated_requirement_is_team_based(&designated_requirement_of(peer)?, peer_id)
+        if !designated_requirement_is(&own_designated_requirement()?, own_requirement)?
+            || !designated_requirement_is(&designated_requirement_of(peer)?, peer_requirement)?
         {
             return Err(PlatformError::Failed(
                 "a designated requirement is not pinned to the MyPass team".into(),
@@ -333,7 +358,66 @@ mod tests {
         let text = designated_requirement_of(Path::new(SYSTEM_BINARY)).unwrap();
         assert!(text.contains("identifier \"com.apple.ls\""), "{text}");
         assert!(text.contains("anchor apple"), "{text}");
-        assert!(!designated_requirement_is_team_based(&text, "com.apple.ls"));
+        assert!(!designated_requirement_is(&text, APP_REQUIREMENT).unwrap());
+        assert!(!designated_requirement_is(&text, HOST_REQUIREMENT).unwrap());
+        // Its own designated requirement does compare equal with itself in canonical form.
+        assert!(designated_requirement_is(&text, &text).unwrap());
+    }
+
+    #[test]
+    fn the_required_expressions_compare_equal_in_canonical_form() {
+        for (expected, id) in [
+            (APP_REQUIREMENT, "com.mypass.app"),
+            (HOST_REQUIREMENT, "com.mypass.chromehost"),
+        ] {
+            let canonical = canonical_requirement(expected).unwrap();
+            assert!(designated_requirement_is(&canonical, expected).unwrap());
+            // Spacing and quoting are the framework's business: the same expression written
+            // differently has the same canonical text.
+            let respelled = format!(
+                "identifier {id}   and anchor apple generic and certificate \
+                 leaf[subject.OU] = {TEAM_ID}"
+            );
+            let respelled = canonical_requirement(&respelled).unwrap();
+            assert!(designated_requirement_is(&respelled, expected).unwrap());
+        }
+    }
+
+    #[test]
+    fn near_miss_designated_requirements_are_refused() {
+        let app = APP_REQUIREMENT;
+        let near_misses = [
+            // A broadened requirement: trusts any Apple-signed code.
+            format!("{app} or anchor apple"),
+            format!("({app}) or identifier \"com.evil.app\""),
+            // A certificate-name pin (the default of an Apple Development certificate).
+            "identifier \"com.mypass.app\" and anchor apple generic and certificate \
+             leaf[subject.CN] = \"Apple Development: Example (W645B93PPQ)\""
+                .to_owned(),
+            format!("{app} and certificate leaf[subject.CN] = \"Apple Development: X\""),
+            // The Developer ID default: not the explicit R27 requirement.
+            "identifier \"com.mypass.app\" and anchor apple generic and certificate \
+             1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate \
+             leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate \
+             leaf[subject.OU] = W645B93PPQ"
+                .to_owned(),
+            app.replace("com.mypass.app", "com.mypass.chromehost"),
+            app.replace("com.mypass.app", "com.mypass.app2"),
+            app.replace(TEAM_ID, "ABCDE12345"),
+            app.replace("anchor apple generic and ", ""),
+            app.replace("anchor apple generic", "anchor trusted"),
+            format!("{app} and !anchor apple"),
+            "cdhash H\"0123456789abcdef0123456789abcdef01234567\"".to_owned(),
+        ];
+        for near_miss in &near_misses {
+            let canonical = canonical_requirement(near_miss)
+                .unwrap_or_else(|e| panic!("{near_miss} does not compile: {e}"));
+            assert!(
+                !designated_requirement_is(&canonical, APP_REQUIREMENT).unwrap(),
+                "{canonical}"
+            );
+        }
+        assert!(canonical_requirement("not a requirement (").is_err());
     }
 
     /// Refused before any Keychain call: the test binary and `/bin/ls` are not team-signed.
