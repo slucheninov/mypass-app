@@ -111,7 +111,7 @@ class PackageTests(Fixture):
 
     def test_host_rejects_a_certificate_name_before_building(self):
         self.env['MYPASS_SIGNING_IDENTITY'] = 'Apple Development: ambiguous name'
-        message = self.run_script('build-host.sh', '--release', ok=False)
+        message = self.run_script('build-host.sh', '--release', '--target', 'aarch64-apple-darwin', ok=False)
         self.assertIn('40-hex', message)
         self.assertNotIn('Traceback', message)
 

@@ -66,8 +66,12 @@ fn dev_app_sh_runs_build_host_first_and_passes_identity_unchanged() {
 
 /// Runs the script with the identity set; the refusal comes before any build, so this is cheap.
 fn run_with_identity(script: &str, identity: &str) -> Option<std::process::Output> {
-    match bash_command()
-        .arg(script)
+    let mut command = bash_command();
+    command.arg(script);
+    if script == "scripts/build-host.sh" {
+        command.args(["--target", "aarch64-apple-darwin"]);
+    }
+    match command
         .env("MYPASS_SIGNING_IDENTITY", identity)
         .current_dir(repo_root())
         .output()

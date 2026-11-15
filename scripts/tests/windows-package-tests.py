@@ -138,6 +138,36 @@ if [[ "$1" == metadata ]]; then python3 -c 'import json,os; print(json.dumps({"t
         self.assertIn('build -p mypass-host --release --target x86_64-pc-windows-msvc', log)
         self.assertEqual((self.root / 'src-tauri/binaries/mypass-native-host-x86_64-pc-windows-msvc.exe').read_bytes(), pe(3))
 
+    def test_native_windows_host_build_ignores_apple_identities_without_target(self):
+        target = self.root / 'native target with spaces'
+        binary = target / 'release/mypass-host.exe'
+        binary.parent.mkdir(parents=True)
+        binary.write_bytes(pe(3))
+        self.env['TEST_TARGET_DIR'] = str(target)
+        self.env['CODESIGN_LOG'] = str(self.root / 'codesign.log')
+        stubs = {
+            'uname': 'echo MINGW64_NT-10.0',
+            'rustc': 'echo "host: x86_64-pc-windows-msvc"',
+            'codesign': 'echo called > "$CODESIGN_LOG"; exit 1',
+            'cargo': """[[ -z "${MYPASS_SIGNING_IDENTITY+set}" && -z "${APPLE_SIGNING_IDENTITY+set}" ]] || exit 91
+echo "$*" >> "$CARGO_TEST_LOG"
+if [[ "$1" == metadata ]]; then python3 -c 'import json,os; print(json.dumps({"target_directory":os.environ["TEST_TARGET_DIR"]}))'; fi""",
+        }
+        for name, body in stubs.items():
+            path = self.root / 'stub-bin' / name
+            path.write_text('#!/usr/bin/env bash\n' + body + '\n')
+            path.chmod(0o755)
+        for identity in ('-', 'Apple Development: ambiguous name', 'A' * 40):
+            with self.subTest(identity=identity):
+                self.env['MYPASS_SIGNING_IDENTITY'] = identity
+                self.env['APPLE_SIGNING_IDENTITY'] = identity
+                self.run_script('build-host.sh', '--release')
+                self.assertEqual((self.root / 'src-tauri/binaries/mypass-native-host-x86_64-pc-windows-msvc.exe').read_bytes(), pe(3))
+        log = (self.root / 'cargo.log').read_text().splitlines()
+        self.assertEqual(log.count('build -p mypass-host --release'), 3)
+        self.assertEqual(log.count('tree --locked -p mypass-host -e normal --target x86_64-pc-windows-msvc'), 3)
+        self.assertFalse((self.root / 'codesign.log').exists())
+
     def test_host_smoke_parser_rejects_empty_truncated_extra_and_wrong_frames(self):
         spec = importlib.util.spec_from_file_location('host_smoke', fixture.ROOT / 'scripts/windows-host-smoke.py')
         module = importlib.util.module_from_spec(spec)
