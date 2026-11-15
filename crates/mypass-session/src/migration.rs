@@ -96,9 +96,31 @@ impl VaultMigrationService {
         target: Arc<dyn StorageBackend>,
         strategy: MigrationStrategy,
     ) -> Result<MigrationOutcome, MigrationError> {
+        Self::migrate_checked(local, password, target, strategy, &|| true)
+    }
+
+    pub fn migrate_checked(
+        local: &Database,
+        password: &SecretString,
+        target: Arc<dyn StorageBackend>,
+        strategy: MigrationStrategy,
+        current: &dyn Fn() -> bool,
+    ) -> Result<MigrationOutcome, MigrationError> {
+        let check = || {
+            if current() {
+                Ok(())
+            } else {
+                Err(MigrationError::Locked)
+            }
+        };
+        check()?;
+        if !unique_ids(&local.root, &mut std::collections::HashSet::new()) {
+            return Err(MigrationError::SourceInvalid);
+        }
         let before = target
             .read()
             .map_err(|_| MigrationError::TargetUnreadable)?;
+        check()?;
         if strategy == MigrationStrategy::AdoptRemote {
             let bytes = before.ok_or(MigrationError::TargetUnreadable)?;
             let remote = open_target(&bytes, password)?;
@@ -111,7 +133,7 @@ impl VaultMigrationService {
         let (expected, written) = if strategy == MigrationStrategy::Merge {
             let engine = SyncEngine::new(target.clone(), Arc::new(InMemoryCheckpointStore::new()));
             let result = engine
-                .sync(local, password, SyncMode::Push)
+                .sync_checked(local, password, SyncMode::Push, current)
                 .map_err(|e| match e {
                     SyncError::RemotePasswordMismatch => MigrationError::TargetPasswordMismatch,
                     SyncError::RemoteNotAVault => MigrationError::TargetNotAVault,
@@ -127,15 +149,18 @@ impl VaultMigrationService {
             if let Some(b) = &before {
                 open_target(b, password)?;
             }
+            check()?;
             let bytes = local
                 .save(password)
                 .map_err(|_| MigrationError::SourceInvalid)?;
+            check()?;
             let verified =
                 Database::open(&bytes, password).map_err(|_| MigrationError::SourceInvalid)?;
-            if !crate::saving::same_content(local, &verified) {
+            if !crate::saving::equivalent_content(local, &verified) {
                 return Err(MigrationError::SourceInvalid);
             }
             let hash: Option<[u8; 32]> = before.as_ref().map(|b| Sha256::digest(b).into());
+            check()?;
             match target
                 .write_if(hash.as_ref(), &bytes)
                 .map_err(|_| MigrationError::TargetWriteFailed)?
@@ -151,9 +176,10 @@ impl VaultMigrationService {
             .read()
             .map_err(|_| MigrationError::ValidationFailed)?
             .ok_or(MigrationError::ValidationFailed)?;
+        check()?;
         let verified =
             Database::open(&bytes, password).map_err(|_| MigrationError::ValidationFailed)?;
-        if !crate::saving::same_content(&expected, &verified) {
+        if !crate::saving::equivalent_content(&expected, &verified) {
             return Err(MigrationError::ValidationFailed);
         }
         Ok(MigrationOutcome {
@@ -162,6 +188,12 @@ impl VaultMigrationService {
             target_written: written && before.as_ref() != Some(&bytes),
         })
     }
+}
+
+fn unique_ids(group: &mypass_kdbx::Group, ids: &mut std::collections::HashSet<uuid::Uuid>) -> bool {
+    ids.insert(group.uuid)
+        && group.entries.iter().all(|entry| ids.insert(entry.uuid))
+        && group.groups.iter().all(|group| unique_ids(group, ids))
 }
 
 fn open_target(bytes: &[u8], password: &SecretString) -> Result<Database, MigrationError> {

@@ -53,6 +53,14 @@ const MESSAGES: Record<ErrorCode, () => string> = {
   invalidated: () => t("Device unlock was reset. Enter your master password."),
   notEnrolledOnDevice: () => t("No fingerprint or device password is set up on this computer"),
   deviceUnlockUnavailable: () => t("Device unlock is not available on this computer"),
+  migrationLocked: () => t("The vault changed or was locked. Unlock it and choose the folder again."),
+  migrationTargetUnreadable: () => t("Cannot read the destination. Check access and availability, then choose the folder again."),
+  migrationTargetNotAVault: () => t("The destination file is not a valid vault. Choose another folder or restore that file from a backup."),
+  migrationTargetPasswordMismatch: () => t("The destination uses a different master password. Choose a vault with the same password."),
+  migrationTargetWriteFailed: () => t("Cannot write the destination, or another app changed it. Check access and choose the folder again."),
+  migrationSourceInvalid: () => t("Cannot validate the source vault or its backup. Keep the original file and restore a known good backup before retrying."),
+  migrationSameFile: () => t("This is the current vault. Choose a different folder."),
+  migrationValidationFailed: () => t("Destination verification failed. The source and verified backup are retained; the destination may already have changed. Keep all copies and inspect them before retrying."),
   internal: () => t("Something went wrong"),
 };
 

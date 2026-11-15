@@ -847,5 +847,13 @@
   "Waiting for iCloud to download your vault…": "Очікування завантаження сховища з iCloud…",
   "Wrong master password for the vault in that folder": "Неправильний головний пароль для сховища в цій папці",
   "Your current file is kept in Backups.": "Поточний файл збережено в резервних копіях.",
-  "iCloud Drive is not available. Working from a local copy; changes will be merged when it comes back.": "iCloud Drive недоступний. Робота з локальною копією; зміни буде об’єднано після відновлення доступу."
+  "iCloud Drive is not available. Working from a local copy; changes will be merged when it comes back.": "iCloud Drive недоступний. Робота з локальною копією; зміни буде об’єднано після відновлення доступу.",
+  "Cannot read the destination. Check access and availability, then choose the folder again.": "Не вдалося прочитати призначення. Перевірте доступ і наявність папки та виберіть її знову.",
+  "Cannot validate the source vault or its backup. Keep the original file and restore a known good backup before retrying.": "Не вдалося перевірити вихідне сховище або його резервну копію. Збережіть оригінал і відновіть справну резервну копію перед повторною спробою.",
+  "Cannot write the destination, or another app changed it. Check access and choose the folder again.": "Не вдалося записати призначення, або інша програма змінила його. Перевірте доступ і виберіть папку знову.",
+  "Destination verification failed. The source and verified backup are retained; the destination may already have changed. Keep all copies and inspect them before retrying.": "Перевірка призначення не вдалася. Оригінал і перевірена резервна копія збережені; призначення вже могло змінитися. Збережіть усі копії та перевірте їх перед повторною спробою.",
+  "The destination file is not a valid vault. Choose another folder or restore that file from a backup.": "Файл призначення не є справним сховищем. Виберіть іншу папку або відновіть файл із резервної копії.",
+  "The destination uses a different master password. Choose a vault with the same password.": "Призначення використовує інший головний пароль. Виберіть сховище з таким самим паролем.",
+  "The vault changed or was locked. Unlock it and choose the folder again.": "Сховище змінено або заблоковано. Розблокуйте його та виберіть папку знову.",
+  "This is the current vault. Choose a different folder.": "Це поточне сховище. Виберіть іншу папку."
 }

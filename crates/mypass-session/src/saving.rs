@@ -199,6 +199,7 @@ impl<'a> InFlight<'a> {
     /// Reserve the write slot for recovery, without taking the current file out of the session.
     pub(crate) fn recovery(session: &'a VaultSession, inner: &mut Inner) -> Self {
         inner.in_flight = true;
+        inner.recovering = true;
         Self {
             session,
             file: None,
@@ -214,6 +215,7 @@ impl<'a> InFlight<'a> {
 
     fn restore(&mut self, inner: &mut Inner) {
         inner.in_flight = false;
+        inner.recovering = false;
         if let Some(file) = self.file.take() {
             match self.slot {
                 Slot::File => inner.file = Some(file),
@@ -221,6 +223,17 @@ impl<'a> InFlight<'a> {
             }
         }
         self.session.0.idle.notify_all();
+    }
+
+    /// Finish a recovery reservation while retaining the publication barrier through install.
+    pub(crate) fn finish_unpublished(mut self) -> Finished<'a> {
+        let mut inner = self.session.wait_unpublished(lock(&self.session.0.inner));
+        self.restore(&mut inner);
+        self.done = true;
+        Finished {
+            session: self.session,
+            inner,
+        }
     }
 
     /// Ends the operation: retakes the session lock, clears the flag, puts the file back and
@@ -294,6 +307,11 @@ impl Drop for Finished<'_> {
 /// change. Covers entries, groups, tombstones and metadata, not the save settings.
 pub(crate) fn same_content(merged: &Database, other: &Database) -> bool {
     *merged == merge(other, other)
+}
+
+/// Compare arbitrary databases symmetrically, including unsorted insertion order.
+pub(crate) fn equivalent_content(a: &Database, b: &Database) -> bool {
+    merge(a, a) == merge(b, b)
 }
 
 /// The KDF parameters without the salt or seed (redrawn on every save).

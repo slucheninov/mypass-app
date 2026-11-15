@@ -136,13 +136,20 @@ pub async fn vault_location_pick(
     shell: State<'_, crate::state::ShellState>,
 ) -> Result<Option<String>, ApiError> {
     super::ensure_unlocked(&state.0)?;
+    let incarnation = state.0.session.unlocked_incarnation()?;
+    let generation = shell.grants.generation();
+    let core = state.0.clone();
     let start = state.0.vault_location_start();
     let picker = shell.picker.clone();
     let grants = shell.grants.clone();
     blocking(move || {
-        Ok(picker
-            .pick_folder(Some(start))
-            .map(|p| grants.grant_folder(p)))
+        let picked = picker.pick_folder(Some(start));
+        if !core.session.is_incarnation(incarnation) {
+            return Err(mypass_session::session::SessionError::ChangedOnDisk.into());
+        }
+        picked
+            .map(|p| grants.grant_folder_if_current(generation, incarnation, p))
+            .transpose()
     })
     .await
 }
@@ -155,14 +162,19 @@ pub async fn vault_location_probe(
     folder_token: String,
 ) -> Result<FolderProbe, ApiError> {
     super::ensure_unlocked(&state.0)?;
-    let folder = shell.grants.take_folder(&folder_token)?;
+    let incarnation = state.0.session.unlocked_incarnation()?;
+    let generation = shell.grants.generation();
+    let folder = shell.grants.take_folder_for(&folder_token, incarnation)?;
     let core = state.0.clone();
     let grants = shell.grants.clone();
     blocking(move || {
         let probe = core.vault_location_probe(&folder)?;
+        if !core.session.is_incarnation(incarnation) {
+            return Err(mypass_session::session::SessionError::ChangedOnDisk.into());
+        }
         Ok(FolderProbe {
             probe,
-            folder_token: grants.grant_folder(folder),
+            folder_token: grants.grant_folder_if_current(generation, incarnation, folder)?,
         })
     })
     .await
@@ -176,9 +188,16 @@ pub async fn vault_location_change(
     req: mypass_session::migration::LocationChangeRequest,
 ) -> Result<SessionStatus, ApiError> {
     super::ensure_unlocked(&state.0)?;
-    let folder = shell.grants.take_folder(&req.folder_token)?;
+    let incarnation = state.0.session.unlocked_incarnation()?;
+    let folder = shell
+        .grants
+        .take_folder_for(&req.folder_token, incarnation)?;
     let core = state.0.clone();
-    blocking(move || core.vault_location_change(&folder, req.strategy)).await
+    blocking(move || {
+        core.migrate_folder_for(&folder, req.strategy, true, incarnation)?;
+        core.vault_status()
+    })
+    .await
 }
 
 /// The webview's reason key is advisory only; Rust chooses the catalog reason.

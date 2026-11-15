@@ -171,7 +171,7 @@ pub struct PickedFile {
 
 #[derive(Default)]
 struct Grants {
-    folders: VecDeque<(String, PathBuf)>,
+    folders: VecDeque<(String, PathBuf, u64)>,
     tokens: VecDeque<(String, PathBuf)>,
     csv: Option<PathBuf>,
     /// Bumped by [`FileGrants::clear`]; a [`Redeemed`] from an older generation is not restored.
@@ -197,27 +197,52 @@ fn invalid(message: &str) -> ApiError {
 }
 
 impl FileGrants {
-    /// Folder grants are a separate namespace from attachment grants.
-    pub fn grant_folder(&self, path: PathBuf) -> String {
-        let token = Uuid::new_v4().to_string();
+    pub fn generation(&self) -> u64 {
+        self.with(|g| g.generation)
+    }
+
+    pub fn grant_folder_if_current(
+        &self,
+        generation: u64,
+        incarnation: u64,
+        path: PathBuf,
+    ) -> Result<String, ApiError> {
         self.with(|g| {
-            g.folders.push_back((token.clone(), path));
+            if g.generation != generation {
+                return Err(invalid("folder selection expired"));
+            }
+            let token = Uuid::new_v4().to_string();
+            g.folders.push_back((token.clone(), path, incarnation));
             while g.folders.len() > MAX_TOKENS {
                 g.folders.pop_front();
             }
-        });
-        token
+            Ok(token)
+        })
     }
+
+    #[cfg(test)]
+    pub fn grant_folder(&self, path: PathBuf) -> String {
+        self.grant_folder_if_current(self.generation(), 0, path)
+            .unwrap_or_default()
+    }
+
+    #[cfg(test)]
     pub fn take_folder(&self, token: &str) -> Result<PathBuf, ApiError> {
+        self.take_folder_for(token, 0)
+    }
+
+    /// Redemption stays bound to the vault that authorized the native picker, including the
+    /// interval before the session observer has cleared the grant generation.
+    pub fn take_folder_for(&self, token: &str, incarnation: u64) -> Result<PathBuf, ApiError> {
         self.with(|g| {
             let pos = g
                 .folders
                 .iter()
-                .position(|(t, _)| t == token)
+                .position(|(t, _, scope)| t == token && *scope == incarnation)
                 .ok_or_else(|| invalid("invalid folder token"))?;
             g.folders
                 .remove(pos)
-                .map(|(_, p)| p)
+                .map(|(_, p, _)| p)
                 .ok_or_else(|| invalid("invalid folder token"))
         })
     }
@@ -327,6 +352,33 @@ impl FileGrants {
 #[cfg(test)]
 mod folder_tests {
     use super::*;
+    #[test]
+    fn folder_grant_cannot_cross_a_vault_switch_before_observer_revocation() {
+        let grants = FileGrants::default();
+        let token = grants
+            .grant_folder_if_current(grants.generation(), 7, PathBuf::from("old"))
+            .unwrap();
+        assert!(grants.take_folder_for(&token, 8).is_err());
+        assert_eq!(
+            grants.take_folder_for(&token, 7).unwrap(),
+            PathBuf::from("old")
+        );
+    }
+
+    #[test]
+    fn pending_folder_completion_cannot_renew_a_revoked_generation() {
+        let grants = FileGrants::default();
+        let generation = grants.generation();
+        grants.clear();
+        assert!(grants
+            .grant_folder_if_current(generation, 0, PathBuf::from("old"))
+            .is_err());
+        let token = grants
+            .grant_folder_if_current(grants.generation(), 0, PathBuf::from("new"))
+            .unwrap();
+        assert_eq!(grants.take_folder(&token).unwrap(), PathBuf::from("new"));
+    }
+
     #[test]
     fn folder_tokens_are_single_use_separate_from_attachments_and_clear_on_lock() {
         let grants = FileGrants::default();

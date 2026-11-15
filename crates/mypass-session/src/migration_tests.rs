@@ -545,3 +545,322 @@ fn unchanged_merge_reports_no_target_write() {
         VaultMigrationService::migrate(&db, &pw, target, MigrationStrategy::Merge).unwrap();
     assert!(!outcome.target_written);
 }
+
+#[test]
+fn migration_accepts_unsorted_children_for_every_strategy() {
+    let mut db = fast_database("unsorted");
+    for id in [2, 1] {
+        let mut entry = mypass_kdbx::Entry::new(mypass_kdbx::Timestamp(1));
+        entry.uuid = uuid::Uuid::from_u128(id);
+        db.root.entries.push(entry);
+        let mut group = mypass_kdbx::Group::new("group", mypass_kdbx::Timestamp(1));
+        group.uuid = uuid::Uuid::from_u128(id + 10);
+        db.root.groups.push(group);
+    }
+    let pw = SecretString::from("pw");
+    for strategy in [
+        MigrationStrategy::SeedRemote,
+        MigrationStrategy::Merge,
+        MigrationStrategy::AdoptRemote,
+        MigrationStrategy::OverwriteRemote,
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("vault.kdbx");
+        if strategy != MigrationStrategy::SeedRemote {
+            fs::write(&path, db.save(&pw).unwrap()).unwrap();
+        }
+        let target = Arc::new(FileIoBackend::new(Arc::new(PlainFileIo), &path));
+        let result = VaultMigrationService::migrate(&db, &pw, target, strategy).unwrap();
+        assert!(crate::saving::same_content(
+            &mypass_core::merge::merge(&db, &db),
+            &result.adopted.unwrap()
+        ));
+    }
+}
+
+#[test]
+fn withdrawn_migration_never_writes_after_target_read() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct Withdraw {
+        inner: FileIoBackend,
+        current: Arc<AtomicBool>,
+    }
+    impl StorageBackend for Withdraw {
+        fn exists(&self) -> Result<bool, mypass_sync::StorageError> {
+            self.inner.exists()
+        }
+        fn write(&self, _: &[u8]) -> Result<(), mypass_sync::StorageError> {
+            panic!("unguarded write")
+        }
+
+        fn read(&self) -> Result<Option<Vec<u8>>, mypass_sync::StorageError> {
+            let result = self.inner.read();
+            self.current.store(false, Ordering::SeqCst);
+            result
+        }
+        fn write_if(
+            &self,
+            _: Option<&[u8; 32]>,
+            _: &[u8],
+        ) -> Result<WriteOutcome, mypass_sync::StorageError> {
+            panic!("withdrawn migration wrote target")
+        }
+        fn modification_date(
+            &self,
+        ) -> Result<Option<std::time::SystemTime>, mypass_sync::StorageError> {
+            self.inner.modification_date()
+        }
+    }
+    for strategy in [
+        MigrationStrategy::SeedRemote,
+        MigrationStrategy::Merge,
+        MigrationStrategy::OverwriteRemote,
+        MigrationStrategy::AdoptRemote,
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        let current = Arc::new(AtomicBool::new(true));
+        let backend = Arc::new(Withdraw {
+            inner: FileIoBackend::new(Arc::new(PlainFileIo), d.path().join("v.kdbx")),
+            current: current.clone(),
+        });
+        assert!(VaultMigrationService::migrate_checked(
+            &fast_database("x"),
+            &SecretString::from("pw"),
+            backend,
+            strategy,
+            &|| current.load(Ordering::SeqCst)
+        )
+        .is_err());
+        assert!(!d.path().join("v.kdbx").exists());
+    }
+}
+
+#[test]
+fn suspended_secondary_cannot_undo_adopt_and_resumes_after_failure() {
+    let (d, core) = core_fixture();
+    let a = d.path().join("a");
+    let b = d.path().join("b");
+    fs::create_dir(&a).unwrap();
+    fs::create_dir(&b).unwrap();
+    core.sync_connect_secondary(&a, MigrationStrategy::SeedRemote)
+        .unwrap();
+    let empty = core.session.with_db(Clone::clone).unwrap();
+    fs::write(
+        b.join("old.kdbx"),
+        empty.save(&SecretString::from("pw")).unwrap(),
+    )
+    .unwrap();
+    let mut remote = empty.clone();
+    remote
+        .root
+        .entries
+        .push(mypass_kdbx::Entry::new(mypass_kdbx::Timestamp(1)));
+    fs::write(
+        a.join("old.kdbx"),
+        remote.save(&SecretString::from("pw")).unwrap(),
+    )
+    .unwrap();
+    let worker = core.secondary.clone();
+    let once = std::sync::atomic::AtomicBool::new(false);
+    core.session.add_observer(Arc::new(move |event| {
+        if matches!(event, crate::session::SessionEvent::VaultChanged)
+            && !once.swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            let _ = worker.sync_now();
+        }
+    }));
+    core.sync_connect_secondary(&b, MigrationStrategy::AdoptRemote)
+        .unwrap();
+    assert_eq!(core.session.with_db(|db| db.root.entries.len()).unwrap(), 0);
+    assert!(core
+        .sync_connect_secondary(&a, MigrationStrategy::SeedRemote)
+        .is_err());
+    assert_eq!(
+        core.settings.get().secondary_folder,
+        Some(fs::canonicalize(&b).unwrap().to_string_lossy().into_owned())
+    );
+    assert!(core.sync_now().is_ok());
+}
+
+#[test]
+fn recovery_reservation_rejects_checkpoint_publication_until_install() {
+    let (_d, session) = session_fixture();
+    let incarnation = session.unlocked_incarnation().unwrap();
+    let reservation = {
+        let mut inner = crate::scheduler::lock(&session.0.inner);
+        crate::saving::InFlight::recovery(&session, &mut inner)
+    };
+    assert_eq!(
+        session.publish_if_current(
+            incarnation,
+            || true,
+            || panic!("stale publication admitted")
+        ),
+        None::<()>
+    );
+    drop(reservation.finish_unpublished());
+    assert_eq!(
+        session.publish_if_current(incarnation, || true, || 7),
+        Some(7)
+    );
+}
+
+#[test]
+fn app_migration_withdraws_on_lock_quit_and_vault_switch_during_read() {
+    struct WithdrawIo {
+        session: crate::session::VaultSession,
+        action: u8,
+        next: std::path::PathBuf,
+    }
+    impl mypass_kdbx::FileIo for WithdrawIo {
+        fn read(&self, _: &Path) -> mypass_kdbx::Result<Vec<u8>> {
+            panic!("unbounded")
+        }
+        fn read_limited(&self, p: &Path, max: u64) -> mypass_kdbx::Result<Vec<u8>> {
+            match self.action {
+                0 => {
+                    self.session.lock(crate::session::LockReason::Manual);
+                }
+                1 => {
+                    self.session.begin_quit();
+                }
+                _ => {
+                    self.session
+                        .open_vault(&self.next, SecretString::from("pw"))
+                        .unwrap();
+                }
+            }
+            mypass_kdbx::FileIo::read_limited(&PlainFileIo, p, max)
+        }
+        fn write_atomic(&self, _: &Path, _: &[u8]) -> mypass_kdbx::Result<()> {
+            panic!("write after withdrawal")
+        }
+        fn replace_if(
+            &self,
+            _: &Path,
+            _: Option<&[u8; 32]>,
+            _: &[u8],
+            _: u64,
+        ) -> mypass_kdbx::Result<mypass_kdbx::ReplaceOutcome> {
+            panic!("guarded write after withdrawal")
+        }
+
+        fn metadata(&self, p: &Path) -> mypass_kdbx::Result<mypass_kdbx::FileMeta> {
+            mypass_kdbx::FileIo::metadata(&PlainFileIo, p)
+        }
+    }
+    for action in 0..3 {
+        for strategy in [
+            MigrationStrategy::SeedRemote,
+            MigrationStrategy::Merge,
+            MigrationStrategy::OverwriteRemote,
+        ] {
+            let (d, core) = core_fixture();
+            let folder = d.path().join("target");
+            fs::create_dir(&folder).unwrap();
+            let next = d.path().join("next.kdbx");
+            fs::write(
+                &next,
+                fast_database("next")
+                    .save(&SecretString::from("pw"))
+                    .unwrap(),
+            )
+            .unwrap();
+            let target = folder.join("old.kdbx");
+            let selected = fs::canonicalize(&folder).unwrap().join("old.kdbx");
+            let io = Arc::new(WithdrawIo {
+                session: core.session.clone(),
+                action,
+                next,
+            });
+            core.session.set_io_resolver(Some(Arc::new(move |path| {
+                if path == selected {
+                    Some(crate::ResolvedStorage::plain(io.clone()))
+                } else {
+                    None
+                }
+            })));
+            assert!(core.vault_location_change(&folder, strategy).is_err());
+            assert!(!target.exists());
+        }
+    }
+}
+
+#[test]
+fn queued_folder_migration_cannot_apply_to_another_incarnation() {
+    let (d, core) = core_fixture();
+    let incarnation = core.session.unlocked_incarnation().unwrap();
+    let next = d.path().join("next.kdbx");
+    fs::write(
+        &next,
+        fast_database("next")
+            .save(&SecretString::from("pw"))
+            .unwrap(),
+    )
+    .unwrap();
+    core.session
+        .open_vault(&next, SecretString::from("pw"))
+        .unwrap();
+    let folder = d.path().join("target");
+    fs::create_dir(&folder).unwrap();
+    assert!(core
+        .migrate_folder_for(&folder, MigrationStrategy::SeedRemote, true, incarnation)
+        .is_err());
+    assert!(!folder.join("next.kdbx").exists());
+}
+
+#[test]
+fn unsorted_vaults_migrate_through_primary_and_secondary_for_all_strategies() {
+    for relocate in [true, false] {
+        for strategy in [
+            MigrationStrategy::SeedRemote,
+            MigrationStrategy::Merge,
+            MigrationStrategy::AdoptRemote,
+            MigrationStrategy::OverwriteRemote,
+        ] {
+            let (d, core) = core_fixture();
+            core.session
+                .mutate(|db, _| {
+                    for id in [2, 1] {
+                        let mut e = mypass_kdbx::Entry::new(mypass_kdbx::Timestamp(1));
+                        e.uuid = uuid::Uuid::from_u128(id);
+                        db.root.entries.push(e);
+                        let mut g = mypass_kdbx::Group::new("g", mypass_kdbx::Timestamp(1));
+                        g.uuid = uuid::Uuid::from_u128(id + 10);
+                        db.root.groups.push(g);
+                    }
+                    Ok(())
+                })
+                .unwrap();
+            core.session.flush().unwrap();
+            let target = d.path().join("target");
+            fs::create_dir(&target).unwrap();
+            if strategy != MigrationStrategy::SeedRemote {
+                let bytes = core
+                    .session
+                    .with_db(|db| db.save(&SecretString::from("pw")).unwrap())
+                    .unwrap();
+                fs::write(target.join("old.kdbx"), bytes).unwrap();
+            }
+            if relocate {
+                core.vault_location_change(&target, strategy).unwrap();
+            } else {
+                core.sync_connect_secondary(&target, strategy).unwrap();
+            }
+            core.session
+                .with_db(|db| {
+                    assert_eq!(db.root.entries.len(), 2);
+                    assert_eq!(db.root.groups.len(), 2);
+                })
+                .unwrap();
+            let remote = Database::open(
+                &fs::read(target.join("old.kdbx")).unwrap(),
+                &SecretString::from("pw"),
+            )
+            .unwrap();
+            assert_eq!(remote.root.entries.len(), 2);
+            assert_eq!(remote.root.groups.len(), 2);
+            assert!(d.path().join("old.kdbx").exists());
+        }
+    }
+}

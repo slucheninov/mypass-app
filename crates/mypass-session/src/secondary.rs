@@ -340,6 +340,7 @@ struct State {
     /// Bumped by every arm and disarm; a job, a watcher event or a run of an older epoch does
     /// nothing.
     epoch: u64,
+    suspended: bool,
     armed: Option<Armed>,
     status: SecondaryStatus,
     last_sync: Option<LastSync>,
@@ -550,6 +551,7 @@ impl SecondarySync {
             watch,
             state: Mutex::new(State {
                 epoch: 0,
+                suspended: false,
                 armed: None,
                 status,
                 last_sync: None,
@@ -743,10 +745,27 @@ impl SecondarySync {
         }
     }
 
-    /// Clears the secondary folder setting and stops syncing; the copy in the folder is left as
-    /// it is. The current vault's checkpoint is cleared (best effort), so a later connect merges
-    /// with whatever the folder then holds instead of writing over it. The setting goes first
-    /// and disarms, so a run in flight stops at its next check instead of being waited out.
+    /// Withdraw old workers before migration. Session fences also cover an adoption in flight.
+    pub(crate) fn suspend(&self) {
+        let old = self.0.session.while_unpublished(|| {
+            let mut st = lock(&self.0.state);
+            st.suspended = true;
+            st.epoch = st.epoch.wrapping_add(1);
+            st.jobs.cancel_all();
+            st.armed.take()
+        });
+        if let Some(watcher) = old.and_then(|a| a.watcher) {
+            watcher.stop();
+        }
+        self.rearm();
+    }
+
+    pub(crate) fn resume(&self) {
+        lock(&self.0.state).suspended = false;
+        self.rearm();
+    }
+
+    /// Stops syncing, retaining the remote copy and clearing its checkpoint best-effort.
     pub fn disconnect(&self) -> Result<(), ApiError> {
         self.0.settings.set_secondary_folder(None)?;
         self.rearm();
@@ -767,6 +786,7 @@ impl SecondarySync {
     /// Re-reads the session and the settings and arms, re-arms or disarms. Call it after
     /// `SettingsStore::set_secondary_folder` (the session events call it themselves).
     pub fn rearm(&self) {
+        let expected_epoch = lock(&self.0.state).epoch;
         let desired = self.desired_key();
         let vault_id = self.0.session.vault_id();
         let folder = self.0.settings.get().secondary_folder;
@@ -777,6 +797,10 @@ impl SecondarySync {
         // calls back into the session.
         let rearmed = self.0.session.while_unpublished(|| {
             let mut st = lock(&self.0.state);
+            if st.epoch != expected_epoch {
+                return Err(None);
+            }
+            let desired = if st.suspended { None } else { desired };
             if st.armed.as_ref().map(|a| &a.key) == desired.as_ref() {
                 // Still disarmed: only the configured / not configured status can have changed.
                 let changed = if st.armed.is_none() {
@@ -1040,7 +1064,7 @@ impl SecondarySync {
     /// the other way round).
     fn arm_is(&self, epoch: u64) -> bool {
         let st = lock(&self.0.state);
-        st.epoch == epoch && st.armed.is_some()
+        !st.suspended && st.epoch == epoch && st.armed.is_some()
     }
 
     /// Adopts a merge into the LIVE database (edits made while the engine ran are kept), makes

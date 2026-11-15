@@ -360,6 +360,8 @@ pub(crate) struct Inner {
     /// is published for a vault that was locked, switched or relocated, or for an arm that was
     /// replaced, once that change has happened. `Shared::idle` is signalled when it drops.
     pub(crate) publishing: u32,
+    /// Recovery owns the write slot; new checkpoint publications must wait for installation.
+    pub(crate) recovering: bool,
     /// The next save is the first since this vault was opened or unlocked (always snapshots).
     pub(crate) first_write_of_session: bool,
     /// The file was created by this session; its first save takes no snapshot (there is
@@ -405,6 +407,7 @@ impl Inner {
             save_job: None,
             in_flight: false,
             publishing: 0,
+            recovering: false,
             first_write_of_session: false,
             fresh_file: false,
             save_job_id: 0,
@@ -869,7 +872,7 @@ impl VaultSession {
         let old_storage;
         let path = {
             let mut inner = match operation {
-                Some(operation) => operation.finish(),
+                Some(operation) => operation.finish_unpublished(),
                 None => self.finish_idle(),
             };
             if inner.quitting {
@@ -1109,7 +1112,7 @@ impl VaultSession {
             let old_storage;
             let vault_id = {
                 let mut inner = match operation {
-                    Some(operation) => operation.finish(),
+                    Some(operation) => operation.finish_unpublished(),
                     None => self.finish_idle(),
                 };
                 if inner.quitting {
@@ -1315,9 +1318,20 @@ impl VaultSession {
         }
     }
 
+    pub fn unlocked_incarnation(&self) -> Result<u64, SessionError> {
+        let inner = lock(&self.0.inner);
+        if inner.quitting {
+            return Err(SessionError::Quitting);
+        }
+        if inner.db.is_none() {
+            return Err(inner.not_unlocked());
+        }
+        Ok(inner.incarnation)
+    }
+
     /// Whether the session still holds the vault of a snapshot taken at `incarnation` (not
     /// locked, switched or relocated since) and is not quitting.
-    pub(crate) fn is_incarnation(&self, incarnation: u64) -> bool {
+    pub fn is_incarnation(&self, incarnation: u64) -> bool {
         let inner = lock(&self.0.inner);
         !inner.quitting && inner.db.is_some() && inner.incarnation == incarnation
     }
@@ -1363,7 +1377,11 @@ impl VaultSession {
     ) -> Option<R> {
         {
             let mut inner = lock(&self.0.inner);
-            if inner.quitting || inner.db.is_none() || inner.incarnation != incarnation || !still()
+            if inner.recovering
+                || inner.quitting
+                || inner.db.is_none()
+                || inner.incarnation != incarnation
+                || !still()
             {
                 return None;
             }
@@ -1407,7 +1425,7 @@ impl VaultSession {
         if inner.is_dirty() {
             return Durability::Unsaved;
         }
-        if crate::saving::same_content(&mypass_core::merge::merge(live, content), live) {
+        if crate::saving::equivalent_content(&mypass_core::merge::merge(live, content), live) {
             Durability::Durable
         } else {
             Durability::Missing
@@ -1507,7 +1525,7 @@ impl VaultSession {
         storage.io = Arc::new(crate::migration::BoundedIo(storage.io));
         let (file, remote) = VaultFile::open_with(storage.io.clone(), path, &snapshot.password)?;
         let expected = adopt.as_ref().unwrap_or(&snapshot.db);
-        if !crate::saving::same_content(&remote, expected) {
+        if !crate::saving::equivalent_content(&remote, expected) {
             return Err(SessionError::ChangedOnDisk);
         }
         let old_storage;
@@ -1521,7 +1539,7 @@ impl VaultSession {
                 || !inner
                     .db
                     .as_ref()
-                    .is_some_and(|db| crate::saving::same_content(db, &snapshot.db))
+                    .is_some_and(|db| crate::saving::equivalent_content(db, &snapshot.db))
             {
                 return Err(SessionError::ChangedOnDisk);
             }

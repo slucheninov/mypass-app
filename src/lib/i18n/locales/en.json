@@ -847,5 +847,13 @@
   "Waiting for iCloud to download your vault…": "Waiting for iCloud to download your vault…",
   "Wrong master password for the vault in that folder": "Wrong master password for the vault in that folder",
   "Your current file is kept in Backups.": "Your current file is kept in Backups.",
-  "iCloud Drive is not available. Working from a local copy; changes will be merged when it comes back.": "iCloud Drive is not available. Working from a local copy; changes will be merged when it comes back."
+  "iCloud Drive is not available. Working from a local copy; changes will be merged when it comes back.": "iCloud Drive is not available. Working from a local copy; changes will be merged when it comes back.",
+  "Cannot read the destination. Check access and availability, then choose the folder again.": "Cannot read the destination. Check access and availability, then choose the folder again.",
+  "Cannot validate the source vault or its backup. Keep the original file and restore a known good backup before retrying.": "Cannot validate the source vault or its backup. Keep the original file and restore a known good backup before retrying.",
+  "Cannot write the destination, or another app changed it. Check access and choose the folder again.": "Cannot write the destination, or another app changed it. Check access and choose the folder again.",
+  "Destination verification failed. The source and verified backup are retained; the destination may already have changed. Keep all copies and inspect them before retrying.": "Destination verification failed. The source and verified backup are retained; the destination may already have changed. Keep all copies and inspect them before retrying.",
+  "The destination file is not a valid vault. Choose another folder or restore that file from a backup.": "The destination file is not a valid vault. Choose another folder or restore that file from a backup.",
+  "The destination uses a different master password. Choose a vault with the same password.": "The destination uses a different master password. Choose a vault with the same password.",
+  "The vault changed or was locked. Unlock it and choose the folder again.": "The vault changed or was locked. Unlock it and choose the folder again.",
+  "This is the current vault. Choose a different folder.": "This is the current vault. Choose a different folder."
 }

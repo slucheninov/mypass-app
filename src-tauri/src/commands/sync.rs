@@ -35,7 +35,12 @@ pub async fn sync_connect_secondary(
     strategy: mypass_session::migration::MigrationStrategy,
 ) -> Result<SecondaryStatus, ApiError> {
     super::ensure_unlocked(&state.0)?;
-    let folder = shell.grants.take_folder(&folder_token)?;
+    let incarnation = state.0.session.unlocked_incarnation()?;
+    let folder = shell.grants.take_folder_for(&folder_token, incarnation)?;
     let core = state.0.clone();
-    blocking(move || core.sync_connect_secondary(&folder, strategy)).await
+    blocking(move || {
+        core.migrate_folder_for(&folder, strategy, false, incarnation)?;
+        core.sync_status()
+    })
+    .await
 }

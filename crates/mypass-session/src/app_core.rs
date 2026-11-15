@@ -77,6 +77,14 @@ pub enum ErrorCode {
     Invalidated,
     NotEnrolledOnDevice,
     DeviceUnlockUnavailable,
+    MigrationLocked,
+    MigrationTargetUnreadable,
+    MigrationTargetNotAVault,
+    MigrationTargetPasswordMismatch,
+    MigrationTargetWriteFailed,
+    MigrationSourceInvalid,
+    MigrationSameFile,
+    MigrationValidationFailed,
     Internal,
 }
 
@@ -209,6 +217,7 @@ pub struct AppCore {
     /// Serialises draft work. Holds the id of the vault whose draft key was created in memory
     /// but has not yet reached the disk (cleared only by a successful flush).
     drafts: Arc<Mutex<Option<String>>>,
+    migration_gate: Arc<Mutex<()>>,
 }
 
 impl AppCore {
@@ -322,6 +331,7 @@ impl AppCore {
             paths,
             processes: Arc::new(NoOtherProcesses),
             drafts: Arc::new(Mutex::new(None)),
+            migration_gate: Arc::new(Mutex::new(())),
         }
     }
 
@@ -988,7 +998,7 @@ impl AppCore {
         folder: &Path,
         strategy: crate::migration::MigrationStrategy,
     ) -> Result<SessionStatus, ApiError> {
-        self.migrate_folder(folder, strategy, true)?;
+        self.migrate_folder(folder, strategy, true, None)?;
         Ok(self.session.status())
     }
 
@@ -998,8 +1008,18 @@ impl AppCore {
         folder: &Path,
         strategy: crate::migration::MigrationStrategy,
     ) -> Result<SecondaryStatus, ApiError> {
-        self.migrate_folder(folder, strategy, false)?;
+        self.migrate_folder(folder, strategy, false, None)?;
         Ok(self.secondary.status())
+    }
+
+    pub fn migrate_folder_for(
+        &self,
+        folder: &Path,
+        strategy: crate::migration::MigrationStrategy,
+        relocate: bool,
+        incarnation: u64,
+    ) -> Result<(), ApiError> {
+        self.migrate_folder(folder, strategy, relocate, Some(incarnation))
     }
 
     fn migrate_folder(
@@ -1007,12 +1027,28 @@ impl AppCore {
         folder: &Path,
         strategy: crate::migration::MigrationStrategy,
         relocate: bool,
+        expected_incarnation: Option<u64>,
     ) -> Result<(), ApiError> {
         use crate::migration::{MigrationError, VaultMigrationService};
         use mypass_sync::{FileIoBackend, StorageBackend, WriteOutcome};
+        let _gate = self
+            .migration_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.secondary.suspend();
+        struct Resume<'a>(&'a SecondarySync);
+        impl Drop for Resume<'_> {
+            fn drop(&mut self) {
+                self.0.resume();
+            }
+        }
+        let _resume = Resume(&self.secondary);
         let target = self.migration_target(folder)?;
         self.session.flush()?;
         let snapshot = self.session.sync_snapshot()?;
+        if expected_incarnation.is_some_and(|expected| expected != snapshot.incarnation) {
+            return Err(SessionError::ChangedOnDisk.into());
+        }
         if crate::migration::same_file(&target, &snapshot.path) {
             return Err(migration_error(MigrationError::SameFile));
         }
@@ -1033,8 +1069,14 @@ impl AppCore {
             .io
             .read_limited(&snapshot.path, mypass_kdbx::MAX_VAULT_FILE_BYTES)
             .map_err(|_| migration_error(MigrationError::SourceInvalid))?;
+        if !self.session.is_incarnation(snapshot.incarnation) {
+            return Err(migration_error(MigrationError::Locked));
+        }
         Database::open(&source, &snapshot.password)
             .map_err(|_| migration_error(MigrationError::SourceInvalid))?;
+        if !self.session.is_incarnation(snapshot.incarnation) {
+            return Err(migration_error(MigrationError::Locked));
+        }
         let backup_dir = self.backups.folder(&snapshot.vault_id)?;
         std::fs::create_dir_all(&backup_dir)
             .map_err(|_| ApiError::new(ErrorCode::Io, "backup folder unavailable"))?;
@@ -1058,9 +1100,14 @@ impl AppCore {
         }
         let storage = self.session.resolve_storage(&target);
         let backend = Arc::new(FileIoBackend::new(storage.io.clone(), &target));
-        let outcome =
-            VaultMigrationService::migrate(&snapshot.db, &snapshot.password, backend, strategy)
-                .map_err(migration_error)?;
+        let outcome = VaultMigrationService::migrate_checked(
+            &snapshot.db,
+            &snapshot.password,
+            backend,
+            strategy,
+            &|| self.session.is_incarnation(snapshot.incarnation),
+        )
+        .map_err(migration_error)?;
         if relocate {
             self.session
                 .switch_snapshot(&target, storage.io, outcome.adopted, &snapshot)?;
@@ -1076,7 +1123,7 @@ impl AppCore {
                 }
                 self.session
                     .mutate_if_incarnation(snapshot.incarnation, |live, _| {
-                        if !crate::saving::same_content(live, &snapshot.db) {
+                        if !crate::saving::equivalent_content(live, &snapshot.db) {
                             return Err(SessionError::ChangedOnDisk);
                         }
                         *live = adopted;
@@ -1115,6 +1162,10 @@ impl AppCore {
 
     /// Stops syncing and forgets the folder; the copy in it is left as it is.
     pub fn sync_disconnect_secondary(&self) -> Result<(), ApiError> {
+        let _gate = self
+            .migration_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.secondary.disconnect()
     }
 
@@ -1143,10 +1194,14 @@ impl AppCore {
 fn migration_error(error: crate::migration::MigrationError) -> ApiError {
     use crate::migration::MigrationError as M;
     let code = match error {
-        M::Locked => ErrorCode::Locked,
-        M::TargetPasswordMismatch => ErrorCode::WrongPassword,
-        M::SameFile | M::TargetNotAVault | M::SourceInvalid => ErrorCode::InvalidInput,
-        M::TargetUnreadable | M::TargetWriteFailed | M::ValidationFailed => ErrorCode::Io,
+        M::Locked => ErrorCode::MigrationLocked,
+        M::TargetUnreadable => ErrorCode::MigrationTargetUnreadable,
+        M::TargetNotAVault => ErrorCode::MigrationTargetNotAVault,
+        M::TargetPasswordMismatch => ErrorCode::MigrationTargetPasswordMismatch,
+        M::TargetWriteFailed => ErrorCode::MigrationTargetWriteFailed,
+        M::SourceInvalid => ErrorCode::MigrationSourceInvalid,
+        M::SameFile => ErrorCode::MigrationSameFile,
+        M::ValidationFailed => ErrorCode::MigrationValidationFailed,
     };
     ApiError::new(code, error.to_string())
 }
@@ -1169,6 +1224,27 @@ mod tests {
     use std::time::{Duration, UNIX_EPOCH};
     use tempfile::TempDir;
     use uuid::Uuid;
+
+    #[test]
+    fn migration_errors_keep_all_eight_typed_api_codes() {
+        use crate::migration::MigrationError as M;
+        let cases = [
+            (M::Locked, ErrorCode::MigrationLocked),
+            (M::TargetUnreadable, ErrorCode::MigrationTargetUnreadable),
+            (M::TargetNotAVault, ErrorCode::MigrationTargetNotAVault),
+            (
+                M::TargetPasswordMismatch,
+                ErrorCode::MigrationTargetPasswordMismatch,
+            ),
+            (M::TargetWriteFailed, ErrorCode::MigrationTargetWriteFailed),
+            (M::SourceInvalid, ErrorCode::MigrationSourceInvalid),
+            (M::SameFile, ErrorCode::MigrationSameFile),
+            (M::ValidationFailed, ErrorCode::MigrationValidationFailed),
+        ];
+        for (error, code) in cases {
+            assert_eq!(migration_error(error).code, code);
+        }
+    }
 
     const T0: u64 = 1_700_000_000;
 
