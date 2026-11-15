@@ -865,5 +865,6 @@
   "Chrome and Edge are supported. Chromium is registered when installed. Other Chromium browsers may use these registrations, but support is unverified.": "Chrome and Edge are supported. Chromium is registered when installed. Other Chromium browsers may use these registrations, but support is unverified.",
   "Approval required. Open Windows Settings > Apps > Startup and allow MyPass.": "Approval required. Open Windows Settings > Apps > Startup and allow MyPass.",
   "On Windows, turning off the display also locks MyPass when this option is enabled.": "On Windows, turning off the display also locks MyPass when this option is enabled.",
-  "Ctrl+Shift+L is also used by Word and some editors. MyPass overrides it while running; you can change the lock hotkey here.": "Ctrl+Shift+L is also used by Word and some editors. MyPass overrides it while running; you can change the lock hotkey here."
+  "Ctrl+Shift+L is also used by Word and some editors. MyPass overrides it while running; you can change the lock hotkey here.": "Ctrl+Shift+L is also used by Word and some editors. MyPass overrides it while running; you can change the lock hotkey here.",
+  "startup.webview2.missing": "MyPass needs the Microsoft Edge WebView2 Runtime, which is missing on this PC. Install it from https://go.microsoft.com/fwlink/p/?LinkId=2124703 and start MyPass again."
 }

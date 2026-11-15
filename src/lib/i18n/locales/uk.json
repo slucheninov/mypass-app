@@ -865,5 +865,6 @@
   "Chrome and Edge are supported. Chromium is registered when installed. Other Chromium browsers may use these registrations, but support is unverified.": "Підтримуються Chrome та Edge. Chromium реєструється, якщо встановлений. Інші браузери Chromium можуть використовувати ці реєстрації, але їхня підтримка не перевірена.",
   "Approval required. Open Windows Settings > Apps > Startup and allow MyPass.": "Потрібен дозвіл. Відкрийте Параметри Windows > Програми > Автозавантаження та дозвольте MyPass.",
   "On Windows, turning off the display also locks MyPass when this option is enabled.": "У Windows вимкнення дисплея також блокує MyPass, коли цей параметр увімкнено.",
-  "Ctrl+Shift+L is also used by Word and some editors. MyPass overrides it while running; you can change the lock hotkey here.": "Ctrl+Shift+L також використовується у Word і деяких редакторах. MyPass перехоплює його під час роботи; тут можна змінити клавіші блокування."
+  "Ctrl+Shift+L is also used by Word and some editors. MyPass overrides it while running; you can change the lock hotkey here.": "Ctrl+Shift+L також використовується у Word і деяких редакторах. MyPass перехоплює його під час роботи; тут можна змінити клавіші блокування.",
+  "startup.webview2.missing": "MyPass потрібен Microsoft Edge WebView2 Runtime, якого немає на цьому комп’ютері. Установіть його з https://go.microsoft.com/fwlink/p/?LinkId=2124703 і запустіть MyPass знову."
 }
