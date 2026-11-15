@@ -16,13 +16,16 @@ workspace = true
 [dependencies]
 mypass-kdbx = { path = "../mypass-kdbx" }
 mypass-core = { path = "../mypass-core" }
+mypass-platform = { path = "../mypass-platform" }
 notify.workspace = true
 secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+specta.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
 mypass-kdbx = { path = "../mypass-kdbx", features = ["test-util"] }
+mypass-platform = { path = "../mypass-platform", features = ["test-util"] }
 tempfile.workspace = true

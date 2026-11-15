@@ -2871,11 +2871,13 @@ version = "0.1.0"
 dependencies = [
  "mypass-core",
  "mypass-kdbx",
+ "mypass-platform",
  "notify",
  "secrecy",
  "serde",
  "serde_json",
  "sha2 0.11.1",
+ "specta",
  "tempfile",
  "thiserror 2.0.21",
 ]
