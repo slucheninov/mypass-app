@@ -4,16 +4,23 @@
 //! test can make a path a placeholder that turns current only after a download request and a
 //! number of polls (or never), inject one failure per operation (for example
 //! `ErrorKind::TimedOut`), add conflict versions, and fire the presenter callbacks.
+//!
+//! The coordination deadline is modelled as on macOS: [`FakeCoordinatedFiles::hold`] makes the
+//! coordinator keep a path busy (another writer, or a download that does not arrive), and a read
+//! or write of that path then waits at most its timeout, returns `ErrorKind::TimedOut` and never
+//! runs its accessor, also not after the hold is released.
 
 use super::lock;
 use crate::coordinated::{
-    Accessor, ChangeCallback, ConflictVersion, CoordinatedFiles, DownloadState,
+    coordination_timed_out, Accessor, ChangeCallback, ConflictVersion, CoordinatedFiles,
+    DownloadState,
 };
 use crate::Subscription;
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::time::Duration;
 
 /// The operations a failure can be injected into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -47,12 +54,42 @@ struct State {
     next_presenter: u64,
     counts: HashMap<CoordinatedOp, usize>,
     icloud_available: bool,
+    /// Paths the coordinator keeps busy, with the number of live holds.
+    held: HashMap<PathBuf, usize>,
+    /// The timeout of the last coordinated read or write, per operation.
+    timeouts: HashMap<CoordinatedOp, Duration>,
+    /// Coordinated reads and writes that timed out.
+    timed_out: usize,
 }
 
 /// A scriptable [`CoordinatedFiles`]; see the module docs.
 #[derive(Clone, Default)]
 pub struct FakeCoordinatedFiles {
     state: Arc<Mutex<State>>,
+    /// Signalled when a hold is released.
+    released: Arc<Condvar>,
+}
+
+/// Keeps a path busy for coordinated access until dropped; see [`FakeCoordinatedFiles::hold`].
+#[must_use = "the hold ends when this is dropped"]
+pub struct CoordinationHold {
+    state: Arc<Mutex<State>>,
+    released: Arc<Condvar>,
+    path: PathBuf,
+}
+
+impl Drop for CoordinationHold {
+    fn drop(&mut self) {
+        let mut state = lock(&self.state);
+        if let Some(n) = state.held.get_mut(&self.path) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                state.held.remove(&self.path);
+            }
+        }
+        drop(state);
+        self.released.notify_all();
+    }
 }
 
 impl std::fmt::Debug for FakeCoordinatedFiles {
@@ -133,6 +170,53 @@ impl FakeCoordinatedFiles {
         lock(&self.state).counts.get(&op).copied().unwrap_or(0)
     }
 
+    /// Keeps `path` busy: coordinated reads and writes of it wait (at most their timeout) until
+    /// the returned hold is dropped, as behind another writer or an evicted placeholder.
+    pub fn hold(&self, path: &Path) -> CoordinationHold {
+        *lock(&self.state)
+            .held
+            .entry(path.to_path_buf())
+            .or_default() += 1;
+        CoordinationHold {
+            state: Arc::clone(&self.state),
+            released: Arc::clone(&self.released),
+            path: path.to_path_buf(),
+        }
+    }
+
+    /// The timeout passed to the last coordinated read or write (`op` is `Read` or `Write`).
+    pub fn last_timeout(&self, op: CoordinatedOp) -> Option<Duration> {
+        lock(&self.state).timeouts.get(&op).copied()
+    }
+
+    /// How many coordinated reads and writes timed out.
+    pub fn timed_out(&self) -> usize {
+        lock(&self.state).timed_out
+    }
+
+    /// Waits until `path` is not held, at most `timeout`; `TimedOut` when it still is.
+    fn coordinate(
+        &self,
+        op: CoordinatedOp,
+        path: &Path,
+        timeout: Duration,
+        accessor: Accessor<'_>,
+    ) -> io::Result<()> {
+        self.enter(op)?;
+        let mut state = lock(&self.state);
+        state.timeouts.insert(op, timeout);
+        let (mut state, _) = self
+            .released
+            .wait_timeout_while(state, timeout, |s| s.held.contains_key(path))
+            .unwrap_or_else(PoisonError::into_inner);
+        if state.held.contains_key(path) {
+            state.timed_out += 1;
+            return Err(coordination_timed_out());
+        }
+        drop(state);
+        accessor(path)
+    }
+
     /// Counts the call and takes an injected failure, if any.
     fn enter(&self, op: CoordinatedOp) -> io::Result<()> {
         let mut state = lock(&self.state);
@@ -145,14 +229,22 @@ impl FakeCoordinatedFiles {
 }
 
 impl CoordinatedFiles for FakeCoordinatedFiles {
-    fn coordinated_read(&self, path: &Path, accessor: Accessor<'_>) -> io::Result<()> {
-        self.enter(CoordinatedOp::Read)?;
-        accessor(path)
+    fn coordinated_read(
+        &self,
+        path: &Path,
+        timeout: Duration,
+        accessor: Accessor<'_>,
+    ) -> io::Result<()> {
+        self.coordinate(CoordinatedOp::Read, path, timeout, accessor)
     }
 
-    fn coordinated_write(&self, path: &Path, accessor: Accessor<'_>) -> io::Result<()> {
-        self.enter(CoordinatedOp::Write)?;
-        accessor(path)
+    fn coordinated_write(
+        &self,
+        path: &Path,
+        timeout: Duration,
+        accessor: Accessor<'_>,
+    ) -> io::Result<()> {
+        self.coordinate(CoordinatedOp::Write, path, timeout, accessor)
     }
 
     fn download_state(&self, path: &Path) -> io::Result<DownloadState> {
@@ -238,7 +330,70 @@ impl CoordinatedFiles for FakeCoordinatedFiles {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    const T: Duration = Duration::from_secs(10);
+
+    #[test]
+    fn a_held_path_times_out_and_the_accessor_never_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("v");
+        std::fs::write(&path, b"original").unwrap();
+        let fake = FakeCoordinatedFiles::new();
+        let hold = fake.hold(&path);
+        let ran = AtomicBool::new(false);
+        let short = Duration::from_millis(20);
+        for op in [CoordinatedOp::Read, CoordinatedOp::Write] {
+            let mut accessor = |p: &Path| {
+                ran.store(true, Ordering::SeqCst);
+                std::fs::write(p, b"late")
+            };
+            let err = match op {
+                CoordinatedOp::Read => fake.coordinated_read(&path, short, &mut accessor),
+                _ => fake.coordinated_write(&path, short, &mut accessor),
+            }
+            .unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+            assert_eq!(fake.last_timeout(op), Some(short));
+        }
+        drop(hold);
+        assert!(!ran.load(Ordering::SeqCst));
+        assert_eq!(std::fs::read(&path).unwrap(), b"original");
+        assert_eq!(fake.timed_out(), 2);
+        // Other paths were never held, and the released path works again.
+        fake.coordinated_write(&path, T, &mut |p| std::fs::write(p, b"new"))
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+    }
+
+    #[test]
+    fn a_hold_released_before_the_deadline_lets_the_access_through() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("v");
+        std::fs::write(&path, b"x").unwrap();
+        let fake = FakeCoordinatedFiles::new();
+        let hold = fake.hold(&path);
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let releaser = std::thread::spawn(move || {
+            rx.recv().unwrap();
+            drop(hold);
+        });
+        let waiter = {
+            let fake = fake.clone();
+            let path = path.clone();
+            std::thread::spawn(move || {
+                fake.coordinated_read(&path, Duration::from_secs(60), &mut |_| Ok(()))
+            })
+        };
+        // Release only once the read is waiting on the hold.
+        while fake.count(CoordinatedOp::Read) == 0 {
+            std::thread::yield_now();
+        }
+        tx.send(()).unwrap();
+        releaser.join().unwrap();
+        waiter.join().unwrap().unwrap();
+        assert_eq!(fake.timed_out(), 0);
+    }
 
     fn version(name: &str) -> ConflictVersion {
         ConflictVersion {
@@ -295,9 +450,11 @@ mod tests {
         std::fs::write(&path, b"x").unwrap();
         let fake = FakeCoordinatedFiles::new();
         fake.fail_next(CoordinatedOp::Read, io::ErrorKind::TimedOut);
-        let err = fake.coordinated_read(&path, &mut |_| Ok(())).unwrap_err();
+        let err = fake
+            .coordinated_read(&path, T, &mut |_| Ok(()))
+            .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
-        fake.coordinated_read(&path, &mut |_| Ok(())).unwrap();
+        fake.coordinated_read(&path, T, &mut |_| Ok(())).unwrap();
         assert_eq!(fake.count(CoordinatedOp::Read), 2);
         assert_eq!(
             fake.download_state(&path).unwrap(),

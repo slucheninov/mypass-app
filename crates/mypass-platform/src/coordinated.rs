@@ -15,14 +15,20 @@
 //! where plain access *is* the coordinated access (there is no coordinator to talk to) and nothing
 //! is ever ubiquitous. Tests use `testing::FakeCoordinatedFiles`.
 //!
-//! Timing is the caller's: nothing here waits for a download or polls. The caller asks for the
-//! download state, requests the download and re-checks the state on its own scheduler.
+//! Timing is the caller's: nothing here polls. The caller asks for the download state, requests
+//! the download and re-checks the state on its own scheduler. The one wait that cannot be avoided
+//! is the coordination itself (another writer, or a placeholder evicted after the state check),
+//! so every coordinated read and write takes a timeout: when the coordinator has not handed the
+//! item over in time, the request is cancelled and the call returns `ErrorKind::TimedOut`, and
+//! the accessor never runs, then or later.
 
 use crate::Subscription;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::SystemTime;
+#[cfg(any(target_os = "macos", test, feature = "test-util"))]
+use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, SystemTime};
 
 /// Where the bytes of an item are, as far as the file provider knows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,12 +98,26 @@ pub type ChangeCallback = Arc<dyn Fn() + Send + Sync>;
 pub trait CoordinatedFiles: Send + Sync {
     /// Runs `accessor` under a coordinated read of `path` and returns its result. Waits for other
     /// writers (the sync daemon included); a placeholder is downloaded first, so callers check
-    /// [`Self::download_state`] beforehand when they must not block.
-    fn coordinated_read(&self, path: &Path, accessor: Accessor<'_>) -> io::Result<()>;
+    /// [`Self::download_state`] beforehand. The wait is bounded by `timeout`: when the accessor
+    /// has not started by then, the coordination is cancelled and the call returns
+    /// `ErrorKind::TimedOut` without ever running the accessor. Once the accessor runs, the
+    /// timeout no longer applies (the accessor is the caller's own I/O).
+    fn coordinated_read(
+        &self,
+        path: &Path,
+        timeout: Duration,
+        accessor: Accessor<'_>,
+    ) -> io::Result<()>;
 
     /// Runs `accessor` under a coordinated write of `path` that replaces the item (the atomic
-    /// rename of a save) and returns its result.
-    fn coordinated_write(&self, path: &Path, accessor: Accessor<'_>) -> io::Result<()>;
+    /// rename of a save) and returns its result. `timeout` bounds the wait for the coordinator
+    /// as for [`Self::coordinated_read`]; a timed-out write never runs later.
+    fn coordinated_write(
+        &self,
+        path: &Path,
+        timeout: Duration,
+        accessor: Accessor<'_>,
+    ) -> io::Result<()>;
 
     /// The current download state of `path`, read fresh (never a cached value). A missing file
     /// is `ErrorKind::NotFound`.
@@ -133,18 +153,137 @@ pub fn coordinated_files() -> Arc<dyn CoordinatedFiles> {
     return Arc::new(UnsupportedCoordinatedFiles);
 }
 
-/// The body for an OS without file coordination: reads and writes go straight to the file, no
-/// item is ever ubiquitous or in conflict, and there is no presenter (`present` returns
-/// `ErrorKind::Unsupported`, so the caller keeps its own change detection).
+#[cfg(any(target_os = "macos", test, feature = "test-util"))]
+/// The error of a coordinated read or write whose coordinator did not hand the item over in time.
+pub(crate) fn coordination_timed_out() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::TimedOut,
+        "the file coordinator did not grant access before the deadline",
+    )
+}
+
+#[cfg(any(target_os = "macos", test, feature = "test-util"))]
+/// Where a coordinated access stands, as seen by the accessor and the deadline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum GateState {
+    /// The coordinator has not called the accessor yet.
+    #[default]
+    Waiting,
+    /// The accessor started first: the deadline no longer applies.
+    Entered,
+    /// The deadline passed first: the accessor must never run.
+    Expired,
+    /// The coordination call returned without either.
+    Finished,
+}
+
+#[cfg(any(target_os = "macos", test, feature = "test-util"))]
+/// Decides the race between the accessor starting and the deadline passing, under one lock, so
+/// exactly one of them wins: an accessor that entered is never cancelled, and an expired request
+/// never runs its accessor, even if the coordinator calls it afterwards.
+#[derive(Debug, Default)]
+pub(crate) struct DeadlineGate {
+    state: Mutex<GateState>,
+    changed: Condvar,
+}
+
+#[cfg(any(target_os = "macos", test, feature = "test-util"))]
+impl DeadlineGate {
+    fn state(&self) -> MutexGuard<'_, GateState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Called right before the accessor runs: `true` lets it run, `false` means the deadline
+    /// passed first (or it already ran) and it must not run.
+    pub(crate) fn enter(&self) -> bool {
+        let mut state = self.state();
+        if *state != GateState::Waiting {
+            return false;
+        }
+        *state = GateState::Entered;
+        self.changed.notify_all();
+        true
+    }
+
+    /// Waits at most `timeout` for the accessor to enter or the call to finish. `true` when the
+    /// deadline passed first: the gate is then expired and the caller cancels the coordination.
+    fn expire_after(&self, timeout: Duration) -> bool {
+        let state = self.state();
+        let (mut state, _) = self
+            .changed
+            .wait_timeout_while(state, timeout, |s| *s == GateState::Waiting)
+            .unwrap_or_else(PoisonError::into_inner);
+        if *state == GateState::Waiting {
+            *state = GateState::Expired;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// The coordination call returned; wakes the deadline watcher.
+    fn finish(&self) {
+        let mut state = self.state();
+        if *state == GateState::Waiting {
+            *state = GateState::Finished;
+        }
+        self.changed.notify_all();
+    }
+
+    /// Whether the deadline won (the access must be reported as `TimedOut`).
+    pub(crate) fn expired(&self) -> bool {
+        *self.state() == GateState::Expired
+    }
+}
+
+#[cfg(any(target_os = "macos", test, feature = "test-util"))]
+/// Runs `body` (one coordination call) with a deadline: when the accessor has not entered the
+/// gate within `timeout`, the gate expires and `cancel` runs on a watcher thread (it cancels the
+/// pending coordination, which makes the blocked call return). Returns only after the watcher has
+/// ended, so `cancel` never runs once this has returned.
+pub(crate) fn with_deadline<R>(
+    timeout: Duration,
+    cancel: impl FnOnce() + Send,
+    body: impl FnOnce(&DeadlineGate) -> R,
+) -> R {
+    let gate = DeadlineGate::default();
+    std::thread::scope(|scope| {
+        let watcher = scope.spawn(|| {
+            if gate.expire_after(timeout) {
+                cancel();
+            }
+        });
+        let result = body(&gate);
+        gate.finish();
+        // A panic in `cancel` must not escape as a second panic of the scope.
+        let _ = watcher.join();
+        result
+    })
+}
+
+/// The body for an OS without file coordination: reads and writes go straight to the file (there
+/// is no coordinator to wait for, so the timeout never applies), no item is ever ubiquitous or in
+/// conflict, and there is no presenter (`present` returns `ErrorKind::Unsupported`, so the caller
+/// keeps its own change detection).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct UnsupportedCoordinatedFiles;
 
 impl CoordinatedFiles for UnsupportedCoordinatedFiles {
-    fn coordinated_read(&self, path: &Path, accessor: Accessor<'_>) -> io::Result<()> {
+    fn coordinated_read(
+        &self,
+        path: &Path,
+        _timeout: Duration,
+        accessor: Accessor<'_>,
+    ) -> io::Result<()> {
         accessor(path)
     }
 
-    fn coordinated_write(&self, path: &Path, accessor: Accessor<'_>) -> io::Result<()> {
+    fn coordinated_write(
+        &self,
+        path: &Path,
+        _timeout: Duration,
+        accessor: Accessor<'_>,
+    ) -> io::Result<()> {
         accessor(path)
     }
 
@@ -191,6 +330,71 @@ fn unsupported(what: &str) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    const T: Duration = Duration::from_secs(10);
+
+    #[test]
+    fn deadline_cancels_an_access_that_never_started() {
+        let cancels = AtomicUsize::new(0);
+        let expired = with_deadline(
+            Duration::from_millis(20),
+            || {
+                cancels.fetch_add(1, Ordering::SeqCst);
+            },
+            |gate| {
+                // A coordinator that hands the item over only after the deadline: blocks until
+                // cancelled, then the late accessor call is refused.
+                while cancels.load(Ordering::SeqCst) == 0 {
+                    std::thread::yield_now();
+                }
+                assert!(!gate.enter(), "an expired access must not run");
+                gate.expired()
+            },
+        );
+        assert!(expired);
+        assert_eq!(cancels.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn an_access_that_started_is_never_cancelled() {
+        let cancelled = AtomicBool::new(false);
+        let ran = with_deadline(
+            Duration::from_millis(10),
+            || cancelled.store(true, Ordering::SeqCst),
+            |gate| {
+                assert!(gate.enter());
+                // The accessor outlives the deadline: it is the caller's own I/O.
+                std::thread::sleep(Duration::from_millis(50));
+                assert!(!gate.enter(), "the accessor enters once");
+                !gate.expired()
+            },
+        );
+        assert!(ran);
+        assert!(!cancelled.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_call_that_returns_early_ends_the_watcher_without_cancelling() {
+        let cancelled = AtomicBool::new(false);
+        let start = std::time::Instant::now();
+        let expired = with_deadline(
+            Duration::from_secs(60),
+            || cancelled.store(true, Ordering::SeqCst),
+            DeadlineGate::expired,
+        );
+        assert!(!expired);
+        assert!(!cancelled.load(Ordering::SeqCst));
+        assert!(
+            start.elapsed() < Duration::from_secs(30),
+            "the watcher waited out the timeout"
+        );
+    }
+
+    #[test]
+    fn timed_out_error_kind() {
+        assert_eq!(coordination_timed_out().kind(), io::ErrorKind::TimedOut);
+    }
 
     #[test]
     fn download_status_mapping_table() {
@@ -230,11 +434,11 @@ mod tests {
         let path = tmp.path().join("vault.kdbx");
         let files = UnsupportedCoordinatedFiles;
         files
-            .coordinated_write(&path, &mut |p| std::fs::write(p, b"bytes"))
+            .coordinated_write(&path, T, &mut |p| std::fs::write(p, b"bytes"))
             .unwrap();
         let mut read = Vec::new();
         files
-            .coordinated_read(&path, &mut |p| {
+            .coordinated_read(&path, T, &mut |p| {
                 read = std::fs::read(p)?;
                 Ok(())
             })
@@ -282,7 +486,7 @@ mod tests {
     fn accessor_errors_are_returned_unchanged() {
         let files = UnsupportedCoordinatedFiles;
         let err = files
-            .coordinated_read(Path::new("x"), &mut |_| {
+            .coordinated_read(Path::new("x"), T, &mut |_| {
                 Err(io::Error::new(io::ErrorKind::TimedOut, "slow"))
             })
             .unwrap_err();

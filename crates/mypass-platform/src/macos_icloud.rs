@@ -7,6 +7,14 @@
 //! coordination call returns; a panic inside the accessor is caught at the block boundary (it
 //! must not unwind through Objective-C frames) and resumed once the call has returned.
 //!
+//! Every coordination call runs under a deadline (`with_deadline`): a watcher thread cancels the
+//! coordinator (`-[NSFileCoordinator cancel]`, documented for use from another thread) when the
+//! accessor has not started in time, which makes the blocked call return with
+//! `NSUserCancelledError`; that is reported as `ErrorKind::TimedOut`. The accessor block asks the
+//! deadline gate before it runs the accessor, so an access whose deadline won never runs, even if
+//! Foundation calls the block after the cancel. The block is a stack block borrowed for the
+//! synchronous call only: once the call has returned, Foundation never calls it again.
+//!
 //! Nothing here touches iCloud in an automated test unless `MYPASS_ICLOUD_INTEGRATION_TESTS=1`:
 //! the default tests use a plain temporary directory, which is valid input for every call.
 
@@ -18,7 +26,8 @@
 #![allow(unsafe_code)]
 
 use crate::coordinated::{
-    map_download_status, Accessor, ChangeCallback, ConflictVersion, CoordinatedFiles, DownloadState,
+    coordination_timed_out, map_download_status, with_deadline, Accessor, ChangeCallback,
+    ConflictVersion, CoordinatedFiles, DeadlineGate, DownloadState,
 };
 use crate::Subscription;
 use objc2::rc::{autoreleasepool, Retained};
@@ -99,8 +108,10 @@ enum AccessorOutcome {
     Panicked(Box<dyn std::any::Any + Send>),
 }
 
-/// Runs one coordination call (`coordinate` gets the block and the error slot) around `accessor`.
+/// Runs one coordination call (`coordinate` gets the block and the error slot) around `accessor`;
+/// the accessor runs only if `gate` lets it in before the deadline.
 fn coordinate(
+    gate: &DeadlineGate,
     accessor: Accessor<'_>,
     coordinate: impl FnOnce(
         &block2::DynBlock<dyn Fn(NonNull<NSURL>) + '_>,
@@ -110,6 +121,10 @@ fn coordinate(
     let accessor = RefCell::new(accessor);
     let outcome = RefCell::new(AccessorOutcome::NotRun);
     let block = block2::StackBlock::new(|url: NonNull<NSURL>| {
+        if !gate.enter() {
+            // The deadline won (or the block is called a second time): never touch the file.
+            return;
+        }
         // SAFETY: the coordinator passes a valid, live `NSURL` for the duration of the block.
         let url = unsafe { url.as_ref() };
         let result = catch_unwind(AssertUnwindSafe(|| {
@@ -127,6 +142,7 @@ fn coordinate(
     match outcome.into_inner() {
         AccessorOutcome::Returned(result) => result,
         AccessorOutcome::Panicked(payload) => resume_unwind(payload),
+        AccessorOutcome::NotRun if gate.expired() => Err(coordination_timed_out()),
         AccessorOutcome::NotRun => Err(error.map_or_else(
             || io::Error::other("the file coordinator did not run the accessor"),
             |e| ns_error(&e),
@@ -138,34 +154,78 @@ fn new_coordinator() -> Retained<NSFileCoordinator> {
     NSFileCoordinator::initWithFilePresenter(NSFileCoordinator::alloc(), None)
 }
 
+/// The coordinator as the deadline watcher sees it: it only ever calls `cancel`.
+struct CancelHandle<'a>(&'a NSFileCoordinator);
+
+// SAFETY: the watcher thread only calls `-[NSFileCoordinator cancel]`, which Apple documents as
+// the way to cancel a coordination call from another thread; the coordinator outlives the handle
+// (`with_deadline` joins the watcher before it returns, and the coordinator lives past that).
+unsafe impl Send for CancelHandle<'_> {}
+
+impl CancelHandle<'_> {
+    fn cancel(self) {
+        self.0.cancel();
+    }
+}
+
+/// One coordinated access of `path` under a deadline; `run` issues the coordination call.
+fn coordinated(
+    path: &Path,
+    timeout: Duration,
+    accessor: Accessor<'_>,
+    run: impl FnOnce(
+        &NSFileCoordinator,
+        &NSURL,
+        &block2::DynBlock<dyn Fn(NonNull<NSURL>) + '_>,
+        &mut Option<Retained<NSError>>,
+    ),
+) -> io::Result<()> {
+    autoreleasepool(|_| {
+        let url = file_url(path)?;
+        let coordinator = new_coordinator();
+        let handle = CancelHandle(&coordinator);
+        with_deadline(
+            timeout,
+            move || handle.cancel(),
+            |gate| {
+                coordinate(gate, accessor, |block, error| {
+                    run(&coordinator, &url, block, error);
+                })
+            },
+        )
+    })
+}
+
 impl CoordinatedFiles for MacCoordinatedFiles {
-    fn coordinated_read(&self, path: &Path, accessor: Accessor<'_>) -> io::Result<()> {
-        autoreleasepool(|_| {
-            let url = file_url(path)?;
-            let coordinator = new_coordinator();
-            coordinate(accessor, |block, error| {
-                coordinator.coordinateReadingItemAtURL_options_error_byAccessor(
-                    &url,
-                    NSFileCoordinatorReadingOptions::empty(),
-                    Some(error),
-                    block,
-                );
-            })
+    fn coordinated_read(
+        &self,
+        path: &Path,
+        timeout: Duration,
+        accessor: Accessor<'_>,
+    ) -> io::Result<()> {
+        coordinated(path, timeout, accessor, |coordinator, url, block, error| {
+            coordinator.coordinateReadingItemAtURL_options_error_byAccessor(
+                url,
+                NSFileCoordinatorReadingOptions::empty(),
+                Some(error),
+                block,
+            );
         })
     }
 
-    fn coordinated_write(&self, path: &Path, accessor: Accessor<'_>) -> io::Result<()> {
-        autoreleasepool(|_| {
-            let url = file_url(path)?;
-            let coordinator = new_coordinator();
-            coordinate(accessor, |block, error| {
-                coordinator.coordinateWritingItemAtURL_options_error_byAccessor(
-                    &url,
-                    NSFileCoordinatorWritingOptions::ForReplacing,
-                    Some(error),
-                    block,
-                );
-            })
+    fn coordinated_write(
+        &self,
+        path: &Path,
+        timeout: Duration,
+        accessor: Accessor<'_>,
+    ) -> io::Result<()> {
+        coordinated(path, timeout, accessor, |coordinator, url, block, error| {
+            coordinator.coordinateWritingItemAtURL_options_error_byAccessor(
+                url,
+                NSFileCoordinatorWritingOptions::ForReplacing,
+                Some(error),
+                block,
+            );
         })
     }
 
@@ -360,7 +420,79 @@ mod tests {
         NSURLUbiquitousItemDownloadingStatusDownloaded,
         NSURLUbiquitousItemDownloadingStatusNotDownloaded,
     };
-    use std::sync::mpsc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Arc};
+
+    const T: Duration = Duration::from_secs(10);
+
+    /// Holds a coordinated write of `path` on another thread (another coordinator, as the sync
+    /// daemon or a presenter would) until the returned sender is used or dropped.
+    fn hold_write(path: &Path) -> (mpsc::Sender<()>, std::thread::JoinHandle<()>) {
+        let (held_tx, held_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let path = path.to_path_buf();
+        let holder = std::thread::spawn(move || {
+            MacCoordinatedFiles
+                .coordinated_write(&path, T, &mut |_| {
+                    let _ = held_tx.send(());
+                    let _ = release_rx.recv();
+                    Ok(())
+                })
+                .unwrap();
+        });
+        held_rx.recv().expect("the holder got the item");
+        (release_tx, holder)
+    }
+
+    #[test]
+    fn a_read_waiting_for_a_held_item_times_out_and_never_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("vault.kdbx");
+        std::fs::write(&path, b"x").unwrap();
+        let (release, holder) = hold_write(&path);
+        let ran = Arc::new(AtomicBool::new(false));
+        let r = Arc::clone(&ran);
+        let err = MacCoordinatedFiles
+            .coordinated_read(&path, Duration::from_millis(200), &mut |_| {
+                r.store(true, Ordering::SeqCst);
+                Ok(())
+            })
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut, "{err}");
+        release.send(()).unwrap();
+        holder.join().unwrap();
+        assert!(!ran.load(Ordering::SeqCst));
+        // The item is free again: the next read goes through.
+        MacCoordinatedFiles
+            .coordinated_read(&path, T, &mut |_| Ok(()))
+            .unwrap();
+    }
+
+    #[test]
+    fn a_cancelled_write_never_runs_later() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("vault.kdbx");
+        std::fs::write(&path, b"original").unwrap();
+        let (release, holder) = hold_write(&path);
+        let ran = Arc::new(AtomicBool::new(false));
+        let r = Arc::clone(&ran);
+        let err = MacCoordinatedFiles
+            .coordinated_write(&path, Duration::from_millis(200), &mut |p| {
+                r.store(true, Ordering::SeqCst);
+                std::fs::write(p, b"late write")
+            })
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut, "{err}");
+        release.send(()).unwrap();
+        holder.join().unwrap();
+        // Another coordinated access after the release proves the queue drained; the cancelled
+        // write still never ran.
+        MacCoordinatedFiles
+            .coordinated_read(&path, T, &mut |_| Ok(()))
+            .unwrap();
+        assert!(!ran.load(Ordering::SeqCst));
+        assert_eq!(std::fs::read(&path).unwrap(), b"original");
+    }
 
     #[test]
     fn sdk_status_strings_match_the_mapping_constants() {
@@ -383,11 +515,11 @@ mod tests {
         let path = tmp.path().join("vault.kdbx");
         let files = MacCoordinatedFiles;
         files
-            .coordinated_write(&path, &mut |p| std::fs::write(p, b"kdbx bytes"))
+            .coordinated_write(&path, T, &mut |p| std::fs::write(p, b"kdbx bytes"))
             .unwrap();
         let mut read = Vec::new();
         files
-            .coordinated_read(&path, &mut |p| {
+            .coordinated_read(&path, T, &mut |p| {
                 read = std::fs::read(p)?;
                 Ok(())
             })
@@ -399,7 +531,7 @@ mod tests {
     fn coordinated_read_of_a_missing_file_is_not_found() {
         let tmp = tempfile::tempdir().unwrap();
         let err = MacCoordinatedFiles
-            .coordinated_read(&tmp.path().join("missing.kdbx"), &mut |p| {
+            .coordinated_read(&tmp.path().join("missing.kdbx"), T, &mut |p| {
                 std::fs::read(p).map(|_| ())
             })
             .unwrap_err();
@@ -412,7 +544,7 @@ mod tests {
         let path = tmp.path().join("vault.kdbx");
         std::fs::write(&path, b"x").unwrap();
         let err = MacCoordinatedFiles
-            .coordinated_read(&path, &mut |_| {
+            .coordinated_read(&path, T, &mut |_| {
                 Err(io::Error::new(io::ErrorKind::TimedOut, "slow"))
             })
             .unwrap_err();
@@ -425,7 +557,8 @@ mod tests {
         let path = tmp.path().join("vault.kdbx");
         std::fs::write(&path, b"x").unwrap();
         let result = catch_unwind(|| {
-            let _ = MacCoordinatedFiles.coordinated_read(&path, &mut |_| panic!("accessor boom"));
+            let _ =
+                MacCoordinatedFiles.coordinated_read(&path, T, &mut |_| panic!("accessor boom"));
         });
         assert!(result.is_err());
     }
@@ -498,7 +631,7 @@ mod tests {
             )
             .unwrap();
         MacCoordinatedFiles
-            .coordinated_write(&path, &mut |p| std::fs::write(p, b"two"))
+            .coordinated_write(&path, T, &mut |p| std::fs::write(p, b"two"))
             .unwrap();
         rx.recv_timeout(Duration::from_secs(10))
             .expect("the presenter heard the write");
@@ -531,7 +664,7 @@ mod tests {
         let path =
             PathBuf::from(dir).join(format!("mypass-icloud-test-{}.bin", std::process::id()));
         files
-            .coordinated_write(&path, &mut |p| std::fs::write(p, b"icloud"))
+            .coordinated_write(&path, T, &mut |p| std::fs::write(p, b"icloud"))
             .unwrap();
         let state = files.download_state(&path).unwrap();
         println!("download state right after the write: {state:?}");
@@ -540,7 +673,7 @@ mod tests {
         files.request_download(&path).unwrap();
         assert!(files.unresolved_conflicts(&path).unwrap().is_empty());
         files
-            .coordinated_write(&path, &mut |p| std::fs::remove_file(p))
+            .coordinated_write(&path, T, &mut |p| std::fs::remove_file(p))
             .unwrap();
     }
 }
