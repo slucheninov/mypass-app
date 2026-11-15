@@ -1,0 +1,53 @@
+MyPass — READ THIS FIRST
+
+This arm64 build requires macOS 14 or newer. The release is signed with an
+Apple Development certificate from team W645B93PPQ. It is NOT notarized and does not pass
+Gatekeeper on another Mac. Its stable team signature preserves Keychain access
+across updates. UNSIGNED development builds use only linker seals: Touch ID and
+browser-bridge Keychain trust across updates are not supported; expect prompts
+and re-enrolment. Never use an unsigned build as a release.
+
+INSTALL
+1. Quit the old Swift MyPass before starting this app. Never run them side by side.
+2. Remove quarantine from the downloaded disk image (replace X.Y.Z with its version):
+   xattr -dr com.apple.quarantine ~/Downloads/MyPass-X.Y.Z-macos-arm64.dmg
+3. Open the DMG and drag MyPass.app to Applications. Run it from /Applications.
+   If you already mounted the quarantined image, eject it, run step 2 and reopen it.
+   If you already copied the app, run:
+   xattr -dr com.apple.quarantine /Applications/MyPass.app
+   Then launch it again. Only do this for an artifact obtained from the official release.
+4. Accept the first-launch Keychain prompts. Open a COPY of your existing vault
+   for initial checks; never overwrite your only vault copy.
+
+BROWSER EXTENSION
+Download MyPass-chrome-extension-X.Y.Z.zip from the same release. Extract it,
+open chrome://extensions, enable Developer mode and choose Load unpacked.
+Alternatively, Settings > Browser > Show extension folder makes a writable copy
+outside the signed app bundle; load that folder. Do not load from inside MyPass.app.
+The extension id is hjijbabodfldconmhdcdphlbgaajkejn.
+Pair it in MyPass Settings > Browser. No manual host installation is needed:
+the app registers the native messaging manifests on each launch and uses the
+bundled Contents/MacOS/mypass-native-host. Do not modify the signed app bundle.
+
+UPDATES AND MIGRATION
+Replace MyPass.app in Applications and reload the new extension. The app checks
+GitHub daily and shows an update banner; switch this off in Settings > About.
+For the old Swift app: quit it first, then re-pick your vault, re-pair the browser
+and re-enrol Touch ID. Old settings are not migrated.
+
+REMOVAL
+Quit MyPass and remove /Applications/MyPass.app. Remove its unpacked extension
+from Chrome. The app writes settings, backups, cached extensions and development
+endpoint files under ~/Library/Application Support/com.mypass.app/ (and the
+platform configuration directory). Its unsigned development host copy is:
+~/Library/Application Support/com.mypass.app/host/mypass-host
+The native messaging manifests are named com.mypass.chromehost.json in each
+browser's NativeMessagingHosts folder, for example:
+~/Library/Application Support/Google/Chrome/NativeMessagingHosts/
+~/Library/Application Support/Chromium/NativeMessagingHosts/
+~/Library/Application Support/Microsoft Edge/NativeMessagingHosts/
+~/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts/
+Use Keychain Access to remove MyPass items if desired: com.mypass.extensionbridge.endpoint,
+com.mypass.extension.pairing and com.mypass.app.biometric. Device-unlock enrolments
+may have per-vault accounts. Do not delete any vault files or backups you need.
+Vault files are never removed by uninstalling the app.

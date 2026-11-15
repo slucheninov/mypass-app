@@ -50,7 +50,7 @@ if [[ -n "${MYPASS_SIGNING_IDENTITY:-}" ]]; then
   APPLE_SIGNING_IDENTITY="$MYPASS_SIGNING_IDENTITY" pnpm tauri build --bundles app ${TAURI_FLAGS[@]+"${TAURI_FLAGS[@]}"}
 else
   echo "warning: building unsigned (set MYPASS_SIGNING_IDENTITY to sign)." >&2
-  env -u APPLE_SIGNING_IDENTITY pnpm tauri build --bundles app ${TAURI_FLAGS[@]+"${TAURI_FLAGS[@]}"}
+  env -u APPLE_SIGNING_IDENTITY pnpm tauri build --no-sign --bundles app ${TAURI_FLAGS[@]+"${TAURI_FLAGS[@]}"}
 fi
 
 if [[ -n "${MYPASS_SIGNING_IDENTITY:-}" ]]; then

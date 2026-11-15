@@ -7,6 +7,7 @@
 pub mod bridge;
 pub mod commands;
 pub mod events;
+mod extension_copy;
 pub mod files;
 pub mod hotkeys;
 pub mod i18n;
@@ -14,6 +15,7 @@ pub mod lifecycle;
 pub mod navigation;
 pub mod shell;
 pub mod shell_runtime;
+pub mod startup;
 pub mod state;
 #[cfg(test)]
 mod testing;

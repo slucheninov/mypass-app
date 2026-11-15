@@ -2,7 +2,7 @@
 # Builds the native messaging host and stages it as the Tauri sidecar:
 #   src-tauri/binaries/mypass-native-host-<target triple>   (Tauri `externalBin` naming; not
 #   `mypass-host`, which would collide with cargo's own binary in the target directory)
-# Usage: scripts/build-host.sh [--release]
+# Usage: scripts/build-host.sh [--release] [--target TRIPLE]
 #
 # Signing: when MYPASS_SIGNING_IDENTITY is set the staged binary is signed with it, passed to
 # codesign unchanged. Use the 40-hex SHA-1 of the valid certificate, never the name (a revoked
@@ -13,17 +13,24 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROFILE_DIR="debug"
 CARGO_FLAGS=()
 
-for arg in "$@"; do
-  case "$arg" in
+TARGET=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --release)
       PROFILE_DIR="release"
       CARGO_FLAGS+=(--release)
       ;;
+    --target)
+      TARGET="$2"
+      CARGO_FLAGS+=(--target "$TARGET")
+      shift
+      ;;
     *)
-      echo "Usage: $0 [--release]" >&2
+      echo "Usage: $0 [--release] [--target TRIPLE]" >&2
       exit 2
       ;;
   esac
+  shift
 done
 
 # Never sign ad-hoc ("-" makes codesign and Tauri sign ad-hoc; an empty value is a mistake).
@@ -36,6 +43,12 @@ if [[ -n "${MYPASS_SIGNING_IDENTITY+set}" ]]; then
   fi
 fi
 
+if [[ -n "${MYPASS_SIGNING_IDENTITY:-}" ]] && ! [[ "$MYPASS_SIGNING_IDENTITY" =~ ^[0-9A-Fa-f]{40}$ ]]; then
+  echo 'Error: signing identity must be a 40-hex SHA-1; certificate names are ambiguous.' >&2
+  echo 'Find valid identities: security find-identity -v -p codesigning' >&2
+  exit 2
+fi
+
 for cmd in cargo rustc python3; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "Error: required command '$cmd' not found." >&2
@@ -44,7 +57,7 @@ for cmd in cargo rustc python3; do
 done
 
 cd "$REPO_ROOT"
-TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
+TRIPLE="${TARGET:-$(rustc -vV | sed -n 's/^host: //p')}"
 if [[ -z "$TRIPLE" ]]; then
   echo "Error: could not read the host target triple from 'rustc -vV'." >&2
   exit 1
@@ -55,6 +68,7 @@ cargo build -p mypass-host ${CARGO_FLAGS[@]+"${CARGO_FLAGS[@]}"}
 TARGET_DIR="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
 EXE_SUFFIX=""
 case "$TRIPLE" in *windows*) EXE_SUFFIX=".exe" ;; esac
+if [[ -n "$TARGET" ]]; then TARGET_DIR="$TARGET_DIR/$TARGET"; fi
 SRC="$TARGET_DIR/$PROFILE_DIR/mypass-host$EXE_SUFFIX"
 DEST_DIR="$REPO_ROOT/src-tauri/binaries"
 DEST="$DEST_DIR/mypass-native-host-$TRIPLE$EXE_SUFFIX"
@@ -70,10 +84,6 @@ chmod 0755 "$DEST.tmp"
 mv -f "$DEST.tmp" "$DEST"
 
 if [[ -n "${MYPASS_SIGNING_IDENTITY:-}" ]]; then
-  if ! [[ "$MYPASS_SIGNING_IDENTITY" =~ ^[0-9A-Fa-f]{40}$ ]]; then
-    echo "warning: MYPASS_SIGNING_IDENTITY does not look like a 40-hex SHA-1 hash." >&2
-    echo "  Find it with: security find-identity -v -p codesigning (use the entry that is not revoked)" >&2
-  fi
   codesign --force --options runtime --identifier com.mypass.chromehost \
     -r='designated => identifier "com.mypass.chromehost" and anchor apple generic and certificate leaf[subject.OU] = "W645B93PPQ"' \
     --sign "$MYPASS_SIGNING_IDENTITY" "$DEST"

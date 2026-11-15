@@ -855,5 +855,7 @@
   "The destination file is not a valid vault. Choose another folder or restore that file from a backup.": "The destination file is not a valid vault. Choose another folder or restore that file from a backup.",
   "The destination uses a different master password. Choose a vault with the same password.": "The destination uses a different master password. Choose a vault with the same password.",
   "The vault changed or was locked. Unlock it and choose the folder again.": "The vault changed or was locked. Unlock it and choose the folder again.",
-  "This is the current vault. Choose a different folder.": "This is the current vault. Choose a different folder."
+  "This is the current vault. Choose a different folder.": "This is the current vault. Choose a different folder.",
+  "MyPass could not start": "MyPass could not start",
+  "startup.failure.message": "MyPass could not initialize. Restart the app. If the problem continues, contact support. Your vault files have not been removed."
 }

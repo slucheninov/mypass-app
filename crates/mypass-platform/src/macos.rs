@@ -404,6 +404,19 @@ pub(crate) fn running_app_executables(bundle_id: &str) -> Vec<PathBuf> {
     })
 }
 
+/// NSAlert also works when Tauri failed before it could install the dialog plugin.
+pub(crate) fn show_startup_error(title: &str, message: &str) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    autoreleasepool(|_| {
+        let alert = objc2_app_kit::NSAlert::new(mtm);
+        alert.setMessageText(&NSString::from_str(title));
+        alert.setInformativeText(&NSString::from_str(message));
+        alert.runModal();
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

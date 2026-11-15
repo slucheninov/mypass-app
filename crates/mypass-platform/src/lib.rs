@@ -127,3 +127,11 @@ mod tests {
 #[cfg(target_os = "macos")]
 mod macos_peer_process;
 pub mod peer_process;
+
+/// Last-resort native error dialog, before a runtime exists. Call only on the main thread.
+pub fn show_startup_error(title: &str, message: &str) {
+    #[cfg(target_os = "macos")]
+    macos::show_startup_error(title, message);
+    #[cfg(not(target_os = "macos"))]
+    let _ = (title, message);
+}

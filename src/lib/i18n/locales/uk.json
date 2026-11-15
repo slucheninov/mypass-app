@@ -855,5 +855,7 @@
   "The destination file is not a valid vault. Choose another folder or restore that file from a backup.": "Файл призначення не є справним сховищем. Виберіть іншу папку або відновіть файл із резервної копії.",
   "The destination uses a different master password. Choose a vault with the same password.": "Призначення використовує інший головний пароль. Виберіть сховище з таким самим паролем.",
   "The vault changed or was locked. Unlock it and choose the folder again.": "Сховище змінено або заблоковано. Розблокуйте його та виберіть папку знову.",
-  "This is the current vault. Choose a different folder.": "Це поточне сховище. Виберіть іншу папку."
+  "This is the current vault. Choose a different folder.": "Це поточне сховище. Виберіть іншу папку.",
+  "MyPass could not start": "Не вдалося запустити MyPass",
+  "startup.failure.message": "Не вдалося ініціалізувати MyPass. Перезапустіть програму. Якщо проблема не зникає, зверніться до підтримки. Файли ваших сховищ не видалено."
 }

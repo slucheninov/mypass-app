@@ -84,3 +84,80 @@ cargo run -p mypass-kdbx --example write_crosscompat -- <out.kdbx>   # synthetic
 
 Run `bash scripts/test.sh` before you call a change done; CI runs after the fact and is not a
 substitute.
+
+## macOS packaging and releases
+
+The release tools and their offline script tests require Python 3.11 or newer
+(`tomllib` from the standard library); CI selects Python 3.12 explicitly.
+
+The app version comes from `src-tauri/Cargo.toml`; Tauri's configuration omits
+`version`. `scripts/check-version.sh [X.Y.Z]` checks the app, npm package, extension
+manifest (and extension package if versioned), and the app's Cargo.lock entry.
+The first release is 0.7.0. Other workspace crates keep their internal versions.
+
+```bash
+bash scripts/bump-version.sh 0.7.1  # validates, refreshes Cargo.lock offline; never commits or tags
+bash scripts/check-version.sh
+bash scripts/package-macos.sh --allow-unsigned --dry-run
+bash scripts/package-macos.sh --allow-unsigned --out /path/to/empty-output
+# Choose the valid certificate SHA-1, never its ambiguous display name:
+security find-identity -v -p codesigning
+MYPASS_SIGNING_IDENTITY=<40-hex-SHA-1> bash scripts/package-macos.sh --out /path/to/empty-output
+# Release additionally requires a clean tree at exactly v<version>:
+MYPASS_SIGNING_IDENTITY=<40-hex-SHA-1> bash scripts/package-macos.sh --release --out /path/to/empty-output
+```
+
+Packaging builds `aarch64-apple-darwin` only, with minimum macOS 14.0. It stages a
+production-only extension, builds the host sidecar, builds Tauri's `app` target,
+re-signs inside out with explicit team-based designated requirements, verifies
+both binaries, then uses `hdiutil` to create a DMG containing the app, Applications
+link, INSTALL.txt and both license files. No sandbox or entitlements are needed;
+hardened runtime is required for signed app and host. The team is W645B93PPQ and
+the identifiers are `com.mypass.app` and `com.mypass.chromehost`.
+
+No ad-hoc signing is allowed. With no certificate, `--allow-unsigned` explicitly
+opts into a development build (`--no-sign`, linker seals only). `--release` always
+fails without a 40-hex identity. `--dry-run` validates metadata and release/tag
+preconditions but writes nothing and never builds, signs, imports a certificate
+or creates a DMG. To compile locally without any packaging/signing use
+`pnpm tauri build --no-bundle --no-sign` (build the host first if needed).
+
+`verify-bundle.sh <app> --host-source <staged-sidecar> --extension-zip <zip>` checks
+strict/deep codesign verification, exact designated requirements in Apple’s
+`csreq` canonical rendering, team, runtime,
+entitlements, plist metadata, localizations, notices, host byte provenance and the
+extension archive against the bundled extension. Only explicit `--allow-unsigned`
+permits linker seals; those builds cannot prove signed verification. The staged
+host is `src-tauri/binaries/mypass-native-host-aarch64-apple-darwin`, produced from
+`cargo build -p mypass-host --release --target aarch64-apple-darwin`. The dependency
+check rejects session/core/KDBX/update code in the host's normal dependency tree.
+
+The output is exactly `MyPass-X.Y.Z-macos-arm64.dmg`,
+`MyPass-chrome-extension-X.Y.Z.zip` and `SHA256SUMS.txt`. The checksum file lists the
+two payloads with relative names (it cannot hash itself). Extension ZIP entries
+are sorted, have fixed timestamps and modes, and exclude tests and package.json.
+The installed app copies the bundled extension into a versioned writable folder
+before revealing it; Chrome must never load unpacked files from the signed bundle.
+
+The separate `.github/workflows/release.yml` runs only on version tags. Configure
+these GitHub Actions repository secrets before tagging:
+
+- `APPLE_CERTIFICATE`: base64-encoded PKCS#12 export of the **Apple Development**
+  signing certificate and private key for team W645B93PPQ.
+- `APPLE_CERTIFICATE_PASSWORD`: the export password for that PKCS#12 file.
+- `APPLE_SIGNING_IDENTITY`: the valid certificate's exact 40-hex SHA-1 hash.
+
+All three secrets are required. The workflow imports them into a temporary
+keychain, deletes the keychain and certificate file even after failure, runs
+`bash scripts/test.sh --ci` before packaging, uploads a draft, downloads and checks
+its exact artifact set and hashes, then rechecks in the final publish job. A stale
+draft may be replaced; an already published release is refused. No release was
+published merely by building locally. The `package-smoke` CI job packages an
+explicitly unsigned development build without secrets on relevant pull requests.
+
+Per the owner's release policy, notarization is disabled even if unrelated Apple
+credentials are present in the environment. Users follow INSTALL.txt's
+`xattr -dr com.apple.quarantine` instructions. Developer ID signing/notarization,
+Intel/universal builds and `.kdbx` association are future work. Icons are generated
+with `pnpm tauri icon src-tauri/icons/source.png`; the source was recovered from
+the owner's old Swift AppIcon asset catalog (1024px `icon_512x512@2x.png`).

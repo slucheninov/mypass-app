@@ -386,12 +386,22 @@ pub fn browser_proposal_take(
 /// Reveals the extension folder with the same helper as `app_reveal_backups`.
 #[tauri::command]
 #[specta::specta]
-pub fn browser_show_extension_folder(app: AppHandle) -> Result<(), ApiError> {
+pub async fn browser_show_extension_folder(app: AppHandle) -> Result<(), ApiError> {
     let folder = extension_folder_of(&app).ok_or(ApiError {
         code: ErrorCode::NotFound,
         message: String::new(),
     })?;
-    tauri_plugin_opener::reveal_item_in_dir(folder).map_err(|e| super::internal(e.to_string()))
+    let data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| super::internal(e.to_string()))?;
+    super::blocking(move || {
+        let copy =
+            crate::extension_copy::writable_extension(&folder, &data, env!("CARGO_PKG_VERSION"))
+                .map_err(|e| super::internal(e.to_string()))?;
+        tauri_plugin_opener::reveal_item_in_dir(copy).map_err(|e| super::internal(e.to_string()))
+    })
+    .await
 }
 
 #[cfg(test)]

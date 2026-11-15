@@ -855,5 +855,7 @@
   "The destination file is not a valid vault. Choose another folder or restore that file from a backup.": "Файл назначения не является исправным хранилищем. Выберите другую папку или восстановите файл из резервной копии.",
   "The destination uses a different master password. Choose a vault with the same password.": "Назначение использует другой мастер-пароль. Выберите хранилище с тем же паролем.",
   "The vault changed or was locked. Unlock it and choose the folder again.": "Хранилище изменено или заблокировано. Разблокируйте его и выберите папку снова.",
-  "This is the current vault. Choose a different folder.": "Это текущее хранилище. Выберите другую папку."
+  "This is the current vault. Choose a different folder.": "Это текущее хранилище. Выберите другую папку.",
+  "MyPass could not start": "Не удалось запустить MyPass",
+  "startup.failure.message": "Не удалось инициализировать MyPass. Перезапустите приложение. Если проблема сохраняется, обратитесь в поддержку. Файлы ваших хранилищ не удалены."
 }
