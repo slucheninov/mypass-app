@@ -41,7 +41,9 @@ fn dev_app_sh_is_strict_and_bash_clean() {
 fn build_host_sh_signs_only_when_identity_set_and_never_ad_hoc() {
     let text = read("scripts/build-host.sh");
     assert!(text.contains("if [[ -n \"${MYPASS_SIGNING_IDENTITY:-}\" ]]"));
-    assert!(text.contains("codesign --force --sign \"$MYPASS_SIGNING_IDENTITY\""));
+    assert!(text.contains("codesign --force --options runtime --identifier com.mypass.chromehost"));
+    assert!(text.contains("--sign \"$MYPASS_SIGNING_IDENTITY\" \"$DEST\""));
+    assert!(text.contains("identifier \"com.mypass.chromehost\" and anchor apple generic and certificate leaf[subject.OU] = \"W645B93PPQ\""));
     let code: Vec<&str> = text
         .lines()
         .filter(|l| !l.trim_start().starts_with('#'))

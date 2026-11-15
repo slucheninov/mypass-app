@@ -68,13 +68,22 @@ const MAIN_THREAD_WAIT: Duration = Duration::from_millis(500);
 /// `SMAppService` login item (`macos_login_item.rs`); device unlock over `LAContext` and the
 /// app-only Keychain store (`macos_device_unlock.rs`).
 pub(crate) fn platform(paths: &AppPaths) -> Platform {
+    let host = std::env::current_exe()
+        .ok()
+        .and_then(|exe| crate::endpoint_store::signed_bundle_host(&exe));
+    let (kind, shared) = crate::endpoint_store::app_shared_store(paths, host.as_deref());
+    let registrar = if kind == crate::endpoint_store::SharedStoreKind::Keychain {
+        crate::MacHostRegistrar::for_bundle(paths.clone(), host)
+    } else {
+        crate::MacHostRegistrar::new(paths.clone())
+    };
     Platform {
         events: Arc::new(MacSystemEvents),
         clipboard: Arc::new(MacClipboard::general()),
         secrets: Arc::new(MacKeychainSecretStore::app_only()),
-        shared_secrets: Arc::new(crate::file_store::shared_store(paths)),
+        shared_secrets: shared,
         device_unlock: Arc::new(mac_device_unlock()),
-        host_registrar: Arc::new(crate::MacHostRegistrar::new(paths.clone())),
+        host_registrar: Arc::new(registrar),
         launch_at_login: Arc::new(MacLaunchAtLogin),
         keyboard_layout: Arc::new(MacKeyboardLayout),
     }

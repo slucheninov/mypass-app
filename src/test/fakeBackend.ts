@@ -9,6 +9,8 @@ import { emit } from "@tauri-apps/api/event";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type {
   ApiError,
+  DeviceUnlockStatus_Serialize,
+  UpdateStatus_Serialize,
   AttachmentMeta,
   BackupFailure,
   BackupItem,
@@ -106,6 +108,9 @@ export interface FakeCall {
 export interface FakeState {
   /** What `browser_status` answers; `browser_revoke`, `browser_pairing_cancel` and `browser_reset_pairings` edit it. */
   browser: BrowserStatus_Serialize;
+  device: DeviceUnlockStatus_Serialize;
+  extensionUnlockRequested: boolean;
+  update: UpdateStatus_Serialize;
   /** What `browser_reinstall_host` answers. */
   browserReinstall: BrowserRegistrationDto_Serialize[];
   /** Save proposals by id: `browser_proposal_take` hands one out once, like the Rust store. */
@@ -196,7 +201,12 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       pairing: null,
       registrations: [],
       hostPath: null,
+      endpointStore: "developmentFile",
+      canReinstallHost: true,
     },
+    device: { available: deviceUnlockAvailable, biometrics: deviceUnlockAvailable, enrolled: false, touchIdEnabled: false, macPasswordEnabled: false, canOfferNow: false, reason: "disabled" },
+    extensionUnlockRequested: false,
+    update: { status: { state: "idle" }, banner: null },
     browserReinstall: [],
     proposals: {},
     session: sessionStatus(opts.session ?? "locked"),
@@ -910,6 +920,23 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       publish("syncStatusChanged", structuredClone(state.sync));
       return structuredClone(state.sync);
     },
+    deviceUnlockStatus: () => structuredClone(state.device),
+    deviceUnlockConfigure: ({ password, touchId, macPassword }) => {
+      requireUnlocked();
+      if ((touchId || macPassword) && !state.device.enrolled && password !== state.masterPassword) throw apiError("wrongPassword");
+      state.device = { ...state.device, enrolled: touchId || macPassword, touchIdEnabled: touchId, macPasswordEnabled: macPassword, canOfferNow: touchId || macPassword, reason: touchId || macPassword ? null : "disabled" };
+      return structuredClone(state.device);
+    },
+    deviceUnlockConsumeExtensionRequest: () => { const pending = state.extensionUnlockRequested; state.extensionUnlockRequested = false; return pending; },
+    vaultUnlockDevice: () => {
+      if (!state.device.canOfferNow) throw apiError("deviceUnlockUnavailable");
+      setSession({ ...state.session, state: "unlocked", lockReason: null });
+      return structuredClone(state.session);
+    },
+    updateStatus: () => structuredClone(state.update),
+    updateCheckNow: () => { state.update.status = { state: "upToDate", checkedAt: 1_700_000_000_000 }; publish("updateChanged", structuredClone(state.update)); return structuredClone(state.update); },
+    updateDismiss: () => { state.update.banner = null; publish("updateChanged", structuredClone(state.update)); return null; },
+    updateOpenRelease: () => null,
     syncStatus: () => structuredClone(state.sync),
     // Like Rust: forgets the folder (the copy in it stays) and reports `off`.
     syncDisconnectSecondary: () => {

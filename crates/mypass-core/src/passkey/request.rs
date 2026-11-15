@@ -39,6 +39,7 @@ const COSE_ALG_ES256: i64 = -7;
 /// and names are page data and personal data, never log material).
 #[derive(Clone, PartialEq, Eq)]
 pub struct CreateContext {
+    pub verification_required: bool,
     /// `rp.name`, falling back to the validated rpId.
     pub rp_name: String,
     /// The challenge bytes.
@@ -75,6 +76,7 @@ impl fmt::Debug for CreateContext {
 /// [`CreateContext`]). `Debug` prints sizes only.
 #[derive(Clone, PartialEq, Eq)]
 pub struct GetContext {
+    pub verification_required: bool,
     /// The challenge bytes.
     pub challenge: Vec<u8>,
     /// Decoded ids of the `public-key` entries of `allowCredentials`; empty means any credential
@@ -218,6 +220,11 @@ pub fn parse_create(origin_url: &str, json: &str) -> Result<ValidatedCreate, Pas
     let rp_name = rp_name.unwrap_or_else(|| origin.rp_id().to_owned());
     Ok(ValidatedCreate {
         request: CreateContext {
+            verification_required: root
+                .get("authenticatorSelection")
+                .and_then(|v| v.get("userVerification"))
+                .and_then(Value::as_str)
+                == Some("required"),
             rp_name,
             challenge,
             user_id,
@@ -261,6 +268,8 @@ pub fn parse_get(origin_url: &str, json: &str) -> Result<ValidatedGet, PasskeyEr
     let origin = validate_origin_in(&root, origin_url, rp_id.as_deref())?;
     Ok(ValidatedGet {
         request: GetContext {
+            verification_required: root.get("userVerification").and_then(Value::as_str)
+                == Some("required"),
             challenge,
             allow_credential_ids,
         },

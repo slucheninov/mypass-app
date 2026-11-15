@@ -35,6 +35,8 @@ const status = (over: Partial<BrowserStatus_Serialize> = {}): BrowserStatus_Seri
   pairing: null,
   registrations: [],
   hostPath: null,
+  endpointStore: "developmentFile",
+  canReinstallHost: true,
   ...over,
 });
 

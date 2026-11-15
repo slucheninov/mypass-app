@@ -244,7 +244,7 @@ const detailsFor = (origin) => JSON.stringify({
   // A second concurrent ceremony is rejected outright, and must not disturb the first's
   // bookkeeping — the pending record still belongs to requestId 1.
   resetState();
-  await writePending({ kind: 'create', requestId: 1, originUrl: 'https://example.com', rpId: 'example.com', matches: [] });
+  await writePending({ startedAt: Date.now(), kind: 'create', requestId: 1, originUrl: 'https://example.com', rpId: 'example.com', matches: [] });
   await handlePasskeyRequest('get', 2, detailsFor('https://example.com'));
   assert.strictEqual(completedGet.requestId, 2);
   assert.strictEqual(completedGet.error.name, 'AbortError');
@@ -290,7 +290,7 @@ const detailsFor = (origin) => JSON.stringify({
 
   // --- completion bookkeeping ---------------------------------------------
   resetState();
-  await writePending({ kind: 'create', requestId: 1, originUrl: 'https://example.com', rpId: 'example.com', matches: [] });
+  await writePending({ startedAt: Date.now(), kind: 'create', requestId: 1, originUrl: 'https://example.com', rpId: 'example.com', matches: [] });
   await completePasskeyRequest('create', { requestId: 99, error: passkeyNotAllowedError('other') });
   assert.strictEqual((await readPending()).requestId, 1, 'completing a different requestId must not clear the pending record');
   await completePasskeyRequest('create', { requestId: 1, responseJson: '{}' });
@@ -329,7 +329,7 @@ const detailsFor = (origin) => JSON.stringify({
 
   // --- popup-driven confirm / cancel --------------------------------------
   resetState();
-  await writePending({ kind: 'create', requestId: 7, originUrl: 'https://example.com', rpId: 'example.com', matches: [] });
+  await writePending({ startedAt: Date.now(), kind: 'create', requestId: 7, originUrl: 'https://example.com', rpId: 'example.com', matches: [] });
   nativeResponder = () => ({ type: 'passkeyCreateComplete', requestId: 7, responseJson: '{"id":"abc"}' });
   await new Promise((resolve) => {
     handleRuntimeMessage({ type: 'passkeyCreateConfirm', requestId: 7, entryId: 'e1', replace: false }, {}, resolve);
@@ -355,7 +355,7 @@ const detailsFor = (origin) => JSON.stringify({
   };
   resetState();
   chrome.webAuthenticationProxy.completeCreateRequest = schemaCheckedCreate;
-  await writePending({ kind: 'create', requestId: 70, rpId: 'example.com', matches: [] });
+  await writePending({ startedAt: Date.now(), kind: 'create', requestId: 70, rpId: 'example.com', matches: [] });
   alarms[PASSKEY_WATCHDOG_ALARM] = {};
   nativeResponder = () => ({ type: 'passkeyCreateComplete', requestId: 70, responseJson: JSON.stringify({
     id: 'AA', rawId: 'AA', type: 'public-key', clientExtensionResults: {},
@@ -378,7 +378,7 @@ const detailsFor = (origin) => JSON.stringify({
   resetState();
   let acknowledgeBrowser;
   chrome.webAuthenticationProxy.completeCreateRequest = () => new Promise((resolve) => { acknowledgeBrowser = resolve; });
-  await writePending({ kind: 'create', requestId: 71, rpId: 'example.com', matches: [] });
+  await writePending({ startedAt: Date.now(), kind: 'create', requestId: 71, rpId: 'example.com', matches: [] });
   alarms[PASSKEY_WATCHDOG_ALARM] = {};
   nativeResponder = () => ({ type: 'passkeyCreateComplete', requestId: 71, responseJson: '{}' });
   let popupResponded = false;
@@ -400,7 +400,7 @@ const detailsFor = (origin) => JSON.stringify({
   // the watchdog rather than forgetting a possibly still-live website request.
   resetState();
   chrome.webAuthenticationProxy.completeCreateRequest = async () => { throw new Error('unavailable'); };
-  await writePending({ kind: 'create', requestId: 72, phase: 'completing' });
+  await writePending({ startedAt: Date.now(), kind: 'create', requestId: 72, phase: 'completing' });
   alarms[PASSKEY_WATCHDOG_ALARM] = {};
   assert.strictEqual((await completePasskeyRequest('create', { requestId: 72, responseJson: '{}' })).error.name, 'OperationError');
   assert.strictEqual((await readPending()).requestId, 72);
@@ -419,12 +419,12 @@ const detailsFor = (origin) => JSON.stringify({
   chrome.webAuthenticationProxy.completeCreateRequest = (details) => details.error
     ? Promise.resolve()
     : new Promise((_resolve, reject) => { rejectOldBrowserCompletion = reject; });
-  await writePending({ kind: 'create', requestId: 720, phase: 'completing' });
+  await writePending({ startedAt: Date.now(), kind: 'create', requestId: 720, phase: 'completing' });
   const oldBrowserCompletion = completePasskeyRequest('create', { requestId: 720, responseJson: '{}' });
   await new Promise((resolve) => setImmediate(resolve));
   canceledListener(720);
   await new Promise((resolve) => setImmediate(resolve));
-  await writePending({ kind: 'get', requestId: 721 });
+  await writePending({ startedAt: Date.now(), kind: 'get', requestId: 721 });
   alarms[PASSKEY_WATCHDOG_ALARM] = { delayInMinutes: 2 };
   rejectOldBrowserCompletion(new Error('Invalid requestId'));
   assert.strictEqual((await oldBrowserCompletion).error.name, 'OperationError');
@@ -442,7 +442,7 @@ const detailsFor = (origin) => JSON.stringify({
     getCalls.push(details);
     if (!details.error) throw new Error('Invalid responseJson');
   };
-  await writePending({ kind: 'get', requestId: 73 });
+  await writePending({ startedAt: Date.now(), kind: 'get', requestId: 73 });
   nativeResponder = () => ({ type: 'passkeyGetComplete', requestId: 73, responseJson: '{}' });
   const rejectedGet = await new Promise((resolve) => handleRuntimeMessage(
     { type: 'passkeyGetApprove', requestId: 73, entryId: 'e1' }, {}, resolve));
@@ -460,13 +460,13 @@ const detailsFor = (origin) => JSON.stringify({
     if (message.type === 'passkeyCreateConfirm') lateConfirmation = callback;
     else callback({ type: 'passkeyCancelled' });
   };
-  await writePending({ kind: 'create', requestId: 74 });
+  await writePending({ startedAt: Date.now(), kind: 'create', requestId: 74 });
   const canceledConfirmation = new Promise((resolve) => handleRuntimeMessage(
     { type: 'passkeyCreateConfirm', requestId: 74, replace: false }, {}, resolve));
   await new Promise((resolve) => setImmediate(resolve));
   canceledListener(74);
   await new Promise((resolve) => setImmediate(resolve));
-  await writePending({ kind: 'get', requestId: 75 });
+  await writePending({ startedAt: Date.now(), kind: 'get', requestId: 75 });
   lateConfirmation({ type: 'passkeyCreateComplete', requestId: 74, responseJson: '{}' });
   assert.strictEqual((await canceledConfirmation).error.name, 'NotAllowedError');
   assert.strictEqual(completedCreate, null, 'a canceled native confirmation cannot be submitted to Chrome');
@@ -475,7 +475,7 @@ const detailsFor = (origin) => JSON.stringify({
   chrome.runtime.sendNativeMessage = nativeBeforeConfirm;
 
   resetState();
-  await writePending({ kind: 'create', requestId: 76 });
+  await writePending({ startedAt: Date.now(), kind: 'create', requestId: 76 });
   nativeResponder = () => ({ type: 'passkeyCreateComplete', requestId: 999, responseJson: '{}' });
   const mismatchedConfirmation = await new Promise((resolve) => handleRuntimeMessage(
     { type: 'passkeyCreateConfirm', requestId: 76, replace: false }, {}, resolve));
@@ -485,7 +485,7 @@ const detailsFor = (origin) => JSON.stringify({
   assert.strictEqual(await readPending(), null);
 
   resetState();
-  await writePending({ kind: 'get', requestId: 8, originUrl: 'https://example.com', rpId: 'example.com', matches: [] });
+  await writePending({ startedAt: Date.now(), kind: 'get', requestId: 8, originUrl: 'https://example.com', rpId: 'example.com', matches: [] });
   nativeResponder = () => ({ type: 'passkeyCancelled', requestId: 8 });
   await new Promise((resolve) => {
     handleRuntimeMessage({ type: 'passkeyCancelUI', requestId: 8 }, {}, resolve);
@@ -624,7 +624,7 @@ const detailsFor = (origin) => JSON.stringify({
   assert.strictEqual((await readPending()).phase, 'checking');
   canceledListener(22);
   await new Promise((resolve) => setImmediate(resolve));
-  await writePending({ kind: 'get', requestId: 23 });
+  await writePending({ startedAt: Date.now(), kind: 'get', requestId: 23 });
   finishNative({ type: 'passkeyCreatePending', rpId: 'example.com', matches: [] });
   await inFlight;
   assert.strictEqual((await readPending()).requestId, 23);
@@ -690,3 +690,10 @@ const detailsFor = (origin) => JSON.stringify({
   console.error(error);
   process.exit(1);
 });
+
+// Presence budget is deterministic over supplied timestamps, including stale update records.
+const { passkeyPresenceDeadlineFits } = require('../background.js');
+assert.strictEqual(passkeyPresenceDeadlineFits({ startedAt: 1000 }, 101000), true);
+assert.strictEqual(passkeyPresenceDeadlineFits({ startedAt: 1000 }, 101001), false);
+assert.strictEqual(passkeyPresenceDeadlineFits({}, 1000), false);
+assert.strictEqual(passkeyPresenceDeadlineFits({ startedAt: 1001 }, 1000), false);

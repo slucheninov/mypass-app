@@ -17,6 +17,9 @@ browser_reset_pairings
 browser_revoke
 browser_show_extension_folder
 browser_status
+device_unlock_configure
+device_unlock_consume_extension_request
+device_unlock_status
 draft_clear
 draft_save
 draft_versions
@@ -62,6 +65,10 @@ sync_connect_secondary
 sync_disconnect_secondary
 sync_now
 sync_status
+update_check_now
+update_dismiss
+update_open_release
+update_status
 vault_create
 vault_find_files
 vault_forget
@@ -75,3 +82,4 @@ vault_recent
 vault_status
 vault_storage_status
 vault_unlock
+vault_unlock_device

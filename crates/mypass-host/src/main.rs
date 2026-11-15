@@ -1,20 +1,23 @@
-//! The native messaging host: relays Chromium's stdin and stdout to the app's loopback server.
-//!
-//! It builds only the paths and the shared file store, never the full platform object set (no AppKit,
-//! clipboard or Keychain objects in a process Chromium spawns per port). Stdout carries frames only
-//! and the exit code is always 0, because Chromium treats anything else as a crash.
-
-use std::io::{stdin, stdout};
-use std::sync::Arc;
-
+//! Native messaging relay; no session, core, KDBX or update dependency.
 use mypass_bridge::endpoint::EndpointStore;
-use mypass_bridge::relay::{load_endpoint, run_relay, RelayOptions};
-use mypass_platform::{shared_store, AppPaths};
-
+use mypass_bridge::relay::{load_endpoint, run_relay_verified, RelayOptions};
+use mypass_platform::endpoint_store::{host_shared_store, SharedStoreKind};
+use mypass_platform::AppPaths;
+use std::io::{stdin, stdout};
 fn main() {
-    let endpoint = AppPaths::resolve().ok().and_then(|paths| {
-        let store = EndpointStore::new(Arc::new(shared_store(&paths)));
-        load_endpoint(&store)
+    let loaded = AppPaths::resolve().ok().map(|paths| {
+        let (kind, store) = host_shared_store(&paths, None);
+        (kind, load_endpoint(&EndpointStore::new(store)))
     });
-    let _ = run_relay(stdin().lock(), stdout(), endpoint, &RelayOptions::default());
+    let (kind, endpoint) = loaded.unwrap_or((SharedStoreKind::File, None));
+    let _ = run_relay_verified(
+        stdin().lock(),
+        stdout(),
+        endpoint,
+        &RelayOptions::default(),
+        &|port| {
+            kind == SharedStoreKind::File
+                || mypass_platform::peer_process::signed_app_listens_on(port)
+        },
+    );
 }

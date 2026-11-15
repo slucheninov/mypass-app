@@ -117,12 +117,45 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let paths = AppPaths::resolve()?;
     let platform = mypass_platform::current(&paths);
     let mut core = AppCore::new(paths, platform)?;
+    let real_feed = use_real_update_feed(
+        !cfg!(debug_assertions),
+        std::env::var("MYPASS_UPDATE_CHECK").ok().as_deref(),
+    );
+    let version = running_update_version();
+    if real_feed {
+        core.update = mypass_session::update::UpdateService::new(
+            core.scheduler(),
+            core.settings.clone(),
+            Arc::new(mypass_update::GitHubReleaseClient::new(env!(
+                "CARGO_PKG_VERSION"
+            ))),
+            &version,
+            &core.paths().config_dir,
+        );
+    } else {
+        core.update = mypass_session::update::UpdateService::new(
+            core.scheduler(),
+            core.settings.clone(),
+            Arc::new(mypass_update::NoopFeed),
+            &version,
+            &core.paths().config_dir,
+        );
+    }
     core.set_process_lookup(Arc::new(SystemProcessLookup));
 
     let core = Arc::new(core);
     let grants = FileGrants::default();
     let reset = GrantsReset::new(grants.clone());
     let refresher = tray_refresher(&handle, core.clone());
+    let update_handle = handle.clone();
+    let update_refresher = refresher.clone();
+    core.update.add_observer(Arc::new(move |status| {
+        let _ = crate::events::UpdateChanged(status).emit(&update_handle);
+        update_refresher.request(TRAY_REFRESH_DELAY);
+    }));
+    if real_feed {
+        core.update.start_scheduling();
+    }
     let editor_dirty = crate::state::EditorDirty::default();
     let observer_dirty = editor_dirty.clone();
     let observer_handle = handle.clone();
@@ -202,9 +235,38 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn use_real_update_feed(release: bool, opt_in: Option<&str>) -> bool {
+    release || opt_in == Some("1")
+}
+
+fn running_update_version() -> String {
+    if cfg!(debug_assertions) {
+        if let Ok(v) = std::env::var("MYPASS_UPDATE_TEST_VERSION") {
+            return v;
+        }
+    }
+    env!("CARGO_PKG_VERSION").to_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_does_not_schedule_with_noop_feed() {
+        assert!(!use_real_update_feed(false, None));
+        assert!(!use_real_update_feed(false, Some("0")));
+        assert!(use_real_update_feed(false, Some("1")));
+        assert!(use_real_update_feed(true, None));
+        let w = crate::testing::world();
+        let pending = w.clock.pending();
+        w.clock.advance(std::time::Duration::from_secs(10));
+        assert_eq!(
+            w.core.update.status().status,
+            mypass_session::update::UpdateState::Idle
+        );
+        assert_eq!(w.clock.pending(), pending);
+    }
 
     fn world_with_reset() -> (crate::testing::World, FileGrants) {
         let w = crate::testing::world();

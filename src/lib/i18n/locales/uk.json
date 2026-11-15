@@ -807,5 +807,7 @@
   "uppercase letters": "великі літери",
   "“%@” could not be read.": "Не вдалося прочитати «{0}».",
   "“%@” is a folder, not a file.": "«{0}» — це папка, а не файл.",
-  "“%@” is larger than 5 MB.": "«{0}» більший за 5 МБ."
+  "“%@” is larger than 5 MB.": "«{0}» більший за 5 МБ.",
+  "Create a passkey for {0}": "Створити ключ доступу для {0}",
+  "Sign in to {0} with a passkey": "Увійти до {0} з ключем доступу"
 }

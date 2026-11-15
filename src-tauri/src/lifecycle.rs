@@ -370,7 +370,13 @@ pub fn current_tray_model(core: &AppCore, update: Option<&str>) -> TrayMenuModel
     } else {
         Vec::new()
     };
-    tray_menu_model(state, &recents, core.settings.get().language, update)
+    let available = core.update.status().banner;
+    tray_menu_model(
+        state,
+        &recents,
+        core.settings.get().language,
+        update.or(available.as_ref().map(|r| r.version.as_str())),
+    )
 }
 
 /// Rebuilds the tray menu after the session or the vault changed. Requests coalesce: any number

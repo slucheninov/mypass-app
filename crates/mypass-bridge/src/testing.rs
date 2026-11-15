@@ -137,7 +137,7 @@ pub(crate) fn passkey_fx() -> (Fx, Arc<PasskeyService>) {
 pub(crate) fn passkey_fx_with_db(db: mypass_kdbx::Database) -> (Fx, Arc<PasskeyService>) {
     let mut service = None;
     let f = fx_build(db, |sched, ui| {
-        let s = PasskeyService::new(sched, ui);
+        let s = PasskeyService::with_presence(sched, ui, Arc::new(|_, _| Ok(true)));
         service = Some(s.clone());
         s
     });

@@ -425,7 +425,11 @@ fn ceremony_arms_answer_a_not_allowed_error_for_bad_or_unknown_ceremonies() {
 fn ceremony_taken_after_a_direct_vault_switch_cannot_mutate_the_new_vault() {
     let (f, _observed) = passkey_fx();
     // Not registered with the session: stands for the window before the observer's clear runs.
-    let svc = PasskeyService::new(f.sched.clone(), f.ui.clone());
+    let svc = PasskeyService::with_presence(
+        f.sched.clone(),
+        f.ui.clone(),
+        std::sync::Arc::new(|_, _| Ok(true)),
+    );
     let epoch = svc.epoch();
     let create = f.session.with_db(pc_for).unwrap();
     let get = f.session.with_db(pg_for).unwrap();
@@ -490,4 +494,89 @@ fn toggle_off_in_the_app_refuses_confirm_and_approve() {
         errors::get_error(7, "NotAllowedError", TURNED_OFF)
     );
     assert_eq!(svc.pending_len(), (0, 0));
+}
+
+#[test]
+fn every_phase_two_checks_presence_before_the_session_and_cancel_consumes_consent() {
+    use mypass_platform::testing::FakeDeviceUnlock;
+    use mypass_platform::{DeviceUnlock, DeviceUnlockAvailability, PlatformError};
+    let (f, _) = passkey_fx();
+    let device = FakeDeviceUnlock::new(DeviceUnlockAvailability::Available { biometrics: true });
+    let check = device.clone();
+    let session = f.session.clone();
+    let svc = PasskeyService::with_presence(
+        f.sched.clone(),
+        f.ui.clone(),
+        Arc::new(move |_, rp| {
+            assert_eq!(rp, "example.com");
+            // This would deadlock if a phase-two session lock were held during authentication.
+            assert!(session.is_unlocked());
+            check
+                .verify_presence(rp)
+                .map(|()| true)
+                .map_err(|_| PresenceError::Cancelled)
+        }),
+    );
+    let before = f.session.with_db(Clone::clone).unwrap();
+    svc.put_create(svc.epoch(), 55, f.session.with_db(pc_for).unwrap());
+    device.fail_next_presence(PlatformError::Cancelled);
+    let response = svc.handle(
+        &ctx(&f, &f.settings, true),
+        &Request::PasskeyCreateConfirm {
+            token: "t".into(),
+            request_id: 55,
+            entry_id: None,
+            replace: false,
+            pairing: None,
+        },
+    );
+    assert!(
+        matches!(response, Response::PasskeyCreateComplete { error: Some(ref e), .. } if e.name == "NotAllowedError")
+    );
+    assert_eq!(f.session.with_db(Clone::clone).unwrap(), before);
+    assert_eq!(device.presence_count(), 1);
+    assert!(svc.take_create(55).is_none());
+    svc.put_get(svc.epoch(), 56, f.session.with_db(pg_for).unwrap());
+    device.fail_next_presence(PlatformError::Cancelled);
+    let response = svc.handle(
+        &ctx(&f, &f.settings, true),
+        &Request::PasskeyGetApprove {
+            token: "t".into(),
+            request_id: 56,
+            entry_id: "bad".into(),
+            pairing: None,
+        },
+    );
+    assert!(
+        matches!(response, Response::PasskeyGetComplete { error: Some(ref e), .. } if e.name == "NotAllowedError")
+    );
+    assert_eq!(device.presence_count(), 2);
+    assert!(svc.take_get(56).is_none());
+}
+
+#[test]
+fn lock_during_presence_invalidates_a_taken_ceremony() {
+    let (f, _) = passkey_fx();
+    let session = f.session.clone();
+    let svc = PasskeyService::with_presence(
+        f.sched.clone(),
+        f.ui.clone(),
+        Arc::new(move |_, _| {
+            session.lock(LockReason::Manual);
+            Ok(true)
+        }),
+    );
+    svc.put_create(svc.epoch(), 57, f.session.with_db(pc_for).unwrap());
+    let response = svc.handle(
+        &ctx(&f, &f.settings, true),
+        &Request::PasskeyCreateConfirm {
+            token: "t".into(),
+            request_id: 57,
+            entry_id: None,
+            replace: false,
+            pairing: None,
+        },
+    );
+    assert!(!response.was_served());
+    assert!(!f.session.is_unlocked());
 }

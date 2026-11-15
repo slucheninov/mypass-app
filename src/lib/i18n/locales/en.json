@@ -807,5 +807,7 @@
   "uppercase letters": "uppercase letters",
   "“%@” could not be read.": "“{0}” could not be read.",
   "“%@” is a folder, not a file.": "“{0}” is a folder, not a file.",
-  "“%@” is larger than 5 MB.": "“{0}” is larger than 5 MB."
+  "“%@” is larger than 5 MB.": "“{0}” is larger than 5 MB.",
+  "Create a passkey for {0}": "Create a passkey for {0}",
+  "Sign in to {0} with a passkey": "Sign in to {0} with a passkey"
 }

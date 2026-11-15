@@ -180,3 +180,20 @@ pub async fn vault_location_change(
     let core = state.0.clone();
     blocking(move || core.vault_location_change(&folder, req.strategy)).await
 }
+
+/// The webview's reason key is advisory only; Rust chooses the catalog reason.
+#[tauri::command]
+#[specta::specta]
+pub async fn vault_unlock_device(
+    state: State<'_, AppState>,
+    reason_key: String,
+) -> Result<SessionStatus, ApiError> {
+    let _ = reason_key;
+    let core = state.0.clone();
+    blocking(move || {
+        let reason = crate::i18n::t(core.settings.get().language, "Unlock MyPass", &[]);
+        core.device_unlock.unlock_with_device(&reason)?;
+        core.vault_status()
+    })
+    .await
+}

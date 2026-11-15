@@ -261,11 +261,14 @@ change is done.
   the token, and only after the host verified it does the host send a token-bearing request, so a squatter on a stale
   port never receives the token; unauthenticated connections have an absolute deadline. The gate order is quitting,
   locked, then pairing; gating `match`es stay exhaustive (no wildcard arm), so a new request type is a compile error
-  until it is classified. Residual risk: a process of the same user can read the endpoint file and request pairing
-  (pairing still needs the code shown in the app), and by rewriting the endpoint record or replacing the host copy the manifests point at
-  it can capture the extension's pairing secret and then read every credential, the same exposure as the extension's own `chrome.storage`; stage 5 closes it, it is not optional hardening, and moves
-  the endpoint into a Keychain item that trusts only the signed host and points the manifests at the host inside the
-  bundle (ROADMAP). The earlier idea of a shared Keychain access group was dropped.
+  until it is classified. Team-signed macOS builds store the endpoint in a Keychain item
+  trusting the app and host team requirements and register the host inside the running bundle.
+  Before sending a token-bearing request the signed host resolves the loopback listener PID via
+  libproc and checks its app code requirement with Security guest-by-pid. Unsigned development
+  uses the 0600 file store and the Application Support host copy (diagnostics: `developmentFile`),
+  retaining the same-user endpoint/host-replacement exposure. Signed-build residuals: PID reuse
+  between lookup and verification, and the check-then-create Keychain ACL race; the earlier shared
+  Keychain access-group idea was dropped.
 - **Passkeys.** `mypass_core::passkey` holds the pure parts: request parsing and origin validation (`https` only,
   the rpId must be a registrable suffix of the origin host through the Public Suffix List, no IP literals, no
   localhost exception, so passkeys never work on `localhost`), the ES256 ceremonies (`perform_create`,
@@ -281,14 +284,13 @@ change is done.
   on) detaches the extension's WebAuthn proxy when off. Locking does not detach it: while MyPass is locked the
   proxy stays as it was, and the bridge gate answers every passkey request `locked`, so the page gets
   `NotAllowedError` "MyPass is locked".
-  - **Residual risks (owner-accepted, stage 5 closes the first two).**
-    1. User verification is "vault unlocked plus a click in the extension popup"; there is no in-app prompt and no
-       re-authentication per ceremony. A paired extension, or a same-user process holding the bridge token and the
-       pairing secret, can create passkeys for any site, replace the passkey of an entry and obtain sign-in assertions
-       for any stored relying party without the app showing anything. This extends the stage 3 residual to signing.
-    2. The authenticator data claims UV=1 even when the site asks for `required`, and `clientExtensionResults` answers
-       only `credProps`. The counter is always 0 and attestation is `none` (`packed` self-attestation for `direct`,
-       `indirect` and `enterprise`).
+  - Every macOS phase two verifies device-owner presence before taking the session lock. The
+    localized prompt names the validated rpId; cancellation and timeout give `NotAllowedError`.
+    UV is set only when that ceremony's presence check succeeded; a platform without presence
+    refuses `userVerification: required` before key access. UP stays 1. Client extensions are
+    `credProps` only, the counter stays 0, and attestation stays `none` (packed self-attestation
+    for `direct`, `indirect` and `enterprise`).
+  - **Residual risks (owner-accepted).**
     3. The pending table fails closed: an evicted or expired item answers `NotAllowedError`. Two copies of the same
        vault share a root UUID, so `vault_matches` cannot tell them apart; the lock observer clears pending items on a
        switch, which leaves only a narrow window.
@@ -474,7 +476,7 @@ move together with the Rust `tauri` family (the CLI rejects mismatched minors).
   tables except `unsafe_code = "deny"`, and only the allow-listed macOS glue files of that crate
   lift it with a module-level `#![allow(unsafe_code)]` for the Objective-C, Carbon and Security
   calls: `src/macos.rs`, `src/macos_login_item.rs`, `src/macos_device_unlock.rs`,
-  `src/macos_icloud.rs` and `src/macos_keychain_acl.rs` (stage 6 may add `windows.rs` the same
+  `src/macos_icloud.rs`, `src/macos_keychain_acl.rs` and `src/macos_peer_process.rs` (stage 6 may add `windows.rs` the same
   way). Every `unsafe` block there is minimal, wrapped in a small safe
   function and carries a `// SAFETY:` comment stating the invariant. Pinned by
   `workspace_lints_forbid_unsafe` and `unsafe_only_in_allow_listed_modules`.

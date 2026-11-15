@@ -93,6 +93,8 @@ pub struct BrowserStatus {
     pub registrations: Vec<BrowserRegistrationDto>,
     /// The host binary shipped with the app, when there is one.
     pub host_path: Option<String>,
+    pub endpoint_store: String,
+    pub can_reinstall_host: bool,
 }
 
 /// Every `PairingError` is the same fixed `Internal` error: no store detail reaches the webview.
@@ -164,6 +166,8 @@ pub fn status(
         paired,
         pairing,
         registrations: registrar.status().iter().map(registration_dto).collect(),
+        endpoint_store: "developmentFile".into(),
+        can_reinstall_host: true,
         host_path: host_path.map(|p| p.display().to_string()),
     }
 }
@@ -202,6 +206,9 @@ pub fn reinstall_host(
     registrar: &dyn NativeHostRegistrar,
     bundled_host: Option<&Path>,
 ) -> Result<Vec<BrowserRegistrationDto>, ApiError> {
+    if state.store_kind() == mypass_platform::endpoint_store::SharedStoreKind::Keychain {
+        return Ok(registrar.status().iter().map(registration_dto).collect());
+    }
     let Some(bundled) = bundled_host else {
         return Err(ApiError {
             code: ErrorCode::NotFound,
@@ -303,18 +310,29 @@ pub async fn browser_status(
     state: State<'_, BridgeState>,
 ) -> Result<BrowserStatus, ApiError> {
     let registrar = app_state.0.platform().host_registrar.clone();
+    let store_kind = state.store_kind();
     let (handle, failed, host) = (
         state.handle(),
         state.pairing_store_failed(),
         state.bundled_host(),
     );
     super::blocking(move || {
-        Ok(status(
+        let mut report = status(
             handle.as_deref(),
             failed,
             registrar.as_ref(),
             host.as_deref(),
-        ))
+        );
+        report.endpoint_store =
+            if store_kind == mypass_platform::endpoint_store::SharedStoreKind::Keychain {
+                "keychain"
+            } else {
+                "developmentFile"
+            }
+            .into();
+        report.can_reinstall_host =
+            store_kind == mypass_platform::endpoint_store::SharedStoreKind::File;
+        Ok(report)
     })
     .await
 }

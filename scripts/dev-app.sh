@@ -10,12 +10,14 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOST_FLAGS=()
 TAURI_FLAGS=(--debug)
+PROFILE_DIR=debug
 
 for arg in "$@"; do
   case "$arg" in
     --release)
       HOST_FLAGS+=(--release)
       TAURI_FLAGS=()
+      PROFILE_DIR=release
       ;;
     *)
       echo "Usage: $0 [--release]" >&2
@@ -45,8 +47,20 @@ cd "$REPO_ROOT"
 bash scripts/build-host.sh ${HOST_FLAGS[@]+"${HOST_FLAGS[@]}"}
 
 if [[ -n "${MYPASS_SIGNING_IDENTITY:-}" ]]; then
-  APPLE_SIGNING_IDENTITY="$MYPASS_SIGNING_IDENTITY" pnpm tauri build ${TAURI_FLAGS[@]+"${TAURI_FLAGS[@]}"}
+  APPLE_SIGNING_IDENTITY="$MYPASS_SIGNING_IDENTITY" pnpm tauri build --bundles app ${TAURI_FLAGS[@]+"${TAURI_FLAGS[@]}"}
 else
   echo "warning: building unsigned (set MYPASS_SIGNING_IDENTITY to sign)." >&2
-  pnpm tauri build ${TAURI_FLAGS[@]+"${TAURI_FLAGS[@]}"}
+  env -u APPLE_SIGNING_IDENTITY pnpm tauri build --bundles app ${TAURI_FLAGS[@]+"${TAURI_FLAGS[@]}"}
+fi
+
+if [[ -n "${MYPASS_SIGNING_IDENTITY:-}" ]]; then
+  TARGET_DIR="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
+  BUNDLE="$TARGET_DIR/$PROFILE_DIR/bundle/macos/MyPass.app"
+  codesign --force --options runtime --identifier com.mypass.chromehost \
+    -r='designated => identifier "com.mypass.chromehost" and anchor apple generic and certificate leaf[subject.OU] = "W645B93PPQ"' \
+    --sign "$MYPASS_SIGNING_IDENTITY" "$BUNDLE/Contents/MacOS/mypass-native-host"
+  codesign --force --options runtime --identifier com.mypass.app \
+    -r='designated => identifier "com.mypass.app" and anchor apple generic and certificate leaf[subject.OU] = "W645B93PPQ"' \
+    --sign "$MYPASS_SIGNING_IDENTITY" "$BUNDLE"
+  codesign --verify --deep --strict "$BUNDLE"
 fi

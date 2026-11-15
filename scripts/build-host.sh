@@ -74,7 +74,9 @@ if [[ -n "${MYPASS_SIGNING_IDENTITY:-}" ]]; then
     echo "warning: MYPASS_SIGNING_IDENTITY does not look like a 40-hex SHA-1 hash." >&2
     echo "  Find it with: security find-identity -v -p codesigning (use the entry that is not revoked)" >&2
   fi
-  codesign --force --sign "$MYPASS_SIGNING_IDENTITY" "$DEST"
+  codesign --force --options runtime --identifier com.mypass.chromehost \
+    -r='designated => identifier "com.mypass.chromehost" and anchor apple generic and certificate leaf[subject.OU] = "W645B93PPQ"' \
+    --sign "$MYPASS_SIGNING_IDENTITY" "$DEST"
   echo "host signed: $DEST"
 else
   echo "host left unsigned (set MYPASS_SIGNING_IDENTITY for a stable signature)"

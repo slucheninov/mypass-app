@@ -44,12 +44,31 @@ const NOT_BUILT: &str = "host not built";
 #[derive(Debug, Clone)]
 pub struct MacHostRegistrar {
     paths: AppPaths,
+    bundle: bool,
+    target: Option<PathBuf>,
 }
 
 impl MacHostRegistrar {
     /// A registrar over `paths` (tests build `AppPaths::macos(tempdir)`).
     pub fn new(paths: AppPaths) -> Self {
-        Self { paths }
+        Self {
+            paths,
+            bundle: false,
+            target: None,
+        }
+    }
+
+    /// Signed app manifests always name the host inside the running sealed bundle. A missing
+    /// bundled host fails closed; it never installs or falls back to Application Support.
+    pub fn for_bundle(paths: AppPaths, host: Option<PathBuf>) -> Self {
+        Self {
+            paths,
+            bundle: true,
+            target: host,
+        }
+    }
+    fn target(&self) -> &Path {
+        self.target.as_deref().unwrap_or(&self.paths.host_exe)
     }
 
     /// Whether `browser` is installed enough to register: its vendor folder exists (a real
@@ -143,7 +162,7 @@ impl MacHostRegistrar {
             );
         };
         // Ok only when both the target and the allowed origins are exactly ours.
-        let expected = manifest_json(&self.paths.host_exe)
+        let expected = manifest_json(self.target())
             .ok()
             .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok());
         if expected.as_ref() == Some(&value) {
@@ -224,6 +243,9 @@ impl MacHostRegistrar {
 impl NativeHostRegistrar for MacHostRegistrar {
     fn register(&self, bundled_host: &Path) -> PlatformResult<HostRegistrationReport> {
         let mut report = HostRegistrationReport::default();
+        if self.bundle && self.target.as_deref() != Some(bundled_host) {
+            return Err(PlatformError::Failed(NOT_BUILT.into()));
+        }
         // The build placeholder (empty or not executable) must never be installed or advertised.
         let usable = fs::metadata(bundled_host)
             .is_ok_and(|m| m.is_file() && m.len() > 0 && m.mode() & 0o111 != 0);
@@ -231,13 +253,26 @@ impl NativeHostRegistrar for MacHostRegistrar {
             report.registrations = self.error_rows(NOT_BUILT);
             return Ok(report);
         }
-        let json = manifest_json(&self.paths.host_exe)
-            .map_err(|e| PlatformError::Failed(e.to_string()))?;
-        match self.install_host(bundled_host) {
+        let json =
+            manifest_json(self.target()).map_err(|e| PlatformError::Failed(e.to_string()))?;
+        match if self.bundle {
+            Ok(false)
+        } else {
+            self.install_host(bundled_host)
+        } {
             Ok(copied) => report.host_copied = copied,
             Err(e) => {
                 report.registrations = self.error_rows(&e.to_string());
                 return Ok(report);
+            }
+        }
+        if self.bundle {
+            // R6: only the obsolete host copy, never a vault. Do not follow symlinks.
+            if check_dir_chain(self.paths.home(), &self.paths.host_dir).is_ok()
+                && fs::symlink_metadata(&self.paths.host_exe).is_ok_and(|m| m.is_file())
+            {
+                fs::remove_file(&self.paths.host_exe)
+                    .map_err(|e| io_err("remove old host", &self.paths.host_exe, &e))?;
             }
         }
         for browser in Browser::ALL {
@@ -270,7 +305,7 @@ impl NativeHostRegistrar for MacHostRegistrar {
                 let (state, detail) = self.read_state(&manifest);
                 // A correct manifest is not healthy while the host it names is gone.
                 if state == RegistrationState::Ok
-                    && !fs::symlink_metadata(&self.paths.host_exe)
+                    && !fs::symlink_metadata(self.target())
                         .is_ok_and(|m| m.is_file() && m.mode() & 0o111 != 0)
                 {
                     return Self::row(
@@ -432,6 +467,27 @@ mod tests {
 
     fn state_of(rows: &[BrowserRegistration], b: Browser) -> RegistrationState {
         rows.iter().find(|r| r.id == b.id()).unwrap().state
+    }
+
+    #[test]
+    fn signed_registration_names_bundle_and_removes_old_copy() {
+        let f = fixture();
+        MacHostRegistrar::new(f.paths.clone())
+            .register(&f.host)
+            .unwrap();
+        let r = MacHostRegistrar::for_bundle(f.paths.clone(), Some(f.host.clone()));
+        let report = r.register(&f.host).unwrap();
+        assert!(!report.host_copied);
+        assert!(!f.paths.host_exe.exists());
+        for row in r.status() {
+            let manifest = row.manifest_path.unwrap();
+            let json: serde_json::Value =
+                serde_json::from_slice(&fs::read(manifest).unwrap()).unwrap();
+            assert_eq!(json["path"], f.host.to_str().unwrap());
+            assert_eq!(row.state, RegistrationState::Ok);
+        }
+        let missing = MacHostRegistrar::for_bundle(f.paths.clone(), None);
+        assert!(missing.register(&f.host).is_err());
     }
 
     #[test]

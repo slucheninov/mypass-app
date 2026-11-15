@@ -1533,7 +1533,11 @@ fn confirm_target_not_offered_by_phase_one_is_rejected() {
 fn confirm_after_direct_vault_switch_writes_nothing_into_the_new_vault() {
     let (f, _observed, _ids) = sample_fx();
     // Not registered with the session: stands for the window before the observer's clear runs.
-    let svc = PasskeyService::new(f.sched.clone(), f.ui.clone());
+    let svc = PasskeyService::with_presence(
+        f.sched.clone(),
+        f.ui.clone(),
+        std::sync::Arc::new(|_, _| Ok(true)),
+    );
     let json = request_json(ORIGIN, Some(RP), &[]).to_string();
     let create_request = Request::PasskeyCreate {
         token: "tok".into(),

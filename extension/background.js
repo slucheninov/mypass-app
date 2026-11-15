@@ -9,6 +9,13 @@ const knownTypes = [
 ];
 
 const PASSKEY_WATCHDOG_MS = 120000;
+// A 60 s OS presence prompt plus relay/cleanup budget must fit before Chrome's 180 s
+// ceremony deadline. Late popup consent fails closed without starting an OS prompt.
+const PASSKEY_PRESENCE_BUDGET_MS = 75000;
+function passkeyPresenceDeadlineFits(pending, now = Date.now()) {
+  return Number.isFinite(pending.startedAt) && now >= pending.startedAt
+    && now - pending.startedAt <= 100000;
+}
 const PASSKEY_WATCHDOG_ALARM = "passkeyCeremonyWatchdog";
 const PASSKEY_REFRESH_ALARM = "passkeyProxyRefresh";
 let proxyRefresh = null;
@@ -834,7 +841,7 @@ async function handlePasskeyRequest(kind, requestId, requestDetailsJson) {
     const reserved = await withPasskeyState(async () => {
       if (await readPending() || cancelledPasskeys.has(requestId)) return false;
       await new Promise((resolve) => chrome.storage.session.remove([PASSKEY_FAILURE_KEY], resolve));
-      await writePending({ kind, requestId, originUrl, phase: "checking" });
+      await writePending({ kind, requestId, originUrl, startedAt: Date.now(), phase: "checking" });
       chrome.alarms.create(PASSKEY_WATCHDOG_ALARM, { delayInMinutes: PASSKEY_WATCHDOG_MS / 60000 });
       return true;
     });
@@ -862,7 +869,7 @@ async function handlePasskeyRequest(kind, requestId, requestDetailsJson) {
       await withPasskeyState(async () => {
         const current = await readPending();
         if (cancelledPasskeys.has(requestId) || !current || current.requestId !== requestId) return;
-        await writePending({ kind, requestId, originUrl, rpId: response.rpId, rpName: response.rpName, matches: response.matches || [] });
+        await writePending({ kind, requestId, originUrl, startedAt: current.startedAt, rpId: response.rpId, rpName: response.rpName, matches: response.matches || [] });
         if (!cancelledPasskeys.has(requestId)) openPasskeyPopup();
       });
       return;
@@ -1776,8 +1783,10 @@ function handleRuntimeMessage(message, sender, sendResponse) {
       const claimed = await withPasskeyState(async () => {
         const pending = await readPending();
         if (!pending || pending.requestId !== message.requestId || pending.kind !== kind
-          || pending.phase === "checking" || pending.phase === "completing") return false;
+          || pending.phase === "checking" || pending.phase === "completing"
+          || !passkeyPresenceDeadlineFits(pending)) return false;
         await writePending({ ...pending, phase: "completing" });
+        chrome.alarms.create(PASSKEY_WATCHDOG_ALARM, { delayInMinutes: PASSKEY_PRESENCE_BUDGET_MS / 60000 });
         return true;
       });
       if (!claimed) return { type: completeType, requestId: message.requestId,
@@ -1954,6 +1963,7 @@ if (typeof chrome !== "undefined" && chrome.commands && chrome.commands.onComman
 
 if (typeof module !== "undefined") {
   module.exports = {
+    passkeyPresenceDeadlineFits,
     PAIRING_STORAGE_KEY,
     PASSKEY_WATCHDOG_ALARM,
     PASSKEY_REFRESH_ALARM,

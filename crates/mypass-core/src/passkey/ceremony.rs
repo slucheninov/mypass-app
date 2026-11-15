@@ -15,13 +15,13 @@
 //!     "extensions":{"remoteDesktopClientOverride":
 //!         {"origin":"https://example.com","sameOriginWithAncestors":true}}}"#;
 //! let request = parse_create("https://example.com", json).unwrap();
-//! let outcome = perform_create(&request).unwrap();
+//! let outcome = perform_create(&request, true).unwrap();
 //! assert_eq!(outcome.credential_id.len(), 32);
 //! ```
 //!
 //! ```compile_fail,E0308
 //! use mypass_core::passkey::perform_create;
-//! let outcome = perform_create("https://example.com");
+//! let outcome = perform_create("https://example.com", true);
 //! ```
 //!
 //! The signing key is neither `Clone` nor `Debug`, so it cannot be copied around or printed:
@@ -42,7 +42,7 @@
 //! fn show(key: &PasskeySigningKey) -> String { format!("{key:?}") }
 //! ```
 //!
-//! **User presence and verification.** Both UP and UV are always set. MyPass is a software
+//! **User presence and verification.** UP is always set; UV is set only after the caller verified presence for this ceremony. MyPass is a software
 //! authenticator: "user verified" means the vault is unlocked and the user clicked to confirm in
 //! the extension popup (the owner's decision for Stage 4, the same as the Swift app). That is also
 //! the answer to `userVerification: "required"`. There is no per-ceremony re-authentication.
@@ -225,11 +225,17 @@ pub fn client_data_json(kind: &str, challenge: &[u8], origin: &str) -> Vec<u8> {
 ///
 /// # Errors
 /// `Crypto` when the OS RNG fails or a key cannot be encoded.
-pub fn perform_create(request: &ValidatedCreate) -> Result<CreateOutcome, PasskeyError> {
+pub fn perform_create(
+    request: &ValidatedCreate,
+    verified: bool,
+) -> Result<CreateOutcome, PasskeyError> {
+    if request.request().verification_required && !verified {
+        return Err(PasskeyError::InvalidRequest);
+    }
     let key = random_secret_key()?;
     let mut credential_id = [0u8; CREDENTIAL_ID_LEN];
     getrandom::fill(&mut credential_id).map_err(|_| PasskeyError::Crypto)?;
-    create_with(request, key, credential_id)
+    create_with(request, key, credential_id, verified)
 }
 
 /// [`perform_create`] with a caller-chosen key and credential id: the deterministic seam for
@@ -244,15 +250,20 @@ pub fn perform_create_with(
     request: &ValidatedCreate,
     key: SecretKey,
     credential_id: [u8; CREDENTIAL_ID_LEN],
+    verified: bool,
 ) -> Result<CreateOutcome, PasskeyError> {
-    create_with(request, key, credential_id)
+    create_with(request, key, credential_id, verified)
 }
 
 fn create_with(
     request: &ValidatedCreate,
     key: SecretKey,
     credential_id: [u8; CREDENTIAL_ID_LEN],
+    verified: bool,
 ) -> Result<CreateOutcome, PasskeyError> {
+    if request.request().verification_required && !verified {
+        return Err(PasskeyError::InvalidRequest);
+    }
     let signing = SigningKey::from(&key);
     let public = key.public_key();
     let point = public.to_sec1_bytes();
@@ -268,7 +279,8 @@ fn create_with(
     attested.extend_from_slice(&credential_id);
     attested.extend(cose_ec2_public_key(x, y));
 
-    let flags = FLAG_UP | FLAG_UV | BackupFlags::default().bits() | FLAG_AT;
+    let flags =
+        FLAG_UP | if verified { FLAG_UV } else { 0 } | BackupFlags::default().bits() | FLAG_AT;
     let auth_data = authenticator_data(request.rp_id(), flags, Some(&attested));
     let client_data = client_data_json(
         "webauthn.create",
@@ -325,7 +337,11 @@ pub fn perform_get(
     credential_id: &[u8],
     user_handle: Option<&[u8]>,
     flags: BackupFlags,
+    verified: bool,
 ) -> Result<GetOutcome, PasskeyError> {
+    if request.request().verification_required && !verified {
+        return Err(PasskeyError::InvalidRequest);
+    }
     if credential_id.is_empty() {
         return Err(PasskeyError::InvalidRequest);
     }
@@ -334,7 +350,11 @@ pub fn perform_get(
         return Err(PasskeyError::CredentialNotAllowed);
     }
 
-    let auth_data = authenticator_data(request.rp_id(), FLAG_UP | FLAG_UV | flags.bits(), None);
+    let auth_data = authenticator_data(
+        request.rp_id(),
+        FLAG_UP | if verified { FLAG_UV } else { 0 } | flags.bits(),
+        None,
+    );
     let client_data = client_data_json(
         "webauthn.get",
         &request.request().challenge,

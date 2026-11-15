@@ -200,6 +200,7 @@ pub struct AppCore {
     pub device_unlock: DeviceUnlockService,
     /// Secondary-folder sync (status, `sync_now`, disconnect); observes the session.
     pub secondary: SecondarySync,
+    pub update: crate::update::UpdateService,
     platform: Platform,
     scheduler: Arc<dyn Scheduler>,
     paths: AppPaths,
@@ -299,7 +300,15 @@ impl AppCore {
         let secondary =
             SecondarySync::new(session.clone(), settings.clone(), sync_scheduler, &paths);
         secondary.attach();
+        let update = crate::update::UpdateService::new(
+            scheduler.clone(),
+            settings.clone(),
+            Arc::new(mypass_update::NoopFeed),
+            "0.0.0",
+            &paths.config_dir,
+        );
         Self {
+            update,
             backups: session.backups(),
             secondary,
             unlock_requests,
@@ -906,6 +915,7 @@ impl AppCore {
     pub fn settings_update(&self, patch: SettingsPatch) -> Result<Settings, ApiError> {
         let updated = self.settings.update(patch)?;
         self.autolock.settings_changed();
+        self.update.enabled_changed();
         Ok(updated)
     }
 

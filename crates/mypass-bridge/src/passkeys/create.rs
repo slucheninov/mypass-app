@@ -180,10 +180,23 @@ pub(crate) fn handle_confirm(
     entry_id: Option<&str>,
     replace: bool,
 ) -> Response {
+    let epoch = svc.epoch();
     // Single use: from here on every answer has consumed the ceremony.
     let Some(pending) = svc.take_create(request_id) else {
         return create_error(request_id, NOT_ALLOWED, NO_PENDING);
     };
+    let verified = match (svc.presence)(true, pending.request.rp_id()) {
+        Ok(v) => v,
+        Err(super::PresenceError::Cancelled) => {
+            return create_error(request_id, NOT_ALLOWED, "Presence verification cancelled")
+        }
+    };
+    if epoch != svc.epoch()
+        || !ctx.settings.get().passkey_proxy_enabled
+        || (pending.request.request().verification_required && !verified)
+    {
+        return create_error(request_id, NOT_ALLOWED, NO_PENDING);
+    }
     // An id the extension sent but that is not an id at all is a target that cannot match.
     let target = match entry_id.map(parse_wire_id) {
         None => None,
@@ -193,7 +206,7 @@ pub(crate) fn handle_confirm(
 
     let mut refusal = None;
     let written = ctx.session.mutate(|db, now| {
-        confirm_in_vault(db, now, &pending, target, replace).map_err(|r| {
+        confirm_in_vault_verified(db, now, &pending, target, replace, verified).map_err(|r| {
             refusal = Some(r);
             // Aborts the mutate (the draft is dropped); the reason travels in `refusal`.
             SessionError::InvalidInput("passkey confirm refused".into())
@@ -292,12 +305,23 @@ fn undo_in_vault(
 
 /// The body of the one confirm `mutate` (R8): every check against `db` as it is now, then the key
 /// generation and the write. Any `Err` drops the draft.
+#[cfg(test)]
 fn confirm_in_vault(
     db: &mut Database,
     now: Timestamp,
     pending: &PendingCreate,
     target: Option<Uuid>,
     replace: bool,
+) -> Result<Written, Refusal> {
+    confirm_in_vault_verified(db, now, pending, target, replace, true)
+}
+fn confirm_in_vault_verified(
+    db: &mut Database,
+    now: Timestamp,
+    pending: &PendingCreate,
+    target: Option<Uuid>,
+    replace: bool,
+    verified: bool,
 ) -> Result<Written, Refusal> {
     // First, before reading anything: the ceremony must belong to this vault.
     if !pending.vault_matches(db) {
@@ -338,7 +362,7 @@ fn confirm_in_vault(
         }
     }
 
-    let outcome = perform_create(request).map_err(|_| Refusal::Failed)?;
+    let outcome = perform_create(request, verified).map_err(|_| Refusal::Failed)?;
     let ceremony = request.request();
     let record = PasskeyRecord {
         rp_id: rp_id.to_owned(),

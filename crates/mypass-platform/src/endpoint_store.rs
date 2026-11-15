@@ -92,6 +92,21 @@ pub fn select_shared_store(probe: &dyn SignatureProbe, side: StoreSide) -> Share
     }
 }
 
+/// The only host path accepted by the signed app: a sibling inside its own app bundle.
+/// A signed standalone executable must fail closed, rather than register a writable copy.
+pub fn signed_bundle_host(app_exe: &Path) -> Option<std::path::PathBuf> {
+    let macos = app_exe.parent()?;
+    let contents = macos.parent()?;
+    let bundle = contents.parent()?;
+    if macos.file_name()? != "MacOS"
+        || contents.file_name()? != "Contents"
+        || bundle.extension()? != "app"
+    {
+        return None;
+    }
+    Some(macos.join("mypass-native-host"))
+}
+
 /// The endpoint store of the app; `host_exe` is the bundled host binary, trusted next to the app
 /// (`None`: not found, so a signed app cannot write the record).
 pub fn app_shared_store(
@@ -184,6 +199,19 @@ pub(crate) fn designated_requirement_is_exact(
     !expected_canonical.trim().is_empty() && actual_canonical == expected_canonical
 }
 
+/// Store selection without opening Keychain or reading an endpoint (diagnostics).
+pub fn running_store_kind(side: StoreSide) -> SharedStoreKind {
+    #[cfg(target_os = "macos")]
+    {
+        select_shared_store(&crate::macos_keychain_acl::MacSignatureProbe, side)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = side;
+        SharedStoreKind::File
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,6 +241,24 @@ mod tests {
 
     fn app() -> PathBuf {
         PathBuf::from("/Applications/MyPass.app/Contents/MacOS/mypass-app")
+    }
+
+    #[test]
+    fn signed_host_path_is_confined_to_the_running_bundle() {
+        assert_eq!(
+            signed_bundle_host(Path::new(
+                "/Applications/MyPass.app/Contents/MacOS/mypass-app"
+            )),
+            Some("/Applications/MyPass.app/Contents/MacOS/mypass-native-host".into())
+        );
+        for p in [
+            "/target/debug/mypass-app",
+            "/Applications/MyPass.app/mypass-app",
+            "/Applications/MyPass.app/Contents/mypass-app",
+            "/tmp/Other/Contents/MacOS/mypass-app",
+        ] {
+            assert!(signed_bundle_host(Path::new(p)).is_none());
+        }
     }
 
     #[test]

@@ -35,6 +35,15 @@ export const commands = {
 	/**  Reveals the extension folder with the same helper as `app_reveal_backups`. */
 	browserShowExtensionFolder: () => typedError<null, ApiError>(__TAURI_INVOKE("browser_show_extension_folder")),
 	browserStatus: () => typedError<BrowserStatus_Serialize, ApiError>(__TAURI_INVOKE("browser_status")),
+	deviceUnlockStatus: () => typedError<DeviceUnlockStatus_Serialize, ApiError>(__TAURI_INVOKE("device_unlock_status")),
+	deviceUnlockConfigure: (password: string | null, touchId: boolean, macPassword: boolean) => typedError<DeviceUnlockStatus_Serialize, ApiError>(__TAURI_INVOKE("device_unlock_configure", { password, touchId, macPassword })),
+	deviceUnlockConsumeExtensionRequest: () => __TAURI_INVOKE<boolean>("device_unlock_consume_extension_request"),
+	updateStatus: () => __TAURI_INVOKE<UpdateStatus_Serialize>("update_status"),
+	updateCheckNow: () => typedError<UpdateStatus_Serialize, ApiError>(__TAURI_INVOKE("update_check_now")),
+	updateDismiss: () => typedError<null, ApiError>(__TAURI_INVOKE("update_dismiss")),
+	updateOpenRelease: () => typedError<null, ApiError>(__TAURI_INVOKE("update_open_release")),
+	/**  The webview's reason key is advisory only; Rust chooses the catalog reason. */
+	vaultUnlockDevice: (reasonKey: string) => typedError<SessionStatus_Serialize, ApiError>(__TAURI_INVOKE("vault_unlock_device", { reasonKey })),
 	draftClear: (entryId: string) => typedError<null, ApiError>(__TAURI_INVOKE("draft_clear", { entryId })),
 	draftSave: (entryId: string, notes: string) => typedError<boolean, ApiError>(__TAURI_INVOKE("draft_save", { entryId, notes })),
 	draftVersions: (entryId: string) => typedError<DraftVersionDto[], ApiError>(__TAURI_INVOKE("draft_versions", { entryId })),
@@ -126,6 +135,7 @@ export const events = {
 	storageStatusChanged: makeEvent<StorageStatusChanged, StorageStatusChanged>("storage-status-changed"),
 	syncStatusChanged: makeEvent<SyncStatusChanged_Serialize, SyncStatusChanged_Deserialize>("sync-status-changed"),
 	unlockRequestedEvent: makeEvent<UnlockRequestedEvent, UnlockRequestedEvent>("unlock-requested-event"),
+	updateChanged: makeEvent<UpdateChanged_Serialize, UpdateChanged_Deserialize>("update-changed"),
 	vaultChanged: makeEvent<VaultChanged, VaultChanged>("vault-changed"),
 };
 
@@ -285,6 +295,8 @@ export type BrowserStatus_Deserialize = {
 	registrations: BrowserRegistrationDto_Deserialize[],
 	/**  The host binary shipped with the app, when there is one. */
 	hostPath?: string | null,
+	endpointStore: string,
+	canReinstallHost: boolean,
 };
 
 /**  Everything the Browser pane shows. */
@@ -301,6 +313,8 @@ export type BrowserStatus_Serialize = {
 	registrations: BrowserRegistrationDto_Serialize[],
 	/**  The host binary shipped with the app, when there is one. */
 	hostPath: string | null,
+	endpointStore: string,
+	canReinstallHost: boolean,
 };
 
 /**  Never carries the full number or the CVV. */
@@ -368,6 +382,47 @@ export type CustomFieldEdit = {
 	key: string,
 	value: string,
 	protected: boolean,
+};
+
+/**  What the Security pane and the unlock screen show about device unlock. */
+export type DeviceUnlockStatus = DeviceUnlockStatus_Serialize | DeviceUnlockStatus_Deserialize;
+
+/**  What the Security pane and the unlock screen show about device unlock. */
+export type DeviceUnlockStatus_Deserialize = {
+	/**  The device can unlock at all (`availability != Unavailable`). */
+	available: boolean,
+	/**  Biometrics are set up on the device. */
+	biometrics: boolean,
+	/**  The current vault is enrolled for the mode the toggles select. */
+	enrolled: boolean,
+	touchIdEnabled: boolean,
+	macPasswordEnabled: boolean,
+	/**  The unlock screen may show the device-unlock button now. */
+	canOfferNow: boolean,
+	/**
+	 *  What blocks the button: the toggles, the enrolment or a window. `None` when none of them
+	 *  does, and `can_offer_now` is then `available`.
+	 */
+	reason?: OfferBlock | null,
+};
+
+/**  What the Security pane and the unlock screen show about device unlock. */
+export type DeviceUnlockStatus_Serialize = {
+	/**  The device can unlock at all (`availability != Unavailable`). */
+	available: boolean,
+	/**  Biometrics are set up on the device. */
+	biometrics: boolean,
+	/**  The current vault is enrolled for the mode the toggles select. */
+	enrolled: boolean,
+	touchIdEnabled: boolean,
+	macPasswordEnabled: boolean,
+	/**  The unlock screen may show the device-unlock button now. */
+	canOfferNow: boolean,
+	/**
+	 *  What blocks the button: the toggles, the enrolment or a window. `None` when none of them
+	 *  does, and `can_offer_now` is then `available`.
+	 */
+	reason: OfferBlock | null,
 };
 
 /**  One saved version of an entry's notes, as the webview sees it. */
@@ -720,6 +775,17 @@ export type LockReason = "manual" | "idle" | "sleep" | "screenLock" | "hotkey" |
 export type LoginItemStatus = "enabled" | "disabled" | "requiresApproval" | "notFound" | "unsupported";
 
 export type MigrationStrategy = "seedRemote" | "merge" | "adoptRemote" | "overwriteRemote";
+
+/**  Why device unlock cannot be offered right now. */
+export type OfferBlock = 
+/**  Both toggles are off. */
+"disabled" | 
+/**  The toggles are on but this vault has no enrolment for their mode. */
+"notEnrolled" | 
+/**  The last device unlock is older than the device window. */
+"deviceWindowExpired" | 
+/**  The master password was last typed longer ago than the account window (or never). */
+"accountWindowExpired";
 
 /**  The main window should open entry `id` (in the editor when `edit`). */
 export type OpenEntryEvent = {
@@ -1371,6 +1437,36 @@ export type UnlockRequestedEvent = null;
  *  stage 5.
  */
 export type UnlockWithDeviceWindow = "oneHour" | "fourHours" | "eightHours" | "twentyFourHours" | "never";
+
+export type UpdateChanged = UpdateChanged_Serialize | UpdateChanged_Deserialize;
+
+export type UpdateChanged_Deserialize = UpdateStatus_Deserialize;
+
+export type UpdateChanged_Serialize = UpdateStatus_Serialize;
+
+export type UpdateFailure = "offline" | "rateLimited" | "badStatus" | "unexpected" | "unknownVersion";
+
+export type UpdateRelease = {
+	version: string,
+	url: string,
+};
+
+export type UpdateState = { state: "idle" } | { state: "checking" } | { state: "upToDate"; checkedAt: number | null } | { state: "available"; version: string; url: string } | { state: "failed"; kind: UpdateFailure };
+
+/**  Status and banner are separate: a failed manual check must preserve an existing banner. */
+export type UpdateStatus = UpdateStatus_Serialize | UpdateStatus_Deserialize;
+
+/**  Status and banner are separate: a failed manual check must preserve an existing banner. */
+export type UpdateStatus_Deserialize = {
+	status: UpdateState,
+	banner?: UpdateRelease | null,
+};
+
+/**  Status and banner are separate: a failed manual check must preserve an existing banner. */
+export type UpdateStatus_Serialize = {
+	status: UpdateState,
+	banner: UpdateRelease | null,
+};
 
 /**  The vault content changed in memory (lists and details are stale). */
 export type VaultChanged = null;

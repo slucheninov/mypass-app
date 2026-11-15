@@ -807,5 +807,7 @@
   "uppercase letters": "заглавные буквы",
   "“%@” could not be read.": "Не удалось прочитать «{0}».",
   "“%@” is a folder, not a file.": "«{0}» — это папка, а не файл.",
-  "“%@” is larger than 5 MB.": "«{0}» больше 5 МБ."
+  "“%@” is larger than 5 MB.": "«{0}» больше 5 МБ.",
+  "Create a passkey for {0}": "Создать ключ доступа для {0}",
+  "Sign in to {0} with a passkey": "Войти в {0} с ключом доступа"
 }

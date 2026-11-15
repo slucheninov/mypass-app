@@ -96,6 +96,7 @@ fn pykeepass_written_keepassxc_style_passkeys_read_and_sign() {
             &record.credential_id,
             record.user_handle.as_deref(),
             record.flags,
+            true,
         )
         .unwrap();
         let response: Value = serde_json::from_str(&outcome.response_json).unwrap();

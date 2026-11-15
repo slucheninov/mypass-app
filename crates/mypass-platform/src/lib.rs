@@ -7,7 +7,7 @@
 mod clipboard;
 mod coordinated;
 mod device_unlock;
-mod endpoint_store;
+pub mod endpoint_store;
 mod error;
 mod events;
 mod fallback;
@@ -123,3 +123,7 @@ mod tests {
         assert!(paths.secrets_shared.is_dir());
     }
 }
+
+#[cfg(target_os = "macos")]
+mod macos_peer_process;
+pub mod peer_process;

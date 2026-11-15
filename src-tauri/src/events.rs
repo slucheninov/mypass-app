@@ -109,3 +109,6 @@ pub struct StorageStatusChanged(pub mypass_session::StorageStatus);
 pub struct SettingsPaneEvent {
     pub pane: String,
 }
+
+#[derive(Serialize, specta::Type, tauri_specta::Event, Clone, Debug)]
+pub struct UpdateChanged(pub mypass_session::update::UpdateStatus);

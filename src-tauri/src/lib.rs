@@ -28,7 +28,7 @@ use tauri_specta::{collect_commands, collect_events, Builder, Commands};
 /// Every command, in one place (the tests read their names from here).
 pub fn commands() -> Commands<tauri::Wry> {
     use commands::{app, attachment, backup, browser, draft, entry, generator, group, import};
-    use commands::{platform, settings, sidebar, sync, vault};
+    use commands::{device, platform, settings, sidebar, sync, update, vault};
     collect_commands![
         app::app_info,
         app::app_open_entry,
@@ -49,6 +49,14 @@ pub fn commands() -> Commands<tauri::Wry> {
         browser::browser_revoke,
         browser::browser_show_extension_folder,
         browser::browser_status,
+        device::device_unlock_status,
+        device::device_unlock_configure,
+        device::device_unlock_consume_extension_request,
+        update::update_status,
+        update::update_check_now,
+        update::update_dismiss,
+        update::update_open_release,
+        vault::vault_unlock_device,
         draft::draft_clear,
         draft::draft_save,
         draft::draft_versions,
@@ -117,7 +125,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         BridgeChangedEvent, ClipboardClearedEvent, OpenEntryEvent, PairingChallengeEvent,
         ProposalEvent, SaveStateChanged, SessionChanged, SettingsChanged, SettingsPaneEvent,
         ShortcutConflictEvent, StorageStatusChanged, SyncStatusChanged, UnlockRequestedEvent,
-        VaultChanged,
+        UpdateChanged, VaultChanged,
     };
     Builder::<tauri::Wry>::new()
         .commands(commands())
@@ -132,6 +140,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             SettingsChanged,
             SettingsPaneEvent,
             ShortcutConflictEvent,
+            UpdateChanged,
             StorageStatusChanged,
             SyncStatusChanged,
             UnlockRequestedEvent,
