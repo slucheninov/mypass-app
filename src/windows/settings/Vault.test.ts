@@ -142,7 +142,7 @@ describe("backups", () => {
 
   it("backup_failure_banner_visible_when_last_failure_present", async () => {
     await open({}, (f) => (f.state.backupFailure = { message: "disk full", at: 1_700_000_100_000 }));
-    const banner = await screen.findByRole("status");
+    const banner = await screen.findByText("Last backup failed", { exact: false });
     expect(banner.textContent).toContain("Last backup failed");
     expect(banner.textContent).not.toContain("disk full");
   });
@@ -150,7 +150,7 @@ describe("backups", () => {
   it("shows no banner without a failure and an empty list without backups", async () => {
     await open();
     await screen.findByRole("button", { name: "Show in Finder" });
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText("Last backup failed", { exact: false })).toBeNull();
     expect(screen.queryAllByRole("listitem")).toEqual([]);
   });
 });

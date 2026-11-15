@@ -170,6 +170,18 @@ async function selectEntry(user: User, name: RegExp) {
 }
 
 const SCENARIOS: Record<string, Scenario> = {
+  "src/screens/LocationChangeSheet.svelte#Also sync to folder|Change vault location": async (user) => {
+    await renderSettingsApp({}, { pane: "Vault" });
+    const opener = await screen.findByRole("button", { name: "Move to a local folder…" });
+    await click(user, opener);
+    return { dialog: "Change vault location", opener };
+  },
+  "src/windows/settings/DeviceUnlockSection.svelte#Confirm Master Password": async (user) => {
+    await renderSettingsApp({ deviceUnlockAvailable: true }, { pane: "Security" });
+    const opener = await screen.findByRole("switch", { name: "Unlock using Touch ID" });
+    await click(user, opener);
+    return { dialog: "Confirm Master Password", opener };
+  },
   "src/screens/Toolbar.svelte#Password Generator…": async (user) => {
     await unlocked();
     return { dialog: "Password Generator…", opener: await chooseFromMenu(user, "New Entry", "Password Generator…") };

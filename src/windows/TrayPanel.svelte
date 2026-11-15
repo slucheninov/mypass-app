@@ -1,4 +1,6 @@
 <script lang="ts">
+  import UnlockDeviceButton from "../screens/UnlockDeviceButton.svelte";
+  import { platform } from "../lib/platform.svelte";
   // The tray panel window (320 x 440). It shares the stores and `api` with the main window but
   // loads no entries list: locked it is a master password field, unlocked it lists the five most
   // recent items (titles only, no secret) and opens a compact detail. Showing and hiding the window
@@ -126,6 +128,7 @@
         {#if error}<p class="error" role="alert">{error}</p>{/if}
         <Button type="submit" variant="primary" disabled={!hasPassword || busy}>{t("Unlock")}</Button>
       </form>
+      {#if platform.deviceUnlockAvailable}<UnlockDeviceButton variant="panel" />{/if}
     {:else if selectedId !== null}
       {#key selectedId}
         <TrayDetail id={selectedId} onback={() => (selectedId = null)} />

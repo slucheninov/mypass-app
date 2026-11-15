@@ -1,3 +1,6 @@
+import { device } from "./device.svelte";
+import { update } from "./update.svelte";
+import { sync } from "./sync.svelte";
 import { toasts } from "./toasts.svelte";
 import { startActivityReporter } from "./activity.svelte";
 import { entries } from "./entries.svelte";
@@ -20,6 +23,9 @@ export async function startStores(opts: { entries?: boolean; saveToast?: boolean
   session.saveToasts = opts.saveToast ?? true;
   navigation.start();
   const stopActivity = startActivityReporter();
+  const stopDevice = device.start();
+  const stopUpdate = update.start();
+  const stopSync = sync.start();
   const results = await Promise.allSettled([
     settings.start(),
     withEntries ? entries.start() : Promise.resolve(),
@@ -28,6 +34,9 @@ export async function startStores(opts: { entries?: boolean; saveToast?: boolean
   for (const r of results) if (r.status === "rejected") toasts.reportError(r.reason);
   return () => {
     stopActivity();
+    stopDevice();
+    stopUpdate();
+    stopSync();
     entries.stop();
     navigation.stop();
     settings.stop();

@@ -1,6 +1,11 @@
 <script lang="ts">
-  // An empty slot above the tray footer. Stage 5 fills it with the update-available row and owns
-  // its tests; until then the container is the whole contract (`data-testid="tray-update-row"`).
+  import { update } from "../lib/stores/update.svelte";
+  import { settings } from "../lib/stores/settings.svelte";
+  import { t } from "../lib/i18n/index.svelte";
+  import Button from "../lib/ui/Button.svelte";
 </script>
-
-<div data-testid="tray-update-row"></div>
+<div data-testid="tray-update-row">
+  {#if update.status.banner && settings.value?.updateCheckEnabled !== false}
+    <Button variant="plain" onclick={() => void update.open()}>{t("MyPass %@ available…", [update.status.banner.version])}</Button>
+  {/if}
+</div>

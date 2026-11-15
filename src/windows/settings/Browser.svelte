@@ -180,6 +180,7 @@
   {/if}
 
   <h2>{t("Native host")}</h2>
+  {#if status.endpointStore === "developmentFile"}<p>{t("Development file store")}</p>{/if}
   {#if status.registrations.length === 0}
     <p class="empty">{t("No supported browsers found")}</p>
   {:else}
@@ -192,7 +193,7 @@
       {/each}
     </ul>
   {/if}
-  <p><Button disabled={busy} onclick={() => void repair()}>{t("Repair")}</Button></p>
+  {#if status.canReinstallHost}<p><Button disabled={busy} onclick={() => void repair()}>{t("Repair")}</Button></p>{/if}
 {/if}
 
 {#if helping}

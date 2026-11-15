@@ -916,6 +916,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     syncConnectSecondary: () => {
       requireUnlocked();
       state.settings.secondaryFolder = "/fake/secondary";
+      publish("settingsChanged", structuredClone(state.settings));
       state.sync = { state: "idle", lastSync: 1_700_000_000_000 };
       publish("syncStatusChanged", structuredClone(state.sync));
       return structuredClone(state.sync);
@@ -925,6 +926,9 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       requireUnlocked();
       if ((touchId || macPassword) && !state.device.enrolled && password !== state.masterPassword) throw apiError("wrongPassword");
       state.device = { ...state.device, enrolled: touchId || macPassword, touchIdEnabled: touchId, macPasswordEnabled: macPassword, canOfferNow: touchId || macPassword, reason: touchId || macPassword ? null : "disabled" };
+      state.settings.unlockTouchIdEnabled = touchId;
+      state.settings.unlockMacPasswordEnabled = macPassword;
+      publish("settingsChanged", structuredClone(state.settings));
       return structuredClone(state.device);
     },
     deviceUnlockConsumeExtensionRequest: () => { const pending = state.extensionUnlockRequested; state.extensionUnlockRequested = false; return pending; },
@@ -941,6 +945,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     // Like Rust: forgets the folder (the copy in it stays) and reports `off`.
     syncDisconnectSecondary: () => {
       state.settings.secondaryFolder = null;
+      publish("settingsChanged", structuredClone(state.settings));
       state.sync = { state: "off" };
       publish("syncStatusChanged", structuredClone(state.sync));
       return null;

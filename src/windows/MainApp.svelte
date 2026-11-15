@@ -1,4 +1,6 @@
 <script lang="ts">
+  import UpdateBanner from "../screens/UpdateBanner.svelte";
+  import StorageBanner from "../screens/StorageBanner.svelte";
   // The main window. Until the first session answer arrives nothing is drawn (no flash of the
   // unlock screen for an already open vault).
   import { onMount } from "svelte";
@@ -49,6 +51,8 @@
 </script>
 
 <main data-testid="main-app">
+  <UpdateBanner />
+  <StorageBanner />
   {#if session.loaded}
     {#if session.status.state === "unlocked"}
       <!-- Keyed by vault: a switch while unlocked drops every piece of component-local state. -->

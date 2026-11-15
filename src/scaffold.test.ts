@@ -322,3 +322,20 @@ describe("tauri platform configuration", () => {
     expect(labels(macosConf())).toEqual(labels(base()));
   });
 });
+
+// Stage 5 keeps folder paths, release URLs and enrolment out of webview-controlled writes.
+describe("stage five command boundaries", () => {
+  it("folder changes use picker grants and release opening takes no webview URL", () => {
+    const sheet = readFileSync(resolve(process.cwd(), "src/screens/LocationChangeSheet.svelte"), "utf8");
+    expect(sheet).toContain("target.folderToken");
+    expect(sheet).not.toMatch(/api\.(?:vaultLocationChange|syncConnectSecondary)\([^;]*\bpath\s*:/);
+    const updates = readFileSync(resolve(process.cwd(), "src/lib/stores/update.svelte.ts"), "utf8");
+    expect(updates).toContain("api.updateOpenRelease()");
+    expect(updates).not.toMatch(/openUrl|window\.open/);
+  });
+  it("device setup takes the typed password from the clearing password field", () => {
+    const section = readFileSync(resolve(process.cwd(), "src/windows/settings/DeviceUnlockSection.svelte"), "utf8");
+    expect(section).toContain("field?.take()");
+    expect(section).not.toMatch(/settings\.update\(\{\s*(unlockTouchIdEnabled|unlockMacPasswordEnabled)/);
+  });
+});
