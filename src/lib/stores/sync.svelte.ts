@@ -8,17 +8,21 @@ class SyncStore {
   status = $state<SecondaryStatus>({ state: "off" });
   start() {
     let active = true;
-    let sequence = 0;
+    let storageSequence = 0;
+    let statusSequence = 0;
     const offs: (() => void)[] = [];
     const refresh = async () => {
-      const before = ++sequence;
-      const [storage, status] = await Promise.all([api.vaultStorageStatus(), api.syncStatus()]);
-      if (active && before === sequence) { this.storage = storage; this.status = status; }
+      const storageBefore = ++storageSequence;
+      const statusBefore = ++statusSequence;
+      await Promise.all([
+        api.vaultStorageStatus().then(value => { if (active && storageBefore === storageSequence) this.storage = value; }),
+        api.syncStatus().then(value => { if (active && statusBefore === statusSequence) this.status = value; }),
+      ]);
     };
     offs.push(session.onChange(() => void refresh().catch(() => {})));
     void Promise.all([
-      events.storageStatusChanged.listen(e => { sequence++; if (active) this.storage = e.payload; }),
-      events.syncStatusChanged.listen(e => { sequence++; if (active) this.status = e.payload; }),
+      events.storageStatusChanged.listen(e => { storageSequence++; if (active) this.storage = e.payload; }),
+      events.syncStatusChanged.listen(e => { statusSequence++; if (active) this.status = e.payload; }),
     ]).then(list => {
       if (!active) { list.forEach(off => off()); return; }
       offs.push(...list);

@@ -38,7 +38,7 @@
     {:else if status.state === "upToDate"}{t("Up to date")}{#if status.checkedAt != null} · {t("Checked %@", [relativeTime(status.checkedAt)])}{/if}
     {:else if status.state === "available"}{t("MyPass %@ available…", [status.version])}{/if}
   </p>
-  {#if update.status.banner}<Button onclick={() => void update.open()}>{t("View release")}</Button>{/if}
+  {#if status.state === "available" || update.status.banner}<Button onclick={() => void update.open()}>{t("View release")}</Button>{/if}
   {#if settings.value}<Row label={t("Check for updates automatically")}><Toggle checked={settings.value.updateCheckEnabled} label={t("Check for updates automatically")} onchange={updateCheckEnabled => void settings.update({ updateCheckEnabled }).catch(e => toasts.reportError(e))} /></Row>{/if}
   <p>{t("Only the app version is sent to GitHub.")}</p>
 </section>

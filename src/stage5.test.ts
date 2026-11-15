@@ -224,3 +224,44 @@ it("new update event wins over an older manual check response", async () => {
   await checking;
   expect(screen.queryByText("MyPass 99.0.0 available…")).toBeTruthy();
 });
+
+it("vault switch clears device enrollment password and intent", async () => {
+  const { fake } = await renderSettingsApp({ deviceUnlockAvailable: true }, { pane: "Security" });
+  await userEvent.click(await screen.findByRole("switch", { name: "Unlock using Touch ID" }));
+  const dialog = await screen.findByRole("dialog");
+  const input = within(dialog).getByLabelText("Master password") as HTMLInputElement;
+  await userEvent.type(input, FIXTURE_MASTER_PASSWORD);
+  await fake.emit("sessionChanged", { ...fake.state.session, state: "unlocked", vaultPath: "/other.kdbx" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(input.value).toBe("");
+  expect(calls(fake, "deviceUnlockConfigure")).toHaveLength(0);
+});
+it("About retains the release action after dismissal", async () => {
+  await renderSettingsApp({}, { pane: "About", prepare: f => {
+    f.state.update = { status: { state: "available", version: "9.0.0", url: "https://github.com/slucheninov/mypass-app/releases/tag/v9.0.0" }, banner: null };
+    f.handlers.updateCheckNow = () => f.state.update;
+  } });
+  expect(await screen.findByRole("button", { name: "View release" })).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "Check for Updates" }));
+  expect(await screen.findByRole("button", { name: "View release" })).toBeTruthy();
+});
+
+it("secondary events cannot discard a pending storage warning snapshot", async () => {
+  let release!: (value: import("./lib/bindings").StorageStatus) => void;
+  const { fake } = await renderMainApp({}, f => {
+    f.handlers.vaultStorageStatus = () => new Promise(resolve => release = resolve);
+  });
+  await fake.emit("syncStatusChanged", { state: "off" });
+  release({ location: "iCloudDrive", fallbackActive: true, cacheAhead: true, downloading: true });
+  expect(await screen.findByText(/iCloud Drive is not available/)).toBeTruthy();
+  expect(await screen.findByText("Waiting for iCloud to download your vault…")).toBeTruthy();
+});
+it("storage events cannot discard a pending secondary status snapshot", async () => {
+  let release!: (value: import("./lib/bindings").SecondaryStatus_Serialize) => void;
+  const { fake } = await renderSettingsApp({}, { pane: "Vault", prepare: f => {
+    f.handlers.syncStatus = () => new Promise(resolve => release = resolve);
+  } });
+  await fake.emit("storageStatusChanged", { location: "local", fallbackActive: false, cacheAhead: false, downloading: false });
+  release({ state: "idle", lastSync: null });
+  expect(await screen.findByRole("button", { name: "Stop syncing" })).toBeTruthy();
+});

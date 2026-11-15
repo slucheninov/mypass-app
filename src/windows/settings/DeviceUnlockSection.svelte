@@ -27,14 +27,19 @@
     { value: "fourteenDays", label: t("After 14 days") }, { value: "thirtyDays", label: t("After 30 days") },
     { value: "ninetyDays", label: t("After 90 days") }, { value: "never", label: t("Never") },
   ]);
-  onMount(() => { void device.refresh().catch(e => error = errorMessage(e)); });
-  function close() { field?.clear(); intent = null; error = null; }
+  onMount(() => {
+    void device.refresh().catch(e => error = errorMessage(e));
+    return session.onChange(next => { if (next !== "unlocked") close(); });
+  });
+  function close() { field?.clear(); hasPassword = false; intent = null; error = null; }
   $effect(() => { if (session.status.state !== "unlocked") close(); });
   async function configure(touchId: boolean, macPassword: boolean, password: string | null = null) {
     if (busy) return;
+    const epoch = session.lockEpoch;
+    if (session.status.state !== "unlocked") { close(); return; }
     busy = true; error = null;
-    try { await device.configure(password, touchId, macPassword); intent = null; }
-    catch (e) { error = errorMessage(e); }
+    try { await device.configure(password, touchId, macPassword); if (epoch === session.lockEpoch) close(); }
+    catch (e) { if (epoch === session.lockEpoch) error = errorMessage(e); }
     finally { busy = false; }
   }
   function change(touchId: boolean, macPassword: boolean) {
