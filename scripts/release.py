@@ -18,6 +18,9 @@ import tempfile
 import tomllib
 import zipfile
 
+# Importing local packaging helpers must not dirty an exact-tag release checkout.
+sys.dont_write_bytecode = True
+
 ROOT = Path(__file__).resolve().parent.parent
 TEAM = 'W645B93PPQ'
 APP_ID = 'com.mypass.app'
@@ -110,7 +113,13 @@ def bump(new):
 
 def expected_release_assets(ver, platforms=('macos-arm64',)):
     semver(ver)
-    return [*(f'MyPass-{ver}-{p}.dmg' for p in platforms), f'MyPass-chrome-extension-{ver}.zip', 'SHA256SUMS.txt']
+    mapping = {
+        'macos-arm64': [f'MyPass-{ver}-macos-arm64.dmg', f'MyPass-chrome-extension-{ver}.zip', 'SHA256SUMS.txt'],
+        'windows-x64': [f'MyPass-{ver}-windows-x64.zip', f'MyPass-{ver}-windows-x64.zip.sha256'],
+    }
+    require(platforms and len(platforms) == len(set(platforms)), 'invalid platform set')
+    require(all(p in mapping for p in platforms), 'unsupported release platform')
+    return [name for p in platforms for name in mapping[p]]
 
 
 def extension_files(folder):
@@ -223,14 +232,53 @@ def verify_bundle(app, host_source, zip_path, allow_unsigned):
     print('bundle structure, host provenance and extension zip verified')
 
 
-def assets_check(folder, ver):
-    expected = expected_release_assets(ver)
+def verify_checksums(folder, manifest, payloads):
+    records = {}
+    for line in (folder / manifest).read_text(encoding='ascii').splitlines():
+        match = re.fullmatch(r'([0-9a-f]{64})  ([A-Za-z0-9_.-]+)', line)
+        require(match is not None, f'{manifest}: malformed or nonrelative record')
+        digest, name = match.groups()
+        require(name not in records, f'{manifest}: duplicate record')
+        records[name] = digest
+    require(set(records) == set(payloads), f'{manifest}: payload set mismatch')
+    for name, digest in records.items():
+        require(hashlib.sha256((folder / name).read_bytes()).hexdigest() == digest,
+                f'{manifest}: checksum mismatch: {name}')
+
+
+def verify_windows_release(path, ver):
+    # The producer checks provenance against Cargo outputs. Here recheck structure, PE headers,
+    # notices and the exact production extension tree against this tag's checked-out sources.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('windows_package', ROOT / 'scripts/windows-package.py')
+    package = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(package)
+    with tempfile.TemporaryDirectory() as temp:
+        source = Path(temp)
+        with zipfile.ZipFile(path) as archive:
+            for archived, staged in [('MyPass.exe', 'mypass-app.exe'),
+                                     ('mypass-native-host.exe', 'mypass-native-host.exe')]:
+                (source / staged).write_bytes(archive.read(archived))
+        package.verify_archive(path, source, ver, ROOT)
+
+
+def assets_check(folder, ver, platforms=('macos-arm64',)):
+    expected = expected_release_assets(ver, platforms)
     require(sorted(p.name for p in folder.iterdir()) == sorted(expected), 'release asset set mismatch')
-    # A checksum file cannot hash itself. Hash exactly the two payload artifacts, relative names.
-    lines = (folder / 'SHA256SUMS.txt').read_text().splitlines()
-    require(len(lines) == len(expected) - 1, 'SHA256SUMS.txt payload count')
-    require(lines == [f'{hashlib.sha256((folder / n).read_bytes()).hexdigest()}  {n}' for n in expected[:-1]], 'SHA256SUMS.txt mismatch')
-    verify_zip(folder / expected[-2], ver)
+    require(all((folder / n).is_file() and not (folder / n).is_symlink() for n in expected),
+            'release assets must be regular files')
+    if 'macos-arm64' in platforms:
+        extension = f'MyPass-chrome-extension-{ver}.zip'
+        verify_checksums(folder, 'SHA256SUMS.txt', [f'MyPass-{ver}-macos-arm64.dmg', extension])
+        verify_zip(folder / extension, ver)
+    if 'windows-x64' in platforms:
+        archive = f'MyPass-{ver}-windows-x64.zip'
+        verify_checksums(folder, archive + '.sha256', [archive])
+        verify_windows_release(folder / archive, ver)
+
+
+PLATFORM_MODES = {'macos': ('macos-arm64',), 'windows': ('windows-x64',),
+                  'all': ('macos-arm64', 'windows-x64')}
 
 
 def main():
@@ -238,21 +286,23 @@ def main():
     sub = parser.add_subparsers(dest='mode', required=True)
     sub.add_parser('version').add_argument('expected', nargs='?')
     sub.add_parser('bump').add_argument('version')
-    sub.add_parser('assets').add_argument('version')
+    assets = sub.add_parser('assets'); assets.add_argument('version')
+    assets.add_argument('--platform', choices=PLATFORM_MODES, default='macos')
     notes = sub.add_parser('notes'); notes.add_argument('version'); notes.add_argument('output', type=Path)
     check = sub.add_parser('check-assets'); check.add_argument('folder', type=Path); check.add_argument('version')
+    check.add_argument('--platform', choices=PLATFORM_MODES, default='macos')
     ext = sub.add_parser('extension'); ext.add_argument('--out', type=Path, default=ROOT / 'release'); ext.add_argument('--stage-dir', type=Path)
     verify = sub.add_parser('verify'); verify.add_argument('app', type=Path); verify.add_argument('--host-source', required=True, type=Path); verify.add_argument('--extension-zip', required=True, type=Path); verify.add_argument('--allow-unsigned', action='store_true')
     args = parser.parse_args()
     if args.mode == 'version': print(check_version(args.expected))
     elif args.mode == 'bump': bump(args.version)
-    elif args.mode == 'assets': print('\n'.join(expected_release_assets(args.version)))
+    elif args.mode == 'assets': print('\n'.join(expected_release_assets(args.version, PLATFORM_MODES[args.platform])))
     elif args.mode == 'notes':
         semver(args.version)
         text = (ROOT / 'scripts/package/RELEASE_NOTES_HEADER.md').read_text().replace('{{VERSION}}', args.version)
         require('{{VERSION}}' not in text, 'release notes contain unresolved version')
         args.output.write_text(text)
-    elif args.mode == 'check-assets': assets_check(args.folder, args.version)
+    elif args.mode == 'check-assets': assets_check(args.folder, args.version, PLATFORM_MODES[args.platform])
     elif args.mode == 'extension': package_extension(args.out, args.stage_dir)
     elif args.mode == 'verify': verify_bundle(args.app, args.host_source, args.extension_zip, args.allow_unsigned)
 

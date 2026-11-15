@@ -755,8 +755,10 @@ fn release_workflow_is_tag_only_minimal_and_publishes_last() {
             .collect::<Vec<_>>()
             .join("\n");
         if id.as_str() == Some("publish") {
-            assert!(runs.contains("--draft=false"));
-            assert!(runs.contains("check-assets"));
+            assert!(runs.contains("bash scripts/publish-release.sh"));
+            let gate = read("scripts/publish-release.sh");
+            assert!(gate.contains("check-assets"));
+            assert!(gate.contains("--draft=false"));
         } else {
             assert!(!runs.contains("--draft=false"));
         }
@@ -889,4 +891,74 @@ fn windows_production_build_and_package_are_wired() {
         .unwrap();
     assert_eq!(upload["with"]["retention-days"].as_i64(), Some(7));
     assert_eq!(upload["with"]["if-no-files-found"].as_str(), Some("error"));
+}
+
+#[test]
+fn release_workflow_validates_windows_and_combined_publish() {
+    let doc = workflow(".github/workflows/release.yml");
+    assert_eq!(
+        doc["concurrency"]["cancel-in-progress"].as_bool(),
+        Some(false)
+    );
+    let windows = job(&doc, "release-windows");
+    assert_eq!(windows["runs-on"].as_str(), Some("windows-latest"));
+    assert_eq!(needs_of(windows), ["release-macos"]);
+    assert!(windows.get("if").is_none());
+    assert_eq!(
+        windows["env"]["PYTHONDONTWRITEBYTECODE"].as_str(),
+        Some("1")
+    );
+    let runs = steps(windows)
+        .iter()
+        .map(|s| run_text(s))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for required in [
+        "check-version.sh",
+        "cargo fmt --all -- --check",
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "bash scripts/test.sh --ci",
+        "check-host-deps.sh --target x86_64-pc-windows-msvc",
+        "package-windows.sh --release --version",
+        "--platform windows",
+        "windows-host-smoke.py",
+        "--json isDraft",
+        "gh release upload",
+        ".zip.sha256",
+    ] {
+        assert!(
+            runs.contains(required),
+            "missing Windows release validation: {required}"
+        );
+    }
+    assert!(
+        runs.find("bash scripts/test.sh --ci").unwrap() < runs.find("package-windows.sh").unwrap()
+    );
+    assert!(runs.find("--json isDraft").unwrap() < runs.find("gh release upload").unwrap());
+    assert!(!format!("{windows:?}").contains("secrets."));
+    let publish = job(&doc, "publish");
+    assert_eq!(needs_of(publish), ["release-macos", "release-windows"]);
+    assert!(publish.get("if").is_none()); // Default success() blocks failed/cancelled producers.
+    assert_eq!(
+        publish["env"]["MACOS_RESULT"].as_str(),
+        Some("${{ needs.release-macos.result }}")
+    );
+    assert_eq!(
+        publish["env"]["WINDOWS_RESULT"].as_str(),
+        Some("${{ needs.release-windows.result }}")
+    );
+    let gate = read("scripts/publish-release.sh");
+    assert!(gate.contains("\"$3\" == success && \"$4\" == success"));
+    assert!(gate.contains("--platform all"));
+    assert!(gate.find("check-assets").unwrap() < gate.find("--draft=false").unwrap());
+    for line in read(".github/workflows/release.yml")
+        .lines()
+        .filter(|l| l.contains("uses:"))
+    {
+        let (_, reference) = line.split_once('@').unwrap();
+        let (sha, tag) = reference.split_once(" # v").unwrap();
+        assert_eq!(sha.len(), 40);
+        assert!(sha.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(!tag.is_empty());
+    }
 }
