@@ -50,7 +50,7 @@ bash scripts/test.sh [--ci] [--only rust|ui|js] [--no-js]   # the full suite
 cargo test --workspace                                        # Rust tests only
 pnpm test                                                     # UI tests only (Vitest, jsdom)
 cargo test -p mypass-app export_bindings_regenerate -- --ignored   # regenerate src/lib/bindings.ts
-cargo test --workspace -- --ignored                           # includes the 50 MiB round trip
+cargo test -p mypass-kdbx --test roundtrip fifty_megabyte_attachment_round_trips -- --ignored  # opt-in 50 MiB round trip
 cargo test -p <crate> <filter>                                # one crate, one filter
 cargo run -p mypass-kdbx --example write_crosscompat -- <out.kdbx>   # synthetic fixture
 ```
@@ -78,7 +78,7 @@ cargo run -p mypass-kdbx --example write_crosscompat -- <out.kdbx>   # synthetic
 - Argon2 at 64 MiB x 3 passes takes minutes at opt-level 0, so dependencies are built at opt-level 3
   in the dev and test profiles (`[profile.dev.package."*"]`, `[profile.test.package."*"]`).
 - CI runs `lint` (clippy on macOS and Windows, format check on macOS), `test` (macOS and Windows),
-  `js` (the `js` part on Ubuntu), `ui` (the `ui` part on Ubuntu: frozen pnpm install, check, tests, build), `crosscompat`, path-gated `package-smoke` and a disabled Windows integration skeleton as
+  `js` (the `js` part on Ubuntu), `ui` (the `ui` part on Ubuntu: frozen pnpm install, check, tests, build), `crosscompat`, path-gated `package-smoke`, `windows-app`, path-gated `windows-package` and a variable-gated Windows integration suite as
   parallel jobs, joined by the `ci`
   aggregator.
 - The `crosscompat` CI job (Rust writes and Python reads, then the reverse) uses `pykeepass`. The
@@ -152,7 +152,7 @@ these GitHub Actions repository secrets before tagging:
 All three secrets are required. The workflow imports them into a temporary
 keychain, deletes the keychain and certificate file even after failure, runs
 `bash scripts/test.sh --ci` before packaging, uploads a draft, downloads and checks
-its exact artifact set and hashes, then rechecks in the final publish job. A stale
+its exact artifact set and hashes, then rechecks in the final publish job after Windows production succeeds. A stale
 draft may be replaced; an already published release is refused. No release was
 published merely by building locally. The `package-smoke` CI job packages an
 explicitly unsigned development build without secrets on relevant pull requests.
@@ -175,3 +175,56 @@ publishing is authorized. The workflow has no manual-dispatch release path.
 Signed installation, certificate renewal, quarantine removal, release failure
 paths and cutover remain owner checks in `RUN.md`; local script tests do not
 establish Gatekeeper acceptance or real Keychain behavior.
+
+## Windows builds, packaging and isolated integration
+
+The supported target is `x86_64-pc-windows-msvc`, Windows 10 22H2 / Windows 11.
+Install Visual Studio Build Tools with Desktop development with C++ and the Windows SDK,
+plus Evergreen WebView2 Runtime. Use pinned rustup, Node and pnpm; run shell scripts in Git Bash.
+Python 3.11+ handles ZIPs and hashes; 7-Zip is not required. Native ARM64, Authenticode,
+an installer and Windows Hello are deferred.
+
+```bash
+bash scripts/build-windows.sh
+bash scripts/package-windows.sh --out /path/to/empty-output
+# Only from a clean tree at the exact authorized v<version> tag:
+bash scripts/package-windows.sh --release --out /path/to/empty-output
+```
+
+The production build runs UI generation and explicitly targets MSVC. It checks x64 PE outputs,
+GUI app / console host subsystems, actual frontend assets and staged-host byte provenance.
+The root of `MyPass-X.Y.Z-windows-x64.zip` contains `MyPass.exe` (built as `mypass-app.exe`),
+`mypass-native-host.exe`, `extension/`, `INSTALL.txt`, `LICENSE` and `THIRD_PARTY_NOTICES.md`.
+The sibling `MyPass-X.Y.Z-windows-x64.zip.sha256` hashes that ZIP. INSTALL is ASCII/LF in
+`scripts/package/INSTALL-windows.txt` and converted to CRLF only in the archive. Packaging is
+unsigned and never invokes Apple signing. `--no-build --stage-from <directory>` is for verified
+fixtures; `--release` requires a source build. Offline package tests require no 7z or Windows.
+
+Known-folder data lives under `%LOCALAPPDATA%\MyPass`, settings under `%APPDATA%\MyPass`.
+Debug builds alone accept `MYPASS_WINDOWS_DATA_ROOT` as the exact absolute config/data root;
+release ignores it. Use disposable roots for tests, never a real vault or profile. The protected
+DPAPI stores are `secrets\shared` and `secrets\app`; refused-ACL recovery is in RUN.md W6.
+
+The repository variable `MYPASS_WINDOWS_INTEGRATION_TESTS=true` enables the separate CI job.
+It sets `MYPASS_WINDOWS_INTEGRATION_TESTS=1`, `RUST_TEST_THREADS=1` and invokes
+`bash scripts/test.sh --ci --only rust`. The native runner discovers statically ignored
+`windows_integration` cases, checks nonempty selection and executed results, and runs serially.
+Do not blanket-run all ignored tests: clipboard cases change clipboard content and registry/DPAPI
+cases require isolation. This job remains skipped unless explicitly opted in. Native desktop,
+minimum-version, real browser, missing-WebView2, Win+V and Modern Standby results remain W1-W17
+owner checks; portable tests and cross-Clippy do not establish them.
+
+CI `windows-app` always builds production app/sidecar after `ui`; `windows-package` runs on
+package-relevant PRs and all main/manual runs, verifies/extracts the unsigned ZIP, executes a framed
+`app_not_running` request against its shipped host and uploads ZIP/checksum for seven days.
+Both feed required `ci`; the package job may be skipped when path-gated. Windows lint/test/app/package
+have CI coverage; the variable-gated native integration suite is a separate validation boundary.
+
+Tagged release flow is `release-macos` -> `release-windows` -> `publish`. Each producer runs its
+validation; Windows has no signing credentials and does not opt into native OS integration.
+The final job requires both successes, downloads and verifies exactly five files: the DMG,
+extension ZIP, `SHA256SUMS.txt` (those two macOS payloads), Windows ZIP and its `.zip.sha256`.
+It refuses missing/extra assets, bad hashes and published releases, then publishes last.
+`scripts/publish-release.sh` also checks each gate's exit status. Local/offline checks do not prove
+a live tagged release. Update banners require the matching OS/architecture payload and checksum
+asset names and only open the release page; no automatic download or installation occurs.

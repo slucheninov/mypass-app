@@ -12,8 +12,8 @@ specify otherwise.
 # 1. The project
 
 **MyPass** is a password manager built on the KeePass **KDBX4** vault format. It is a Rust + Tauri
-rewrite of the earlier Swift app: macOS first, Windows right after, with a Chromium browser extension
-(autofill, TOTP, passkeys) arriving in later stages. The vault engine is written from scratch in Rust
+rewrite of the earlier Swift app: macOS and Windows x64, with a Chromium browser extension
+(autofill, TOTP, passkeys). The vault engine is written from scratch in Rust
 on RustCrypto primitives; there is no hand-rolled crypto.
 
 ## Crates
@@ -23,7 +23,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `mypass-kdbx` | implemented | KDBX4 engine: format pipeline, model, database API, vault file, `FileIo` seam |
 | `mypass-core` | implemented | Everything that consumes the model: TOTP, generator and password rules, Public Suffix List, entry matcher, merge engine, WebAuthn passkey ceremonies and the KeePassXC passkey record (`passkey`) |
 | `repo-guards` | implemented | Test-only (`publish = false`, never shipped): guard tests for the workspace, CI, docs and scripts |
-| `mypass-platform` | macOS implemented: events, clipboard, keyboard layout, Keychain, native host registration, device unlock, launch at login and coordinated iCloud access; Windows bodies in stage 6 | OS glue behind traits (system events, secure clipboard, secret stores, device unlock, native host registrar, launch at login, keyboard layout) and `AppPaths`; fakes behind the `test-util` feature, `Unsupported` fallbacks where a platform body has not landed |
+| `mypass-platform` | macOS and Windows implemented; device unlock and coordinated iCloud access are macOS-only | OS glue behind traits (system events, secure clipboard, secret stores, device unlock, native host registrar, launch at login, keyboard layout) and `AppPaths`; fakes behind the `test-util` feature, `Unsupported` fallbacks where a platform body has not landed |
 | `mypass-sync` | implemented | Secondary-folder sync, hash checkpoints, watcher and coordinated iCloud storage with offline cache and conflict merging |
 | `mypass-update` | implemented | GitHub release checks behind the `github` feature; banner-only updates, no automatic installation |
 | `mypass-session` | implemented | Vault session, settings, scheduling and the `AppCore` command facade; no Tauri dependency |
@@ -47,14 +47,15 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `index.html`, `vite.config.ts`, `svelte.config.js`, `tsconfig.json`, `vitest.setup.ts` | The Svelte 5 (runes) + Vite + Vitest toolchain of the UI |
 | `src/` | The UI: `main.ts` picks the root for the window label (`windows/`), `lib/` the API wrapper, stores and i18n, `screens/` the screens and editors, `test/` holds the fake backend (type-checked against the bindings), the render helper and the shared source scan `textScan.ts`, `scaffold.test.ts` holds the static source guards, `journey.test.ts`, `a11y.test.ts` and `i18n.audit.test.ts` the journey, accessibility and string-audit suites |
 | `scripts/test.sh` | The single local and CI test entry point |
-| `scripts/build-host.sh`, `scripts/dev-app.sh` | Build the `mypass-host` sidecar (signed when `MYPASS_SIGNING_IDENTITY` names a certificate SHA-1; never ad-hoc), and build and run the app locally with it |
+| `scripts/build-host.sh`, `scripts/dev-app.sh` | Build the `mypass-host` sidecar (signed when `MYPASS_SIGNING_IDENTITY` names a certificate SHA-1 on macOS; Windows is unsigned; never ad-hoc), and build and run the app locally with it |
 | `scripts/package-macos.sh`, `scripts/verify-bundle.sh`, `scripts/check-host-deps.sh` | arm64 DMG, signed app/host verification and isolated shipped-host dependency check |
 | `scripts/bump-version.sh`, `scripts/check-version.sh`, `scripts/package-extension.sh`, `scripts/verify-release-assets.sh` | Version consistency, deterministic extension ZIP and release artifact verification |
-| `.github/workflows/release.yml` | Tag-driven signed release: full tests, temporary certificate import, verified draft assets, publish last |
+| `.github/workflows/release.yml` | Tag-driven macOS signed DMG and Windows unsigned ZIP: full tests, temporary Apple certificate import/cleanup, exact five draft assets verified, publish last |
+| `scripts/build-windows.sh`, `scripts/package-windows.sh` | Production x64 MSVC app/sidecar build, deterministic unsigned ZIP and sibling checksum |
 | `scripts/test-extension.sh` | Runs every `extension/tests/*.test.js` suite in its own node process (`--list` prints them); part of the `js` part |
 | `scripts/convert-xcstrings.mjs` | One-time converter of the old app's String Catalogs; its output (`src/lib/i18n/locales/{en,uk,ru}.json`, `src-tauri/resources/macos/*.lproj/InfoPlist.strings`) is then the hand-edited source of truth |
 | `.github/` | Workflows (`ci.yml`, `codeql.yml`), Dependabot config, issue forms, pull request template |
-| `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts), the Stage 2b UI walk-through and the Stage 3 browser bridge checklist (M1 to M14) and the Stage 4 passkey checklist (P1 to P13), Stage 5 checks (S1 to S21) and cutover (C1 to C10) |
+| `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts), the Stage 2b UI walk-through and the Stage 3 browser bridge checklist (M1 to M14) and the Stage 4 passkey checklist (P1 to P13), Stage 5 checks (S1 to S21), cutover (C1 to C10) and Stage 6 Windows checks (W1 to W17) |
 | `docs/implementation/ROADMAP.md` | The only tracked document under `docs/`: unfinished work |
 | `LICENSE`, `THIRD_PARTY_NOTICES.md` | Apache-2.0 and the notices for vendored data and linked crates |
 
@@ -67,7 +68,13 @@ Stage 2b (the Svelte UI: unlock, create and open, the three-pane shell, editors,
 Stage 3 (the browser bridge: `mypass-bridge`, the `mypass-host` native messaging host, the Settings Browser pane with pairing and save proposals, and the extension moved into `extension/` with its suites in CI) is implemented apart from the owner's manual checks, which live in `RUN.md`.
 Stage 4 (passkeys: the WebAuthn create and get ceremonies in `mypass_core::passkey`, the bridge `PasskeyService`, the app commands and toggle, and the passkey UI) is implemented apart from the owner's manual checks, which live in `RUN.md`.
 Stage 5 (iCloud primary storage and relocation, secondary-folder sync, device unlock, per-ceremony passkey presence, launch at login, update checks, signed arm64 packaging and release tooling) is implemented apart from the owner's manual checks in `RUN.md`.
-Later stages and deferred release work (including Windows) are listed in `docs/implementation/ROADMAP.md`.
+Stage 6 (Windows 10 22H2 and Windows 11, x64: DPAPI stores, registry browser integration, events,
+secure clipboard, input layout, launch at login, shell/UI, unsigned ZIP and multi-platform releases)
+is implemented apart from the owner checks W1 to W17 in `RUN.md`. Windows Hello is deferred.
+Native desktop behavior remains unverified; Windows CI lint/test/app/package coverage does not
+prove desktop acceptance. `windows-integration` stays repository-variable-gated and skipped unless
+explicitly enabled.
+Later stages and deferred release work are listed in `docs/implementation/ROADMAP.md`.
 
 ## Build, run, test
 
@@ -142,13 +149,20 @@ jobs are independent and run in parallel, so the wall-clock time is the slowest 
   main/manual builds. It runs offline package tests, builds the unsigned x64 ZIP, verifies and
   extracts it, checks a framed `app_not_running` response from the shipped host, and uploads the
   ZIP and checksum for 7 days. No Windows signing credentials are used.
-- `windows-integration` is a disabled skeleton for stage 6: it runs only when the repository variable
-  `MYPASS_WINDOWS_INTEGRATION_TESTS` is `true`, otherwise it is skipped.
+- `windows-integration` runs only when the repository variable `MYPASS_WINDOWS_INTEGRATION_TESTS`
+  is `true`, otherwise it is skipped. The job sets the environment value to `1` and runs statically
+  ignored native tests serially through the inventory/accounting runner; an empty selection fails.
+  Ordinary Windows tests never opt into real DPAPI, registry or clipboard integration.
 - `ci` is the aggregator and the required status check. It needs every other job (`changes`, `lint`,
   `test`, `js`, `ui`, `windows-integration`, `crosscompat`, `package-smoke`, `windows-app`,
   `windows-package`); a gated job may be `skipped`, every other result
   (`lint` and `test` included) must be `success`. A job added later must be wired into it
   (pinned by `ci_aggregator_needs_every_job`).
+- `release.yml` runs only for version tags: `release-macos` creates the signed DMG, extension ZIP
+  and `SHA256SUMS.txt`; `release-windows` follows it and validates/builds the unsigned Windows ZIP
+  and its `.zip.sha256`. `publish` needs both successful producers, downloads exactly five assets
+  and verifies both checksum manifests before publishing last. Native OS integration is not run
+  by the release job. Apple temporary keychain cleanup remains unconditional; no Windows signing.
 - `.github/workflows/codeql.yml` is a separate workflow (push to `main`, weekly, manual; never on pull
   requests) and is not part of `ci`.
 - Every `uses:` is pinned to a full commit SHA with the tag in a trailing comment.
@@ -236,6 +250,49 @@ change is done.
   built by `mypass_platform::current`) and every on-disk location through `AppPaths`. Tests use
   `mypass_platform::testing::fake_platform()` under the `test-util` feature; no non-ignored test touches the
   real clipboard, Keychain or system notifications.
+- **Windows paths and secrets.** Known folders resolve data under `%LOCALAPPDATA%\MyPass`
+  (backups, drafts, host, webview2 and `secrets/shared`, `secrets/app`); settings live under
+  `%APPDATA%\MyPass`. `MYPASS_WINDOWS_DATA_ROOT` is a debug-only absolute root override for
+  isolated tests; release builds ignore it. All locations still come from `AppPaths`.
+  DPAPI was chosen over Credential Manager to support bounded file records and protected atomic
+  replacement. Current-user DPAPI uses `CRYPTPROTECT_UI_FORBIDDEN`, never machine scope, with
+  distinct public entropy `MyPass.shared.v1` and `MyPass.app.v1`; entropy is domain separation,
+  not same-user isolation. Protected current-user/SYSTEM DACLs and ownership are checked by
+  handle; reparse points and multiply-linked records are refused. Invalid existing ACLs fail
+  closed without falling back to plaintext or silently repairing permissions. Recovery is in
+  `RUN.md` W6; host Repair cannot repair secret-store ACLs. Legacy plaintext endpoints are
+  discarded and freshly published, never trusted or imported. Windows has no device unlock,
+  no Windows Hello and no iCloud backend; ordinary master-password unlock remains available.
+- **Windows bridge policy.** Before hello, the host checks the exact IPv4 loopback listener PID
+  and its current-user SID; HMAC proof still precedes token transmission. This is a same-user
+  peer policy, not publisher authentication. Same-user tampering and PID/port reuse remain risks.
+  Registry host registration uses both 32-bit and 64-bit views of
+  `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.mypass.chromehost` and
+  `HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.mypass.chromehost` unconditionally;
+  `HKCU\Software\Chromium\NativeMessagingHosts\com.mypass.chromehost` requires an installed
+  marker. Brave/Vivaldi/Opera fallback is unverified. HKLM is never written. The shared manifest
+  points to `%LOCALAPPDATA%\MyPass\host\mypass-host.exe`, copied from `mypass-native-host.exe`.
+  Startup publishes the endpoint/server before unconditional background hash repair/registration;
+  mapped-image replacement is bounded and preserves the old bytes on failure. Removal touches
+  only verified owned registry values/files, suppresses automatic registration for this run,
+  and registers again next launch; explicit Repair restores immediately. Removal is settings-only.
+- **Windows desktop.** Clipboard history/cloud exclusion formats precede CF_UNICODETEXT.
+  `clear_if_unchanged` checks a per-write keyed content digest of UTF-16 text and our exclusion
+  marker under the same open clipboard lock; sequence numbers never authorize clearing alone
+  (Windows can synthesize formats on close). An identical re-copy retaining our marker may clear.
+  Win+V/cloud exclusion needs owner observation. Lock/suspend and conservative display-off events
+  feed the scheduler. Launch at login uses the owned MyPass value in
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, a quoted executable and `--autostarted`.
+  StartupApproved stays OS-owned: any present/unknown record conservatively requires approval;
+  saved intent stays on and moved paths heal without clearing Task Manager disable state.
+  Autostart hides to tray only if the tray exists. The custom title bar has no Windows 11 maximize
+  snap-layout flyout; keyboard and edge snapping remain available. WebView2 preflight uses the
+  safe loader API and a localized native error before runtime creation.
+- **Update asset selection.** Only supported OS/architecture pairs advertise updates: macOS arm64
+  requires `MyPass-X.Y.Z-macos-arm64.dmg` plus `SHA256SUMS.txt`; Windows x64 requires
+  `MyPass-X.Y.Z-windows-x64.zip` plus `MyPass-X.Y.Z-windows-x64.zip.sha256`. A missing payload or
+  checksum suppresses availability. Checks inspect asset names, not downloaded checksum contents;
+  the banner opens the validated release page and never downloads or installs binaries.
 - **File dialogs.** The webview never supplies a path for an attachment, an attachment export or
   a CSV import. The dialogs open from Rust behind `mypass_app_lib::files::FilePicker`: picked
   attachments come back as single-use random tokens that `entry_save` swaps for the real path, the

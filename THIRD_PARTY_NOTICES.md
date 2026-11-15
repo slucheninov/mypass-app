@@ -10,6 +10,9 @@ dependency, or re-vendors a file (see `CONTRIBUTING.md`). The Cargo tables are g
 RustCrypto `sha2` and `hmac` enable their upstream `zeroize` features to erase
 intermediate hash state. Versions and licences are unchanged.
 
+7-Zip is a build tool, not shipped. Windows ZIP packaging and verification currently use
+Python standard-library zipfile/hashlib; no 7-Zip binary or runtime dependency is bundled.
+
 ## Vendored data
 
 ### jsQR 1.4.0 (`extension/vendor/jsQR.js`)

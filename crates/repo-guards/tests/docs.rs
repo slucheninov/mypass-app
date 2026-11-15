@@ -28,7 +28,9 @@ fn roadmap_has_only_open_boxes() {
 }
 
 #[test]
-fn roadmap_lists_every_later_stage() {
+fn roadmap_lists_open_stage_followups() {
+    // Completed implementations keep a heading while deferred/manual follow-ups remain.
+    // Remove a stage here only when its last open follow-up has actually been resolved.
     let roadmap = read("docs/implementation/ROADMAP.md");
     let headings: Vec<&str> = roadmap.lines().filter(|l| l.starts_with('#')).collect();
     for stage in [
@@ -455,4 +457,122 @@ fn agents_documents_stage_5_delivery_and_remaining_boundaries() {
     ] {
         assert!(agents.contains(needle), "AGENTS.md must mention {needle}");
     }
+}
+
+#[test]
+fn agents_md_documents_windows_layout() {
+    let agents = squash(&read("AGENTS.md"));
+    for needle in [
+        r"%LOCALAPPDATA%\MyPass",
+        "MYPASS_WINDOWS_INTEGRATION_TESTS",
+        "MYPASS_WINDOWS_DATA_ROOT",
+        "DPAPI",
+        "Credential Manager",
+        r"HKCU\Software\Google\Chrome\NativeMessagingHosts\com.mypass.chromehost",
+        r"HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.mypass.chromehost",
+        "scripts/package-windows.sh",
+        "content",
+        "digest",
+        "same-user",
+        "StartupApproved",
+        "windows-x64.zip.sha256",
+        "Stage 6",
+    ] {
+        assert!(
+            agents.contains(needle),
+            "missing Windows contract: {needle}"
+        );
+    }
+    assert_eq!(agents.matches(MANUAL_CHECKS_SENTENCE).count(), 1);
+    assert!(!agents.contains("Windows bodies in stage 6"));
+}
+
+#[test]
+fn third_party_notices_lists_windows_crate_and_7zip_note() {
+    let notices = read("THIRD_PARTY_NOTICES.md");
+    assert!(notices.contains("| `windows` | 0.62.2 | MIT OR Apache-2.0 |"));
+    assert!(notices.contains("7-Zip is a build tool, not shipped"));
+}
+
+#[test]
+fn roadmap_windows_items() {
+    let roadmap = read("docs/implementation/ROADMAP.md");
+    let windows = roadmap
+        .split("## Stage 6 Windows")
+        .nth(1)
+        .unwrap()
+        .split("\n## ")
+        .next()
+        .unwrap();
+    for needle in [
+        "Windows Hello",
+        "Authenticode",
+        "installer",
+        "ARM64",
+        "snap-layout",
+        "Brave/Vivaldi/Opera",
+        "W1",
+        "W17",
+    ] {
+        assert!(
+            windows.contains(needle),
+            "missing deferred Windows item: {needle}"
+        );
+    }
+    for stale in [
+        "Windows bodies of every",
+        "UnsupportedSecretStore",
+        "Windows jobs in CI and",
+    ] {
+        assert!(!windows.contains(stale), "implemented item: {stale}");
+    }
+}
+
+#[test]
+fn run_md_has_windows_section() {
+    let run = read("RUN.md");
+    assert_eq!(run.matches("## Stage 6 Windows").count(), 1);
+    let windows = run.split("## Stage 6 Windows").nth(1).unwrap();
+    for n in 1..=17 {
+        let heading = format!("### W{n} ");
+        assert_eq!(windows.matches(&heading).count(), 1, "{heading}");
+        let item = windows
+            .split(&heading)
+            .nth(1)
+            .unwrap()
+            .split("\n### ")
+            .next()
+            .unwrap();
+        // Expected-result label, escaped to preserve the repository's source language rule.
+        assert!(item.contains("\u{41e}\u{447}\u{456}\u{43a}\u{443}\u{432}\u{430}\u{43d}\u{438}\u{439} \u{440}\u{435}\u{437}\u{443}\u{43b}\u{44c}\u{442}\u{430}\u{442}:"), "W{n} needs an expected result");
+        assert!(item.contains("- [ ]"));
+    }
+    for needle in [
+        "userVerification",
+        "required",
+        "preferred",
+        "discouraged",
+        "StartupApproved",
+        "icacls",
+        "SYSTEM",
+        "ReparsePoint",
+    ] {
+        assert!(windows.contains(needle), "missing owner check: {needle}");
+    }
+}
+
+#[test]
+fn readme_install_section_links_windows_zip() {
+    let readme = read("README.md");
+    let install = readme
+        .split("## Install")
+        .nth(1)
+        .unwrap()
+        .split("\n## ")
+        .next()
+        .unwrap();
+    assert!(install.contains("windows-x64.zip"));
+    assert!(install.contains("https://github.com/slucheninov/mypass-app/releases"));
+    assert!(install.contains("Unblock"));
+    assert!(!install.contains("run the installer"));
 }
