@@ -4,7 +4,7 @@
 //! test-only support code: helpers here unwrap and index freely, a guard must fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
-use repo_guards::{read, rel_str, repo_root, tracked_files};
+use repo_guards::{read, rel_str, repo_root, tracked_files, working_tree_files};
 
 /// The sentence D11 requires verbatim in AGENTS.md.
 const MANUAL_CHECKS_SENTENCE: &str = "Manual-only checks (signed-build, Windows, real-vault) are walked by the owner in daily use and never block a merge or a release; a task whose only open work is a manual check is complete once its automated part is green.";
@@ -230,28 +230,81 @@ fn cyrillic_detector_detects_cyrillic() {
     assert!(!has_cyrillic("privit, plain ASCII and caf\u{e9}"));
 }
 
+fn cyrillic_violations(root: &std::path::Path) -> Option<Vec<String>> {
+    let files = working_tree_files(root)?;
+    Some(
+        files
+            .into_iter()
+            .filter_map(|file| {
+                let rel = rel_str(&file);
+                if cyrillic_allowed(&rel) {
+                    return None;
+                }
+                let bytes = std::fs::read(root.join(&file)).ok()?;
+                let text = String::from_utf8(bytes).ok()?;
+                has_cyrillic(&text).then_some(rel)
+            })
+            .collect(),
+    )
+}
+
 #[test]
 fn cyrillic_only_in_allowed_files() {
-    let Some(files) = tracked_files() else {
+    let Some(violations) = cyrillic_violations(&repo_root()) else {
         println!("skipped: git is not available");
         return;
     };
-    for file in files {
-        let rel = rel_str(&file);
-        if cyrillic_allowed(&rel) {
-            continue;
+    assert!(violations.is_empty(), "{violations:?} contain Cyrillic; use \\u{{..}} escapes (see AGENTS.md for the exact allow-list)");
+}
+
+#[test]
+fn cyrillic_guard_checks_unstaged_windows_sources_and_preserves_exemptions() {
+    use std::{
+        fs,
+        process::Command,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+    // Isolated inventory: never stage files or change ignore rules in the real repository.
+    struct Scratch(std::path::PathBuf);
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).unwrap();
         }
-        let Ok(bytes) = std::fs::read(repo_root().join(&file)) else {
-            continue;
-        };
-        let Ok(text) = String::from_utf8(bytes) else {
-            continue;
-        };
-        assert!(
-            !has_cyrillic(&text),
-            "{rel} contains Cyrillic; use \\u{{..}} escapes (literal Cyrillic is allowed only in *.xcstrings, RUN.md, src/lib/i18n/locales/{{uk,ru}}.json, src-tauri/resources/macos/{{uk,ru}}.lproj/InfoPlist.strings, five extension files listed in AGENTS.md, crates/mypass-kdbx/tests/unicode.rs, vendored data under crates/mypass-core/resources/ and binary fixtures crates/mypass-kdbx/tests/fixtures/*.kdbx)"
-        );
     }
+    let root = Scratch(std::env::temp_dir().join(format!("mypass-cyrillic-{}-{}",
+        std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos())));
+    fs::create_dir(&root.0).unwrap();
+    let git = |args: &[&str]| {
+        assert!(Command::new("git")
+            .arg("-C")
+            .arg(&root.0)
+            .args(args)
+            .output()
+            .unwrap()
+            .status
+            .success());
+    };
+    git(&["init", "--quiet"]);
+    fs::write(root.0.join("tracked.rs"), "// \u{41f}").unwrap();
+    git(&["add", "tracked.rs"]);
+    fs::create_dir_all(root.0.join("crates/example/tests")).unwrap();
+    let untracked = "crates/example/tests/windows_paths.rs";
+    fs::write(root.0.join(untracked), "#![cfg(windows)]\n// \u{41f}").unwrap();
+    fs::write(root.0.join(".gitignore"), "ignored.rs\n").unwrap();
+    fs::write(root.0.join("ignored.rs"), "// \u{41f}").unwrap();
+    fs::write(root.0.join("RUN.md"), "\u{41f}").unwrap();
+    fs::write(root.0.join("escaped.rs"), r"// \u{41f}").unwrap();
+    assert_eq!(
+        cyrillic_violations(&root.0).unwrap(),
+        [untracked, "tracked.rs"]
+    );
+    // Staging must not hide or duplicate a violation; ignored tracked files still count.
+    git(&["add", untracked]);
+    git(&["add", "--force", "ignored.rs"]);
+    assert_eq!(
+        cyrillic_violations(&root.0).unwrap(),
+        [untracked, "ignored.rs", "tracked.rs"]
+    );
 }
 
 #[test]

@@ -48,6 +48,36 @@ pub fn tracked_files() -> Option<Vec<PathBuf>> {
     )
 }
 
+/// Tracked and untracked non-ignored files, for guards that must also catch new source files
+/// before staging. Keep `tracked_files` for rules that specifically concern committed inventory.
+/// Like `tracked_files`, returns None outside a Git checkout or when Git is unavailable.
+pub fn working_tree_files(root: &Path) -> Option<Vec<PathBuf>> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args([
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(output.stdout).ok()?;
+    let mut files: Vec<_> = text
+        .split('\0')
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .collect();
+    files.sort();
+    files.dedup();
+    Some(files)
+}
+
 /// `/`-separated string form of a relative path, for comparisons that must not depend on the OS.
 pub fn rel_str(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
