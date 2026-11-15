@@ -14,7 +14,6 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
     },
-    time::Duration,
 };
 
 fn kind<T: std::fmt::Debug>(r: Result<T>) -> ErrorKind {
@@ -189,12 +188,14 @@ fn default_read_limited_refuses_a_non_regular_handle_before_reading() {
 }
 
 /// Runs `f` on a helper thread; a hang (the bug) fails the test instead of blocking it forever.
+/// Only the Unix FIFO test needs it (Windows has no FIFOs in the file namespace).
+#[cfg(unix)]
 fn bounded<R: Send + 'static>(f: impl FnOnce() -> R + Send + 'static) -> R {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let _ = tx.send(f());
     });
-    rx.recv_timeout(Duration::from_secs(20))
+    rx.recv_timeout(std::time::Duration::from_secs(20))
         .expect("the bounded read blocked (deadlock bound, not timing)")
 }
 
