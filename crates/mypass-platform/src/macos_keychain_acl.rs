@@ -17,6 +17,11 @@
 //! which `security-framework` does not wrap. Errors carry status codes only, never item data.
 //!
 //! Signing questions go through [`MacSignatureProbe`] (safe `security-framework` calls).
+//!
+//! This module also holds the one other Keychain query `security-framework` cannot express: the
+//! attribute-only, no-UI lookup of an item ([`silent_item_attributes`]) that the device-unlock
+//! enrolment checks use (`kSecUseAuthenticationUI = kSecUseAuthenticationUIFail`; the crate only
+//! offers `Skip`, which would hide an item that needs interaction instead of failing).
 
 // `unsafe` is denied crate-wide and allowed in this module only: the access-list and requirement
 // calls are C functions declared here. Each block is minimal and carries a `// SAFETY:` note; the
@@ -29,6 +34,7 @@ use crate::endpoint_store::{
 use crate::macos_keychain::MacKeychainSecretStore;
 use crate::{PlatformError, PlatformResult, SecretStore};
 use core_foundation::base::{CFType, CFTypeRef, OSStatus, TCFType};
+use core_foundation::boolean::CFBoolean;
 use core_foundation::data::CFData;
 use core_foundation::dictionary::CFDictionary;
 use core_foundation::string::{CFString, CFStringRef};
@@ -48,6 +54,7 @@ extern "C" {
         access: *mut CFTypeRef,
     ) -> OSStatus;
     fn SecItemAdd(attributes: CFTypeRef, result: *mut CFTypeRef) -> OSStatus;
+    fn SecItemCopyMatching(query: CFTypeRef, result: *mut CFTypeRef) -> OSStatus;
     fn SecCodeCopyDesignatedRequirement(
         code: CFTypeRef,
         flags: u32,
@@ -66,6 +73,13 @@ extern "C" {
     static kSecAttrLabel: CFStringRef;
     static kSecAttrAccess: CFStringRef;
     static kSecValueData: CFStringRef;
+    static kSecAttrComment: CFStringRef;
+    static kSecReturnAttributes: CFStringRef;
+    static kSecReturnData: CFStringRef;
+    static kSecMatchLimit: CFStringRef;
+    static kSecMatchLimitOne: CFStringRef;
+    static kSecUseAuthenticationUI: CFStringRef;
+    static kSecUseAuthenticationUIFail: CFStringRef;
 }
 
 const ERR_SEC_SUCCESS: OSStatus = 0;
@@ -109,6 +123,91 @@ fn add_keys() -> AddKeys {
             data: CFString::wrap_under_get_rule(kSecValueData),
         }
     }
+}
+
+/// The keys and values of the silent attribute query, retained.
+struct SilentKeys {
+    class: CFString,
+    generic_password: CFString,
+    service: CFString,
+    account: CFString,
+    comment: CFString,
+    return_attributes: CFString,
+    /// Only the test reads it: the query must never contain it.
+    #[cfg_attr(not(test), allow(dead_code))]
+    return_data: CFString,
+    match_limit: CFString,
+    match_limit_one: CFString,
+    authentication_ui: CFString,
+    authentication_ui_fail: CFString,
+}
+
+fn silent_keys() -> SilentKeys {
+    // SAFETY: the Security framework constants are valid, immutable `CFString`s for the life of
+    // the process; reading them is a plain load and the get rule retains each one.
+    unsafe {
+        SilentKeys {
+            class: CFString::wrap_under_get_rule(kSecClass),
+            generic_password: CFString::wrap_under_get_rule(kSecClassGenericPassword),
+            service: CFString::wrap_under_get_rule(kSecAttrService),
+            account: CFString::wrap_under_get_rule(kSecAttrAccount),
+            comment: CFString::wrap_under_get_rule(kSecAttrComment),
+            return_attributes: CFString::wrap_under_get_rule(kSecReturnAttributes),
+            return_data: CFString::wrap_under_get_rule(kSecReturnData),
+            match_limit: CFString::wrap_under_get_rule(kSecMatchLimit),
+            match_limit_one: CFString::wrap_under_get_rule(kSecMatchLimitOne),
+            authentication_ui: CFString::wrap_under_get_rule(kSecUseAuthenticationUI),
+            authentication_ui_fail: CFString::wrap_under_get_rule(kSecUseAuthenticationUIFail),
+        }
+    }
+}
+
+/// The silent lookup of one generic password: attributes only (never `kSecReturnData`), one
+/// match, and no UI (`kSecUseAuthenticationUIFail`: an item that would need interaction fails
+/// with `errSecInteractionNotAllowed` instead of prompting).
+fn silent_attributes_query(service: &str, account: &str) -> CFDictionary<CFString, CFType> {
+    let k = silent_keys();
+    CFDictionary::from_CFType_pairs(&[
+        (k.class, k.generic_password.as_CFType()),
+        (k.service, CFString::new(service).as_CFType()),
+        (k.account, CFString::new(account).as_CFType()),
+        (k.return_attributes, CFBoolean::true_value().as_CFType()),
+        (k.match_limit, k.match_limit_one.as_CFType()),
+        (k.authentication_ui, k.authentication_ui_fail.as_CFType()),
+    ])
+}
+
+/// Runs [`silent_attributes_query`]: `Ok(None)` when there is no such item, otherwise the item's
+/// comment (`Ok(Some(None))` without one); `Err` carries the `OSStatus` (including
+/// `errSecInteractionNotAllowed`), which the caller maps.
+pub(crate) fn silent_item_attributes(
+    service: &str,
+    account: &str,
+) -> Result<Option<Option<String>>, OSStatus> {
+    const ERR_SEC_ITEM_NOT_FOUND: OSStatus = -25300;
+    let query = silent_attributes_query(service, account);
+    let mut result: CFTypeRef = ptr::null();
+    // SAFETY: `query` is a live dictionary for the duration of the call; the out pointer is
+    // valid and receives a +1 reference on success.
+    let status = unsafe { SecItemCopyMatching(query.as_CFTypeRef(), &mut result) };
+    if status == ERR_SEC_ITEM_NOT_FOUND {
+        return Ok(None);
+    }
+    let result = owned(status, result, "silent attributes").map_err(|_| status)?;
+    let attributes = result
+        .downcast_into::<CFDictionary>()
+        .ok_or(ERR_SEC_ITEM_NOT_FOUND)?;
+    let comment_key = silent_keys().comment;
+    let comment = attributes
+        .find(comment_key.as_CFTypeRef())
+        .map(|value| {
+            // SAFETY: the dictionary holds a live CF object at this key; the get rule retains it
+            // for the wrapper's lifetime.
+            unsafe { CFType::wrap_under_get_rule(*value) }
+        })
+        .and_then(|value| value.downcast_into::<CFString>())
+        .map(|text| text.to_string());
+    Ok(Some(comment))
 }
 
 /// The designated requirement of `code` (a `SecCode` or `SecStaticCode`) as canonical text.
@@ -337,6 +436,38 @@ impl SignatureProbe for MacSignatureProbe {
 mod tests {
     use super::*;
     use crate::endpoint_store::{APP_REQUIREMENT, HOST_REQUIREMENT, TEAM_ID};
+
+    #[test]
+    fn silent_query_reads_attributes_only_and_never_shows_ui() {
+        let query = silent_attributes_query("svc", "acct");
+        let k = silent_keys();
+        let value = |key: &CFString| query.find(key).map(|v| v.clone());
+        assert_eq!(
+            value(&k.return_attributes).and_then(|v| v.downcast::<CFBoolean>()),
+            Some(CFBoolean::true_value())
+        );
+        assert!(
+            value(&k.return_data).is_none(),
+            "the query must not ask for data"
+        );
+        assert_eq!(
+            value(&k.authentication_ui).and_then(|v| v.downcast::<CFString>()),
+            Some(k.authentication_ui_fail.clone())
+        );
+        assert_eq!(
+            value(&k.match_limit).and_then(|v| v.downcast::<CFString>()),
+            Some(k.match_limit_one.clone())
+        );
+        assert_eq!(
+            value(&k.service).and_then(|v| v.downcast::<CFString>()),
+            Some(CFString::new("svc"))
+        );
+        assert_eq!(
+            value(&k.account).and_then(|v| v.downcast::<CFString>()),
+            Some(CFString::new("acct"))
+        );
+        assert_eq!(query.len(), 6);
+    }
 
     /// An Apple-signed system binary: valid input for every signing call, never team-signed.
     const SYSTEM_BINARY: &str = "/bin/ls";

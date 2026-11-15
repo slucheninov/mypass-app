@@ -31,6 +31,19 @@
 //!    enrolment of another vault is kept (the contract requires it).
 //! 5. **No prompt without an item.** `unlock` checks the enrolment silently first and answers
 //!    `Invalidated` without showing a prompt when nothing usable is stored.
+//! 6. **Silent checks never show Keychain UI.** Every enrolment check (`is_enrolled`, the check
+//!    before an unlock prompt) reads item attributes only, through
+//!    [`ItemStore::attributes_silently`], which never returns item data and fails instead of
+//!    showing UI. The domain-state hash is therefore kept as a public attribute (the item's
+//!    comment, hex) of the domain-state item; it is a hash of an opaque state, not a secret. The
+//!    master password is read only on the explicit unlock path, after the user passed the
+//!    LocalAuthentication prompt. An attribute read that needs interaction is an error, never
+//!    "not enrolled".
+//! 7. **Only a changed finger set invalidates.** A biometric preflight that fails for a reason that
+//!    says nothing about the enrolled fingers (lockout, sensor not available, for example with the
+//!    lid closed, passcode not set, an unknown code) is reported as its error and the enrolment is
+//!    kept ([`classify_biometric_preflight`]); only a domain state that differs from the stored one,
+//!    or no fingers enrolled at all (`biometryNotEnrolled`, the set was emptied), invalidates.
 //!
 //! No secret reaches an error, a log or a `Debug` output; the bytes read from the store are
 //! zeroized on drop.
@@ -149,6 +162,60 @@ pub(crate) fn map_la_error(code: i64) -> PlatformError {
     }
 }
 
+/// `LAErrorBiometryNotEnrolled`: no fingers are enrolled on this Mac.
+const LA_BIOMETRY_NOT_ENROLLED: i64 = -7;
+
+/// What a silent biometric preflight says about the enrolled fingers.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum CurrentBiometrics {
+    /// The current domain state, compared with the stored hash.
+    State(Vec<u8>),
+    /// No fingers are enrolled any more: the enrolled set changed, a biometrics enrolment is
+    /// invalid.
+    NoneEnrolled,
+    /// The state cannot be read now; this says nothing about a change, so the check reports the
+    /// error and keeps the enrolment.
+    Unknown(PlatformError),
+}
+
+/// Classifies the result of a biometric preflight ([`LocalAuth::biometric_domain_state`]): `Err`
+/// carries the `LAError` code of `canEvaluatePolicy`, `Ok(None)` a successful preflight without a
+/// state (which Apple's contract rules out; treated as unknown, never as a change).
+pub(crate) fn classify_biometric_preflight(
+    result: Result<Option<Vec<u8>>, i64>,
+) -> CurrentBiometrics {
+    match result {
+        Ok(Some(state)) => CurrentBiometrics::State(state),
+        Ok(None) => CurrentBiometrics::Unknown(PlatformError::Failed(
+            "the biometric domain state is not available".to_owned(),
+        )),
+        Err(LA_BIOMETRY_NOT_ENROLLED) => CurrentBiometrics::NoneEnrolled,
+        // biometryLockout -> Lockout, biometryNotAvailable and passcodeNotSet ->
+        // NotEnrolledOnDevice, anything else -> Failed: an error, the enrolment stays.
+        Err(code) => CurrentBiometrics::Unknown(map_la_error(code)),
+    }
+}
+
+/// Lowercase hex of `bytes` (the public form of the stored domain-state hash).
+fn to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The bytes of a lowercase or uppercase hex string; `None` for anything else.
+fn from_hex(text: &str) -> Option<Vec<u8>> {
+    if text.len() % 2 != 0 {
+        return None;
+    }
+    let digit = |c: u8| char::from(c).to_digit(16);
+    text.as_bytes()
+        .chunks(2)
+        .map(|pair| match pair {
+            [high, low] => Some(u8::try_from(digit(*high)? << 4 | digit(*low)?).ok()?),
+            _ => None,
+        })
+        .collect()
+}
+
 /// SHA-256 of a biometric domain state (only the hash is stored).
 pub(crate) fn domain_state_hash(state: &[u8]) -> [u8; 32] {
     Sha256::digest(state).into()
@@ -175,8 +242,10 @@ pub(crate) fn domain_state_matches(
 pub(crate) trait LocalAuth: Send + Sync {
     /// Whether `policy` can be evaluated now; `Err` carries the `LAError` code. Never prompts.
     fn can_evaluate(&self, policy: AuthPolicy) -> Result<(), i64>;
-    /// The current biometric domain state, read without a prompt; `None` without Touch ID.
-    fn biometric_domain_state(&self) -> Option<Vec<u8>>;
+    /// The current biometric domain state, read without a prompt after a biometric preflight;
+    /// `Err` carries the preflight's `LAError` code (classified by
+    /// [`classify_biometric_preflight`]), `Ok(None)` a successful preflight without a state.
+    fn biometric_domain_state(&self) -> Result<Option<Vec<u8>>, i64>;
     /// Shows the prompt (`reason`) and waits at most `timeout`; a timeout cancels the prompt and
     /// reports `Cancelled`. `Ok` carries the domain state the evaluation saw, when any.
     fn evaluate(
@@ -187,10 +256,37 @@ pub(crate) trait LocalAuth: Send + Sync {
     ) -> PlatformResult<Option<Vec<u8>>>;
 }
 
-/// A [`SecretStore`] that can also list the accounts of a service (attributes only, never data).
+/// The public attributes of one item, read without its data.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ItemAttributes {
+    /// The item's note (`kSecAttrComment`), when it has one.
+    pub(crate) note: Option<String>,
+}
+
+/// A [`SecretStore`] that can also answer from item attributes alone, never reading item data and
+/// never showing UI.
 pub(crate) trait ItemStore: SecretStore {
     /// Every account stored under `service`; empty when there is none.
     fn accounts(&self, service: &str) -> PlatformResult<Vec<String>>;
+
+    /// The attributes of one item (`None`: no such item), from an attribute-only query that may
+    /// not show any UI: when the store would need interaction (a locked keychain, an access
+    /// prompt), this is an error, never `None`.
+    fn attributes_silently(
+        &self,
+        service: &str,
+        account: &str,
+    ) -> PlatformResult<Option<ItemAttributes>>;
+
+    /// Stores `secret` like [`SecretStore::set`], with `note` as a public attribute that
+    /// [`Self::attributes_silently`] returns.
+    fn set_with_note(
+        &self,
+        service: &str,
+        account: &str,
+        secret: &[u8],
+        note: &str,
+    ) -> PlatformResult<()>;
 }
 
 /// [`DeviceUnlock`] over an [`ItemStore`] and a [`LocalAuth`].
@@ -232,41 +328,54 @@ impl<A: LocalAuth> KeychainDeviceUnlock<A> {
         }
     }
 
-    fn read(&self, account: &str) -> PlatformResult<Option<Zeroizing<Vec<u8>>>> {
+    /// The stored master password: the one data read, only on the explicit unlock path.
+    fn read_secret(&self, account: &str) -> PlatformResult<Option<Zeroizing<Vec<u8>>>> {
         Ok(self.store.get(&self.service, account)?.map(Zeroizing::new))
     }
 
-    fn stored_domain_hash(&self, v: &VaultId) -> PlatformResult<Option<Zeroizing<Vec<u8>>>> {
-        self.read(&domain_state_account(v))
+    /// The stored domain-state hash, from the domain-state item's public note (silent).
+    fn stored_domain_hash(&self, v: &VaultId) -> PlatformResult<Option<Vec<u8>>> {
+        Ok(self
+            .store
+            .attributes_silently(&self.service, &domain_state_account(v))?
+            .and_then(|attributes| attributes.note)
+            .and_then(|note| from_hex(&note)))
     }
 
-    /// The silent enrolment check: an item exists and, for the biometrics-only mode, the stored
-    /// domain-state hash matches `current_state`.
+    /// The silent enrolment check, from item attributes only: an item exists and, for the
+    /// biometrics-only mode, the stored domain-state hash matches the current state (`evaluated`
+    /// when an evaluation just reported one, otherwise a silent preflight). A preflight that
+    /// cannot tell (lockout and the like) is an error and changes nothing.
     fn enrolled_with(
         &self,
         mode: DeviceUnlockMode,
         v: &VaultId,
-        current_state: Option<&[u8]>,
+        evaluated: Option<Vec<u8>>,
     ) -> PlatformResult<bool> {
-        if self.read(&account_for(mode, v))?.is_none() {
+        if self
+            .store
+            .attributes_silently(&self.service, &account_for(mode, v))?
+            .is_none()
+        {
             return Ok(false);
         }
         if mode == DeviceUnlockMode::AccountPassword {
             return Ok(true);
         }
         let stored = self.stored_domain_hash(v)?;
+        let current = match evaluated {
+            Some(state) => state,
+            None => match classify_biometric_preflight(self.auth.biometric_domain_state()) {
+                CurrentBiometrics::State(state) => state,
+                CurrentBiometrics::NoneEnrolled => return Ok(false),
+                CurrentBiometrics::Unknown(error) => return Err(error),
+            },
+        };
         Ok(domain_state_matches(
             mode,
-            stored.as_deref().map(Vec::as_slice),
-            current_state,
+            stored.as_deref(),
+            Some(&current),
         ))
-    }
-
-    fn current_state_for(&self, mode: DeviceUnlockMode) -> Option<Vec<u8>> {
-        match mode {
-            DeviceUnlockMode::Biometrics => self.auth.biometric_domain_state(),
-            DeviceUnlockMode::AccountPassword => None,
-        }
     }
 }
 
@@ -283,8 +392,7 @@ impl<A: LocalAuth> DeviceUnlock for KeychainDeviceUnlock<A> {
 
     fn is_enrolled(&self, mode: DeviceUnlockMode, vault_id: &str) -> PlatformResult<bool> {
         let v = vault(vault_id)?;
-        let current = self.current_state_for(mode);
-        self.enrolled_with(mode, &v, current.as_deref())
+        self.enrolled_with(mode, &v, None)
     }
 
     fn enroll(
@@ -298,22 +406,27 @@ impl<A: LocalAuth> DeviceUnlock for KeychainDeviceUnlock<A> {
             .can_evaluate(policy_for(mode))
             .map_err(map_la_error)?;
         let state_hash = match mode {
-            DeviceUnlockMode::Biometrics => Some(domain_state_hash(
-                &self
-                    .auth
-                    .biometric_domain_state()
-                    .ok_or(PlatformError::NotEnrolledOnDevice)?,
-            )),
+            DeviceUnlockMode::Biometrics => {
+                match classify_biometric_preflight(self.auth.biometric_domain_state()) {
+                    CurrentBiometrics::State(state) => Some(domain_state_hash(&state)),
+                    CurrentBiometrics::NoneEnrolled => {
+                        return Err(PlatformError::NotEnrolledOnDevice)
+                    }
+                    CurrentBiometrics::Unknown(error) => return Err(error),
+                }
+            }
             DeviceUnlockMode::AccountPassword => None,
         };
         let account = account_for(mode, &v);
         self.store
             .set(&self.service, &account, secret.expose_secret().as_bytes())?;
         if let Some(hash) = state_hash {
-            if let Err(e) = self
-                .store
-                .set(&self.service, &domain_state_account(&v), &hash)
-            {
+            if let Err(e) = self.store.set_with_note(
+                &self.service,
+                &domain_state_account(&v),
+                &hash,
+                &to_hex(&hash),
+            ) {
                 // Never leave a biometrics item that no domain state guards.
                 let _ = self.store.delete(&self.service, &account);
                 return Err(e);
@@ -338,14 +451,15 @@ impl<A: LocalAuth> DeviceUnlock for KeychainDeviceUnlock<A> {
             .evaluate(policy_for(mode), reason, UNLOCK_TIMEOUT)?;
         if mode == DeviceUnlockMode::Biometrics {
             // The state the evaluation itself saw is authoritative (a finger added during the
-            // prompt counts); fall back to a silent read when the context reported none.
-            let current = evaluated.or_else(|| self.auth.biometric_domain_state());
-            if !self.enrolled_with(mode, &v, current.as_deref())? {
+            // prompt counts); `enrolled_with` falls back to a silent preflight when the context
+            // reported none.
+            if !self.enrolled_with(mode, &v, evaluated)? {
                 return Err(PlatformError::Invalidated);
             }
         }
+        // The only read of item data: the user just passed the prompt for this unlock.
         let bytes = self
-            .read(&account_for(mode, &v))?
+            .read_secret(&account_for(mode, &v))?
             .ok_or(PlatformError::Invalidated)?;
         let text = std::str::from_utf8(&bytes)
             .map_err(|_| PlatformError::Failed("the stored secret is not valid text".to_owned()))?;
@@ -405,33 +519,85 @@ mod tests {
         m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// An [`ItemStore`] in memory, keyed by `(service, account)`.
+    /// One stored item: its data and its public note.
+    type Item = (Vec<u8>, Option<String>);
+
+    /// An [`ItemStore`] in memory, keyed by `(service, account)`. Counts the data reads (the
+    /// only operation that could show Keychain UI) and can act as a keychain that needs
+    /// interaction.
     #[derive(Default)]
-    struct MemoryItems(Mutex<BTreeMap<(String, String), Vec<u8>>>);
+    struct MemoryItems {
+        items: Mutex<BTreeMap<(String, String), Item>>,
+        data_reads: std::sync::atomic::AtomicUsize,
+        needs_interaction: std::sync::atomic::AtomicBool,
+    }
+
+    impl MemoryItems {
+        fn data_reads(&self) -> usize {
+            self.data_reads.load(std::sync::atomic::Ordering::SeqCst)
+        }
+        fn set_needs_interaction(&self, needs: bool) {
+            self.needs_interaction
+                .store(needs, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn snapshot(&self) -> BTreeMap<(String, String), Item> {
+            lock(&self.items).clone()
+        }
+    }
 
     impl SecretStore for MemoryItems {
         fn set(&self, service: &str, account: &str, secret: &[u8]) -> PlatformResult<()> {
-            lock(&self.0).insert((service.into(), account.into()), secret.to_vec());
+            lock(&self.items).insert((service.into(), account.into()), (secret.to_vec(), None));
             Ok(())
         }
         fn get(&self, service: &str, account: &str) -> PlatformResult<Option<Vec<u8>>> {
-            Ok(lock(&self.0)
+            self.data_reads
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(lock(&self.items)
                 .get(&(service.into(), account.into()))
-                .cloned())
+                .map(|(data, _)| data.clone()))
         }
         fn delete(&self, service: &str, account: &str) -> PlatformResult<()> {
-            lock(&self.0).remove(&(service.into(), account.into()));
+            lock(&self.items).remove(&(service.into(), account.into()));
             Ok(())
         }
     }
 
     impl ItemStore for MemoryItems {
         fn accounts(&self, service: &str) -> PlatformResult<Vec<String>> {
-            Ok(lock(&self.0)
+            Ok(lock(&self.items)
                 .keys()
                 .filter(|(s, _)| s == service)
                 .map(|(_, a)| a.clone())
                 .collect())
+        }
+        fn attributes_silently(
+            &self,
+            service: &str,
+            account: &str,
+        ) -> PlatformResult<Option<ItemAttributes>> {
+            if self
+                .needs_interaction
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(PlatformError::Failed("keychain status -25308".to_owned()));
+            }
+            Ok(lock(&self.items)
+                .get(&(service.into(), account.into()))
+                .map(|(_, note)| ItemAttributes { note: note.clone() }))
+        }
+        fn set_with_note(
+            &self,
+            service: &str,
+            account: &str,
+            secret: &[u8],
+            note: &str,
+        ) -> PlatformResult<()> {
+            lock(&self.items).insert(
+                (service.into(), account.into()),
+                (secret.to_vec(), Some(note.to_owned())),
+            );
+            Ok(())
         }
     }
 
@@ -446,6 +612,9 @@ mod tests {
         biometrics: bool,
         device_owner: bool,
         domain_state: Vec<u8>,
+        /// The `LAError` code a biometric preflight fails with (lockout and the like) while the
+        /// fingers are still enrolled.
+        preflight_error: Option<i64>,
         fail_next: Option<PlatformError>,
         evaluations: usize,
         presence: usize,
@@ -480,9 +649,15 @@ mod tests {
                 AuthPolicy::DeviceOwner => Err(-5),
             }
         }
-        fn biometric_domain_state(&self) -> Option<Vec<u8>> {
+        fn biometric_domain_state(&self) -> Result<Option<Vec<u8>>, i64> {
             let s = lock(&self.0);
-            s.biometrics.then(|| s.domain_state.clone())
+            if let Some(code) = s.preflight_error {
+                return Err(code);
+            }
+            if !s.biometrics {
+                return Err(LA_BIOMETRY_NOT_ENROLLED);
+            }
+            Ok(Some(s.domain_state.clone()))
         }
         fn evaluate(
             &self,
@@ -547,6 +722,194 @@ mod tests {
                 PlatformError::Failed(format!("local authentication error {code}"))
             );
         }
+    }
+
+    #[test]
+    fn biometric_preflight_mapping_table() {
+        use CurrentBiometrics::{NoneEnrolled, State, Unknown};
+        let cases: [(Result<Option<Vec<u8>>, i64>, CurrentBiometrics); 8] = [
+            (Ok(Some(b"s".to_vec())), State(b"s".to_vec())),
+            // Only an emptied finger set says the enrolled fingers changed.
+            (Err(-7), NoneEnrolled),
+            // biometryLockout: temporary, the enrolment stays.
+            (Err(-8), Unknown(PlatformError::Lockout)),
+            // biometryNotAvailable (lid closed, no sensor right now) and passcodeNotSet.
+            (Err(-6), Unknown(PlatformError::NotEnrolledOnDevice)),
+            (Err(-5), Unknown(PlatformError::NotEnrolledOnDevice)),
+            (
+                Err(-1004),
+                Unknown(PlatformError::Failed(
+                    "local authentication error -1004".to_owned(),
+                )),
+            ),
+            (
+                Err(-1),
+                Unknown(PlatformError::Failed(
+                    "local authentication error -1".to_owned(),
+                )),
+            ),
+            (
+                Ok(None),
+                Unknown(PlatformError::Failed(
+                    "the biometric domain state is not available".to_owned(),
+                )),
+            ),
+        ];
+        for (input, expected) in cases {
+            let label = format!("{input:?}");
+            assert_eq!(classify_biometric_preflight(input), expected, "{label}");
+        }
+    }
+
+    #[test]
+    fn hex_round_trips_and_refuses_garbage() {
+        let hash = domain_state_hash(b"fingers-1");
+        assert_eq!(from_hex(&to_hex(&hash)), Some(hash.to_vec()));
+        assert_eq!(to_hex(&[0x00, 0xab, 0x0f]), "00ab0f");
+        assert_eq!(from_hex("00AB0f"), Some(vec![0x00, 0xab, 0x0f]));
+        for bad in ["0", "zz", "0g", "+1", "\u{e9}a"] {
+            assert_eq!(from_hex(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn preflight_errors_keep_a_valid_biometrics_enrolment() {
+        for (code, expected) in [
+            (-8, PlatformError::Lockout),
+            (-6, PlatformError::NotEnrolledOnDevice),
+            (-5, PlatformError::NotEnrolledOnDevice),
+            (
+                -1,
+                PlatformError::Failed("local authentication error -1".to_owned()),
+            ),
+        ] {
+            let f = fixture();
+            f.du.enroll(DeviceUnlockMode::Biometrics, "vault-a", &secret("pw"))
+                .unwrap();
+            let before = f.items.snapshot();
+            lock(&f.auth.0).preflight_error = Some(code);
+            assert_eq!(
+                f.du.is_enrolled(DeviceUnlockMode::Biometrics, "vault-a"),
+                Err(expected.clone()),
+                "{code}"
+            );
+            assert_eq!(
+                f.du.unlock(DeviceUnlockMode::Biometrics, "vault-a", "r")
+                    .map(|_| ()),
+                Err(expected),
+                "{code}"
+            );
+            assert_eq!(lock(&f.auth.0).evaluations, 0, "{code}: no prompt");
+            assert_eq!(f.items.snapshot(), before, "{code}: items untouched");
+            // The temporary condition passes: the same enrolment works again.
+            lock(&f.auth.0).preflight_error = None;
+            assert_eq!(
+                f.du.is_enrolled(DeviceUnlockMode::Biometrics, "vault-a"),
+                Ok(true),
+                "{code}"
+            );
+            assert_eq!(
+                f.du.unlock(DeviceUnlockMode::Biometrics, "vault-a", "r")
+                    .unwrap()
+                    .expose_secret(),
+                "pw"
+            );
+        }
+    }
+
+    #[test]
+    fn an_emptied_finger_set_invalidates_biometrics_only() {
+        let f = fixture();
+        f.du.enroll(DeviceUnlockMode::Biometrics, "vault-a", &secret("pw"))
+            .unwrap();
+        f.du.enroll(DeviceUnlockMode::AccountPassword, "vault-a", &secret("pw"))
+            .unwrap();
+        lock(&f.auth.0).biometrics = false;
+        assert_eq!(
+            f.du.is_enrolled(DeviceUnlockMode::Biometrics, "vault-a"),
+            Ok(false)
+        );
+        assert_eq!(
+            f.du.is_enrolled(DeviceUnlockMode::AccountPassword, "vault-a"),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn a_preflight_error_stops_a_biometrics_enrolment() {
+        let f = fixture();
+        lock(&f.auth.0).preflight_error = Some(-8);
+        // `can_evaluate` still passes in the fake, so the state read decides.
+        assert_eq!(
+            f.du.enroll(DeviceUnlockMode::Biometrics, "vault-a", &secret("pw")),
+            Err(PlatformError::Lockout)
+        );
+        assert!(f.items.accounts_of(SVC).is_empty());
+    }
+
+    #[test]
+    fn silent_checks_never_read_item_data() {
+        let f = fixture();
+        f.du.enroll(DeviceUnlockMode::Biometrics, "vault-a", &secret("pw"))
+            .unwrap();
+        f.du.enroll(DeviceUnlockMode::AccountPassword, "vault-a", &secret("pw"))
+            .unwrap();
+        for mode in [
+            DeviceUnlockMode::Biometrics,
+            DeviceUnlockMode::AccountPassword,
+        ] {
+            assert_eq!(f.du.is_enrolled(mode, "vault-a"), Ok(true));
+            assert_eq!(f.du.is_enrolled(mode, "vault-b"), Ok(false));
+        }
+        let _ = f.du.availability();
+        assert_eq!(f.items.data_reads(), 0);
+        // A refused unlock (no item) reads nothing either.
+        assert_eq!(
+            f.du.unlock(DeviceUnlockMode::Biometrics, "vault-b", "r")
+                .map(|_| ()),
+            Err(PlatformError::Invalidated)
+        );
+        assert_eq!(f.items.data_reads(), 0);
+        // A cancelled prompt reads nothing.
+        lock(&f.auth.0).fail_next = Some(PlatformError::Cancelled);
+        assert_eq!(
+            f.du.unlock(DeviceUnlockMode::Biometrics, "vault-a", "r")
+                .map(|_| ()),
+            Err(PlatformError::Cancelled)
+        );
+        assert_eq!(f.items.data_reads(), 0);
+        // Only the explicit unlock, after the prompt, reads the secret: once.
+        f.du.unlock(DeviceUnlockMode::Biometrics, "vault-a", "r")
+            .unwrap();
+        assert_eq!(f.items.data_reads(), 1);
+    }
+
+    #[test]
+    fn a_keychain_that_needs_interaction_is_an_error_not_absent() {
+        let f = fixture();
+        f.du.enroll(DeviceUnlockMode::Biometrics, "vault-a", &secret("pw"))
+            .unwrap();
+        let before = f.items.snapshot();
+        f.items.set_needs_interaction(true);
+        for mode in [
+            DeviceUnlockMode::Biometrics,
+            DeviceUnlockMode::AccountPassword,
+        ] {
+            assert!(
+                matches!(
+                    f.du.is_enrolled(mode, "vault-a"),
+                    Err(PlatformError::Failed(_))
+                ),
+                "{mode:?}"
+            );
+        }
+        assert!(matches!(
+            f.du.unlock(DeviceUnlockMode::Biometrics, "vault-a", "r"),
+            Err(PlatformError::Failed(_))
+        ));
+        assert_eq!(lock(&f.auth.0).evaluations, 0);
+        assert_eq!(f.items.data_reads(), 0);
+        assert_eq!(f.items.snapshot(), before);
     }
 
     #[test]
@@ -685,6 +1048,13 @@ mod tests {
         assert_eq!(stored, domain_state_hash(b"fingers-1").to_vec());
         assert_eq!(
             f.items
+                .attributes_silently(SVC, &domain_state_account(&id("vault-a")))
+                .unwrap()
+                .and_then(|a| a.note),
+            Some(to_hex(&domain_state_hash(b"fingers-1")))
+        );
+        assert_eq!(
+            f.items
                 .get(
                     SVC,
                     &account_for(DeviceUnlockMode::Biometrics, &id("vault-a"))
@@ -766,7 +1136,7 @@ mod tests {
             fn can_evaluate(&self, p: AuthPolicy) -> Result<(), i64> {
                 self.0.can_evaluate(p)
             }
-            fn biometric_domain_state(&self) -> Option<Vec<u8>> {
+            fn biometric_domain_state(&self) -> Result<Option<Vec<u8>>, i64> {
                 self.0.biometric_domain_state()
             }
             fn evaluate(

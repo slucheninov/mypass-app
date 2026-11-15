@@ -83,13 +83,13 @@ impl LocalAuth for LaContextAuth {
         autoreleasepool(|_| can_evaluate_with(&new_context(), policy))
     }
 
-    fn biometric_domain_state(&self) -> Option<Vec<u8>> {
+    fn biometric_domain_state(&self) -> Result<Option<Vec<u8>>, i64> {
         autoreleasepool(|_| {
             let context = new_context();
-            // The state is populated by a successful biometric preflight; without Touch ID there
-            // is none.
-            can_evaluate_with(&context, AuthPolicy::Biometrics).ok()?;
-            domain_state_of(&context)
+            // The state is populated by a successful biometric preflight. A failed preflight
+            // keeps its code (lockout is not a changed finger set; the caller classifies it).
+            can_evaluate_with(&context, AuthPolicy::Biometrics)?;
+            Ok(domain_state_of(&context))
         })
     }
 
