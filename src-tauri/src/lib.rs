@@ -57,6 +57,7 @@ pub fn commands() -> Commands<tauri::Wry> {
         browser::browser_revoke,
         browser::browser_show_extension_folder,
         browser::browser_status,
+        browser::browser_unregister_host,
         device::device_unlock_status,
         device::device_unlock_configure,
         device::device_unlock_consume_extension_request,
@@ -432,6 +433,7 @@ mod tests {
             "browser_revoke",
             "browser_show_extension_folder",
             "browser_status",
+            "browser_unregister_host",
         ] {
             assert!(
                 command_names().iter().any(|n| n == name),

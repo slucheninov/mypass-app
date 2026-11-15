@@ -415,6 +415,11 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       delete state.proposals[id];
       return structuredClone(model);
     },
+    browserUnregisterHost: () => {
+      state.browser.registrations = state.browser.registrations.map((r) => ({ ...r, state: "missing", detail: null }));
+      publish("bridgeChangedEvent", null);
+      return structuredClone(state.browser.registrations);
+    },
     browserReinstallHost: () => structuredClone(state.browserReinstall),
     browserResetPairings: () => {
       state.browser.paired = [];

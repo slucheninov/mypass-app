@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { platform } from "../../lib/platform.svelte";
   import { api } from "../../lib/api";
   import { events, type Language, type LoginItemStatus, type SettingsPatch_Deserialize, type ShortcutKind } from "../../lib/bindings";
   import { t } from "../../lib/i18n/index.svelte";
@@ -110,7 +111,11 @@
       <Toggle checked={loginStatus === "enabled"} label={t("Launch at login")} onchange={toggleLogin} />
       {#snippet hint()}
         {#if loginStatus === "requiresApproval"}
-          {t("Approval required. Open System Settings > General > Login Items and allow MyPass.")}
+          {#if platform.os === "windows"}
+            {t("Approval required. Open Windows Settings > Apps > Startup and allow MyPass.")}
+          {:else}
+            {t("Approval required. Open System Settings > General > Login Items and allow MyPass.")}
+          {/if}
         {/if}
         {#if loginError}<span class="problem" role="alert">{loginError}</span>{/if}
       {/snippet}
@@ -140,6 +145,7 @@
     {/snippet}
   </Row>
 
+  {#if platform.os === "windows"}<p>{t("Ctrl+Shift+L is also used by Word and some editors. MyPass overrides it while running; you can change the lock hotkey here.")}</p>{/if}
   <HotkeyRow
     label={t("Lock hotkey")}
     value={settings.value.shortcutLock}

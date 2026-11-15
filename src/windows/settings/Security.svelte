@@ -70,6 +70,9 @@
       label={t("Lock when the computer sleeps")}
       onchange={(lockOnDeviceSleep) => send({ lockOnDeviceSleep })}
     />
+    {#snippet hint()}
+      {#if platform.os === "windows"}{t("On Windows, turning off the display also locks MyPass when this option is enabled.")}{/if}
+    {/snippet}
   </Row>
   <Row label={t("Lock when the screen locks")}>
     <Toggle

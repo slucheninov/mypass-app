@@ -346,6 +346,12 @@ const SCENARIOS: Record<string, Scenario> = {
     await click(user, opener);
     return { dialog: "Connect a browser", opener };
   },
+  "src/windows/settings/Browser.svelte#Remove browser integration?": async (user) => {
+    await renderSettingsApp({ os: "windows" }, { pane: "Browser" });
+    const opener = await screen.findByRole("button", { name: "Remove browser integration" });
+    await click(user, opener);
+    return { dialog: "Remove browser integration?", opener };
+  },
   "src/windows/settings/Browser.svelte#Revoke this browser?": async (user) => {
     await renderSettingsApp(
       {},

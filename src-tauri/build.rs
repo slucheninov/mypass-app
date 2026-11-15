@@ -55,6 +55,7 @@ fn main() {
         "browser_pairing_cancel",
         "browser_proposal_take",
         "browser_reinstall_host",
+        "browser_unregister_host",
         "browser_reset_pairings",
         "browser_revoke",
         "browser_show_extension_folder",

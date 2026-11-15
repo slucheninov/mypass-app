@@ -260,3 +260,9 @@ describe("passkey proxy", () => {
     await waitFor(() => expect(toggle().getAttribute("aria-checked")).toBe("true"));
   });
 });
+
+ it("windows_login_approval_names_windows_startup_settings", async () => {
+   await renderSettingsApp({ os: "windows" }, { pane: "General", prepare: (fake) => { fake.state.loginItem = "requiresApproval"; } });
+   expect(await screen.findByText("Approval required. Open Windows Settings > Apps > Startup and allow MyPass.")).toBeTruthy();
+   expect(screen.queryByText(/Open System Settings/)).toBeNull();
+ });

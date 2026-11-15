@@ -53,7 +53,7 @@
 </script>
 
 <div class="shell" data-testid="vault-shell">
-  <header class="titlebar" data-tauri-drag-region>
+  <header class="titlebar" class:windows={platform.os === "windows"} data-tauri-drag-region>
     <Toolbar onnewgroup={(parentId) => (editor = { mode: "create", parentId })} {onimportcsv} />
     <!-- Last in the DOM so the Windows buttons sit at the right edge; the macOS inset is ordered first. -->
     {#if platform.os}<WindowControls os={platform.os} />{/if}
@@ -92,6 +92,9 @@
     display: flex;
     flex-direction: column;
     height: 100vh;
+  }
+  .titlebar.windows {
+    height: 32px;
   }
   .titlebar {
     display: flex;

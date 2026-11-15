@@ -35,6 +35,7 @@ export const commands = {
 	/**  Reveals the extension folder with the same helper as `app_reveal_backups`. */
 	browserShowExtensionFolder: () => typedError<null, ApiError>(__TAURI_INVOKE("browser_show_extension_folder")),
 	browserStatus: () => typedError<BrowserStatus_Serialize, ApiError>(__TAURI_INVOKE("browser_status")),
+	browserUnregisterHost: () => typedError<BrowserRegistrationDto_Serialize[], ApiError>(__TAURI_INVOKE("browser_unregister_host")),
 	deviceUnlockStatus: () => typedError<DeviceUnlockStatus_Serialize, ApiError>(__TAURI_INVOKE("device_unlock_status")),
 	deviceUnlockConfigure: (password: string | null, touchId: boolean, macPassword: boolean) => typedError<DeviceUnlockStatus_Serialize, ApiError>(__TAURI_INVOKE("device_unlock_configure", { password, touchId, macPassword })),
 	deviceUnlockConsumeExtensionRequest: () => __TAURI_INVOKE<boolean>("device_unlock_consume_extension_request"),

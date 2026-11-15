@@ -7,6 +7,12 @@ import { renderSettingsApp } from "../../test/settingsApp";
 const open = (opts: Parameters<typeof renderSettingsApp>[0] = {}) => renderSettingsApp(opts, { pane: "Security" });
 
 describe("Security", () => {
+  it("windows_explains_display_off_and_has_no_device_unlock", async () => {
+    await open({ os: "windows", deviceUnlockAvailable: false });
+    expect(await screen.findByText("On Windows, turning off the display also locks MyPass when this option is enabled.")).toBeTruthy();
+    expect(screen.queryByTestId("device-unlock-slot")).toBeNull();
+  });
+
   it("idle_timeout_select_has_eight_options_default_thirty_minutes", async () => {
     const user = userEvent.setup();
     const { fake } = await open();
