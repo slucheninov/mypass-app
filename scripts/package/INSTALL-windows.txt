@@ -1,0 +1,40 @@
+MyPass for Windows (unsigned portable ZIP)
+
+Requirements: Windows 10 22H2 or Windows 11, x64, and Microsoft Edge WebView2
+Runtime. Install the Evergreen WebView2 Runtime from Microsoft if it is missing.
+Windows Hello is not supported; unlock your vault with its master password.
+
+Verify the download before opening it:
+  Get-FileHash -Algorithm SHA256 .\MyPass-*.zip
+Compare the hash with the downloaded .zip.sha256 file.
+
+Before extracting, right-click the ZIP -> Properties -> Unblock -> Apply.
+Alternatively, in PowerShell:
+  Unblock-File .\MyPass-*.zip
+Extract all files into a folder where you keep apps, not a temporary folder.
+Keep MyPass.exe, mypass-native-host.exe and the extension folder together.
+Moving the whole folder later is fine: MyPass re-registers its browser host.
+
+Run MyPass.exe. If SmartScreen says "Windows protected your PC", choose
+More info -> Run anyway. This app is not code-signed yet. No installer or
+administrator rights are needed.
+
+First launch copies the bundled mypass-native-host.exe as mypass-host.exe into
+%LOCALAPPDATA%\MyPass\host and registers it for Chrome and Edge under HKCU.
+Chromium registration is conditional on its installed marker. Other Chromium
+browsers' fallback support is unverified. Nothing is written to HKLM.
+
+In your browser's extension manager, enable Developer mode, choose Load unpacked,
+and select the extension folder beside MyPass.exe. The extension ID is
+hjijbabodfldconmhdcdphlbgaajkejn. Open MyPass Settings -> Browser and pair it.
+Show extension folder may open MyPass's versioned writable copy of that folder.
+
+The tray icon may be in the overflow flyout; drag it out for easy access.
+Enable launch at login in Settings if desired.
+
+To uninstall: Settings -> Browser -> Remove browser integration, then quit MyPass
+and delete the extracted app folder. Integration registers again on next launch.
+Optionally delete %LOCALAPPDATA%\MyPass and %APPDATA%\MyPass to remove settings,
+secrets, drafts and backups. Your vault file is never touched by uninstalling
+browser integration or deleting the extracted app folder. Keep vaults outside
+the app data folders and preserve any backups you need before optional cleanup.

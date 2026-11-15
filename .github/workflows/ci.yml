@@ -153,6 +153,11 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Offline Windows packaging tests on Linux
+        run: bash scripts/tests/package-windows.test.sh
       - name: js tests
         run: bash scripts/test.sh --ci --only js
 
@@ -268,6 +273,79 @@ jobs:
           bash scripts/check-host-deps.sh
           bash scripts/package-macos.sh --allow-unsigned --out "$RUNNER_TEMP/package-smoke"
 
+  windows-app:
+    needs: ui
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.99.1
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-on-failure: true
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 12.18.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Build production Windows app and sidecar
+        run: bash scripts/build-windows.sh
+      - name: App Windows tests
+        run: cargo test -p mypass-app
+
+  windows-package:
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.package == 'true' }}
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.99.1
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-on-failure: true
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 12.18.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Offline Windows packaging tests
+        run: bash scripts/tests/package-windows.test.sh
+      - name: Package unsigned Windows x64 ZIP
+        run: bash scripts/package-windows.sh --out "$RUNNER_TEMP/windows-package"
+      - name: Extract and smoke-test the packaged native host
+        run: |
+          target_dir="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
+          python3 scripts/windows-host-smoke.py "$RUNNER_TEMP/windows-package/MyPass-$(bash scripts/check-version.sh)-windows-x64.zip" "$target_dir/x86_64-pc-windows-msvc/release"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-x64
+          path: |
+            ${{ runner.temp }}/windows-package/*.zip
+            ${{ runner.temp }}/windows-package/*.zip.sha256
+          if-no-files-found: error
+          retention-days: 7
+
   # The required status check (keep the name `ci`). It needs every other job (`changes`, `lint`,
   # `test`, `js`, `ui`, `windows-integration`, `crosscompat`), so a job added in a later stage must be wired in
   # here (guard test `ci_aggregator_needs_every_job`). A job that never ran counts as success only
@@ -275,7 +353,7 @@ jobs:
   # included, must be `success`. `if: always()` makes it report even after a failed or cancelled
   # need, instead of being skipped (a skipped required check would count as passing).
   ci:
-    needs: [changes, lint, test, js, ui, windows-integration, crosscompat, package-smoke]
+    needs: [changes, lint, test, js, ui, windows-integration, crosscompat, package-smoke, windows-app, windows-package]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -285,7 +363,7 @@ jobs:
           NEEDS_JSON: ${{ toJSON(needs) }}
         run: |
           # Jobs whose `skipped` result is fine: gated on a variable or on changed paths.
-          gated=" windows-integration crosscompat package-smoke "
+          gated=" windows-integration crosscompat package-smoke windows-package "
           failed=0
           for job in $(jq -r 'keys[]' <<<"$NEEDS_JSON"); do
             result=$(jq -r --arg j "$job" '.[$j].result' <<<"$NEEDS_JSON")

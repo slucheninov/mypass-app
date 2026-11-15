@@ -136,10 +136,17 @@ jobs are independent and run in parallel, so the wall-clock time is the slowest 
   runs cargo), always runs and must be `success`.
 - `package-smoke` is path-gated on pull requests and runs on main/manual builds: it packages and
   verifies an explicitly unsigned arm64 development build without signing secrets.
+- `windows-app` needs `ui` and always builds the production x64 Windows UI, app and native
+  messaging sidecar, checks PE architecture/subsystems and host provenance, and runs the app tests.
+- `windows-package` is gated by the `package` path filter on pull requests and always runs on
+  main/manual builds. It runs offline package tests, builds the unsigned x64 ZIP, verifies and
+  extracts it, checks a framed `app_not_running` response from the shipped host, and uploads the
+  ZIP and checksum for 7 days. No Windows signing credentials are used.
 - `windows-integration` is a disabled skeleton for stage 6: it runs only when the repository variable
   `MYPASS_WINDOWS_INTEGRATION_TESTS` is `true`, otherwise it is skipped.
 - `ci` is the aggregator and the required status check. It needs every other job (`changes`, `lint`,
-  `test`, `js`, `ui`, `windows-integration`, `crosscompat`, `package-smoke`); a gated job may be `skipped`, every other result
+  `test`, `js`, `ui`, `windows-integration`, `crosscompat`, `package-smoke`, `windows-app`,
+  `windows-package`); a gated job may be `skipped`, every other result
   (`lint` and `test` included) must be `success`. A job added later must be wired into it
   (pinned by `ci_aggregator_needs_every_job`).
 - `.github/workflows/codeql.yml` is a separate workflow (push to `main`, weekly, manual; never on pull

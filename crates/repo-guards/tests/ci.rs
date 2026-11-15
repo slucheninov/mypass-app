@@ -9,7 +9,12 @@ use serde_yaml_ng::{Mapping, Value};
 /// Jobs whose `skipped` result the aggregator may accept: gated on a repository variable
 /// (`windows-integration`) or on changed paths (`crosscompat`, `package-smoke`, added by later
 /// tasks). Every other job, `changes` included, must be `success`.
-const GATED_JOBS: [&str; 3] = ["windows-integration", "crosscompat", "package-smoke"];
+const GATED_JOBS: [&str; 4] = [
+    "windows-integration",
+    "crosscompat",
+    "package-smoke",
+    "windows-package",
+];
 
 fn workflow(rel: &str) -> Value {
     serde_yaml_ng::from_str(&read(rel)).unwrap_or_else(|e| panic!("{rel} does not parse: {e}"))
@@ -88,7 +93,9 @@ fn ci_aggregator_needs_every_job() {
             "package-smoke",
             "test",
             "ui",
-            "windows-integration"
+            "windows-app",
+            "windows-integration",
+            "windows-package"
         ],
         "`ci.needs` must be exactly the parallel jobs of the workflow"
     );
@@ -830,4 +837,56 @@ fn release_workflow_never_signs_ad_hoc_and_limits_write_permissions() {
     ] {
         assert!(script.contains(fragment), "packaging missing {fragment}");
     }
+}
+
+#[test]
+fn windows_production_build_and_package_are_wired() {
+    let doc = workflow(".github/workflows/ci.yml");
+    let app = job(&doc, "windows-app");
+    assert_eq!(app["runs-on"].as_str(), Some("windows-latest"));
+    assert_eq!(needs_of(app), ["ui"]);
+    assert!(app.get("if").is_none());
+    let package = job(&doc, "windows-package");
+    assert_eq!(package["runs-on"].as_str(), Some("windows-latest"));
+    assert_eq!(needs_of(package), ["changes"]);
+    assert!(package["if"]
+        .as_str()
+        .unwrap()
+        .contains("needs.changes.outputs.package"));
+    for (value, command) in [(app, "build-windows.sh"), (package, "package-windows.sh")] {
+        let all = steps(value)
+            .iter()
+            .map(|s| run_text(s))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(all.contains(command));
+        assert!(!all.contains("codesign"));
+        for action in [
+            "Swatinem/rust-cache@",
+            "pnpm/action-setup@",
+            "actions/setup-node@",
+            "actions/setup-python@",
+        ] {
+            assert!(steps(value)
+                .iter()
+                .any(|s| s["uses"].as_str().is_some_and(|u| u.starts_with(action))));
+        }
+    }
+    let all = steps(package)
+        .iter()
+        .map(|s| run_text(s))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(all.contains("windows-host-smoke.py"));
+    assert!(all.contains("package-windows.test.sh"));
+    let upload = steps(package)
+        .into_iter()
+        .find(|s| {
+            s["uses"]
+                .as_str()
+                .is_some_and(|u| u.starts_with("actions/upload-artifact@"))
+        })
+        .unwrap();
+    assert_eq!(upload["with"]["retention-days"].as_i64(), Some(7));
+    assert_eq!(upload["with"]["if-no-files-found"].as_str(), Some("error"));
 }
