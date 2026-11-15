@@ -1494,11 +1494,11 @@ fn a_lock_waits_for_a_publication_in_progress() {
             let _ = tx.send(());
         });
         // The window only gives a broken fence the chance to fail; with the fence the lock
-        // cannot complete before the publication does, whatever the timing.
-        flag.store(
-            rx.recv_timeout(Duration::from_millis(200)).is_ok(),
-            Ordering::SeqCst,
-        );
+        // can neither drop the database nor return before the publication ends, whatever the
+        // timing. The database is checked too: the lock observer (the arm shutdown) also waits
+        // for the publication, so the return alone would not show a lock that went through.
+        let returned = rx.recv_timeout(Duration::from_millis(200)).is_ok();
+        flag.store(returned || !session.is_unlocked(), Ordering::SeqCst);
         *slot.lock().unwrap() = Some(rx);
     });
     w.run_watch();
