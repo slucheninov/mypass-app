@@ -864,3 +864,102 @@ fn unsorted_vaults_migrate_through_primary_and_secondary_for_all_strategies() {
         }
     }
 }
+
+#[test]
+fn migrated_icloud_saves_preserve_a_writer_at_coordinator_entry() {
+    for reopen in [false, true] {
+        let (d, core) = core_fixture();
+        let fake = Arc::new(mypass_platform::testing::FakeCoordinatedFiles::new());
+        let cloud = mypass_sync::icloud::ICloudDriveLocation::root(d.path());
+        fs::create_dir_all(&cloud).unwrap();
+        core.session
+            .set_io_resolver(Some(crate::storage::icloud_resolver(
+                fake.clone(),
+                d.path().to_path_buf(),
+                d.path().join("cache"),
+            )));
+        core.vault_location_change(&cloud, MigrationStrategy::SeedRemote)
+            .unwrap();
+        if reopen {
+            core.session.lock(crate::session::LockReason::Manual);
+            core.session.unlock(SecretString::from("pw")).unwrap();
+        }
+        let mut remote = core.session.with_db(Clone::clone).unwrap();
+        let mut entry = mypass_kdbx::Entry::new(mypass_kdbx::Timestamp(100));
+        entry.set_field("Title", "remote-only", false);
+        remote.root.entries.push(entry);
+        core.session
+            .mutate(|db, _| {
+                let mut entry = mypass_kdbx::Entry::new(mypass_kdbx::Timestamp(101));
+                entry.set_field("Title", "local-only", false);
+                db.root.entries.push(entry);
+                Ok(())
+            })
+            .unwrap();
+        let target = core.session.vault_path().unwrap();
+        let path = target.clone();
+        let bytes = remote.save(&SecretString::from("pw")).unwrap();
+        fake.before_next_write(move || fs::write(&path, &bytes).unwrap());
+        core.session.flush().unwrap();
+        let saved = Database::open(&fs::read(target).unwrap(), &SecretString::from("pw")).unwrap();
+        let mut titles: Vec<_> = saved
+            .root
+            .entries
+            .iter()
+            .filter_map(|e| e.field("Title"))
+            .collect();
+        titles.sort();
+        assert_eq!(titles, ["local-only", "remote-only"], "reopen={reopen}");
+        assert!(crate::saving::equivalent_content(
+            &saved,
+            &core.session.with_db(Clone::clone).unwrap()
+        ));
+    }
+}
+
+#[test]
+fn migrated_icloud_pending_retry_preserves_a_competing_writer() {
+    use mypass_platform::testing::CoordinatedOp;
+    let (d, core) = core_fixture();
+    let fake = Arc::new(mypass_platform::testing::FakeCoordinatedFiles::new());
+    let cloud = mypass_sync::icloud::ICloudDriveLocation::root(d.path());
+    fs::create_dir_all(&cloud).unwrap();
+    core.session
+        .set_io_resolver(Some(crate::storage::icloud_resolver(
+            fake.clone(),
+            d.path().to_path_buf(),
+            d.path().join("cache"),
+        )));
+    core.vault_location_change(&cloud, MigrationStrategy::SeedRemote)
+        .unwrap();
+    let target = core.session.vault_path().unwrap();
+    let mut remote = core.session.with_db(Clone::clone).unwrap();
+    remote
+        .root
+        .entries
+        .push(mypass_kdbx::Entry::new(mypass_kdbx::Timestamp(100)));
+    core.session
+        .mutate(|db, _| {
+            db.root
+                .entries
+                .push(mypass_kdbx::Entry::new(mypass_kdbx::Timestamp(101)));
+            Ok(())
+        })
+        .unwrap();
+    fake.fail_next(CoordinatedOp::Write, std::io::ErrorKind::PermissionDenied);
+    core.session.lock(crate::session::LockReason::Manual);
+    assert!(!core.session.is_unlocked());
+    let bytes = remote.save(&SecretString::from("pw")).unwrap();
+    let path = target.clone();
+    let competing = bytes.clone();
+    fake.before_next_write(move || fs::write(&path, &competing).unwrap());
+    assert!(
+        core.session.flush().is_err(),
+        "pending retry must refuse the racing write"
+    );
+    assert_eq!(fs::read(&target).unwrap(), bytes);
+    core.session.unlock(SecretString::from("pw")).unwrap();
+    core.session.flush().unwrap();
+    let saved = Database::open(&fs::read(target).unwrap(), &SecretString::from("pw")).unwrap();
+    assert_eq!(saved.root.entries.len(), 2);
+}

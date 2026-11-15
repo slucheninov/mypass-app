@@ -236,6 +236,14 @@ impl mypass_kdbx::FileIo for BoundedIo {
     fn write_atomic(&self, path: &Path, bytes: &[u8]) -> mypass_kdbx::Result<()> {
         self.0.write_atomic(path, bytes)
     }
+    fn write_checked(
+        &self,
+        path: &Path,
+        expected: &[u8; 32],
+        bytes: &[u8],
+    ) -> mypass_kdbx::Result<mypass_kdbx::SaveOutcome> {
+        self.0.write_checked(path, expected, bytes)
+    }
     fn metadata(&self, path: &Path) -> mypass_kdbx::Result<mypass_kdbx::FileMeta> {
         self.0.metadata(path)
     }

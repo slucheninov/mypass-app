@@ -285,6 +285,14 @@ impl FileIo for SwitchIo {
     fn write_atomic(&self, path: &Path, bytes: &[u8]) -> mypass_kdbx::Result<()> {
         self.get().write_atomic(path, bytes)
     }
+    fn write_checked(
+        &self,
+        path: &Path,
+        expected: &[u8; 32],
+        bytes: &[u8],
+    ) -> mypass_kdbx::Result<mypass_kdbx::SaveOutcome> {
+        self.get().write_checked(path, expected, bytes)
+    }
     fn metadata(&self, path: &Path) -> mypass_kdbx::Result<FileMeta> {
         self.get().metadata(path)
     }
