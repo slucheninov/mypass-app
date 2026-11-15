@@ -299,6 +299,26 @@ mod tests {
     }
 
     #[test]
+    fn shortcut_conflict_is_reported_not_fatal_on_windows() {
+        let registry = FakeRegistry {
+            taken: ["Ctrl+Shift+L".to_owned()].into(),
+            ..FakeRegistry::default()
+        };
+        let conflicts = register_with(
+            &registry,
+            &settings("CommandOrControl+Shift+L", ""),
+            "windows",
+        );
+        assert_eq!(
+            conflicts,
+            [ShortcutConflictEvent {
+                kind: ShortcutKind::Lock,
+                shortcut: "CommandOrControl+Shift+L".into()
+            }]
+        );
+    }
+
+    #[test]
     fn a_taken_accelerator_is_reported_as_a_conflict_not_a_failure() {
         let registry = FakeRegistry {
             taken: ["Cmd+Shift+L".to_owned()].into(),

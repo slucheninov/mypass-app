@@ -94,7 +94,12 @@ pub(crate) fn platform(paths: &AppPaths) -> crate::Platform {
                 std::sync::Arc::new(WinRegistry::new()),
             ),
         ),
-        launch_at_login: std::sync::Arc::new(crate::fallback::UnsupportedLaunchAtLogin),
+        launch_at_login: std::sync::Arc::new(
+            crate::windows_launch_at_login::WinLaunchAtLogin::new(
+                std::sync::Arc::new(WinRegistry::new()),
+                std::env::current_exe().unwrap_or_default(),
+            ),
+        ),
         keyboard_layout: std::sync::Arc::new(WinKeyboardLayout::capture()),
     }
 }
@@ -2232,5 +2237,23 @@ mod desktop_windows_integration {
         tick_layout(hwnd).unwrap();
         drop(thread);
         assert!(!window_exists(hwnd));
+    }
+}
+
+/// Last-resort dialog before WebView2 exists; text buffers live for the modal call.
+pub fn show_startup_error(title: &str, message: &str) {
+    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+    let (Ok(title), Ok(message)) = (to_wide(OsStr::new(title)), to_wide(OsStr::new(message)))
+    else {
+        return;
+    };
+    // SAFETY: both buffers are NUL-terminated and live through the synchronous dialog; no owner.
+    unsafe {
+        MessageBoxW(
+            None,
+            windows::core::PCWSTR(message.as_ptr()),
+            windows::core::PCWSTR(title.as_ptr()),
+            MB_OK | MB_ICONERROR,
+        );
     }
 }

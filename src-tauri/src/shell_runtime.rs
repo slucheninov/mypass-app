@@ -14,11 +14,13 @@ use crate::hotkeys::{self, ConflictGate};
 use crate::i18n;
 use crate::lifecycle::{
     attach_platform_events, confirm_discard_edits, current_tray_model, emit_save_state,
-    emit_settings, lock_via_scheduler, on_exit_requested, start_external_poll, sync_login_item,
-    ExitGate, ExitOutcome, ExitRequest, ExternalWatcher, QuitPort, QuitWorkerGuard, ShellTarget,
-    TrayRefresher, EXTERNAL_POLL,
+    emit_settings, lock_via_scheduler, on_exit_requested, start_external_poll,
+    sync_login_item_report, ExitGate, ExitOutcome, ExitRequest, ExternalWatcher, QuitPort,
+    QuitWorkerGuard, ShellTarget, TrayRefresher, EXTERNAL_POLL,
 };
-use crate::shell::{close_action, current_os, panel_position, show_main, CloseAction, PanelRect};
+#[cfg(not(windows))]
+use crate::shell::panel_position;
+use crate::shell::{close_action, current_os, show_main, CloseAction, PanelRect};
 use crate::state::{AppState, EditorDirty, ShellState};
 use crate::tray::{
     action_for_id, separator_before, TrayAction, TrayMenuModel, PANEL_WINDOW, TRAY_ID,
@@ -80,7 +82,7 @@ fn create_tray(app: &AppHandle, model: &TrayMenuModel) -> tauri::Result<()> {
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .icon_as_template(true)
+        .icon_as_template(cfg!(target_os = "macos"))
         .on_menu_event(|app, event| {
             if let Some(action) = action_for_id(event.id().as_ref()) {
                 run_tray_action(app, action);
@@ -160,10 +162,22 @@ fn toggle_panel(app: &AppHandle, tray: tauri::Rect) {
     let Some(panel) = app.get_webview_window(PANEL_WINDOW) else {
         return;
     };
+    #[cfg(windows)]
+    if let Some(gate) = app.try_state::<TrayClickState>() {
+        if gate
+            .gate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .suppress(gate.started.elapsed())
+        {
+            return;
+        }
+    }
     if panel.is_visible().unwrap_or(false) {
         let _ = panel.hide();
         return;
     }
+    // Tray events are physical on Windows. A logical event elsewhere uses the current scale.
     let scale = panel.scale_factor().unwrap_or(1.0);
     let at = tray.position.to_physical::<f64>(scale);
     let size = tray.size.to_physical::<f64>(scale);
@@ -173,6 +187,7 @@ fn toggle_panel(app: &AppHandle, tray: tauri::Rect) {
         .flatten()
         .or_else(|| app.primary_monitor().ok().flatten());
     if let (Some(monitor), Ok(panel_size)) = (monitor, panel.outer_size()) {
+        #[cfg(not(windows))]
         let (x, y) = panel_position(
             PanelRect {
                 x: at.x,
@@ -189,7 +204,45 @@ fn toggle_panel(app: &AppHandle, tray: tauri::Rect) {
             f64::from(panel_size.width),
             f64::from(panel_size.height),
         );
+        #[cfg(windows)]
+        let (x, y, width, height) = {
+            let scale = monitor.scale_factor();
+            let work = monitor.work_area();
+            let (width, height) = panel
+                .outer_size()
+                .ok()
+                .map(|size| {
+                    let logical = size.to_logical::<f64>(panel.scale_factor().unwrap_or(scale));
+                    (logical.width * scale, logical.height * scale)
+                })
+                .unwrap_or((f64::from(panel_size.width), f64::from(panel_size.height)));
+            let width = width.min((f64::from(work.size.width) - 16.0 * scale).max(1.0));
+            let height = height.min((f64::from(work.size.height) - 16.0 * scale).max(1.0));
+            let (x, y) = crate::shell::panel_position_windows(
+                PanelRect {
+                    x: at.x,
+                    y: at.y,
+                    w: size.width,
+                    h: size.height,
+                },
+                PanelRect {
+                    x: f64::from(work.position.x),
+                    y: f64::from(work.position.y),
+                    w: f64::from(work.size.width),
+                    h: f64::from(work.size.height),
+                },
+                width,
+                height,
+                scale,
+            );
+            (x, y, width, height)
+        };
         let _ = panel.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
+        #[cfg(windows)]
+        let _ = panel.set_size(tauri::PhysicalSize::new(
+            width.round() as u32,
+            height.round() as u32,
+        ));
     }
     let _ = panel.show();
     let _ = panel.set_focus();
@@ -301,11 +354,15 @@ pub fn tray_refresher(app: &AppHandle, core: Arc<AppCore>) -> Arc<TrayRefresher>
 /// reconcile, platform events, the external-change watcher, theme, tray, hotkeys and the first
 /// window. A failure of an optional piece (no platform events on this OS) never stops the app.
 pub fn start(app: &tauri::App) {
+    #[cfg(windows)]
+    app.manage(TrayClickState::default());
     let handle = app.handle().clone();
     let core = app.state::<AppState>().0.clone();
     let settings = core.settings.get();
 
-    if let Some(corrected) = sync_login_item(&core, settings.launch_at_login) {
+    if let Some(corrected) =
+        sync_login_item_report(&core, settings.launch_at_login, crate::startup::show_error)
+    {
         emit_settings(&handle, corrected);
     }
 
@@ -338,8 +395,15 @@ fn apply_startup_ui(handle: &AppHandle, core: &Arc<AppCore>, settings: &Settings
     if let Some(gate) = handle.try_state::<Arc<ConflictGate>>() {
         emit_conflicts(handle, gate.submit(hotkeys::register_all(handle, settings)));
     }
-    if let Some(shell) = handle.try_state::<ShellState>() {
-        let _ = show_main(shell.windows.as_ref());
+    let show = !cfg!(windows)
+        || crate::windows_boot::show_main_on_start(
+            &std::env::args().collect::<Vec<_>>(),
+            tray_visible(handle),
+        );
+    if show {
+        if let Some(shell) = handle.try_state::<ShellState>() {
+            let _ = show_main(shell.windows.as_ref());
+        }
     }
 }
 
@@ -372,6 +436,15 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
             let _ = window.hide();
         }
         (PANEL_WINDOW, WindowEvent::Focused(false)) => {
+            #[cfg(windows)]
+            if window.is_visible().unwrap_or(false) {
+                if let Some(gate) = app.try_state::<TrayClickState>() {
+                    gate.gate
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .blur(gate.started.elapsed());
+                }
+            }
             let _ = window.hide();
         }
         _ => {}
@@ -553,6 +626,21 @@ impl QuitPort for TauriQuitPort {
 
     fn exit(&self) {
         self.0.exit(0);
+    }
+}
+
+#[cfg(windows)]
+struct TrayClickState {
+    started: std::time::Instant,
+    gate: Mutex<crate::shell::TrayToggleDebounce>,
+}
+#[cfg(windows)]
+impl Default for TrayClickState {
+    fn default() -> Self {
+        Self {
+            started: std::time::Instant::now(),
+            gate: Mutex::new(Default::default()),
+        }
     }
 }
 

@@ -20,6 +20,7 @@ pub mod state;
 #[cfg(test)]
 mod testing;
 pub mod tray;
+pub mod windows_boot;
 pub mod wiring;
 
 use std::path::Path;

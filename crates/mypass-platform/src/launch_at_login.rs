@@ -20,6 +20,10 @@ pub enum LoginItemStatus {
 
 /// Starts the app at login.
 pub trait LaunchAtLogin: Send + Sync {
+    /// Repair an owned enabled startup entry under the saved setting, preserving OS approval.
+    fn prepare_startup(&self, _desired: bool) -> PlatformResult<()> {
+        Ok(())
+    }
     /// Current status; unsupported platforms return `Ok(LoginItemStatus::Unsupported)`.
     fn status(&self) -> PlatformResult<LoginItemStatus>;
     /// `true` only for [`LoginItemStatus::Enabled`].

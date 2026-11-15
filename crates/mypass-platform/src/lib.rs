@@ -10,6 +10,8 @@ mod file_identity;
 pub mod windows;
 pub mod windows_desktop;
 pub mod windows_host_install;
+#[path = "windows/launch_at_login.rs"]
+pub mod windows_launch_at_login;
 pub mod windows_paths;
 pub mod windows_registry;
 pub use file_identity::{file_identity, FileIdentity};
@@ -149,6 +151,8 @@ pub mod peer_process;
 pub fn show_startup_error(title: &str, message: &str) {
     #[cfg(target_os = "macos")]
     macos::show_startup_error(title, message);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    windows::show_startup_error(title, message);
+    #[cfg(not(any(target_os = "macos", windows)))]
     let _ = (title, message);
 }
