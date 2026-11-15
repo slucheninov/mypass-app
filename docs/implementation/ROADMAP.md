@@ -124,5 +124,7 @@ Last updated: 2026-11-15
 ## Vault features
 
 - [ ] Change master password (re-key an open vault), including safe secondary rotation across
-  restart. An active sync engine can merge its verified old-password secondary copy; after
-  restart, an unreadable secondary fails closed even when its ciphertext matches the checkpoint.
+  sync runs and restart. A reused sync engine can merge its previously verified old-password
+  secondary copy, but production creates a fresh engine for each sync run. An unreadable
+  secondary therefore fails closed even without a restart, including when its ciphertext
+  matches the checkpoint.

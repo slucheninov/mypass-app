@@ -38,7 +38,8 @@ pub const MAX_SYNC_ATTEMPTS: usize = 3;
 
 /// Why a sync failed. In every case the remote was left as it was, except where a write had
 /// already committed (`Storage` after a write, `RemoteChangedDuringSync` after a write that was
-/// replaced again, `ConcurrentCopyKept`), which the next sync reconciles.
+/// replaced again, `ConcurrentCopyKept`, or `Cancelled` after a write). A subsequent sync
+/// reconciles the remote content.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SyncError {
     /// The remote storage failed (unavailable folder, timeout, too large, not a regular file...).
@@ -69,7 +70,8 @@ pub enum SyncError {
     #[error("a concurrent version of the remote was kept but cannot be merged")]
     ConcurrentCopyKept,
     /// The caller withdrew the sync (the vault was locked, switched or the app is quitting)
-    /// before a write; nothing was written by the attempt that noticed it.
+    /// and the engine stopped subsequent work when it noticed. A write may already have
+    /// committed; cancellation does not roll it back.
     #[error("the sync was cancelled")]
     Cancelled,
     /// The checkpoint store failed. Nothing is lost: the next sync merges.
@@ -177,8 +179,9 @@ pub struct SyncEngine {
     echo: Option<Arc<EchoFilter>>,
     gate: Mutex<()>,
     /// One verified secondary copy, keyed by its exact ciphertext digest. Allows an active
-    /// engine to merge the old-password copy during password rotation without retaining a
-    /// password. Dropped with the engine (the session drops its arm on lock/switch).
+    /// reused engine to merge a previously verified old-password copy without retaining a
+    /// password. Dropped with the engine. Production SecondarySync creates a fresh engine
+    /// per run, so this cache does not carry verified content between production sync runs.
     verified: Mutex<Option<([u8; 32], Database)>>,
 }
 
