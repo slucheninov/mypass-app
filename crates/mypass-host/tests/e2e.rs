@@ -3,10 +3,14 @@
 //!
 //! Isolation: HOME on macOS and the validated debug-only final Windows data-root override
 //! point the real host and in-process server into the same temporary tree. Endpoint storage
-//! remains the existing file backend in this scaffold batch; the protected Windows adapter and
-//! gated native host cases land atomically in the next batch. No real profile is read here.
+//! uses DPAPI on Windows; protected cases are statically ignored and require explicit opt-in.
+//! Actual server/child PIDs and the production store selector are used, never a plaintext override.
 // test-only support code
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+
+// Release hosts intentionally ignore the data-root override: never launch one from a fixture.
+#[cfg(all(windows, not(debug_assertions)))]
+compile_error!("Windows host fixtures require the debug-only isolated root override");
 
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpListener};
@@ -27,8 +31,11 @@ use mypass_bridge::service::{BridgeDeps, BridgeService};
 use mypass_bridge::ui::{BridgeUi, ProposalStore};
 use mypass_core::TotpConfig;
 use mypass_kdbx::{Database, Entry, PlainFileIo, Timestamp};
+#[cfg(not(windows))]
+use mypass_platform::shared_store;
+#[cfg(not(windows))]
 use mypass_platform::testing::InMemorySecretStore;
-use mypass_platform::{shared_store, AppPaths};
+use mypass_platform::AppPaths;
 use mypass_session::autolock::AutoLock;
 use mypass_session::scheduler::ManualScheduler;
 use mypass_session::session::{LockReason, SessionDeps, VaultSession};
@@ -41,6 +48,20 @@ use uuid::Uuid;
 const WALL_START: u64 = 1_700_000_000;
 const OTP: &str = "otpauth://totp/x?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&digits=8";
 const WAIT: Duration = Duration::from_secs(30);
+
+fn shared_secrets(root: &Path) -> Arc<dyn mypass_platform::SecretStore> {
+    #[cfg(windows)]
+    return mypass_platform::host_shared_store(&paths(root), None).1;
+    #[cfg(not(windows))]
+    Arc::new(shared_store(&paths(root)))
+}
+fn require_native_opt_in() {
+    #[cfg(windows)]
+    assert_eq!(
+        std::env::var("MYPASS_WINDOWS_INTEGRATION_TESTS").as_deref(),
+        Ok("1")
+    );
+}
 
 fn paths(root: &Path) -> AppPaths {
     #[cfg(windows)]
@@ -142,7 +163,16 @@ impl App {
         let autolock = AutoLock::new(session.clone(), settings.clone(), sched.clone());
         let pairing = Arc::new(
             PairingManager::new(
-                PairedBrowserStore::new(InMemorySecretStore::new()),
+                PairedBrowserStore::new({
+                    #[cfg(windows)]
+                    {
+                        Arc::new(mypass_platform::DpapiSecretStore::app(&paths(&root)))
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        InMemorySecretStore::new()
+                    }
+                }),
                 sched.clone(),
             )
             .unwrap(),
@@ -175,7 +205,7 @@ impl App {
             .create_vault_with(&vault, SecretString::from("pw".to_owned()), db)
             .unwrap();
 
-        let endpoints = Arc::new(EndpointStore::new(Arc::new(shared_store(&paths(&root)))));
+        let endpoints = Arc::new(EndpointStore::new(shared_secrets(&root)));
         let handler: Handler = Arc::new(move |r| svc.handle(r));
         let server = LoopbackServer::start(cfg, endpoints, handler).unwrap();
         Self {
@@ -191,7 +221,7 @@ impl App {
 
     fn token(&self) -> String {
         // Read the record the host itself reads, not only the server's in-memory copy.
-        EndpointStore::new(Arc::new(shared_store(&paths(&self.root))))
+        EndpointStore::new(shared_secrets(&self.root))
             .load()
             .unwrap()
             .expect("endpoint published")
@@ -236,6 +266,10 @@ struct Host {
 impl Host {
     fn spawn(root: &Path) -> Self {
         let mut c = Command::new(env!("CARGO_BIN_EXE_mypass-host"));
+        c.args([
+            "chrome-extension://hjijbabodfldconmhdcdphlbgaajkejn/",
+            "--parent-window=1234",
+        ]);
         c.env("HOME", root)
             .env("MYPASS_WINDOWS_DATA_ROOT", root)
             .env("USERPROFILE", root)
@@ -353,7 +387,12 @@ fn get_credentials(secret: &str) -> Value {
 }
 
 #[test]
-fn pairing_then_autofill_end_to_end() {
+#[cfg_attr(
+    windows,
+    ignore = "protected endpoint; use isolated Windows integration runner"
+)]
+fn windows_integration_pairing_then_autofill_end_to_end() {
+    require_native_opt_in();
     let app = App::start();
     let secret = app.pair();
 
@@ -382,7 +421,12 @@ fn pairing_then_autofill_end_to_end() {
 }
 
 #[test]
-fn extension_supplied_token_is_ignored_by_real_host() {
+#[cfg_attr(
+    windows,
+    ignore = "protected endpoint; use isolated Windows integration runner"
+)]
+fn windows_integration_extension_supplied_token_is_ignored_by_real_host() {
+    require_native_opt_in();
     let app = App::start();
     let secret = app.pair();
     let mut h = app.spawn();
@@ -394,7 +438,12 @@ fn extension_supplied_token_is_ignored_by_real_host() {
 }
 
 #[test]
-fn locked_vault_gets_locked_then_unlock_then_served() {
+#[cfg_attr(
+    windows,
+    ignore = "protected endpoint; use isolated Windows integration runner"
+)]
+fn windows_integration_locked_vault_gets_locked_then_unlock_then_served() {
+    require_native_opt_in();
     let app = App::start();
     let secret = app.pair();
     app.session.lock(LockReason::Manual);
@@ -419,7 +468,12 @@ fn locked_vault_gets_locked_then_unlock_then_served() {
 }
 
 #[test]
-fn host_output_and_stderr_never_contain_the_token() {
+#[cfg_attr(
+    windows,
+    ignore = "protected endpoint; use isolated Windows integration runner"
+)]
+fn windows_integration_host_output_and_stderr_never_contain_the_token() {
+    require_native_opt_in();
     let app = App::start();
     let token = app.token();
     let secret = app.pair();
@@ -452,9 +506,7 @@ fn host_output_and_stderr_never_contain_the_token() {
 }
 
 fn save_endpoint(root: &Path, ep: &Endpoint) {
-    EndpointStore::new(Arc::new(shared_store(&paths(root))))
-        .save(ep)
-        .unwrap();
+    EndpointStore::new(shared_secrets(root)).save(ep).unwrap();
 }
 
 fn temp_root() -> (tempfile::TempDir, PathBuf) {
@@ -465,7 +517,12 @@ fn temp_root() -> (tempfile::TempDir, PathBuf) {
 }
 
 #[test]
-fn stale_endpoint_with_closed_port_answers_app_not_running() {
+#[cfg_attr(
+    windows,
+    ignore = "protected endpoint; use isolated Windows integration runner"
+)]
+fn windows_integration_stale_endpoint_with_closed_port_answers_app_not_running() {
+    require_native_opt_in();
     let (_dir, root) = temp_root();
     let port = {
         let l = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
@@ -476,7 +533,7 @@ fn stale_endpoint_with_closed_port_answers_app_not_running() {
         &Endpoint {
             port,
             token: generate_token(),
-            pid: 1,
+            pid: std::process::id(),
             started_at: 1,
         },
     );
@@ -486,7 +543,12 @@ fn stale_endpoint_with_closed_port_answers_app_not_running() {
 }
 
 #[test]
-fn foreign_listener_on_stale_port_never_receives_token_or_request() {
+#[cfg_attr(
+    windows,
+    ignore = "protected endpoint; use isolated Windows integration runner"
+)]
+fn windows_integration_foreign_listener_on_stale_port_never_receives_token_or_request() {
+    require_native_opt_in();
     let (_dir, root) = temp_root();
     let token = generate_token();
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
@@ -495,7 +557,7 @@ fn foreign_listener_on_stale_port_never_receives_token_or_request() {
         &Endpoint {
             port: listener.local_addr().unwrap().port(),
             token: token.clone(),
-            pid: 1,
+            pid: std::process::id(),
             started_at: 1,
         },
     );
@@ -561,7 +623,12 @@ fn no_endpoint_answers_app_not_running() {
 }
 
 #[test]
-fn malformed_extension_frame_answers_malformed_request() {
+#[cfg_attr(
+    windows,
+    ignore = "protected endpoint; use isolated Windows integration runner"
+)]
+fn windows_integration_malformed_extension_frame_answers_malformed_request() {
+    require_native_opt_in();
     let app = App::start();
     let secret = app.pair();
     let mut h = app.spawn();
@@ -577,7 +644,12 @@ fn malformed_extension_frame_answers_malformed_request() {
 }
 
 #[test]
-fn oversized_extension_frame_terminates_host_cleanly() {
+#[cfg_attr(
+    windows,
+    ignore = "protected endpoint; use isolated Windows integration runner"
+)]
+fn windows_integration_oversized_extension_frame_terminates_host_cleanly() {
+    require_native_opt_in();
     let app = App::start();
     let mut h = app.spawn();
     // Only a header that claims one byte more than the cap: the host must stop without reading it.
@@ -592,7 +664,12 @@ fn oversized_extension_frame_terminates_host_cleanly() {
 }
 
 #[test]
-fn host_exits_zero_in_every_scenario() {
+#[cfg_attr(
+    windows,
+    ignore = "protected endpoint; use isolated Windows integration runner"
+)]
+fn windows_integration_host_exits_zero_in_every_scenario() {
+    require_native_opt_in();
     // No endpoint, stale endpoint, malformed frame, oversized frame, a served request and stdin
     // closed at once: every one of them is a clean exit 0 with a silent stderr.
     let (_d1, no_endpoint) = temp_root();
@@ -606,7 +683,7 @@ fn host_exits_zero_in_every_scenario() {
         &Endpoint {
             port,
             token: generate_token(),
-            pid: 1,
+            pid: std::process::id(),
             started_at: 1,
         },
     );
@@ -637,7 +714,13 @@ fn host_exits_zero_in_every_scenario() {
 }
 
 #[test]
-fn sixteen_hosts_hold_the_cap_and_the_seventeenth_is_refused_until_a_slot_frees() {
+#[cfg_attr(
+    windows,
+    ignore = "protected endpoint; use isolated Windows integration runner"
+)]
+fn windows_integration_sixteen_hosts_hold_the_cap_and_the_seventeenth_is_refused_until_a_slot_frees(
+) {
+    require_native_opt_in();
     // The held hosts connect eagerly and send nothing, so each keeps its slot until its stdin
     // closes; the generous first-frame deadline keeps the server from reaping them meanwhile.
     let app = App::start_with(ServerConfig {
@@ -679,7 +762,12 @@ fn sixteen_hosts_hold_the_cap_and_the_seventeenth_is_refused_until_a_slot_frees(
 }
 
 #[test]
-fn passkey_status_and_ceremony_reach_the_passkey_service_end_to_end() {
+#[cfg_attr(
+    windows,
+    ignore = "protected endpoint; use isolated Windows integration runner"
+)]
+fn windows_integration_passkey_status_and_ceremony_reach_the_passkey_service_end_to_end() {
+    require_native_opt_in();
     let app = App::start();
     let secret = app.pair();
     let mut h = app.spawn();
@@ -724,7 +812,12 @@ fn vault_has_title(path: &Path, title: &str) -> bool {
 }
 
 #[test]
-fn create_entry_persists_through_save_pipeline() {
+#[cfg_attr(
+    windows,
+    ignore = "protected endpoint; use isolated Windows integration runner"
+)]
+fn windows_integration_create_entry_persists_through_save_pipeline() {
+    require_native_opt_in();
     let app = App::start();
     let secret = app.pair();
     let mut h = app.spawn();
@@ -746,7 +839,12 @@ fn create_entry_persists_through_save_pipeline() {
 }
 
 #[test]
-fn app_quit_gate_rejects_requests_end_to_end() {
+#[cfg_attr(
+    windows,
+    ignore = "protected endpoint; use isolated Windows integration runner"
+)]
+fn windows_integration_app_quit_gate_rejects_requests_end_to_end() {
+    require_native_opt_in();
     let app = App::start();
     let secret = app.pair();
     let mut h = app.spawn();
@@ -757,4 +855,27 @@ fn app_quit_gate_rejects_requests_end_to_end() {
     let r = h.call(get_credentials(&secret));
     assert_eq!(r["type"], "credentialList", "{r}");
     h.finish();
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "protected endpoint; use isolated Windows integration runner"
+)]
+fn windows_integration_stdout_flushes_before_next_request_with_browser_arguments() {
+    require_native_opt_in();
+    let app = App::start();
+    let mut h = app.spawn();
+    let secret = app.pair();
+    // call waits on the bounded frame receiver before submitting the next request. This proves
+    // frame flush independently of stdin EOF; CR/LF/NUL/Ctrl-Z are valid escaped JSON strings.
+    for _ in 0..2 {
+        let r = h.call(
+            json!({"type":"getPasskeyProxyStatus", "pairing":secret, "note":"\r\n\u{001a}\0"}),
+        );
+        assert_eq!(r["type"], "passkeyProxyStatus");
+    }
+    let exit = h.finish();
+    assert!(exit.stderr.is_empty());
+    assert!(exit.leftover_stdout.is_empty());
 }

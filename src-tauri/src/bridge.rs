@@ -404,6 +404,8 @@ fn start_bridge_with_kind(
     )
     .map_err(BridgeStartError::Server)?;
 
+    // DPAPI uses the identical hashed filename: encrypted atomic publication itself retires
+    // the old plaintext record. Never delete it through FileSecretStore after publication.
     // R4/R38: delete ONLY the obsolete endpoint file, after the first successful Keychain
     // publication. This uses the hardened store's exact service/account deletion path.
     if store_kind == mypass_platform::endpoint_store::SharedStoreKind::Keychain
@@ -625,16 +627,9 @@ pub fn extension_folder(
 }
 
 pub fn endpoint_store_kind() -> mypass_platform::endpoint_store::SharedStoreKind {
-    #[cfg(target_os = "macos")]
-    {
-        mypass_platform::endpoint_store::running_store_kind(
-            mypass_platform::endpoint_store::StoreSide::App,
-        )
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        mypass_platform::endpoint_store::SharedStoreKind::File
-    }
+    mypass_platform::endpoint_store::running_store_kind(
+        mypass_platform::endpoint_store::StoreSide::App,
+    )
 }
 
 /// The production [`BridgeState`]: starts over `core` with the real windows and events, and the
@@ -923,6 +918,7 @@ mod tests {
         for (kind, fail) in [
             (SharedStoreKind::Keychain, false),
             (SharedStoreKind::File, false),
+            (SharedStoreKind::Dpapi, false),
             (SharedStoreKind::Keychain, true),
         ] {
             let f = unstarted(false, None);
@@ -960,7 +956,7 @@ mod tests {
             }
             assert_eq!(
                 legacy.load().unwrap().is_some(),
-                fail || kind == SharedStoreKind::File
+                fail || kind != SharedStoreKind::Keychain
             );
         }
     }

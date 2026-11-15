@@ -323,15 +323,8 @@ pub async fn browser_status(
             registrar.as_ref(),
             host.as_deref(),
         );
-        report.endpoint_store =
-            if store_kind == mypass_platform::endpoint_store::SharedStoreKind::Keychain {
-                "keychain"
-            } else {
-                "developmentFile"
-            }
-            .into();
-        report.can_reinstall_host =
-            store_kind == mypass_platform::endpoint_store::SharedStoreKind::File;
+        report.endpoint_store = store_kind.diagnostic_name().into();
+        report.can_reinstall_host = store_kind.can_reinstall_host();
         Ok(report)
     })
     .await

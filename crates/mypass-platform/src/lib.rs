@@ -9,6 +9,10 @@ pub mod dev_overrides;
 pub mod windows;
 pub mod windows_registry;
 
+#[cfg(any(windows, test))]
+mod dpapi;
+#[cfg(windows)]
+pub use dpapi::{DpapiSecretStore, SecretClass};
 mod clipboard;
 mod coordinated;
 mod device_unlock;

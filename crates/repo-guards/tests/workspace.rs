@@ -939,6 +939,13 @@ const FILE_MUTATIONS: &[(&str, &str, usize)] = &[
     // Update state atomic publication and temp cleanup (sync state uses write_atomic).
     ("crates/mypass-update/src/state.rs", "rename(&tmp,path)", 1),
     ("crates/mypass-update/src/state.rs", "remove_file(&tmp)", 1),
+    // DPAPI: only the armed create-new encrypted temp and a handle-validated secret item under
+    // pinned protected ancestors. Neither call can name a vault; MoveFileExW publishes ciphertext.
+    (
+        "crates/mypass-platform/src/windows.rs",
+        "remove_file(path)",
+        2,
+    ),
     // File secret store: private temps and secret deletion, including the retired endpoint.
     (
         "crates/mypass-platform/src/file_store.rs",
