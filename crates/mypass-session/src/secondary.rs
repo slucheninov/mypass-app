@@ -1368,6 +1368,16 @@ pub(crate) fn validate_folder(
     primary: &Path,
     file_name: &str,
 ) -> Result<PathBuf, SecondaryUnavailable> {
+    validate_folder_with_identity(folder, primary, file_name, mypass_platform::file_identity)
+}
+
+// Inject only the identity query; validation and error propagation stay identical in tests.
+fn validate_folder_with_identity(
+    folder: &str,
+    primary: &Path,
+    file_name: &str,
+    identity: impl Fn(&Path) -> std::io::Result<mypass_platform::FileIdentity>,
+) -> Result<PathBuf, SecondaryUnavailable> {
     let path = Path::new(folder);
     if folder.is_empty() || !path.is_absolute() {
         return Err(SecondaryUnavailable::InvalidFolder);
@@ -1385,13 +1395,12 @@ pub(crate) fn validate_folder(
     let dir = fs::canonicalize(path).map_err(folder_error)?;
     let invalid = |_| SecondaryUnavailable::InvalidFolder;
     let primary = fs::canonicalize(primary).map_err(invalid)?;
-    let primary_id = mypass_platform::file_identity(&primary).map_err(identity_error)?;
+    let primary_id = identity(&primary).map_err(identity_error)?;
     let parent = primary
         .parent()
         .ok_or(SecondaryUnavailable::InvalidFolder)?;
     if dir == parent
-        || mypass_platform::file_identity(&dir).map_err(identity_error)?
-            == mypass_platform::file_identity(parent).map_err(identity_error)?
+        || identity(&dir).map_err(identity_error)? == identity(parent).map_err(identity_error)?
     {
         return Err(SecondaryUnavailable::InvalidFolder);
     }
@@ -1401,7 +1410,7 @@ pub(crate) fn validate_folder(
     match fs::symlink_metadata(&target) {
         Ok(_) => {
             let canonical = fs::canonicalize(&target).map_err(invalid)?;
-            let target_id = mypass_platform::file_identity(&canonical).map_err(identity_error)?;
+            let target_id = identity(&canonical).map_err(identity_error)?;
             if canonical == primary || target_id == primary_id {
                 return Err(SecondaryUnavailable::InvalidFolder);
             }

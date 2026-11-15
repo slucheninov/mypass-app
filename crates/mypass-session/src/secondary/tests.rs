@@ -1629,6 +1629,48 @@ fn secondary_guard_fails_closed_when_primary_identity_is_unavailable() {
 }
 
 #[test]
+fn secondary_guard_propagates_each_identity_error_without_changing_vaults_or_checkpoint() {
+    let w = world();
+    w.open();
+    let primary = fs::read(&w.primary).unwrap();
+    let remote = w.remote_bytes();
+    let checkpoint = fs::read(w.checkpoint_file()).unwrap();
+    for (kind, expected) in [
+        (
+            ErrorKind::PermissionDenied,
+            SecondaryUnavailable::InvalidFolder,
+        ),
+        (
+            ErrorKind::Unsupported,
+            SecondaryUnavailable::UnsupportedFolder,
+        ),
+    ] {
+        // Primary, selected directory, primary parent, existing target: each query must
+        // propagate its error instead of authorizing sync with incomplete identity evidence.
+        for fail_at in 0..4 {
+            let calls = AtomicUsize::new(0);
+            let result = validate_folder_with_identity(
+                w.folder.to_str().unwrap(),
+                &w.primary,
+                FILE,
+                |path| {
+                    if calls.fetch_add(1, Ordering::SeqCst) == fail_at {
+                        Err(kind.into())
+                    } else {
+                        mypass_platform::file_identity(path)
+                    }
+                },
+            );
+            assert_eq!(result, Err(expected), "query {fail_at}, {kind:?}");
+            assert_eq!(calls.load(Ordering::SeqCst), fail_at + 1);
+            assert_eq!(fs::read(&w.primary).unwrap(), primary);
+            assert_eq!(w.remote_bytes(), remote);
+            assert_eq!(fs::read(w.checkpoint_file()).unwrap(), checkpoint);
+        }
+    }
+}
+
+#[test]
 #[cfg_attr(
     windows,
     ignore = "native Windows identity; isolated integration runner only"
@@ -1654,7 +1696,7 @@ fn windows_integration_secondary_guard_rejects_a_hard_link_to_primary() {
 #[cfg(windows)]
 #[test]
 #[ignore = "native Windows identity and junctions; isolated integration runner only"]
-fn windows_integration_secondary_guard_rejects_aliases_and_identity_errors() {
+fn windows_integration_secondary_guard_rejects_aliases_and_allows_attribute_queries() {
     use std::os::windows::fs::OpenOptionsExt;
     assert_eq!(
         std::env::var("MYPASS_WINDOWS_INTEGRATION_TESTS").as_deref(),
@@ -1694,6 +1736,9 @@ fn windows_integration_secondary_guard_rejects_aliases_and_identity_errors() {
     let result = validate_folder(junction.to_str().unwrap(), &w.primary, FILE);
     fs::remove_dir(&junction).unwrap();
     assert_eq!(result, Err(SecondaryUnavailable::InvalidFolder));
+    // CreateFileW dwShareMode does not restrict attribute/extended-attribute requests:
+    // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew
+    // Identity (FILE_READ_ATTRIBUTES) and canonicalization can succeed while data reads fail.
     let exclusive = fs::OpenOptions::new()
         .read(true)
         .share_mode(0)
@@ -1701,8 +1746,9 @@ fn windows_integration_secondary_guard_rejects_aliases_and_identity_errors() {
         .unwrap();
     assert_eq!(
         validate_folder(w.folder.to_str().unwrap(), &w.primary, FILE),
-        Err(SecondaryUnavailable::InvalidFolder)
+        Ok(fs::canonicalize(&w.folder).unwrap())
     );
+    assert!(fs::read(&w.primary).is_err());
     drop(exclusive);
     let exclusive = fs::OpenOptions::new()
         .read(true)
@@ -1711,8 +1757,9 @@ fn windows_integration_secondary_guard_rejects_aliases_and_identity_errors() {
         .unwrap();
     assert_eq!(
         validate_folder(w.folder.to_str().unwrap(), &w.primary, FILE),
-        Err(SecondaryUnavailable::InvalidFolder)
+        Ok(fs::canonicalize(&w.folder).unwrap())
     );
+    assert!(fs::read(w.remote()).is_err());
     drop(exclusive);
     assert!(validate_folder(w.folder.to_str().unwrap(), &w.primary, FILE).is_ok());
 }
