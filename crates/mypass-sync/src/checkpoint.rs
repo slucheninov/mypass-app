@@ -28,8 +28,8 @@ pub struct SyncCheckpoint {
     /// Lower-case hex SHA-256 of the remote file.
     pub sha256_hex: String,
     /// Root group UUID of the vault this checkpoint was taken for; `None` for a bare content
-    /// stamp. The engine pushes without merging only when it equals the local vault's root UUID,
-    /// so a checkpoint store shared by mistake never lets one vault overwrite another's copy.
+    /// stamp. This associates the stamp with its vault; it does not prove that a primary
+    /// reloaded or replaced since publication still contains the secondary's content.
     pub vault_uuid: Option<String>,
 }
 

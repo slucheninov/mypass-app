@@ -1533,3 +1533,86 @@ fn a_volume_without_a_safe_replacement_is_an_unsupported_folder() {
         serde_json::json!({"state": "unavailable", "reason": "unsupportedFolder"})
     );
 }
+
+/// FR-C2: a checkpoint describes the secondary, not every later incarnation of primary content.
+#[test]
+fn clean_primary_reload_merges_checkpointed_secondary_only_entries() {
+    let w = world();
+    w.open();
+    let base = w.session.with_db(Clone::clone).unwrap();
+    w.foreign_add("secondary-only");
+    w.sync.sync_now().unwrap();
+    assert_eq!(w.primary_titles(), v(&["secondary-only"]));
+    let checkpoint = fs::read(w.checkpoint_file()).unwrap();
+    let mut delayed = base;
+    add_to(
+        &mut delayed,
+        "delayed-primary-only",
+        Timestamp(1_700_000_600),
+    );
+    fs::write(&w.primary, delayed.save(&pw()).unwrap()).unwrap();
+    w.session.check_external_change().unwrap();
+    assert_eq!(w.live_titles(), v(&["delayed-primary-only"]));
+    assert_eq!(fs::read(w.checkpoint_file()).unwrap(), checkpoint);
+    w.sync.sync_now().unwrap();
+    assert_eq!(
+        w.remote_titles(),
+        v(&["delayed-primary-only", "secondary-only"])
+    );
+    assert_eq!(w.primary_titles(), w.remote_titles());
+}
+
+#[test]
+fn restart_with_a_delayed_primary_merges_checkpointed_secondary_only_entries() {
+    let w = world();
+    w.open();
+    let base = w.session.with_db(Clone::clone).unwrap();
+    w.foreign_add("secondary-only");
+    w.sync.sync_now().unwrap();
+    assert_eq!(w.primary_titles(), v(&["secondary-only"]));
+    let mut delayed = base;
+    add_to(
+        &mut delayed,
+        "delayed-primary-only",
+        Timestamp(1_700_000_600),
+    );
+    fs::write(&w.primary, delayed.save(&pw()).unwrap()).unwrap();
+    let w = w.restart();
+    assert_eq!(
+        w.remote_titles(),
+        v(&["delayed-primary-only", "secondary-only"])
+    );
+    assert_eq!(w.primary_titles(), w.remote_titles());
+}
+
+#[test]
+fn primary_reload_before_checkpoint_publication_cannot_authorize_content_loss() {
+    let w = world();
+    w.open();
+    let mut delayed = w.session.with_db(Clone::clone).unwrap();
+    add_to(
+        &mut delayed,
+        "delayed-primary-only",
+        Timestamp(1_700_000_600),
+    );
+    w.foreign_add("secondary-only");
+    let session = w.session.clone();
+    let primary = w.primary.clone();
+    let reached = Arc::new(AtomicBool::new(false));
+    let seen = reached.clone();
+    w.set_hook(&w.sync.probe().before_commit, move || {
+        if !seen.swap(true, Ordering::SeqCst) {
+            fs::write(&primary, delayed.save(&pw()).unwrap()).unwrap();
+            session.check_external_change().unwrap();
+        }
+    });
+    w.sync.sync_now().unwrap();
+    assert!(reached.load(Ordering::SeqCst));
+    assert_eq!(w.live_titles(), v(&["delayed-primary-only"]));
+    w.sync.sync_now().unwrap();
+    assert_eq!(
+        w.remote_titles(),
+        v(&["delayed-primary-only", "secondary-only"])
+    );
+    assert_eq!(w.primary_titles(), w.remote_titles());
+}

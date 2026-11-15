@@ -905,3 +905,62 @@ fn withdrawal_after_the_read_stops_before_decrypting_the_remote() {
     assert_eq!(fx.probe.write_attempts.load(Ordering::SeqCst), 0);
     assert_eq!(fx.remote_bytes(), before);
 }
+
+#[test]
+fn checkpoint_after_primary_replacement_never_authorizes_a_blind_push() {
+    for mode in [SyncMode::Pull, SyncMode::Push, SyncMode::PushIfChanged] {
+        let fx = Fx::new();
+        let mut a = fast_db("v");
+        add(&mut a, "A");
+        let mut ab = a.clone();
+        add(&mut ab, "B");
+        run(&fx.engine, &ab, true).unwrap();
+        let mut ac = a;
+        add(&mut ac, "C");
+        let result = fx.engine.sync(&ac, &pw(), mode).unwrap();
+        assert_eq!(
+            titles(merged(result).database()),
+            ["A", "B", "C"],
+            "mode={mode:?}"
+        );
+        assert_eq!(titles(&fx.remote_db()), ["A", "B", "C"]);
+    }
+}
+
+#[test]
+fn password_rotation_merges_verified_secondary_content_after_primary_replacement() {
+    let fx = Fx::new();
+    let a = fast_db("v");
+    let mut ab = a.clone();
+    add(&mut ab, "B");
+    run(&fx.engine, &ab, true).unwrap();
+    let mut ac = a;
+    add(&mut ac, "C");
+    let new_password = SecretString::from("new password");
+    let m = merged(
+        fx.engine
+            .sync(&ac, &new_password, SyncMode::PushIfChanged)
+            .unwrap(),
+    );
+    assert_eq!(titles(m.database()), ["B", "C"]);
+    assert_eq!(
+        titles(&Database::open(&fx.remote_bytes(), &new_password).unwrap()),
+        ["B", "C"]
+    );
+}
+
+#[test]
+fn persisted_checkpoint_cannot_authorize_overwriting_an_unreadable_secondary() {
+    let fx = Fx::new();
+    let local = fast_db("v");
+    run(&fx.engine, &local, true).unwrap();
+    let before = fx.remote_bytes();
+    let restarted = SyncEngine::new(fx.probe.clone(), fx.store.clone());
+    assert_eq!(
+        restarted
+            .sync(&local, &SecretString::from("new password"), SyncMode::Push)
+            .unwrap_err(),
+        SyncError::RemotePasswordMismatch
+    );
+    assert_eq!(fx.remote_bytes(), before);
+}

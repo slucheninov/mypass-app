@@ -2,9 +2,10 @@
 //!
 //! Data safety rules, in order of priority:
 //! - A remote copy is never overwritten unless its current content is either already merged into
-//!   what is written, or is exactly the content this device wrote last time (the checkpoint).
-//! - A remote that does not open with the session password, is not a vault, is damaged, is too
-//!   large, is not a regular file or belongs to another vault is left untouched.
+//!   what is written. A checkpoint alone never proves what a later primary still contains.
+//! - A remote must decrypt with the session password or match an exact copy this active engine
+//!   already verified (password rotation). Unreadable, damaged, oversized, non-regular or
+//!   different-vault content is left untouched.
 //! - Every write is conditional ([`StorageBackend::write_if`]): it replaces the remote only while
 //!   the remote still holds the exact content this attempt read (or is still missing), checked
 //!   by the storage right before the replacement. A changed remote makes the attempt start over
@@ -12,13 +13,10 @@
 //!   the storage ([`WriteOutcome::Displaced`]) and merged into the next attempt instead of being
 //!   lost; after a successful write the remote is read back, and a writer that replaced it in
 //!   the meantime is merged too, never described by our checkpoint.
-//! - **The checkpoint is a promise about the durable local vault**: "the remote holds nothing
-//!   that the local vault on disk lacks". That is what lets a later push write the local vault
-//!   over the remote without merging. The engine therefore never stores a checkpoint itself:
-//!   every result that would record one carries a [`PendingCheckpoint`], and the caller commits
-//!   it with [`SyncEngine::commit`] only after the local state it synced, and any merge it
-//!   adopted, is durable on the local disk. A crash at any point before that commit leaves the
-//!   old checkpoint, so the next sync merges again (idempotent), never pushes blindly.
+//! - A checkpoint records the secondary ciphertext, not the provenance of a later primary.
+//!   Even on a checkpoint hit the engine merges the verified remote content: an external reload
+//!   or a restart may have replaced the primary with a delayed branch. Checkpoints are published
+//!   only after local durability, but never authorize a blind push.
 //! - The engine never mutates `local`.
 use crate::{
     backend::{StorageBackend, StorageError, WriteOutcome},
@@ -178,6 +176,10 @@ pub struct SyncEngine {
     checkpoints: Arc<dyn SyncCheckpointStore>,
     echo: Option<Arc<EchoFilter>>,
     gate: Mutex<()>,
+    /// One verified secondary copy, keyed by its exact ciphertext digest. Allows an active
+    /// engine to merge the old-password copy during password rotation without retaining a
+    /// password. Dropped with the engine (the session drops its arm on lock/switch).
+    verified: Mutex<Option<([u8; 32], Database)>>,
 }
 
 impl fmt::Debug for SyncEngine {
@@ -256,6 +258,7 @@ impl SyncEngine {
             checkpoints,
             echo: None,
             gate: Mutex::new(()),
+            verified: Mutex::new(None),
         }
     }
 
@@ -285,9 +288,7 @@ impl SyncEngine {
     ///
     /// - Remote missing: write `local` (never over a file that appeared meanwhile),
     ///   [`SyncResult::UploadedInitial`].
-    /// - Remote equals the checkpoint of this vault: per `mode`, [`SyncResult::UploadedLocal`]
-    ///   or [`SyncResult::Unchanged`].
-    /// - Otherwise open the remote with `password` and merge. Equal content is
+    /// - Remote present: verify and merge its content, including on checkpoint hits. Equal content is
     ///   [`SyncResult::Unchanged`] with no write (so two devices never ping-pong fresh encodings
     ///   of the same vault); a remote with nothing new gets the merge written and is
     ///   [`SyncResult::UploadedLocal`]; else [`SyncResult::Merged`].
@@ -356,30 +357,46 @@ impl SyncEngine {
         if !still_current() {
             return Err(SyncError::Cancelled);
         }
-        if ours {
-            match mode {
-                SyncMode::Pull => return Ok(Attempt::Done(SyncResult::Unchanged(None))),
-                SyncMode::PushIfChanged if self.holds_exactly(&remote_bytes, local, password) => {
-                    return Ok(Attempt::Done(SyncResult::Unchanged(None)));
-                }
-                SyncMode::Push | SyncMode::PushIfChanged => {}
+        let (remote_db, needs_rekey) = match Database::open(&remote_bytes, password) {
+            Ok(db) => (db, false),
+            Err(KdbxError::WrongPassword) => {
+                // Only exact, previously verified ciphertext can use the retained content.
+                // A persisted checkpoint is insufficient after a restart: fail closed then.
+                let cached = self.verified.lock().unwrap_or_else(PoisonError::into_inner);
+                let db = cached
+                    .as_ref()
+                    .filter(|(hash, _)| *hash == digest(&remote_bytes))
+                    .map(|(_, db)| db.clone())
+                    .ok_or(SyncError::RemotePasswordMismatch)?;
+                (db, true)
+            }
+            Err(e) => return Err(remote_open_error(e)),
+        };
+        if remote_db.root.uuid != local.root.uuid {
+            return Err(SyncError::RemoteIsDifferentVault);
+        }
+        self.remember_verified(&remote_bytes, &remote_db);
+        let merged = merge(base, &remote_db);
+        // `Database` equality depends on child order and `merge` sorts by UUID, so each side is
+        // compared in its canonical (self-merged) form: equal exactly when it lacks nothing.
+        let remote_has_all = merged == merge(&remote_db, &remote_db);
+        let local_has_all = merged == merge(local, local);
+        if ours && local_has_all && mode == SyncMode::Pull {
+            return Ok(Attempt::Done(SyncResult::Unchanged(None)));
+        }
+        if ours && remote_has_all && local_has_all {
+            if mode == SyncMode::PushIfChanged
+                && !needs_rekey
+                && same_format(&remote_db.settings, &local.settings)
+            {
+                return Ok(Attempt::Done(SyncResult::Unchanged(None)));
             }
             let bytes = encode(local, password)?;
             let expected = digest(&remote_bytes);
             let write = Write::new(Some(&expected), &bytes, local, false, Upload::Local);
             return self.install(write, password, local, vault, still_current);
         }
-
-        let remote_db = Database::open(&remote_bytes, password).map_err(remote_open_error)?;
-        if remote_db.root.uuid != local.root.uuid {
-            return Err(SyncError::RemoteIsDifferentVault);
-        }
-        let merged = merge(base, &remote_db);
-        // `Database` equality depends on child order and `merge` sorts by UUID, so each side is
-        // compared in its canonical (self-merged) form: equal exactly when it lacks nothing.
-        let remote_has_all = merged == merge(&remote_db, &remote_db);
-        let local_has_all = merged == merge(local, local);
-        if remote_has_all {
+        if remote_has_all && !needs_rekey {
             // Nothing to write: the remote already holds every change.
             let cp = PendingCheckpoint(self.checkpoint_of(&remote_bytes, vault));
             if local_has_all {
@@ -402,23 +419,9 @@ impl SyncEngine {
         self.install(write, password, local, vault, still_current)
     }
 
-    /// Whether the remote (this device's last write) opens with `password` and holds exactly
-    /// the local content in the same file format, so a reconciling push can be skipped.
-    fn holds_exactly(
-        &self,
-        remote_bytes: &[u8],
-        local: &Database,
-        password: &SecretString,
-    ) -> bool {
-        match Database::open(remote_bytes, password) {
-            Ok(remote) => {
-                remote.root.uuid == local.root.uuid
-                    && merge(&remote, &remote) == merge(local, local)
-                    && same_format(&remote.settings, &local.settings)
-            }
-            // A new password (or anything else that keeps it from opening): push.
-            Err(_) => false,
-        }
+    fn remember_verified(&self, bytes: &[u8], db: &Database) {
+        *self.verified.lock().unwrap_or_else(PoisonError::into_inner) =
+            Some((digest(bytes), db.clone()));
     }
 
     /// One conditional write and what it means for the attempt.
@@ -454,6 +457,7 @@ impl SyncEngine {
                 if self.remote.read()?.as_deref() != Some(write.bytes) {
                     return Ok(Attempt::Rebase(Box::new(write.content.clone())));
                 }
+                self.remember_verified(write.bytes, write.content);
                 let cp = PendingCheckpoint(self.checkpoint_of(write.bytes, vault));
                 Ok(Attempt::Done(if write.adopt {
                     SyncResult::Merged(Box::new(MergedRemote {
