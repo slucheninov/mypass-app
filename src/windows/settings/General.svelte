@@ -35,7 +35,8 @@
     return error === null;
   }
 
-  // ---- launch at login: the platform status drives the row, re-read on open and after each toggle ----
+  // Windows keeps user intent separate from OS approval; macOS displays effective status.
+  // Re-read status on open and after each toggle.
   let loginStatus = $state<LoginItemStatus | null>(null);
   let loginError = $state<string | null>(null);
 
@@ -108,11 +109,15 @@
 
   {#if loginStatus !== null && loginStatus !== "unsupported"}
     <Row label={t("Launch at login")}>
-      <Toggle checked={loginStatus === "enabled"} label={t("Launch at login")} onchange={toggleLogin} />
+      <Toggle
+        checked={platform.os === "windows" ? settings.value.launchAtLogin : loginStatus === "enabled"}
+        label={t("Launch at login")}
+        onchange={toggleLogin}
+      />
       {#snippet hint()}
         {#if loginStatus === "requiresApproval"}
           {#if platform.os === "windows"}
-            {t("Approval required. Open Windows Settings > Apps > Startup and allow MyPass.")}
+            {t("Disabled in Windows Startup settings. Open Windows Settings > Apps > Startup and allow MyPass.")}
           {:else}
             {t("Approval required. Open System Settings > General > Login Items and allow MyPass.")}
           {/if}
