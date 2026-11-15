@@ -16,16 +16,17 @@ import { settings } from "./settings.svelte";
  * language are applied even if one part cannot start; a failing part is reported, the rest keeps running.
  * `entries: false` is for a window that shows no entries (settings): it keeps the lock hooks and the
  * activity reporter but never fetches the list or the sidebar. `saveToast: false` (tray panel, settings)
- * leaves the sticky "Saving failed" toast to the main window.
+ * leaves the sticky "Saving failed" toast to the main window. `sync: false` keeps the tray
+ * panel from querying sync/storage state that it does not render or have permission to read.
  */
-export async function startStores(opts: { entries?: boolean; saveToast?: boolean } = {}): Promise<() => void> {
+export async function startStores(opts: { entries?: boolean; saveToast?: boolean; sync?: boolean } = {}): Promise<() => void> {
   const withEntries = opts.entries ?? true;
   session.saveToasts = opts.saveToast ?? true;
   navigation.start();
   const stopActivity = startActivityReporter();
   const stopDevice = device.start();
   const stopUpdate = update.start();
-  const stopSync = sync.start();
+  const stopSync = opts.sync === false ? () => {} : sync.start();
   const results = await Promise.allSettled([
     settings.start(),
     withEntries ? entries.start() : Promise.resolve(),

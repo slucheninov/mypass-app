@@ -15,6 +15,33 @@
         { "url": "https://support.1password.com/*" },
         { "url": "https://support.apple.com/*" }
       ]
-    }
+    },
+    "allow-app-info",
+    "allow-app-record-activity",
+    "allow-app-reveal-backups",
+    "allow-backup-list",
+    "allow-backup-restore",
+    "allow-browser-reinstall-host",
+    "allow-browser-reset-pairings",
+    "allow-browser-revoke",
+    "allow-browser-show-extension-folder",
+    "allow-browser-status",
+    "allow-device-unlock-configure",
+    "allow-device-unlock-status",
+    "allow-settings-get",
+    "allow-settings-login-item-status",
+    "allow-settings-update",
+    "allow-sync-connect-secondary",
+    "allow-sync-disconnect-secondary",
+    "allow-sync-now",
+    "allow-sync-status",
+    "allow-update-check-now",
+    "allow-update-open-release",
+    "allow-update-status",
+    "allow-vault-location-change",
+    "allow-vault-location-pick",
+    "allow-vault-location-probe",
+    "allow-vault-status",
+    "allow-vault-storage-status"
   ]
 }

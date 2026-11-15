@@ -228,6 +228,7 @@ change is done.
   opens the save dialog itself. Only vault open and create take a path from the UI. Capabilities
   grant no `fs`, `shell`, `http`, `clipboard-manager` or `global-shortcut` permission to any window
   (pinned by `capabilities_grant_no_fs_shell_or_clipboard_read`).
+  A build manifest and per-window command ACLs grant each window only its UI commands.
 - **Shell.** Decisions are plain functions, the Tauri glue is thin: `shell.rs` (settings effects, close
   and quit rules, login-item reconcile, `WindowOps`), `tray.rs` (menu model and ids), `hotkeys.rs`
   (plan, `HotkeyRegistry` seam), `lifecycle.rs` (platform events into auto-lock, the quit flow,

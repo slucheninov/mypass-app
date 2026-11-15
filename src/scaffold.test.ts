@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { clearMocks, mockWindows } from "@tauri-apps/api/mocks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { windowCommands } from "./test/windowCommands";
 import { sourceFiles } from "./test/sourceScan";
 import { UNTRANSLATED_TEXT_ALLOW_LIST, markupOf, untranslatedFindings } from "./test/textScan";
 
@@ -337,5 +338,23 @@ describe("stage five command boundaries", () => {
     const section = readFileSync(resolve(process.cwd(), "src/windows/settings/DeviceUnlockSection.svelte"), "utf8");
     expect(section).toContain("field?.take()");
     expect(section).not.toMatch(/settings\.update\(\{\s*(unlockTouchIdEnabled|unlockMacPasswordEnabled)/);
+  });
+});
+
+// Moving a component (or adding an API call in one of its imported screens) must also update
+// that window's reviewed capability. Shared store methods are followed by reference, so a
+// status read cannot accidentally justify granting the tray a settings-only mutation.
+describe("window command ACL", () => {
+  it.each([
+    ["main", "MainApp"],
+    ["settings", "SettingsApp"],
+    ["tray-panel", "TrayPanel"],
+  ])("%s grants every command referenced by its UI", (label, component) => {
+    const capability = JSON.parse(readFileSync(resolve(`src-tauri/capabilities/${label}.json`), "utf8"));
+    const grants = new Set(capability.permissions.filter((p: unknown) => typeof p === "string"));
+    const calls = windowCommands(`src/windows/${component}.svelte`);
+    expect(calls.size).toBeGreaterThan(0);
+    const missing = [...calls].filter(name => !grants.has(`allow-${name.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`)}`));
+    expect(missing).toEqual([]);
   });
 });

@@ -25,6 +25,11 @@ use std::path::Path;
 use specta_typescript::Typescript;
 use tauri_specta::{collect_commands, collect_events, Builder, Commands};
 
+// One context macro invocation also avoids duplicate embedded plist symbols in macOS tests.
+fn app_context() -> tauri::Context<tauri::Wry> {
+    tauri::generate_context!()
+}
+
 /// Every command, in one place (the tests read their names from here).
 pub fn commands() -> Commands<tauri::Wry> {
     use commands::{app, attachment, backup, browser, draft, entry, generator, group, import};
@@ -183,7 +188,7 @@ pub fn run() -> tauri::Result<()> {
             shell_runtime::start(app);
             Ok(())
         })
-        .build(tauri::generate_context!())?;
+        .build(app_context())?;
     app.run(|app, event| shell_runtime::on_run_event(app, &event));
     Ok(())
 }
@@ -271,7 +276,7 @@ mod tests {
         assert_eq!(panel["height"], 440);
     }
 
-    fn command_names() -> Vec<String> {
+    pub(super) fn command_names() -> Vec<String> {
         let mut types = specta::Types::default();
         let collected = (commands().1)(&mut types);
         let mut names: Vec<String> = collected
@@ -501,6 +506,8 @@ mod tests {
         let all = capabilities();
         let sorted = |id: &str| {
             let mut set = all.iter().find(|c| c.0 == id).unwrap().2.clone();
+            // App command grants are pinned separately in acl_tests.
+            set.retain(|permission| !permission.starts_with("allow-"));
             set.sort();
             set
         };
@@ -676,3 +683,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod acl_tests;
