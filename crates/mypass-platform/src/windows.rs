@@ -80,17 +80,23 @@ pub fn resolve_windows() -> PlatformResult<AppPaths> {
     Ok(AppPaths::windows(&roaming, &local, &profile))
 }
 
-/// Native services are replaced batch by batch; never construct unimplemented native bodies.
+/// Built by the shell setup on the main UI thread, before commands can query layouts.
 pub(crate) fn platform(paths: &AppPaths) -> crate::Platform {
-    let mut platform = crate::fallback::platform(paths);
-    platform.secrets = std::sync::Arc::new(crate::DpapiSecretStore::app(paths));
-    platform.shared_secrets = crate::app_shared_store(paths, None).1;
-    platform.host_registrar =
-        std::sync::Arc::new(crate::windows_host_install::WindowsHostRegistrar::new(
-            paths.clone(),
-            std::sync::Arc::new(WinRegistry::new()),
-        ));
-    platform
+    crate::Platform {
+        events: std::sync::Arc::new(WinSystemEvents),
+        clipboard: std::sync::Arc::new(WinClipboard),
+        secrets: std::sync::Arc::new(crate::DpapiSecretStore::app(paths)),
+        shared_secrets: crate::app_shared_store(paths, None).1,
+        device_unlock: std::sync::Arc::new(crate::fallback::UnsupportedDeviceUnlock),
+        host_registrar: std::sync::Arc::new(
+            crate::windows_host_install::WindowsHostRegistrar::new(
+                paths.clone(),
+                std::sync::Arc::new(WinRegistry::new()),
+            ),
+        ),
+        launch_at_login: std::sync::Arc::new(crate::fallback::UnsupportedLaunchAtLogin),
+        keyboard_layout: std::sync::Arc::new(WinKeyboardLayout::capture()),
+    }
 }
 
 // DPAPI, protected file I/O and unsigned Windows listener ownership. All pointer operations
@@ -1223,5 +1229,889 @@ impl InstallDirectory for HostDirectory {
                     .map_err(|_| invalid())
             })
             .collect()
+    }
+}
+
+// Desktop services: each HWND and registration is owned and destroyed on its creating thread.
+use crate::windows_desktop::{self as desktop, ClipboardTransaction, LayoutPoll, Message};
+use crate::{
+    ClipboardStamp, KeyboardLayout, SecureClipboard, Subscription, SystemEvent, SystemEvents,
+};
+use std::{
+    cell::RefCell,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc,
+    },
+    thread::{self, JoinHandle},
+};
+use windows::Win32::{
+    Foundation::{GlobalFree, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
+    Globalization::{GetLocaleInfoEx, LCIDToLocaleName, LOCALE_SISO639LANGNAME},
+    System::{
+        DataExchange::*, Diagnostics::Debug::ReadProcessMemory, LibraryLoader::GetModuleHandleW,
+        Memory::*, Power::*, RemoteDesktop::*, SystemServices::GUID_CONSOLE_DISPLAY_STATE,
+    },
+    UI::{Input::KeyboardAndMouse::GetKeyboardLayout, WindowsAndMessaging::*},
+};
+
+pub struct WinSystemEvents;
+impl SystemEvents for WinSystemEvents {
+    fn subscribe(
+        &self,
+        sink: Arc<dyn Fn(SystemEvent) + Send + Sync>,
+    ) -> PlatformResult<Subscription> {
+        let owner = DesktopThread::start(WindowMode::Events(sink))?;
+        Ok(Subscription::new(move || drop(owner)))
+    }
+}
+
+/// Construct on the main MyPass UI thread. Command workers never become the fallback thread.
+pub struct WinKeyboardLayout {
+    ui_thread: u32,
+}
+impl WinKeyboardLayout {
+    pub fn capture() -> Self {
+        // SAFETY: returns this thread's identity without borrowing OS memory.
+        Self {
+            ui_thread: unsafe { GetCurrentThreadId() },
+        }
+    }
+}
+impl KeyboardLayout for WinKeyboardLayout {
+    fn current(&self) -> PlatformResult<Option<String>> {
+        query_layout(self.ui_thread)
+    }
+    fn subscribe(
+        &self,
+        sink: Arc<dyn Fn(Option<String>) + Send + Sync>,
+    ) -> PlatformResult<Subscription> {
+        let owner = DesktopThread::start(layout_mode(self.ui_thread, sink)?)?;
+        Ok(Subscription::new(move || drop(owner)))
+    }
+}
+fn query_layout(ui_thread: u32) -> PlatformResult<Option<String>> {
+    let mut pid = 0;
+    // SAFETY: the optional foreground HWND can disappear; these queries then return zero.
+    // pid is a valid writable DWORD. Only our own process's foreground thread is selected.
+    let foreground = unsafe { GetForegroundWindow() };
+    // SAFETY: valid local output; handles are only queried, never dereferenced by Rust.
+    let foreground_thread = unsafe { GetWindowThreadProcessId(foreground, Some(&mut pid)) };
+    // SAFETY: process identity is a scalar, no handle ownership.
+    let current_pid = unsafe { GetCurrentProcessId() };
+    let target = desktop::layout_thread(current_pid, pid, foreground_thread, ui_thread);
+    // SAFETY: target is a captured MyPass thread id, never an arbitrary command-worker id.
+    let hkl = unsafe { GetKeyboardLayout(target) };
+    if hkl.0.is_null() {
+        return Ok(None);
+    }
+    let lang = (hkl.0 as usize & 0xffff) as u16;
+    let mut name = [0u16; 85];
+    // SAFETY: buffers are sized slices and LANGID is promoted to its default-sort LCID.
+    let count = unsafe { LCIDToLocaleName(u32::from(lang), Some(&mut name), 0) };
+    let mut iso = [0u16; 16];
+    let count = if count > 0 {
+        // SAFETY: a successful LCIDToLocaleName terminated name within the live buffer.
+        unsafe {
+            GetLocaleInfoEx(
+                PCWSTR(name.as_ptr()),
+                LOCALE_SISO639LANGNAME,
+                Some(&mut iso),
+            )
+        }
+    } else {
+        0
+    };
+    let label = usize::try_from(count)
+        .ok()
+        .and_then(|n| n.checked_sub(1))
+        .and_then(|n| iso.get(..n))
+        .and_then(|s| String::from_utf16(s).ok());
+    Ok(desktop::layout_label(lang, label.as_deref()))
+}
+fn layout_mode(
+    ui_thread: u32,
+    sink: Arc<dyn Fn(Option<String>) + Send + Sync>,
+) -> PlatformResult<WindowMode> {
+    Ok(WindowMode::Layout {
+        ui_thread,
+        poll: LayoutPoll::new(query_layout(ui_thread)?),
+        sink,
+    })
+}
+
+enum WindowMode {
+    Events(Arc<dyn Fn(SystemEvent) + Send + Sync>),
+    Layout {
+        ui_thread: u32,
+        poll: LayoutPoll,
+        sink: Arc<dyn Fn(Option<String>) + Send + Sync>,
+    },
+    Clipboard,
+}
+struct WindowState {
+    active: Arc<AtomicBool>,
+    mode: RefCell<WindowMode>,
+}
+struct HiddenWindow {
+    hwnd: HWND,
+    class: Vec<u16>,
+    instance: HINSTANCE,
+}
+impl HiddenWindow {
+    fn new(state: &WindowState) -> PlatformResult<Self> {
+        let class = to_wide(OsStr::new(&format!(
+            "MyPass.Desktop.{}",
+            uuid::Uuid::new_v4()
+        )))?;
+        // SAFETY: query this loaded executable, without transferring module ownership.
+        let instance = HINSTANCE(unsafe { GetModuleHandleW(None) }.map_err(win_error)?.0);
+        let wc = WNDCLASSW {
+            lpfnWndProc: Some(desktop_proc),
+            hInstance: instance,
+            lpszClassName: PCWSTR(class.as_ptr()),
+            ..Default::default()
+        };
+        // SAFETY: wc and its class name remain live through registration; callback is static.
+        if unsafe { RegisterClassW(&wc) } == 0 {
+            return Err(win_error(windows::core::Error::from_thread()));
+        }
+        let mut result = Self {
+            hwnd: HWND::default(),
+            class,
+            instance,
+        };
+        // SAFETY: state is pinned in a Box by the caller until AFTER this HWND is destroyed.
+        // WS_POPUP without WS_VISIBLE/parent is a hidden TOP-LEVEL window, not HWND_MESSAGE:
+        // broadcast power notifications need a top-level recipient. WS_EX_TOOLWINDOW hides taskbar UI.
+        result.hwnd = unsafe {
+            CreateWindowExW(
+                WS_EX_TOOLWINDOW,
+                PCWSTR(result.class.as_ptr()),
+                w!("MyPass desktop service"),
+                WS_POPUP,
+                0,
+                0,
+                0,
+                0,
+                None,
+                None,
+                Some(instance),
+                Some(std::ptr::from_ref(state).cast()),
+            )
+        }
+        .map_err(win_error)?;
+        Ok(result)
+    }
+}
+impl Drop for HiddenWindow {
+    fn drop(&mut self) {
+        // SAFETY: this owner never leaves the creating thread; destroy precedes state/class drop.
+        unsafe {
+            if !self.hwnd.0.is_null() && IsWindow(Some(self.hwnd)).as_bool() {
+                let _ = DestroyWindow(self.hwnd);
+            }
+            let _ = UnregisterClassW(PCWSTR(self.class.as_ptr()), Some(self.instance));
+        }
+    }
+}
+
+struct Notifications {
+    hwnd: HWND,
+    session: bool,
+    suspend: Option<HPOWERNOTIFY>,
+    display: Option<HPOWERNOTIFY>,
+    timer: bool,
+}
+impl Notifications {
+    fn register(hwnd: HWND, mode: &WindowMode) -> PlatformResult<Self> {
+        let mut owner = Self {
+            hwnd,
+            session: false,
+            suspend: None,
+            display: None,
+            timer: false,
+        };
+        match mode {
+            WindowMode::Events(_) => {
+                // SAFETY: live HWND on this thread. Each successful registration is immediately
+                // recorded in RAII ownership, so any later failure rolls all earlier ones back.
+                unsafe { WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION) }
+                    .map_err(win_error)?;
+                owner.session = true;
+                // SAFETY: valid HWND recipient with WINDOW_HANDLE flag, retained until unregister.
+                owner.suspend = Some(
+                    unsafe {
+                        RegisterSuspendResumeNotification(
+                            HANDLE(hwnd.0),
+                            DEVICE_NOTIFY_WINDOW_HANDLE,
+                        )
+                    }
+                    .map_err(win_error)?,
+                );
+                // SAFETY: static GUID and same owned HWND as above.
+                owner.display = Some(
+                    unsafe {
+                        RegisterPowerSettingNotification(
+                            HANDLE(hwnd.0),
+                            &GUID_CONSOLE_DISPLAY_STATE,
+                            DEVICE_NOTIFY_WINDOW_HANDLE,
+                        )
+                    }
+                    .map_err(win_error)?,
+                );
+            }
+            WindowMode::Layout { .. } => {
+                // SAFETY: window-owned timer dispatched only by this thread's message loop;
+                // no callback pointer and no timer exists outside a live subscription.
+                if unsafe { SetTimer(Some(hwnd), 1, 500, None) } == 0 {
+                    return Err(win_error(windows::core::Error::from_thread()));
+                }
+                owner.timer = true;
+            }
+            WindowMode::Clipboard => {}
+        }
+        Ok(owner)
+    }
+}
+impl Drop for Notifications {
+    fn drop(&mut self) {
+        // SAFETY: all handles were returned by the matching registration; this runs before HWND
+        // destruction, on its owner thread. Reverse-order cleanup also handles partial startup.
+        unsafe {
+            if self.timer {
+                let _ = KillTimer(Some(self.hwnd), 1);
+            }
+            if let Some(h) = self.display.take() {
+                let _ = UnregisterPowerSettingNotification(h);
+            }
+            if let Some(h) = self.suspend.take() {
+                let _ = UnregisterSuspendResumeNotification(h);
+            }
+            if self.session {
+                let _ = WTSUnRegisterSessionNotification(self.hwnd);
+            }
+        }
+    }
+}
+
+/// Scalar handle storage permits sharing the kernel event without making a thread-affine HWND
+/// Send. The last Arc closes it only after both cancellation and the message loop finish.
+struct StopEvent(usize);
+impl StopEvent {
+    fn new() -> PlatformResult<Arc<Self>> {
+        // SAFETY: unnamed manual-reset event, initially unsignaled, uniquely owned on success.
+        let handle = unsafe { CreateEventW(None, true, false, None) }.map_err(win_error)?;
+        Ok(Arc::new(Self(handle.0 as usize)))
+    }
+    fn handle(&self) -> HANDLE {
+        HANDLE(self.0 as *mut _)
+    }
+    fn signal(&self) {
+        // SAFETY: this Arc retains a live kernel event; it is closed only on last-owner drop.
+        unsafe {
+            let _ = SetEvent(self.handle());
+        }
+    }
+    fn stopped(&self) -> bool {
+        // SAFETY: same event lifetime; a zero-time wait never blocks.
+        unsafe { WaitForSingleObject(self.handle(), 0).0 == 0 }
+    }
+}
+impl Drop for StopEvent {
+    fn drop(&mut self) {
+        // SAFETY: last unique owner of the CreateEventW allocation, after all users finished.
+        unsafe {
+            let _ = CloseHandle(self.handle());
+        }
+    }
+}
+struct DesktopThread {
+    #[cfg(test)]
+    hwnd: usize,
+    active: Arc<AtomicBool>,
+    stop: Arc<StopEvent>,
+    join: Option<JoinHandle<()>>,
+}
+impl DesktopThread {
+    fn start(mode: WindowMode) -> PlatformResult<Self> {
+        let active = Arc::new(AtomicBool::new(true));
+        let state_active = active.clone();
+        let stop = StopEvent::new()?;
+        let worker_stop = stop.clone();
+        let (ready, receive) = mpsc::sync_channel(1);
+        let join = thread::Builder::new()
+            .name("mypass-desktop".into())
+            .spawn(move || {
+                let state = Box::new(WindowState {
+                    active: state_active,
+                    mode: RefCell::new(mode),
+                });
+                let run = || -> PlatformResult<()> {
+                    let window = HiddenWindow::new(&state)?;
+                    let registrations = Notifications::register(window.hwnd, &state.mode.borrow())?;
+                    if ready.send(Ok(window.hwnd.0 as usize)).is_err() {
+                        return Ok(());
+                    }
+                    let mut message = MSG::default();
+                    'messages: loop {
+                        // SAFETY: the event and queue belong to this live worker. The event avoids
+                        // shutdown depending on a successful PostMessage to a potentially full queue.
+                        let wait = unsafe {
+                            MsgWaitForMultipleObjectsEx(
+                                Some(&[worker_stop.handle()]),
+                                INFINITE,
+                                QS_ALLINPUT,
+                                MWMO_INPUTAVAILABLE,
+                            )
+                        };
+                        if wait.0 != 1 {
+                            break;
+                        } // stop signaled or native wait failed
+                        while !worker_stop.stopped() {
+                            // SAFETY: writable MSG and this thread's queue. Dispatch only retrieved messages.
+                            if !unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }
+                                .as_bool()
+                            {
+                                break;
+                            }
+                            if message.message == WM_QUIT {
+                                break 'messages;
+                            }
+                            // SAFETY: retrieved message, window and callback state remain live.
+                            unsafe {
+                                let _ = TranslateMessage(&message);
+                                DispatchMessageW(&message);
+                            }
+                        }
+                        if worker_stop.stopped() {
+                            break;
+                        }
+                    }
+                    state.active.store(false, Ordering::Release);
+                    if let WindowMode::Layout { poll, .. } = &mut *state.mode.borrow_mut() {
+                        poll.cancel();
+                    }
+                    drop(registrations);
+                    drop(window);
+                    Ok(())
+                };
+                if let Err(error) = run() {
+                    let _ = ready.send(Err(error));
+                }
+                // State/sink drops only after registrations and the HWND are gone.
+            })
+            .map_err(|e| PlatformError::Failed(e.to_string()))?;
+        match receive.recv() {
+            Ok(Ok(_hwnd)) => Ok(Self {
+                #[cfg(test)]
+                hwnd: _hwnd,
+                active,
+                stop,
+                join: Some(join),
+            }),
+            Ok(Err(error)) => {
+                let _ = join.join();
+                Err(error)
+            }
+            Err(_) => {
+                let _ = join.join();
+                Err(PlatformError::Failed("desktop startup ended".into()))
+            }
+        }
+    }
+}
+impl Drop for DesktopThread {
+    fn drop(&mut self) {
+        self.active.store(false, Ordering::Release);
+        self.stop.signal();
+        if let Some(join) = self.join.take() {
+            // A sink may cancel its own subscription. Never self-join: the signaled event lets
+            // the worker release its state as soon as that callback returns.
+            if join.thread().id() != thread::current().id() {
+                let _ = join.join();
+            }
+        }
+    }
+}
+
+// Copy power broadcast data through ReadProcessMemory: even a malformed synthetic pointer must
+// fail closed rather than fault the callback. Read only the fixed header, then exactly one DWORD.
+#[repr(C)]
+#[derive(Default)]
+struct PowerHeader {
+    guid: GUID,
+    length: u32,
+}
+fn display_state(pointer: isize) -> Option<u32> {
+    if pointer == 0 {
+        return None;
+    }
+    let mut header = PowerHeader::default();
+    let mut read = 0;
+    // SAFETY: current-process read into a sized initialized local; OS validates the source address.
+    unsafe {
+        ReadProcessMemory(
+            GetCurrentProcess(),
+            pointer as *const _,
+            std::ptr::from_mut(&mut header).cast(),
+            size_of::<PowerHeader>(),
+            Some(&mut read),
+        )
+    }
+    .ok()?;
+    if read != size_of::<PowerHeader>()
+        || header.guid != GUID_CONSOLE_DISPLAY_STATE
+        || header.length != 4
+    {
+        return None;
+    }
+    let mut data = 0u32;
+    let address = (pointer as usize).checked_add(size_of::<PowerHeader>())?;
+    // SAFETY: same checked-copy contract, reading only the validated DWORD payload length.
+    unsafe {
+        ReadProcessMemory(
+            GetCurrentProcess(),
+            address as *const _,
+            std::ptr::from_mut(&mut data).cast(),
+            size_of::<u32>(),
+            Some(&mut read),
+        )
+    }
+    .ok()?;
+    (read == 4).then_some(data)
+}
+extern "system" fn desktop_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    // No Rust unwind, including a sink panic or RefCell reentrancy panic, crosses the ABI.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        desktop_dispatch(hwnd, msg, wp, lp)
+    }))
+    .unwrap_or(LRESULT(0))
+}
+fn desktop_dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    if msg == WM_NCCREATE {
+        // SAFETY: WM_NCCREATE's CREATESTRUCTW and lpCreateParams are supplied by our own
+        // CreateWindowExW. The pinned state lives beyond WM_NCDESTROY.
+        unsafe {
+            let create = &*(lp.0 as *const CREATESTRUCTW);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
+        }
+    }
+    // SAFETY: the slot was set only by WM_NCCREATE and cleared on NCDESTROY; state is boxed
+    // on this window's owner thread and never accessed through this slot on another thread.
+    let state = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const WindowState;
+    if msg == WM_NCDESTROY {
+        // SAFETY: stop exposing the state before the HWND can outlive it or be reused.
+        unsafe {
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        }
+    } else if let Some(state) = unsafe { state.as_ref() } {
+        // SAFETY: lifetime invariant above.
+        if state.active.load(Ordering::Acquire) {
+            let mapped = match msg {
+                WM_WTSSESSION_CHANGE => desktop::map_message(Message::Session(wp.0 as u32)),
+                WM_POWERBROADCAST if wp.0 == PBT_POWERSETTINGCHANGE as usize => {
+                    display_state(lp.0).and_then(|v| desktop::map_message(Message::Display(v)))
+                }
+                WM_POWERBROADCAST => desktop::map_message(Message::Power(wp.0 as u32)),
+                _ => None,
+            };
+            let mut mode = state.mode.borrow_mut();
+            match &mut *mode {
+                WindowMode::Events(sink) => {
+                    if let Some(event) = mapped {
+                        sink(event);
+                    }
+                }
+                WindowMode::Layout {
+                    ui_thread,
+                    poll,
+                    sink,
+                } if msg == WM_TIMER && wp.0 == 1 => {
+                    if let Ok(next) = query_layout(*ui_thread) {
+                        if let Some(next) = poll.tick(next) {
+                            sink(next);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    // SAFETY: pass all unhandled and lifecycle messages to the default procedure on this thread.
+    unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
+}
+
+/// Each transaction uses an owned hidden HWND on a dedicated thread. No HWND, open clipboard
+/// guard or native allocation crosses threads. No persistent secret or clipboard read-back hash.
+pub struct WinClipboard;
+fn clipboard_call<T: Send + 'static>(
+    call: impl FnOnce(&mut NativeClipboard) -> PlatformResult<T> + Send + 'static,
+) -> PlatformResult<T> {
+    thread::Builder::new()
+        .name("mypass-clipboard".into())
+        .spawn(move || {
+            let state = Box::new(WindowState {
+                active: Arc::new(AtomicBool::new(true)),
+                mode: RefCell::new(WindowMode::Clipboard),
+            });
+            let window = HiddenWindow::new(&state)?;
+            let mut clipboard = NativeClipboard::open(window.hwnd)?;
+            call(&mut clipboard)
+            // close -> destroy HWND -> state drop, including on errors/unwind.
+        })
+        .map_err(|e| PlatformError::Failed(e.to_string()))?
+        .join()
+        .map_err(|_| PlatformError::Failed("clipboard worker ended".into()))?
+}
+impl SecureClipboard for WinClipboard {
+    fn write_secret(&self, text: &str) -> PlatformResult<ClipboardStamp> {
+        let text = Zeroizing::new(text.to_owned());
+        clipboard_call(move |tx| desktop::write_clipboard(tx, &text))
+    }
+    fn clear_if_unchanged(&self, stamp: &ClipboardStamp) -> PlatformResult<bool> {
+        let stamp = stamp.clone();
+        clipboard_call(move |tx| desktop::clear_clipboard(tx, &stamp))
+    }
+}
+struct NativeClipboard;
+impl NativeClipboard {
+    fn open(hwnd: HWND) -> PlatformResult<Self> {
+        for attempt in 0..10 {
+            // SAFETY: non-null live HWND on this thread. Success is uniquely owned by this guard.
+            match unsafe { OpenClipboard(Some(hwnd)) } {
+                Ok(()) => return Ok(Self),
+                Err(e) if attempt == 9 => return Err(win_error(e)),
+                Err(_) => thread::sleep(std::time::Duration::from_millis(10)),
+            }
+        }
+        Err(PlatformError::Failed("clipboard contention".into()))
+    }
+}
+impl Drop for NativeClipboard {
+    fn drop(&mut self) {
+        // SAFETY: exactly one close per successful open, on its opening thread.
+        unsafe {
+            let _ = CloseClipboard();
+        }
+    }
+}
+impl ClipboardTransaction for NativeClipboard {
+    fn empty(&mut self) -> PlatformResult<()> {
+        // SAFETY: this guard holds the OS clipboard open; its HWND remains live.
+        unsafe { EmptyClipboard() }.map_err(win_error)
+    }
+    fn sequence(&self) -> PlatformResult<u64> {
+        // SAFETY: non-mutating scalar query, still under our open OS clipboard transaction.
+        let sequence = unsafe { GetClipboardSequenceNumber() };
+        if sequence == 0 {
+            return Err(PlatformError::Failed(
+                "clipboard sequence unavailable".into(),
+            ));
+        }
+        Ok(u64::from(sequence))
+    }
+    fn set(&mut self, format: &str, bytes: &[u8]) -> PlatformResult<()> {
+        let id = if format == "CF_UNICODETEXT" {
+            13
+        } else {
+            let name = to_wide(OsStr::new(format))?;
+            // SAFETY: terminated name is borrowed for this call only.
+            let id = unsafe { RegisterClipboardFormatW(PCWSTR(name.as_ptr())) };
+            if id == 0 {
+                return Err(win_error(windows::core::Error::from_thread()));
+            }
+            id
+        };
+        // The empty legacy marker uses a zero-sized GMEM_MOVEABLE block: a valid
+        // block is a valid discarded block with logical size zero; no delayed rendering/null handle.
+        let mut allocation = ClipboardMemory::new(bytes)?;
+        // SAFETY: clipboard open, owner is non-null; unlocked GMEM_MOVEABLE transfers only on Ok.
+        unsafe { SetClipboardData(id, Some(HANDLE(allocation.0 .0))) }.map_err(win_error)?;
+        allocation.0 = HGLOBAL::default();
+        Ok(())
+    }
+}
+struct ClipboardMemory(HGLOBAL);
+impl ClipboardMemory {
+    fn new(bytes: &[u8]) -> PlatformResult<Self> {
+        // SAFETY: request a movable, zero-initialized block. Empty marker owns a valid zero-size
+        // discarded block; never lock it or treat it as a delayed-rendering null HANDLE.
+        let allocation = Self(
+            unsafe { GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, bytes.len()) }
+                .map_err(win_error)?,
+        );
+        if !bytes.is_empty() {
+            // SAFETY: uniquely owned movable block, alive and at least bytes.len() bytes long.
+            let pointer = unsafe { GlobalLock(allocation.0) };
+            if pointer.is_null() {
+                return Err(win_error(windows::core::Error::from_thread()));
+            }
+            // SAFETY: valid locked allocation, exact requested byte range, disjoint source.
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), pointer.cast(), bytes.len());
+                let _ = GlobalUnlock(allocation.0);
+            }
+        }
+        Ok(allocation)
+    }
+}
+impl Drop for ClipboardMemory {
+    fn drop(&mut self) {
+        if self.0 .0.is_null() {
+            return;
+        }
+        // SAFETY: only FAILED/untransferred allocations reach here. Successful SetClipboardData
+        // disarms ownership; Windows-owned blocks are never zeroized, freed or written again.
+        unsafe {
+            let length = GlobalSize(self.0);
+            let pointer = GlobalLock(self.0);
+            if !pointer.is_null() {
+                std::slice::from_raw_parts_mut(pointer.cast::<u8>(), length).zeroize();
+                let _ = GlobalUnlock(self.0);
+            }
+            let _ = GlobalFree(Some(self.0));
+        }
+    }
+}
+
+#[cfg(test)]
+fn window_exists(hwnd: usize) -> bool {
+    // SAFETY: scalar HWND validity query only.
+    unsafe { IsWindow(Some(HWND(hwnd as *mut _))).as_bool() }
+}
+#[cfg(test)]
+fn send_native(hwnd: usize, msg: u32, wp: usize, lp: isize) -> PlatformResult<()> {
+    let mut result = 0;
+    // SAFETY: bounded synchronous send; caller owns and retains any payload for the entire call.
+    if unsafe {
+        SendMessageTimeoutW(
+            HWND(hwnd as *mut _),
+            msg,
+            WPARAM(wp),
+            LPARAM(lp),
+            SMTO_ABORTIFHUNG,
+            2000,
+            Some(&mut result),
+        )
+    }
+    .0 == 0
+    {
+        return Err(win_error(windows::core::Error::from_thread()));
+    }
+    Ok(())
+}
+#[cfg(test)]
+fn synthetic_message(hwnd: usize, message: Message) -> PlatformResult<()> {
+    match message {
+        Message::Session(v) => send_native(hwnd, WM_WTSSESSION_CHANGE, v as usize, 0),
+        Message::Power(v) => send_native(hwnd, WM_POWERBROADCAST, v as usize, 0),
+        Message::Display(v) => {
+            #[repr(C)]
+            struct Packet {
+                header: PowerHeader,
+                data: u32,
+            }
+            let packet = Packet {
+                header: PowerHeader {
+                    guid: GUID_CONSOLE_DISPLAY_STATE,
+                    length: 4,
+                },
+                data: v,
+            };
+            send_native(
+                hwnd,
+                WM_POWERBROADCAST,
+                PBT_POWERSETTINGCHANGE as usize,
+                std::ptr::from_ref(&packet) as isize,
+            )
+        }
+    }
+}
+#[cfg(test)]
+fn tick_layout(hwnd: usize) -> PlatformResult<()> {
+    send_native(hwnd, WM_TIMER, 1, 0)
+}
+
+#[cfg(test)]
+mod desktop_windows_integration {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)] // test-only support code
+    use super::*;
+    use crate::{
+        KeyboardLayout, SecureClipboard,
+        SystemEvent::{ScreenLocked, ScreenUnlocked, Sleep, Wake},
+    };
+    use std::sync::{mpsc, Arc};
+    fn opt_in() {
+        assert_eq!(
+            std::env::var("MYPASS_WINDOWS_INTEGRATION_TESTS").as_deref(),
+            Ok("1")
+        );
+    }
+    #[test]
+    #[ignore = "native Windows windows/events; isolated integration runner only"]
+    fn windows_integration_events_independent_shutdown_and_panic_containment() {
+        opt_in();
+        let (tx, rx) = mpsc::channel();
+        let thread = DesktopThread::start(WindowMode::Events(Arc::new(move |e| {
+            tx.send(e).unwrap();
+        })))
+        .unwrap();
+        let other = DesktopThread::start(WindowMode::Events(Arc::new(|_| {}))).unwrap();
+        assert_ne!(thread.hwnd, other.hwnd);
+        for (msg, want) in [
+            (crate::windows_desktop::Message::Session(7), ScreenLocked),
+            (crate::windows_desktop::Message::Session(8), ScreenUnlocked),
+            (crate::windows_desktop::Message::Power(4), Sleep),
+            (crate::windows_desktop::Message::Power(18), Wake),
+            (crate::windows_desktop::Message::Display(0), Sleep),
+            (crate::windows_desktop::Message::Display(2), Wake),
+        ] {
+            synthetic_message(thread.hwnd, msg).unwrap();
+            assert_eq!(
+                rx.recv_timeout(std::time::Duration::from_secs(3)).unwrap(),
+                want
+            );
+        }
+        let old = thread.hwnd;
+        drop(thread);
+        assert!(!window_exists(old));
+        assert!(synthetic_message(old, crate::windows_desktop::Message::Session(7)).is_err());
+        let (tx, rx) = mpsc::channel();
+        let panicking = DesktopThread::start(WindowMode::Events(Arc::new(move |e| {
+            if e == ScreenLocked {
+                panic!("injected sink panic")
+            }
+            tx.send(e).unwrap();
+        })))
+        .unwrap();
+        synthetic_message(panicking.hwnd, crate::windows_desktop::Message::Session(7)).unwrap();
+        synthetic_message(panicking.hwnd, crate::windows_desktop::Message::Session(8)).unwrap();
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(3)).unwrap(),
+            ScreenUnlocked
+        );
+    }
+    #[test]
+    #[ignore = "native Windows clipboard; serial isolated integration runner only"]
+    fn windows_integration_clipboard_markers_unicode_foreign_copy_and_contention() {
+        opt_in();
+        native_clipboard_checks();
+    }
+    #[test]
+    #[ignore = "native Windows callbacks; isolated integration runner only"]
+    fn windows_integration_event_sink_can_cancel_itself_and_power_payload_is_validated() {
+        opt_in();
+        struct Dropped(mpsc::Sender<()>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                let _ = self.0.send(());
+            }
+        }
+        let (dropped, finished) = mpsc::channel();
+        let dropped = Dropped(dropped);
+        let subscription = Arc::new(std::sync::Mutex::new(None::<Subscription>));
+        let slot = subscription.clone();
+        let (tx, rx) = mpsc::channel();
+        let thread = DesktopThread::start(WindowMode::Events(Arc::new(move |_| {
+            let _keep_until_state_drops = &dropped;
+            slot.lock().unwrap().take();
+            tx.send(()).unwrap();
+        })))
+        .unwrap();
+        let hwnd = thread.hwnd;
+        *subscription.lock().unwrap() = Some(Subscription::new(move || drop(thread)));
+        // Invalid pointers and a mismatched GUID/size cannot produce an event or memory fault.
+        send_native(hwnd, WM_POWERBROADCAST, PBT_POWERSETTINGCHANGE as usize, 1).unwrap();
+        assert!(rx.try_recv().is_err());
+        assert_eq!(display_state(0), None);
+        let header = PowerHeader {
+            guid: GUID::zeroed(),
+            length: 4,
+        };
+        assert_eq!(display_state(std::ptr::from_ref(&header) as isize), None);
+        let header = PowerHeader {
+            guid: GUID_CONSOLE_DISPLAY_STATE,
+            length: 3,
+        };
+        assert_eq!(display_state(std::ptr::from_ref(&header) as isize), None);
+        synthetic_message(hwnd, Message::Session(7)).unwrap();
+        rx.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+        assert!(subscription.lock().unwrap().is_none());
+        finished
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .unwrap();
+        assert!(!window_exists(hwnd));
+    }
+    fn native_clipboard_checks() {
+        // This is deliberately destructive ONLY in the serial, isolated opt-in CI session. No
+        // text-only backup pretends to preserve arbitrary user formats. Cleanup uses the stamp.
+        let clipboard = WinClipboard;
+        let stamp = clipboard.write_secret("A\u{0443}\u{1f512}").unwrap();
+        clipboard_call(move |tx| {
+            assert_eq!(tx.sequence().unwrap(), stamp.0);
+            for (format, payload) in desktop::EXCLUSIONS {
+                let name = to_wide(OsStr::new(format)).unwrap();
+                // SAFETY: registered name and currently open clipboard; handle stays OS-owned.
+                let id = unsafe { RegisterClipboardFormatW(PCWSTR(name.as_ptr())) };
+                assert!(unsafe { IsClipboardFormatAvailable(id) }.is_ok());
+                let data = unsafe { GetClipboardData(id) }.unwrap();
+                if !payload.is_empty() {
+                    let handle = HGLOBAL(data.0);
+                    let pointer = unsafe { GlobalLock(handle) };
+                    assert!(!pointer.is_null());
+                    assert_eq!(
+                        unsafe { std::slice::from_raw_parts(pointer.cast::<u8>(), payload.len()) },
+                        payload
+                    );
+                    let _ = unsafe { GlobalUnlock(handle) };
+                }
+            }
+            // SAFETY: open clipboard pins the OS-owned text allocation while reading it.
+            let text = unsafe { GetClipboardData(13) }.unwrap();
+            let handle = HGLOBAL(text.0);
+            let pointer = unsafe { GlobalLock(handle) };
+            assert!(!pointer.is_null());
+            let len = unsafe { GlobalSize(handle) } / 2;
+            let units = unsafe { std::slice::from_raw_parts(pointer.cast::<u16>(), len) };
+            let end = units.iter().position(|c| *c == 0).unwrap();
+            assert_eq!(
+                String::from_utf16(&units[..end]).unwrap(),
+                "A\u{0443}\u{1f512}"
+            );
+            let _ = unsafe { GlobalUnlock(handle) };
+            // Deterministic OS-lock barrier: another thread's entire bounded open retry fails
+            // while this transaction remains open. No probabilistic alternating loop.
+            let other = std::thread::spawn(|| WinClipboard.write_secret("blocked"));
+            assert!(other.join().unwrap().is_err());
+            Ok(())
+        })
+        .unwrap();
+        let foreign = clipboard_call(|tx| {
+            tx.empty()?;
+            tx.set("CF_UNICODETEXT", &[70, 0, 0, 0])?;
+            tx.sequence().map(ClipboardStamp)
+        })
+        .unwrap();
+        assert!(!clipboard.clear_if_unchanged(&stamp).unwrap());
+        assert!(clipboard.clear_if_unchanged(&foreign).unwrap());
+        let again = clipboard.write_secret("cleanup").unwrap();
+        assert!(clipboard.clear_if_unchanged(&again).unwrap());
+        assert!(!clipboard.clear_if_unchanged(&again).unwrap());
+    }
+    #[test]
+    #[ignore = "native Windows layout; integration runner only"]
+    fn windows_integration_layout_owned_timer_shutdown() {
+        opt_in();
+        let layout = WinKeyboardLayout::capture();
+        let current = layout.current().unwrap().unwrap();
+        assert!((2..=3).contains(&current.len()));
+        assert!(current.bytes().all(|b| b.is_ascii_uppercase()));
+        let thread =
+            DesktopThread::start(layout_mode(layout.ui_thread, Arc::new(|_| {})).unwrap()).unwrap();
+        let hwnd = thread.hwnd;
+        tick_layout(hwnd).unwrap();
+        drop(thread);
+        assert!(!window_exists(hwnd));
     }
 }

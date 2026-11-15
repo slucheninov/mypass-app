@@ -7,6 +7,7 @@
 pub mod dev_overrides;
 #[cfg(windows)]
 pub mod windows;
+pub mod windows_desktop;
 pub mod windows_host_install;
 pub mod windows_registry;
 

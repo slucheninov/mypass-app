@@ -1574,3 +1574,51 @@ fn confirm_after_direct_vault_switch_writes_nothing_into_the_new_vault() {
     assert_eq!(snapshot(&f), b_before);
     assert!(no_kpex(&b_before));
 }
+
+#[test]
+fn windows_unavailable_presence_create_requires_consent_and_never_claims_uv() {
+    for verification in ["discouraged", "preferred", "required"] {
+        let (f, _, _) = sample_fx();
+        let svc = PasskeyService::with_presence(
+            f.sched.clone(),
+            f.ui.clone(),
+            Arc::new(|_, _| Ok(false)),
+        );
+        let before = f.session.with_db(Clone::clone).unwrap();
+        let mut json = request_json(ORIGIN, Some(RP), &[]);
+        json["authenticatorSelection"] = json!({"userVerification": verification});
+        let pending = svc.handle(
+            &ctx(&f, &f.settings, true),
+            &Request::PasskeyCreate {
+                token: "t".into(),
+                request_id: 982,
+                request_details_json: json.to_string(),
+                origin_url: ORIGIN.into(),
+                pairing: None,
+            },
+        );
+        assert!(matches!(pending, Response::PasskeyCreatePending { .. }));
+        assert_eq!(f.session.with_db(Clone::clone).unwrap(), before);
+        let result = svc.handle(
+            &ctx(&f, &f.settings, true),
+            &Request::PasskeyCreateConfirm {
+                token: "t".into(),
+                request_id: 982,
+                entry_id: None,
+                replace: false,
+                pairing: None,
+            },
+        );
+        if verification == "required" {
+            let (name, _) = failure(&result);
+            assert_eq!(name, "NotAllowedError");
+            assert_eq!(f.session.with_db(Clone::clone).unwrap(), before);
+        } else {
+            let (_, _, auth) = attestation(&b64_field(
+                &success(&result),
+                &["response", "attestationObject"],
+            ));
+            assert_eq!(auth[32] & 0x05, 0x01, "UP set, UV clear");
+        }
+    }
+}

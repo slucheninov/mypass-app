@@ -1,11 +1,11 @@
-//! Fallbacks: `Unsupported` stubs for every trait and, off macOS, the `arboard` clipboard.
+//! Unsupported services and the arboard clipboard on targets without native clipboard support.
 //!
 //! Every stub is a one-line `Unsupported` body, so a later stage replaces a body, never a
-//! signature. Windows uses all of them (except the host-shared file secret store) until stage 6.
+//! signature. Windows keeps device unlock and launch-at-login stubs until their owned stages.
 
-#[cfg(any(not(target_os = "macos"), test))]
+#[cfg(any(not(any(target_os = "macos", windows)), test))]
 use crate::SecretStore;
-#[cfg(any(not(target_os = "macos"), test))]
+#[cfg(any(not(any(target_os = "macos", windows)), test))]
 use crate::{BrowserRegistration, HostRegistrationReport, NativeHostRegistrar};
 #[cfg(any(not(target_os = "macos"), test, feature = "test-util"))]
 use crate::{
@@ -14,22 +14,24 @@ use crate::{
 };
 #[cfg(any(not(target_os = "macos"), test, feature = "test-util"))]
 use secrecy::SecretString;
-#[cfg(any(not(target_os = "macos"), test))]
+#[cfg(any(not(any(target_os = "macos", windows)), test))]
 use std::path::Path;
 // Items used only off macOS (and by this module's tests on macOS).
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 use crate::{AppPaths, Platform};
-#[cfg(any(not(target_os = "macos"), test))]
+#[cfg(any(not(any(target_os = "macos", windows)), test))]
 use crate::{KeyboardLayout, Subscription, SystemEvent, SystemEvents};
 #[cfg(any(not(target_os = "macos"), test))]
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
+#[cfg(any(not(any(target_os = "macos", windows)), test))]
+use std::sync::Arc;
 
 /// No system events on this platform.
 #[derive(Debug, Default)]
-#[cfg(any(not(target_os = "macos"), test))]
+#[cfg(any(not(any(target_os = "macos", windows)), test))]
 pub(crate) struct UnsupportedSystemEvents;
 
-#[cfg(any(not(target_os = "macos"), test))]
+#[cfg(any(not(any(target_os = "macos", windows)), test))]
 impl SystemEvents for UnsupportedSystemEvents {
     fn subscribe(&self, _: Arc<dyn Fn(SystemEvent) + Send + Sync>) -> PlatformResult<Subscription> {
         Err(PlatformError::Unsupported("system events"))
@@ -38,10 +40,10 @@ impl SystemEvents for UnsupportedSystemEvents {
 
 /// No secret store on this platform yet (Windows app-only store: stage 6).
 #[derive(Debug, Default)]
-#[cfg(any(not(target_os = "macos"), test))]
+#[cfg(any(not(any(target_os = "macos", windows)), test))]
 pub(crate) struct UnsupportedSecretStore;
 
-#[cfg(any(not(target_os = "macos"), test))]
+#[cfg(any(not(any(target_os = "macos", windows)), test))]
 impl SecretStore for UnsupportedSecretStore {
     fn set(&self, _: &str, _: &str, _: &[u8]) -> PlatformResult<()> {
         Err(PlatformError::Unsupported("secret store"))
@@ -80,11 +82,11 @@ impl DeviceUnlock for UnsupportedDeviceUnlock {
 }
 
 /// No native host registration off macOS yet (Windows stage 6).
-#[cfg(any(not(target_os = "macos"), test))]
+#[cfg(any(not(any(target_os = "macos", windows)), test))]
 #[derive(Debug, Default)]
 pub(crate) struct UnsupportedHostRegistrar;
 
-#[cfg(any(not(target_os = "macos"), test))]
+#[cfg(any(not(any(target_os = "macos", windows)), test))]
 impl NativeHostRegistrar for UnsupportedHostRegistrar {
     fn register(&self, _: &Path) -> PlatformResult<HostRegistrationReport> {
         Err(PlatformError::Unsupported("native host registration"))
@@ -115,10 +117,10 @@ impl LaunchAtLogin for UnsupportedLaunchAtLogin {
 
 /// No keyboard layout reading on this platform.
 #[derive(Debug, Default)]
-#[cfg(any(not(target_os = "macos"), test))]
+#[cfg(any(not(any(target_os = "macos", windows)), test))]
 pub(crate) struct UnsupportedKeyboardLayout;
 
-#[cfg(any(not(target_os = "macos"), test))]
+#[cfg(any(not(any(target_os = "macos", windows)), test))]
 impl KeyboardLayout for UnsupportedKeyboardLayout {
     fn current(&self) -> PlatformResult<Option<String>> {
         Err(PlatformError::Unsupported("keyboard layout"))
@@ -132,7 +134,7 @@ impl KeyboardLayout for UnsupportedKeyboardLayout {
 }
 
 /// The pure clipboard core: compiled off macOS (where `arboard` drives it) and for tests.
-#[cfg(any(not(target_os = "macos"), test))]
+#[cfg(any(not(any(target_os = "macos", windows)), test))]
 mod hashing {
     use crate::{ClipboardStamp, PlatformError, PlatformResult, SecureClipboard};
     use sha2::{Digest, Sha256};
@@ -160,8 +162,7 @@ mod hashing {
     /// counter plus a SHA-256 of the last written text. `clear_if_unchanged` reads the clipboard back
     /// and clears it only when the stamp is our latest write and the text still hashes the same.
     ///
-    /// The Windows clipboard-history and cloud-clipboard exclusion formats are set by the `arboard`
-    /// backend (`ArboardBackend::set_text` under `cfg(windows)`); other targets use the plain setter.
+    /// Windows uses its own sequence-checked native transaction backend.
     pub(crate) struct HashingClipboard<B> {
         state: Mutex<HashingState<B>>,
     }
@@ -231,34 +232,17 @@ mod hashing {
     }
 }
 
-#[cfg(any(not(target_os = "macos"), test))]
+#[cfg(any(not(any(target_os = "macos", windows)), test))]
 pub(crate) use hashing::{ClipboardBackend, HashingClipboard};
 
 /// The system clipboard through `arboard`. A fresh `arboard::Clipboard` per call: the handle is
 /// cheap and this keeps the backend free of any thread-affinity question.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 #[derive(Debug, Default)]
 pub(crate) struct ArboardBackend;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 impl ClipboardBackend for ArboardBackend {
-    // Only ever called for secrets (`HashingClipboard::write_secret`), so on Windows the write
-    // opts out of clipboard history, the cloud clipboard and monitoring.
-    #[cfg(windows)]
-    fn set_text(&mut self, text: &str) -> Result<(), String> {
-        use arboard::SetExtWindows;
-        arboard::Clipboard::new()
-            .and_then(|mut c| {
-                c.set()
-                    .exclude_from_monitoring()
-                    .exclude_from_cloud()
-                    .exclude_from_history()
-                    .text(text)
-            })
-            .map_err(|e| e.to_string())
-    }
-
-    #[cfg(not(windows))]
     fn set_text(&mut self, text: &str) -> Result<(), String> {
         arboard::Clipboard::new()
             .and_then(|mut c| c.set_text(text))
@@ -282,7 +266,7 @@ impl ClipboardBackend for ArboardBackend {
 
 /// The platform of a target without a native implementation: `arboard` for the clipboard off
 /// macOS, `Unsupported` for everything else.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 pub(crate) fn platform(paths: &AppPaths) -> Platform {
     Platform {
         events: Arc::new(UnsupportedSystemEvents),
