@@ -61,8 +61,17 @@ pub(crate) const TURNED_OFF: &str = "MyPass passkeys are turned off in Settings"
 
 /// The stage 4 passkey handler: the proxy status and toggle, cancel, and the pending table the
 /// ceremonies (create, confirm, get, approve) share. See the module docs for the gate order.
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+pub enum PresenceError {
+    #[error("presence verification cancelled")]
+    Cancelled,
+}
+/// Arguments: creating a credential, validated rpId. Ok(true) means THIS ceremony verified
+/// device-owner presence; Ok(false) is the unsupported-platform path and never sets UV.
+pub type PresenceCheck = dyn Fn(bool, &str) -> Result<bool, PresenceError> + Send + Sync;
 pub struct PasskeyService {
     pending: Mutex<Pending>,
+    presence: Arc<PresenceCheck>,
     scheduler: Arc<dyn Scheduler>,
     ui: Arc<dyn BridgeUi>,
 }
@@ -78,7 +87,20 @@ impl PasskeyService {
     /// `ui` hears about toggle changes made from the extension.
     #[must_use]
     pub fn new(scheduler: Arc<dyn Scheduler>, ui: Arc<dyn BridgeUi>) -> Arc<Self> {
+        Self::with_presence(
+            scheduler,
+            ui,
+            Arc::new(|_, _| Err(PresenceError::Cancelled)),
+        )
+    }
+
+    pub fn with_presence(
+        scheduler: Arc<dyn Scheduler>,
+        ui: Arc<dyn BridgeUi>,
+        presence: Arc<PresenceCheck>,
+    ) -> Arc<Self> {
         Arc::new(Self {
+            presence,
             pending: Mutex::new(Pending::new()),
             scheduler,
             ui,

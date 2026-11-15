@@ -24,6 +24,8 @@ On Windows, run `cargo` commands from PowerShell and `scripts/*.sh` from Git Bas
 | `mypass-core` | implemented | TOTP, generator and password rules, Public Suffix List, entry matcher, merge engine |
 | `repo-guards` | implemented | Test-only guard tests for the workspace, CI, docs and scripts (never shipped) |
 | `mypass-platform` | implemented | OS glue behind traits (system events, secure clipboard, secret stores, device unlock, native host registrar, launch at login, keyboard layout) and `AppPaths`; fakes behind the `test-util` feature, `Unsupported` fallbacks where a platform body has not landed |
+| `mypass-sync` | implemented | Secondary-folder sync and iCloud storage, offline cache and conflict merging |
+| `mypass-update` | implemented | GitHub release checks and persisted banner dismissal; no automatic installation |
 | `mypass-session` | implemented | Vault session, settings, scheduling and the command facade; no Tauri dependency |
 | `src/` (Svelte UI) | implemented (stage 2b) | The webview UI: typed API wrapper, stores, i18n, design kit, screens and the three windows (main, settings, tray panel), with its Vitest suites |
 | `src-tauri` (`mypass-app`) | implemented | The Tauri 2 app shell and the typed IPC bindings (`src/lib/bindings.ts`, generated) |
@@ -76,7 +78,7 @@ cargo run -p mypass-kdbx --example write_crosscompat -- <out.kdbx>   # synthetic
 - Argon2 at 64 MiB x 3 passes takes minutes at opt-level 0, so dependencies are built at opt-level 3
   in the dev and test profiles (`[profile.dev.package."*"]`, `[profile.test.package."*"]`).
 - CI runs `lint` (clippy on macOS and Windows, format check on macOS), `test` (macOS and Windows),
-  `js` (the `js` part on Ubuntu), `ui` (the `ui` part on Ubuntu: frozen pnpm install, check, tests, build), `crosscompat` and a disabled Windows integration skeleton as
+  `js` (the `js` part on Ubuntu), `ui` (the `ui` part on Ubuntu: frozen pnpm install, check, tests, build), `crosscompat`, path-gated `package-smoke` and a disabled Windows integration skeleton as
   parallel jobs, joined by the `ci`
   aggregator.
 - The `crosscompat` CI job (Rust writes and Python reads, then the reverse) uses `pykeepass`. The
@@ -84,3 +86,92 @@ cargo run -p mypass-kdbx --example write_crosscompat -- <out.kdbx>   # synthetic
 
 Run `bash scripts/test.sh` before you call a change done; CI runs after the fact and is not a
 substitute.
+
+## macOS packaging and releases
+
+The release tools and their offline script tests require Python 3.11 or newer
+(`tomllib` from the standard library); CI selects Python 3.12 explicitly.
+
+The app version comes from `src-tauri/Cargo.toml`; Tauri's configuration omits
+`version`. `scripts/check-version.sh [X.Y.Z]` checks the app, npm package, extension
+manifest (and extension package if versioned), and the app's Cargo.lock entry.
+The first release is 0.7.0. Other workspace crates keep their internal versions.
+
+```bash
+bash scripts/bump-version.sh 0.7.1  # validates, refreshes Cargo.lock offline; never commits or tags
+bash scripts/check-version.sh
+bash scripts/package-macos.sh --allow-unsigned --dry-run
+bash scripts/package-macos.sh --allow-unsigned --out /path/to/empty-output
+# Choose the valid certificate SHA-1, never its ambiguous display name:
+security find-identity -v -p codesigning
+MYPASS_SIGNING_IDENTITY=<40-hex-SHA-1> bash scripts/package-macos.sh --out /path/to/empty-output
+# Release additionally requires a clean tree at exactly v<version>:
+MYPASS_SIGNING_IDENTITY=<40-hex-SHA-1> bash scripts/package-macos.sh --release --out /path/to/empty-output
+```
+
+Packaging builds `aarch64-apple-darwin` only, with minimum macOS 14.0. It stages a
+production-only extension, builds the host sidecar, builds Tauri's `app` target,
+re-signs inside out with explicit team-based designated requirements, verifies
+both binaries, then uses `hdiutil` to create a DMG containing the app, Applications
+link, INSTALL.txt and both license files. No sandbox or entitlements are needed;
+hardened runtime is required for signed app and host. The team is W645B93PPQ and
+the identifiers are `com.mypass.app` and `com.mypass.chromehost`.
+
+No ad-hoc signing is allowed. With no certificate, `--allow-unsigned` explicitly
+opts into a development build (`--no-sign`, linker seals only). `--release` always
+fails without a 40-hex identity. `--dry-run` validates metadata and release/tag
+preconditions but writes nothing and never builds, signs, imports a certificate
+or creates a DMG. To compile locally without any packaging/signing use
+`pnpm tauri build --no-bundle --no-sign` (build the host first if needed).
+
+`verify-bundle.sh <app> --host-source <staged-sidecar> --extension-zip <zip>` checks
+strict/deep codesign verification, exact designated requirements in Apple’s
+`csreq` canonical rendering, team, runtime,
+entitlements, plist metadata, localizations, notices, host byte provenance and the
+extension archive against the bundled extension. Only explicit `--allow-unsigned`
+permits linker seals; those builds cannot prove signed verification. The staged
+host is `src-tauri/binaries/mypass-native-host-aarch64-apple-darwin`, produced from
+`cargo build -p mypass-host --release --target aarch64-apple-darwin`. The dependency
+check rejects session/core/KDBX/update code in the host's normal dependency tree.
+
+The output is exactly `MyPass-X.Y.Z-macos-arm64.dmg`,
+`MyPass-chrome-extension-X.Y.Z.zip` and `SHA256SUMS.txt`. The checksum file lists the
+two payloads with relative names (it cannot hash itself). Extension ZIP entries
+are sorted, have fixed timestamps and modes, and exclude tests and package.json.
+The installed app copies the bundled extension into a versioned writable folder
+before revealing it; Chrome must never load unpacked files from the signed bundle.
+
+The separate `.github/workflows/release.yml` runs only on version tags. Configure
+these GitHub Actions repository secrets before tagging:
+
+- `APPLE_CERTIFICATE`: base64-encoded PKCS#12 export of the **Apple Development**
+  signing certificate and private key for team W645B93PPQ.
+- `APPLE_CERTIFICATE_PASSWORD`: the export password for that PKCS#12 file.
+- `APPLE_SIGNING_IDENTITY`: the valid certificate's exact 40-hex SHA-1 hash.
+
+All three secrets are required. The workflow imports them into a temporary
+keychain, deletes the keychain and certificate file even after failure, runs
+`bash scripts/test.sh --ci` before packaging, uploads a draft, downloads and checks
+its exact artifact set and hashes, then rechecks in the final publish job. A stale
+draft may be replaced; an already published release is refused. No release was
+published merely by building locally. The `package-smoke` CI job packages an
+explicitly unsigned development build without secrets on relevant pull requests.
+
+Per the owner's release policy, notarization is disabled even if unrelated Apple
+credentials are present in the environment. Users follow INSTALL.txt's
+`xattr -dr com.apple.quarantine` instructions. Developer ID signing/notarization,
+Intel/universal builds and `.kdbx` association are future work. Icons are generated
+with `pnpm tauri icon src-tauri/icons/source.png`; the source was recovered from
+the owner's old Swift AppIcon asset catalog (1024px `icon_512x512@2x.png`).
+
+The Rust test entry point also runs `scripts/tests/*.test.sh` (offline version,
+packaging and verification tests). Regenerate dependency notices with
+`python3 crates/mypass-kdbx/tests/crosscompat/update_notices.py`; `--check` verifies
+that the committed table matches Cargo metadata without editing it.
+
+Before a release, run `bash scripts/check-version.sh`, commit the version change,
+merge it through the normal review process, then create and push `vX.Y.Z` when
+publishing is authorized. The workflow has no manual-dispatch release path.
+Signed installation, certificate renewal, quarantine removal, release failure
+paths and cutover remain owner checks in `RUN.md`; local script tests do not
+establish Gatekeeper acceptance or real Keychain behavior.

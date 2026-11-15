@@ -8,23 +8,13 @@
 
   let { warning, ondecide }: { warning: OpenWarning; ondecide: (proceed: boolean) => void } = $props();
 
-  const copy = $derived(
-    warning.kind === "icloud"
-      ? // STAGE5-REMOVE: this branch goes away together with the backend iCloud guard.
-        {
-          title: t("This vault is in iCloud Drive"),
-          body: t(
-            "iCloud Drive can sync a vault file while MyPass is writing it, which can create conflicting copies. Keep the vault in a normal folder, or continue at your own risk.",
-          ),
-        }
-      : {
-          title: t("Another copy of MyPass is running"),
-          body: t(
-            "An older MyPass (%@) is open. Two copies writing the same vault can overwrite each other's changes. Quit the other copy first, or continue anyway.",
-            [warning.executable],
-          ),
-        },
-  );
+  const copy = $derived({
+    title: t("Another copy of MyPass is running"),
+    body: t(
+      "An older MyPass (%@) is open. Two copies writing the same vault can overwrite each other's changes. Quit the other copy first, or continue anyway.",
+      [warning.executable],
+    ),
+  });
 </script>
 
 <Modal open={true} title={copy.title} onclose={() => ondecide(false)}>

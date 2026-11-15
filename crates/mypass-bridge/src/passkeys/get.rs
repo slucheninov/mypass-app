@@ -156,17 +156,47 @@ pub(crate) fn handle_approve(
     request_id: i64,
     entry_id: &str,
 ) -> Response {
+    let epoch = svc.epoch();
     // Single use: from here on every answer has consumed the ceremony.
-    let Some(pending) = svc.take_get(request_id) else {
+    let taken = {
+        let mut table = svc.pending();
+        table
+            .take_get(request_id, svc.scheduler.monotonic_now())
+            .map(|p| (p, table.claim(request_id)))
+    };
+    let Some((pending, claim)) = taken else {
         return get_error(request_id, NOT_ALLOWED, NO_PENDING);
     };
+    let verified = match (svc.presence)(false, pending.request.rp_id()) {
+        Ok(v) => v,
+        Err(super::PresenceError::Cancelled) => {
+            return get_error(request_id, NOT_ALLOWED, "Presence verification cancelled")
+        }
+    };
+    if epoch != svc.epoch()
+        || !ctx.settings.get().passkey_proxy_enabled
+        || (pending.request.request().verification_required && !verified)
+    {
+        return get_error(request_id, NOT_ALLOWED, NO_PENDING);
+    }
     let Some(target) = parse_wire_id(entry_id) else {
         return Refusal::NotFound.answer(request_id);
     };
-    let signed = match ctx
-        .session
-        .with_db(|db| approve_in_vault(db, &pending, target))
-    {
+    let signed = match ctx.session.with_db(|db| {
+        if claim
+            .compare_exchange(
+                0,
+                2,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_err()
+            || epoch != svc.epoch()
+        {
+            return Err(Refusal::OtherVault);
+        }
+        approve_in_vault_verified(db, &pending, target, verified)
+    }) {
         Ok(Ok(json)) => json,
         Ok(Err(refusal)) => return refusal.answer(request_id),
         Err(_) => return Response::Locked,
@@ -189,10 +219,19 @@ pub(crate) fn handle_approve(
 
 /// The body of the one approve `with_db` (R11): every check against `db` as it is now, then the
 /// signing. The stored key is decoded here and dropped before the function returns.
+#[cfg(test)]
 pub(crate) fn approve_in_vault(
     db: &Database,
     pending: &PendingGet,
     target: Uuid,
+) -> Result<String, Refusal> {
+    approve_in_vault_verified(db, pending, target, true)
+}
+fn approve_in_vault_verified(
+    db: &Database,
+    pending: &PendingGet,
+    target: Uuid,
+    verified: bool,
 ) -> Result<String, Refusal> {
     // First, before reading anything: the ceremony must belong to this vault.
     if !pending.vault_matches(db) {
@@ -226,6 +265,9 @@ pub(crate) fn approve_in_vault(
     ) {
         return Err(Refusal::NotAllowed);
     }
+    if request.request().verification_required && !verified {
+        return Err(Refusal::NotAllowed);
+    }
     // Zeroized on drop, neither `Clone` nor `Debug`.
     let key =
         PasskeySigningKey::from_pem(&record.private_key_pem).map_err(|_| Refusal::SignFailed)?;
@@ -235,6 +277,7 @@ pub(crate) fn approve_in_vault(
         &record.credential_id,
         record.user_handle.as_deref(),
         record.flags,
+        verified,
     )
     .map_err(|e| match e {
         PasskeyError::CredentialNotAllowed => Refusal::NotAllowed,

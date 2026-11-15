@@ -1,0 +1,29 @@
+[package]
+name = "mypass-update"
+version = "0.1.0"
+description = "MyPass update check: release feed, semantic versions and the update policy."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+# The GitHub release client (`ureq`, OS trust store TLS). Off by default: only `src-tauri` enables
+# it, so no other crate (and never `mypass-host`) links an HTTP client.
+github = ["dep:ureq"]
+
+# Depends on no MyPass crate, so the session can own the update service without a cycle; the HTTP
+# client arrives behind the `github` feature that only `src-tauri` enables.
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true
+ureq = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true

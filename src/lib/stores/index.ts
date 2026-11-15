@@ -1,3 +1,6 @@
+import { device } from "./device.svelte";
+import { update } from "./update.svelte";
+import { sync } from "./sync.svelte";
 import { toasts } from "./toasts.svelte";
 import { startActivityReporter } from "./activity.svelte";
 import { entries } from "./entries.svelte";
@@ -13,13 +16,17 @@ import { settings } from "./settings.svelte";
  * language are applied even if one part cannot start; a failing part is reported, the rest keeps running.
  * `entries: false` is for a window that shows no entries (settings): it keeps the lock hooks and the
  * activity reporter but never fetches the list or the sidebar. `saveToast: false` (tray panel, settings)
- * leaves the sticky "Saving failed" toast to the main window.
+ * leaves the sticky "Saving failed" toast to the main window. `sync: false` keeps the tray
+ * panel from querying sync/storage state that it does not render or have permission to read.
  */
-export async function startStores(opts: { entries?: boolean; saveToast?: boolean } = {}): Promise<() => void> {
+export async function startStores(opts: { entries?: boolean; saveToast?: boolean; sync?: boolean } = {}): Promise<() => void> {
   const withEntries = opts.entries ?? true;
   session.saveToasts = opts.saveToast ?? true;
   navigation.start();
   const stopActivity = startActivityReporter();
+  const stopDevice = device.start();
+  const stopUpdate = update.start();
+  const stopSync = opts.sync === false ? () => {} : sync.start();
   const results = await Promise.allSettled([
     settings.start(),
     withEntries ? entries.start() : Promise.resolve(),
@@ -28,6 +35,9 @@ export async function startStores(opts: { entries?: boolean; saveToast?: boolean
   for (const r of results) if (r.status === "rejected") toasts.reportError(r.reason);
   return () => {
     stopActivity();
+    stopDevice();
+    stopUpdate();
+    stopSync();
     entries.stop();
     navigation.stop();
     settings.stop();

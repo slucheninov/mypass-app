@@ -48,7 +48,7 @@ impl Default for RelayOptions {
     fn default() -> Self {
         Self {
             connect_timeout: Duration::from_secs(5),
-            drain_timeout: Duration::from_secs(5),
+            drain_timeout: Duration::from_secs(75),
             max_frame: MAX_FRAME_BYTES,
         }
     }
@@ -290,10 +290,22 @@ fn drain(shared: &Shared, limit: Duration) {
 /// request within its first-frame deadline (10 s by default), so this suits a host that serves one
 /// message (`sendNativeMessage`), not a long-lived `connectNative` port.
 pub fn run_relay<R: Read, W: Write + Send + 'static>(
+    stdin: R,
+    stdout: W,
+    endpoint: Option<Endpoint>,
+    opts: &RelayOptions,
+) -> RelayOutcome {
+    run_relay_verified(stdin, stdout, endpoint, opts, &|_| true)
+}
+
+/// Production signed hosts supply a listener identity check, after connect and before any
+/// token-bearing request. The HMAC handshake is retained as an independent check.
+pub fn run_relay_verified<R: Read, W: Write + Send + 'static>(
     mut stdin: R,
     stdout: W,
     endpoint: Option<Endpoint>,
     opts: &RelayOptions,
+    verify_peer: &dyn Fn(u16) -> bool,
 ) -> RelayOutcome {
     let out = Arc::new(Mutex::new(stdout));
     let not_running = |out: &Mutex<W>| {
@@ -307,6 +319,9 @@ pub fn run_relay<R: Read, W: Write + Send + 'static>(
     let Ok(mut stream) = TcpStream::connect_timeout(&addr, opts.connect_timeout) else {
         return not_running(&out);
     };
+    if !verify_peer(endpoint.port) {
+        return not_running(&out);
+    }
     let _ = stream.set_nodelay(true);
     if !handshake(&mut stream, &endpoint.token, opts.connect_timeout) {
         let _ = stream.shutdown(Shutdown::Both);
@@ -496,6 +511,31 @@ mod tests {
     }
 
     // ---- injector ------------------------------------------------------------------------
+
+    #[test]
+    fn planted_endpoint_peer_receives_no_bytes_when_identity_is_refused() {
+        let (ep, peer) = fake_app("planted-token", |mut stream, _| {
+            let mut bytes = Vec::new();
+            stream.read_to_end(&mut bytes).unwrap();
+            bytes
+        });
+        let out = SharedBuf::default();
+        assert_eq!(
+            run_relay_verified(
+                Cursor::new(frame(TOKEN_FRAME_TYPE)),
+                out,
+                Some(ep),
+                &opts(),
+                &|_| false
+            ),
+            RelayOutcome::AppNotRunning
+        );
+        assert!(peer.join().unwrap().is_empty());
+        assert!(RelayOptions::default().drain_timeout > Duration::from_secs(60));
+        let js = include_str!("../../../extension/background.js");
+        assert!(js.contains("PASSKEY_PRESENCE_BUDGET_MS = 75000"));
+        assert!(js.contains("now - pending.startedAt <= 100000"));
+    }
 
     #[test]
     fn injector_adds_token_to_object() {

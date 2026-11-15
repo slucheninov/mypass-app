@@ -95,8 +95,20 @@ pub struct ProposalEvent {
 #[derive(Serialize, Deserialize, specta::Type, tauri_specta::Event, Clone, Debug)]
 pub struct UnlockRequestedEvent;
 
+/// The secondary-folder sync status changed.
+#[derive(Serialize, specta::Type, tauri_specta::Event, Clone, Debug)]
+pub struct SyncStatusChanged(pub mypass_session::SecondaryStatus);
+
+/// Where the open vault is stored, or how that storage is doing, changed (iCloud Drive: served
+/// from the offline copy, edits not in iCloud yet, still downloading).
+#[derive(Serialize, specta::Type, tauri_specta::Event, Clone, Debug)]
+pub struct StorageStatusChanged(pub mypass_session::StorageStatus);
+
 /// The settings window, already open, should select `pane` (for example `browser`).
 #[derive(Serialize, Deserialize, specta::Type, tauri_specta::Event, Clone, PartialEq, Debug)]
 pub struct SettingsPaneEvent {
     pub pane: String,
 }
+
+#[derive(Serialize, specta::Type, tauri_specta::Event, Clone, Debug)]
+pub struct UpdateChanged(pub mypass_session::update::UpdateStatus);

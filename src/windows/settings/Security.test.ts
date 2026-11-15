@@ -62,8 +62,7 @@ describe("Security", () => {
   it("device_unlock_slot_mounted_when_available", async () => {
     await open({ deviceUnlockAvailable: true });
     const slot = await screen.findByTestId("device-unlock-slot");
-    expect(slot.children.length).toBe(0);
-    expect(slot.textContent).toBe("");
-    expect(slot.querySelectorAll("button, input, select, a, [tabindex]").length).toBe(0);
+    expect(slot.querySelectorAll("button[role=switch]")).toHaveLength(2);
+    expect(slot.querySelectorAll("select")).toHaveLength(2);
   });
 });

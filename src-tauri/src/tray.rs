@@ -130,6 +130,7 @@ pub fn separator_before(previous: &TrayItem, item: &TrayItem) -> bool {
 /// What a menu click does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrayAction {
+    OpenRelease,
     /// Show and focus the main window (`Unlock`, `Open MyPass`, the update row).
     ShowMain,
     /// Open an entry in the main window.
@@ -145,7 +146,8 @@ pub fn action_for_id(id: &str) -> Option<TrayAction> {
         return Some(TrayAction::OpenEntry(entry.to_owned()));
     }
     match id {
-        "unlock" | "open" | "update" => Some(TrayAction::ShowMain),
+        "unlock" | "open" => Some(TrayAction::ShowMain),
+        "update" => Some(TrayAction::OpenRelease),
         "lock" => Some(TrayAction::Lock),
         "settings" => Some(TrayAction::OpenSettings),
         "quit" => Some(TrayAction::Quit),
@@ -303,7 +305,7 @@ mod tests {
         );
         assert_eq!(
             action_for_id(&TrayItem::UpdateAvailable("1".into()).id()),
-            Some(TrayAction::ShowMain)
+            Some(TrayAction::OpenRelease)
         );
         assert_eq!(action_for_id(&TrayItem::Lock.id()), Some(TrayAction::Lock));
         assert_eq!(

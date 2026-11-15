@@ -35,6 +35,15 @@ export const commands = {
 	/**  Reveals the extension folder with the same helper as `app_reveal_backups`. */
 	browserShowExtensionFolder: () => typedError<null, ApiError>(__TAURI_INVOKE("browser_show_extension_folder")),
 	browserStatus: () => typedError<BrowserStatus_Serialize, ApiError>(__TAURI_INVOKE("browser_status")),
+	deviceUnlockStatus: () => typedError<DeviceUnlockStatus_Serialize, ApiError>(__TAURI_INVOKE("device_unlock_status")),
+	deviceUnlockConfigure: (password: string | null, touchId: boolean, macPassword: boolean) => typedError<DeviceUnlockStatus_Serialize, ApiError>(__TAURI_INVOKE("device_unlock_configure", { password, touchId, macPassword })),
+	deviceUnlockConsumeExtensionRequest: () => __TAURI_INVOKE<boolean>("device_unlock_consume_extension_request"),
+	updateStatus: () => __TAURI_INVOKE<UpdateStatus_Serialize>("update_status"),
+	updateCheckNow: () => typedError<UpdateStatus_Serialize, ApiError>(__TAURI_INVOKE("update_check_now")),
+	updateDismiss: () => typedError<null, ApiError>(__TAURI_INVOKE("update_dismiss")),
+	updateOpenRelease: () => typedError<null, ApiError>(__TAURI_INVOKE("update_open_release")),
+	/**  The webview's reason key is advisory only; Rust chooses the catalog reason. */
+	vaultUnlockDevice: (reasonKey: string) => typedError<SessionStatus_Serialize, ApiError>(__TAURI_INVOKE("vault_unlock_device", { reasonKey })),
 	draftClear: (entryId: string) => typedError<null, ApiError>(__TAURI_INVOKE("draft_clear", { entryId })),
 	draftSave: (entryId: string, notes: string) => typedError<boolean, ApiError>(__TAURI_INVOKE("draft_save", { entryId, notes })),
 	draftVersions: (entryId: string) => typedError<DraftVersionDto[], ApiError>(__TAURI_INVOKE("draft_versions", { entryId })),
@@ -88,14 +97,26 @@ export const commands = {
 	 */
 	shortcutConflictsTake: () => __TAURI_INVOKE<ShortcutConflictEvent[]>("shortcut_conflicts_take"),
 	sidebarGet: () => typedError<Sidebar_Serialize, ApiError>(__TAURI_INVOKE("sidebar_get")),
+	syncConnectSecondary: (folderToken: string, strategy: MigrationStrategy) => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_connect_secondary", { folderToken, strategy })),
+	syncDisconnectSecondary: () => typedError<null, ApiError>(__TAURI_INVOKE("sync_disconnect_secondary")),
+	syncNow: () => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_now")),
+	syncStatus: () => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_status")),
 	vaultCreate: (path: string, password: string, name: string) => typedError<SessionStatus_Serialize, ApiError>(__TAURI_INVOKE("vault_create", { path, password, name })),
 	vaultFindFiles: () => typedError<FoundVaultFileDto[], ApiError>(__TAURI_INVOKE("vault_find_files")),
 	vaultForget: (path: string) => typedError<null, ApiError>(__TAURI_INVOKE("vault_forget", { path })),
+	vaultLocationPick: () => typedError<string | null, ApiError>(__TAURI_INVOKE("vault_location_pick")),
+	vaultLocationProbe: (folderToken: string) => typedError<FolderProbe_Serialize, ApiError>(__TAURI_INVOKE("vault_location_probe", { folderToken })),
+	vaultLocationChange: (req: LocationChangeRequest) => typedError<SessionStatus_Serialize, ApiError>(__TAURI_INVOKE("vault_location_change", { req })),
 	vaultLock: () => typedError<null, ApiError>(__TAURI_INVOKE("vault_lock")),
 	vaultOpen: (path: string, password: string) => typedError<SessionStatus_Serialize, ApiError>(__TAURI_INVOKE("vault_open", { path, password })),
 	vaultOpenWarnings: (path: string) => typedError<OpenWarning[], ApiError>(__TAURI_INVOKE("vault_open_warnings", { path })),
 	vaultRecent: () => typedError<RecentVaultDto[], ApiError>(__TAURI_INVOKE("vault_recent")),
 	vaultStatus: () => typedError<SessionStatus_Serialize, ApiError>(__TAURI_INVOKE("vault_status")),
+	/**
+	 *  Where the open vault is stored (local or iCloud Drive) and whether it is served from the
+	 *  offline copy or still downloading.
+	 */
+	vaultStorageStatus: () => typedError<StorageStatus, ApiError>(__TAURI_INVOKE("vault_storage_status")),
 	vaultUnlock: (password: string) => typedError<SessionStatus_Serialize, ApiError>(__TAURI_INVOKE("vault_unlock", { password })),
 };
 
@@ -111,7 +132,10 @@ export const events = {
 	settingsChanged: makeEvent<SettingsChanged_Serialize, SettingsChanged_Deserialize>("settings-changed"),
 	settingsPaneEvent: makeEvent<SettingsPaneEvent, SettingsPaneEvent>("settings-pane-event"),
 	shortcutConflictEvent: makeEvent<ShortcutConflictEvent, ShortcutConflictEvent>("shortcut-conflict-event"),
+	storageStatusChanged: makeEvent<StorageStatusChanged, StorageStatusChanged>("storage-status-changed"),
+	syncStatusChanged: makeEvent<SyncStatusChanged_Serialize, SyncStatusChanged_Deserialize>("sync-status-changed"),
 	unlockRequestedEvent: makeEvent<UnlockRequestedEvent, UnlockRequestedEvent>("unlock-requested-event"),
+	updateChanged: makeEvent<UpdateChanged_Serialize, UpdateChanged_Deserialize>("update-changed"),
 	vaultChanged: makeEvent<VaultChanged, VaultChanged>("vault-changed"),
 };
 
@@ -271,6 +295,8 @@ export type BrowserStatus_Deserialize = {
 	registrations: BrowserRegistrationDto_Deserialize[],
 	/**  The host binary shipped with the app, when there is one. */
 	hostPath?: string | null,
+	endpointStore: string,
+	canReinstallHost: boolean,
 };
 
 /**  Everything the Browser pane shows. */
@@ -287,6 +313,8 @@ export type BrowserStatus_Serialize = {
 	registrations: BrowserRegistrationDto_Serialize[],
 	/**  The host binary shipped with the app, when there is one. */
 	hostPath: string | null,
+	endpointStore: string,
+	canReinstallHost: boolean,
 };
 
 /**  Never carries the full number or the CVV. */
@@ -354,6 +382,47 @@ export type CustomFieldEdit = {
 	key: string,
 	value: string,
 	protected: boolean,
+};
+
+/**  What the Security pane and the unlock screen show about device unlock. */
+export type DeviceUnlockStatus = DeviceUnlockStatus_Serialize | DeviceUnlockStatus_Deserialize;
+
+/**  What the Security pane and the unlock screen show about device unlock. */
+export type DeviceUnlockStatus_Deserialize = {
+	/**  The device can unlock at all (`availability != Unavailable`). */
+	available: boolean,
+	/**  Biometrics are set up on the device. */
+	biometrics: boolean,
+	/**  The current vault is enrolled for the mode the toggles select. */
+	enrolled: boolean,
+	touchIdEnabled: boolean,
+	macPasswordEnabled: boolean,
+	/**  The unlock screen may show the device-unlock button now. */
+	canOfferNow: boolean,
+	/**
+	 *  What blocks the button: the toggles, the enrolment or a window. `None` when none of them
+	 *  does, and `can_offer_now` is then `available`.
+	 */
+	reason?: OfferBlock | null,
+};
+
+/**  What the Security pane and the unlock screen show about device unlock. */
+export type DeviceUnlockStatus_Serialize = {
+	/**  The device can unlock at all (`availability != Unavailable`). */
+	available: boolean,
+	/**  Biometrics are set up on the device. */
+	biometrics: boolean,
+	/**  The current vault is enrolled for the mode the toggles select. */
+	enrolled: boolean,
+	touchIdEnabled: boolean,
+	macPasswordEnabled: boolean,
+	/**  The unlock screen may show the device-unlock button now. */
+	canOfferNow: boolean,
+	/**
+	 *  What blocks the button: the toggles, the enrolment or a window. `None` when none of them
+	 *  does, and `can_offer_now` is then `available`.
+	 */
+	reason: OfferBlock | null,
 };
 
 /**  One saved version of an entry's notes, as the webview sees it. */
@@ -533,10 +602,27 @@ export type EntrySummary = {
 export type EntryTypeDto = "login" | "address" | "card" | "notes" | "files";
 
 /**  The stable error code the UI localises. Serialised in camelCase. */
-export type ErrorCode = "locked" | "noVault" | "wrongPassword" | "alreadyExists" | "notFound" | "invalidInput" | "limitExceeded" | "corrupt" | "unsupported" | "changedOnDisk" | "io" | "quitting" | "generatorNoClass" | "generatorUnsatisfiable" | "cancelled" | "lockout" | "invalidated" | "notEnrolledOnDevice" | "deviceUnlockUnavailable" | "internal";
+export type ErrorCode = "locked" | "noVault" | "wrongPassword" | "alreadyExists" | "notFound" | "invalidInput" | "limitExceeded" | "corrupt" | "unsupported" | "changedOnDisk" | "io" | 
+/**  The vault is in iCloud Drive and did not download in time, try again later. */
+"downloading" | "quitting" | "generatorNoClass" | "generatorUnsatisfiable" | "cancelled" | "lockout" | "invalidated" | "notEnrolledOnDevice" | "deviceUnlockUnavailable" | "migrationLocked" | "migrationTargetUnreadable" | "migrationTargetNotAVault" | "migrationTargetPasswordMismatch" | "migrationTargetWriteFailed" | "migrationSourceInvalid" | "migrationSameFile" | "migrationValidationFailed" | "internal";
 
 /**  A single field to reveal or copy. `Totp` resolves to the current code. */
 export type FieldRef = { kind: "username" } | { kind: "password" } | { kind: "url" } | { kind: "notesBody" } | { kind: "cardNumber" } | { kind: "cardCvv" } | { kind: "totp" } | { kind: "custom"; key: string };
+
+/**  Probe consumes a grant and returns a fresh grant for the user's strategy decision. */
+export type FolderProbe = FolderProbe_Serialize | FolderProbe_Deserialize;
+
+/**  Probe consumes a grant and returns a fresh grant for the user's strategy decision. */
+export type FolderProbe_Deserialize = {
+	probe: TargetProbe_Deserialize,
+	folderToken: string,
+};
+
+/**  Probe consumes a grant and returns a fresh grant for the user's strategy decision. */
+export type FolderProbe_Serialize = {
+	probe: TargetProbe_Serialize,
+	folderToken: string,
+};
 
 /**  A `.kdbx` file found by the scanner. `modified` is Unix milliseconds, `size` bytes. */
 export type FoundVaultFileDto = {
@@ -674,6 +760,11 @@ export type ImportResult = {
 
 export type Language = "system" | "en" | "uk" | "ru";
 
+export type LocationChangeRequest = {
+	folderToken: string,
+	strategy: MigrationStrategy,
+};
+
 /**  Why the session was locked. */
 export type LockReason = "manual" | "idle" | "sleep" | "screenLock" | "hotkey" | "quit";
 
@@ -683,6 +774,19 @@ export type LockReason = "manual" | "idle" | "sleep" | "screenLock" | "hotkey" |
  */
 export type LoginItemStatus = "enabled" | "disabled" | "requiresApproval" | "notFound" | "unsupported";
 
+export type MigrationStrategy = "seedRemote" | "merge" | "adoptRemote" | "overwriteRemote";
+
+/**  Why device unlock cannot be offered right now. */
+export type OfferBlock = 
+/**  Both toggles are off. */
+"disabled" | 
+/**  The toggles are on but this vault has no enrolment for their mode. */
+"notEnrolled" | 
+/**  The last device unlock is older than the device window. */
+"deviceWindowExpired" | 
+/**  The master password was last typed longer ago than the account window (or never). */
+"accountWindowExpired";
+
 /**  The main window should open entry `id` (in the editor when `edit`). */
 export type OpenEntryEvent = {
 	id: string,
@@ -691,8 +795,6 @@ export type OpenEntryEvent = {
 
 /**  A reason to ask for confirmation before creating or opening a vault (D6, D7). */
 export type OpenWarning = 
-/**  The file lives under `~/Library/Mobile Documents` (iCloud Drive). */
-{ kind: "icloud" } | 
 /**  Another `com.mypass.app` process, with a different executable (the old Swift app), runs. */
 { kind: "oldAppRunning"; executable: string };
 
@@ -925,6 +1027,90 @@ export type SaveStatus_Serialize = {
 
 export type Scope = { kind: "category"; category: Category } | { kind: "group"; groupId: string };
 
+/**  Why the last secondary sync failed (a localisable code). The remote was left as it was. */
+export type SecondaryError = 
+/**  The copy does not open with the session password. */
+"wrongPassword" | 
+/**  The file is not a KDBX vault. */
+"notAVault" | 
+/**  A vault format this app does not read. */
+"unsupported" | 
+/**  The copy is damaged. */
+"corrupt" | 
+/**  The file is a different vault (another root group). */
+"differentVault" | 
+/**  The file is larger than any vault this app opens. */
+"tooLarge" | 
+/**  The path is not a regular file (a folder, a device, a pipe). */
+"notRegularFile" | 
+/**  The copy kept changing while it was synced. */
+"remoteBusy" | 
+/**  A read, write or checkpoint failure. */
+"io" | 
+/**
+ *  The copy is synced, but changes in the folder are not noticed: the folder watcher could
+ *  not start. It is retried with a growing delay.
+ */
+"watchFailed";
+
+/**  What the Settings sync pane shows (the `SyncStatusChanged` event payload). */
+export type SecondaryStatus = SecondaryStatus_Serialize | SecondaryStatus_Deserialize;
+
+/**  What the Settings sync pane shows (the `SyncStatusChanged` event payload). */
+export type SecondaryStatus_Deserialize = 
+/**  No secondary folder is configured. */
+{ state: "off" } | 
+/**
+ *  Configured and not running; `last_sync` is the time of the last success for this vault
+ *  and folder in this run of the app, in unix milliseconds.
+ */
+{ state: "idle"; lastSync?: number | null } | 
+/**  A sync is running. */
+{ state: "syncing" } | 
+/**
+ *  The folder cannot be used; retried every [`SECONDARY_RETRY`] except for `invalidFolder`
+ *  and `unsupportedFolder`.
+ */
+{ state: "unavailable"; reason: SecondaryUnavailable } | 
+/**  The last sync failed; the remote and the primary are untouched. */
+{ state: "error"; code: SecondaryError };
+
+/**  What the Settings sync pane shows (the `SyncStatusChanged` event payload). */
+export type SecondaryStatus_Serialize = 
+/**  No secondary folder is configured. */
+{ state: "off" } | 
+/**
+ *  Configured and not running; `last_sync` is the time of the last success for this vault
+ *  and folder in this run of the app, in unix milliseconds.
+ */
+{ state: "idle"; lastSync: number | null } | 
+/**  A sync is running. */
+{ state: "syncing" } | 
+/**
+ *  The folder cannot be used; retried every [`SECONDARY_RETRY`] except for `invalidFolder`
+ *  and `unsupportedFolder`.
+ */
+{ state: "unavailable"; reason: SecondaryUnavailable } | 
+/**  The last sync failed; the remote and the primary are untouched. */
+{ state: "error"; code: SecondaryError };
+
+/**  Why the secondary folder cannot be used right now (a localisable code). */
+export type SecondaryUnavailable = 
+/**  Not absolute, not a directory, or the primary vault's own folder. */
+"invalidFolder" | 
+/**  The folder does not exist (an unmounted drive, a deleted folder). */
+"folderMissing" | 
+/**  The folder or the copy in it cannot be written. */
+"readOnly" | 
+/**  The storage did not answer in time. */
+"timedOut" | 
+/**
+ *  The folder's volume cannot replace the copy without risking another writer's version
+ *  (no atomic exchange and no hard links: FAT, exFAT, some network shares). Not retried:
+ *  choose a folder on another volume.
+ */
+"unsupportedFolder";
+
 export type SecurityFlag = "reused" | "weak" | "emptyPassword" | "insecureUrl";
 
 /**  Lock state, vault or path changed. */
@@ -980,18 +1166,26 @@ export type SettingsPaneEvent = {
 };
 
 /**
- *  A partial update: every field of [`Settings`] except `recent_vaults` (owned by
- *  [`SettingsStore::remember_vault`] / [`SettingsStore::forget_vault`]). `None` leaves a field
- *  untouched; `vault_path` and `secondary_folder` use `Some(None)` (JSON `null`) to clear;
- *  `generator` replaces the whole options object.
+ *  A partial update from the webview: every field of [`Settings`] except `recent_vaults` (owned by
+ *  [`SettingsStore::remember_vault`] / [`SettingsStore::forget_vault`]), the two device-unlock
+ *  toggles and `secondary_folder`. Those three change only through Rust
+ *  ([`SettingsStore::set_device_unlock_toggles`] behind the device-unlock enrolment,
+ *  [`SettingsStore::set_secondary_folder`] behind the sync commands), so no window can switch
+ *  device unlock on without an enrolment or point sync at a folder it typed. `None` leaves a field
+ *  untouched; `vault_path` uses `Some(None)` (JSON `null`) to clear; `generator` replaces the whole
+ *  options object.
  */
 export type SettingsPatch = SettingsPatch_Serialize | SettingsPatch_Deserialize;
 
 /**
- *  A partial update: every field of [`Settings`] except `recent_vaults` (owned by
- *  [`SettingsStore::remember_vault`] / [`SettingsStore::forget_vault`]). `None` leaves a field
- *  untouched; `vault_path` and `secondary_folder` use `Some(None)` (JSON `null`) to clear;
- *  `generator` replaces the whole options object.
+ *  A partial update from the webview: every field of [`Settings`] except `recent_vaults` (owned by
+ *  [`SettingsStore::remember_vault`] / [`SettingsStore::forget_vault`]), the two device-unlock
+ *  toggles and `secondary_folder`. Those three change only through Rust
+ *  ([`SettingsStore::set_device_unlock_toggles`] behind the device-unlock enrolment,
+ *  [`SettingsStore::set_secondary_folder`] behind the sync commands), so no window can switch
+ *  device unlock on without an enrolment or point sync at a folder it typed. `None` leaves a field
+ *  untouched; `vault_path` uses `Some(None)` (JSON `null`) to clear; `generator` replaces the whole
+ *  options object.
  */
 export type SettingsPatch_Deserialize = {
 	language?: Language | null,
@@ -1008,20 +1202,21 @@ export type SettingsPatch_Deserialize = {
 	shortcutShow?: string | null,
 	generator?: GeneratorOptionsDto_Deserialize | null,
 	passkeyProxyEnabled?: boolean | null,
-	unlockTouchIdEnabled?: boolean | null,
-	unlockMacPasswordEnabled?: boolean | null,
 	unlockWithDeviceWindow?: UnlockWithDeviceWindow | null,
 	requireAccountPasswordWindow?: RequireAccountPasswordWindow | null,
-	secondaryFolder?: string | null,
 	updateCheckEnabled?: boolean | null,
 	vaultPath?: string | null,
 };
 
 /**
- *  A partial update: every field of [`Settings`] except `recent_vaults` (owned by
- *  [`SettingsStore::remember_vault`] / [`SettingsStore::forget_vault`]). `None` leaves a field
- *  untouched; `vault_path` and `secondary_folder` use `Some(None)` (JSON `null`) to clear;
- *  `generator` replaces the whole options object.
+ *  A partial update from the webview: every field of [`Settings`] except `recent_vaults` (owned by
+ *  [`SettingsStore::remember_vault`] / [`SettingsStore::forget_vault`]), the two device-unlock
+ *  toggles and `secondary_folder`. Those three change only through Rust
+ *  ([`SettingsStore::set_device_unlock_toggles`] behind the device-unlock enrolment,
+ *  [`SettingsStore::set_secondary_folder`] behind the sync commands), so no window can switch
+ *  device unlock on without an enrolment or point sync at a folder it typed. `None` leaves a field
+ *  untouched; `vault_path` uses `Some(None)` (JSON `null`) to clear; `generator` replaces the whole
+ *  options object.
  */
 export type SettingsPatch_Serialize = {
 	language?: Language,
@@ -1038,11 +1233,8 @@ export type SettingsPatch_Serialize = {
 	shortcutShow?: string,
 	generator?: GeneratorOptionsDto_Serialize,
 	passkeyProxyEnabled?: boolean,
-	unlockTouchIdEnabled?: boolean,
-	unlockMacPasswordEnabled?: boolean,
 	unlockWithDeviceWindow?: UnlockWithDeviceWindow,
 	requireAccountPasswordWindow?: RequireAccountPasswordWindow,
-	secondaryFolder?: string,
 	updateCheckEnabled?: boolean,
 	vaultPath?: string,
 };
@@ -1169,6 +1361,64 @@ export type SkippedRow = {
 
 export type SortKey = "title" | "modified";
 
+/**
+ *  Where the open vault is stored and how that storage is doing (the `StorageStatusChanged`
+ *  event payload).
+ */
+export type StorageStatus = {
+	/**  `local` also when no vault is open. */
+	location: VaultLocation,
+	/**
+	 *  The vault is served from the offline copy (iCloud Drive is unavailable, or the copy holds
+	 *  edits not in iCloud yet).
+	 */
+	fallbackActive: boolean,
+	/**
+	 *  The offline copy holds edits that are not in iCloud yet; they are merged into iCloud when
+	 *  it is available again.
+	 */
+	cacheAhead: boolean,
+	/**  The last read waited too long for iCloud to download the vault. */
+	downloading: boolean,
+};
+
+/**
+ *  Where the open vault is stored, or how that storage is doing, changed (iCloud Drive: served
+ *  from the offline copy, edits not in iCloud yet, still downloading).
+ */
+export type StorageStatusChanged = StorageStatus;
+
+/**  The secondary-folder sync status changed. */
+export type SyncStatusChanged = SyncStatusChanged_Serialize | SyncStatusChanged_Deserialize;
+
+/**  The secondary-folder sync status changed. */
+export type SyncStatusChanged_Deserialize = SecondaryStatus_Deserialize;
+
+/**  The secondary-folder sync status changed. */
+export type SyncStatusChanged_Serialize = SecondaryStatus_Serialize;
+
+export type TargetProbe = TargetProbe_Serialize | TargetProbe_Deserialize;
+
+export type TargetProbe_Deserialize = {
+	exists: boolean,
+	/**  Unix seconds; f64 at the IPC boundary, as for the other session DTOs. */
+	modified?: number | null,
+	byteCount?: number | null,
+	looksLikeVault: boolean,
+	insideIcloud: boolean,
+	sameAsCurrent: boolean,
+};
+
+export type TargetProbe_Serialize = {
+	exists: boolean,
+	/**  Unix seconds; f64 at the IPC boundary, as for the other session DTOs. */
+	modified: number | null,
+	byteCount: number | null,
+	looksLikeVault: boolean,
+	insideIcloud: boolean,
+	sameAsCurrent: boolean,
+};
+
 export type Theme = "system" | "light" | "dark";
 
 /**  A TOTP display value (the code is meant to be shown, the secret never leaves Rust). */
@@ -1188,6 +1438,36 @@ export type UnlockRequestedEvent = null;
  */
 export type UnlockWithDeviceWindow = "oneHour" | "fourHours" | "eightHours" | "twentyFourHours" | "never";
 
+export type UpdateChanged = UpdateChanged_Serialize | UpdateChanged_Deserialize;
+
+export type UpdateChanged_Deserialize = UpdateStatus_Deserialize;
+
+export type UpdateChanged_Serialize = UpdateStatus_Serialize;
+
+export type UpdateFailure = "offline" | "rateLimited" | "badStatus" | "unexpected" | "unknownVersion";
+
+export type UpdateRelease = {
+	version: string,
+	url: string,
+};
+
+export type UpdateState = { state: "idle" } | { state: "checking" } | { state: "upToDate"; checkedAt: number | null } | { state: "available"; version: string; url: string } | { state: "failed"; kind: UpdateFailure };
+
+/**  Status and banner are separate: a failed manual check must preserve an existing banner. */
+export type UpdateStatus = UpdateStatus_Serialize | UpdateStatus_Deserialize;
+
+/**  Status and banner are separate: a failed manual check must preserve an existing banner. */
+export type UpdateStatus_Deserialize = {
+	status: UpdateState,
+	banner?: UpdateRelease | null,
+};
+
+/**  Status and banner are separate: a failed manual check must preserve an existing banner. */
+export type UpdateStatus_Serialize = {
+	status: UpdateState,
+	banner: UpdateRelease | null,
+};
+
 /**  The vault content changed in memory (lists and details are stale). */
 export type VaultChanged = null;
 
@@ -1203,7 +1483,19 @@ export type VaultFileStatus =
 /**  The path no longer exists (moved, deleted, unmounted). */
 { kind: "missing" } | 
 /**  The path exists but its metadata cannot be read. */
-{ kind: "unreadable"; message: string };
+{ kind: "unreadable"; message: string } | 
+/**
+ *  The vault is in iCloud Drive and not downloaded to this Mac yet (a placeholder), or the
+ *  last read timed out waiting for the download.
+ */
+{ kind: "downloading" };
+
+/**  Where a vault file is kept. */
+export type VaultLocation = 
+/**  A plain folder on this computer (or a drive the OS mounts as one). */
+"local" | 
+/**  iCloud Drive (any ubiquity container under `~/Library/Mobile Documents`). */
+"iCloudDrive";
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

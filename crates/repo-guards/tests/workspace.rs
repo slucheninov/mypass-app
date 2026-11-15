@@ -295,9 +295,19 @@ fn workspace_lints_forbid_unsafe() {
 /// The only member allowed its own `[lints]` tables (see `workspace_lints_forbid_unsafe`).
 const OWN_LINTS_MEMBER: &str = "mypass-platform";
 
-/// Files of our crates where `unsafe` code may appear. Stage 6 adds
-/// `crates/mypass-platform/src/windows.rs` here for the Win32 calls; nothing else, ever.
-const UNSAFE_ALLOWED_FILES: &[&str] = &["crates/mypass-platform/src/macos.rs"];
+/// Files of our crates where `unsafe` code may appear: the macOS glue of `mypass-platform`, one
+/// file per framework whose bindings are `unsafe` (stage 5 added the ServiceManagement login item,
+/// the LocalAuthentication device unlock, the Foundation file coordination for iCloud Drive and
+/// the Keychain access list of the bridge endpoint; ruling R1 of the stage 5 plan). Stage 6 adds `crates/mypass-platform/src/windows.rs` for the
+/// Win32 calls. Never a file outside `mypass-platform`.
+const UNSAFE_ALLOWED_FILES: &[&str] = &[
+    "crates/mypass-platform/src/macos_peer_process.rs",
+    "crates/mypass-platform/src/macos.rs",
+    "crates/mypass-platform/src/macos_login_item.rs",
+    "crates/mypass-platform/src/macos_device_unlock.rs",
+    "crates/mypass-platform/src/macos_icloud.rs",
+    "crates/mypass-platform/src/macos_keychain_acl.rs",
+];
 
 /// Blanks out comments (line, nested block), string literals (plain and raw) and char literals,
 /// keeping every other byte, so token scans see code only. Lifetimes (`'a`) are left alone.
@@ -707,4 +717,381 @@ fn toolchain_pins_agree() {
             }
         }
     }
+}
+
+/// Crates that open outbound HTTP connections. Only `mypass-update` may name one, as an optional
+/// dependency behind its `github` feature (R23).
+const HTTP_CLIENT_CRATES: [&str; 7] = [
+    "ureq",
+    "reqwest",
+    "hyper",
+    "isahc",
+    "attohttpc",
+    "surf",
+    "curl",
+];
+
+fn collect_dependency_names(table: &Table, out: &mut Vec<(String, Value)>) {
+    for (key, value) in table {
+        if key.ends_with("dependencies") {
+            if let Some(deps) = value.as_table() {
+                for (name, spec) in deps {
+                    out.push((name.clone(), spec.clone()));
+                }
+            }
+        } else if let Some(nested) = value.as_table() {
+            // `[target.'cfg(..)'.dependencies]` and similar nested tables.
+            collect_dependency_names(nested, out);
+        }
+    }
+}
+
+fn dependencies_of(manifest: &Table) -> Vec<(String, Value)> {
+    let mut out = Vec::new();
+    collect_dependency_names(manifest, &mut out);
+    out
+}
+
+#[test]
+fn http_client_only_behind_the_update_crate_github_feature() {
+    for (path, manifest) in member_manifests() {
+        let package = manifest["package"]["name"].as_str().unwrap().to_owned();
+        let deps = dependencies_of(&manifest);
+        for (name, spec) in &deps {
+            if HTTP_CLIENT_CRATES.contains(&name.as_str()) {
+                assert_eq!(
+                    package, "mypass-update",
+                    "{path}: {name} is an HTTP client; only mypass-update may depend on one"
+                );
+                assert_eq!(
+                    spec.get("optional").and_then(Value::as_bool),
+                    Some(true),
+                    "{path}: {name} must be optional (behind the `github` feature)"
+                );
+            }
+        }
+        if package != "mypass-update" {
+            // Only the app shell enables the client; nobody else may even ask for the feature, and
+            // the host never links the update crate at all.
+            for (name, spec) in &deps {
+                if name != "mypass-update" {
+                    continue;
+                }
+                assert!(
+                    matches!(package.as_str(), "mypass-app" | "mypass-session"),
+                    "{path}: {package} must not depend on mypass-update"
+                );
+                let features: Vec<&str> = spec
+                    .get("features")
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter().filter_map(Value::as_str).collect())
+                    .unwrap_or_default();
+                if package != "mypass-app" {
+                    assert!(
+                        features.is_empty(),
+                        "{path}: only mypass-app may enable mypass-update features"
+                    );
+                }
+            }
+            continue;
+        }
+        // The update crate itself: the client is opt-in and it depends on no MyPass crate.
+        let features = manifest.get("features").and_then(Value::as_table);
+        let default_enables_github = features
+            .and_then(|f| f.get("default"))
+            .and_then(Value::as_array)
+            .is_some_and(|a| a.iter().any(|v| v.as_str() == Some("github")));
+        assert!(
+            !default_enables_github,
+            "{path}: `github` must stay out of the default features"
+        );
+        let github: Vec<&str> = features
+            .and_then(|f| f.get("github"))
+            .and_then(Value::as_array)
+            .expect("mypass-update has a `github` feature")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(
+            github,
+            ["dep:ureq"],
+            "{path}: the github feature enables ureq only"
+        );
+        for (name, _) in &deps {
+            assert!(
+                !name.starts_with("mypass-"),
+                "{path}: mypass-update must depend on no MyPass crate (found {name})"
+            );
+        }
+    }
+}
+
+#[test]
+fn http_client_code_only_in_update_github_rs() {
+    let Some(files) = tracked_files() else {
+        println!("skipped: not a git checkout");
+        return;
+    };
+    // The loopback bridge opens connections to 127.0.0.1 only; that is the one other user of a
+    // raw socket (its tests are skipped below with every other `tests/` file).
+    const LOOPBACK_FILES: [&str; 3] = [
+        "crates/mypass-bridge/src/server.rs",
+        "crates/mypass-bridge/src/relay.rs",
+        "src-tauri/src/bridge.rs",
+    ];
+    let mut offenders = Vec::new();
+    for path in files {
+        let rel = rel_str(&path);
+        let ours = rel.starts_with("crates/") || rel.starts_with("src-tauri/");
+        if !ours
+            || !rel.ends_with(".rs")
+            || rel.contains("/tests/")
+            || rel.starts_with("crates/repo-guards/")
+            || rel == "crates/mypass-update/src/github.rs"
+        {
+            continue;
+        }
+        let code = strip_comments_and_strings(&read(&rel));
+        for word in HTTP_CLIENT_CRATES {
+            if word_positions(&code, word).next().is_some() {
+                offenders.push(format!("{rel}: names the HTTP client `{word}`"));
+            }
+        }
+        if code.contains("TcpStream::connect") && !LOOPBACK_FILES.contains(&rel.as_str()) {
+            offenders.push(format!("{rel}: opens a raw TCP connection"));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "HTTP clients and raw sockets belong in crates/mypass-update/src/github.rs and the loopback \
+         bridge only:\n{}",
+        offenders.join("\n")
+    );
+}
+
+/// Narrow call-expression exceptions, never whole files or arbitrary vault-path deletion.
+/// The count also catches a duplicated call in an otherwise allowed module.
+const FILE_MUTATIONS: &[(&str, &str, usize)] = &[
+    // Atomic writer: armed private temp; rename is its existing atomic replacement primitive.
+    (
+        "crates/mypass-kdbx/src/file.rs",
+        "remove_file(&self.path)",
+        1,
+    ),
+    ("crates/mypass-kdbx/src/file.rs", "rename(source,target)", 1),
+    // Compare-and-replace moves aside competing bytes; only checked/merged bytes are unlinked.
+    ("crates/mypass-kdbx/src/file.rs", "rename(from,to)", 1),
+    (
+        "crates/mypass-kdbx/src/file.rs",
+        "remove_file(&names.probe)",
+        1,
+    ),
+    ("crates/mypass-kdbx/src/file.rs", "remove_file(at)", 1),
+    // Existing backup retention and failure marker; not an active primary or secondary vault.
+    (
+        "crates/mypass-session/src/backups.rs",
+        "remove_file(folder.join(item.id))",
+        1,
+    ),
+    (
+        "crates/mypass-session/src/backups.rs",
+        "remove_file(folder.join(FAILURE_FILE))",
+        1,
+    ),
+    // Settings quarantine and private draft retention/unreadable-file quarantine.
+    (
+        "crates/mypass-session/src/settings.rs",
+        "rename(&path,PathBuf::from(bad))",
+        1,
+    ),
+    (
+        "crates/mypass-session/src/drafts.rs",
+        "rename(self.path(entry),self.unreadable_path(entry))",
+        1,
+    ),
+    (
+        "crates/mypass-session/src/drafts.rs",
+        "remove_file(self.path(entry))",
+        1,
+    ),
+    (
+        "crates/mypass-session/src/drafts.rs",
+        "remove_file(self.unreadable_path(entry))",
+        1,
+    ),
+    (
+        "crates/mypass-session/src/drafts.rs",
+        "remove_file(item.path())",
+        1,
+    ),
+    (
+        "crates/mypass-session/src/drafts.rs",
+        "remove_file(&path)",
+        3,
+    ),
+    // Unsaved-copy temporary name only, after attempting a no-replace hard-link publication.
+    (
+        "crates/mypass-session/src/saving.rs",
+        "remove_file(&temp)",
+        1,
+    ),
+    // Update state atomic publication and temp cleanup (sync state uses write_atomic).
+    ("crates/mypass-update/src/state.rs", "rename(&tmp,path)", 1),
+    ("crates/mypass-update/src/state.rs", "remove_file(&tmp)", 1),
+    // File secret store: private temps and secret deletion, including the retired endpoint.
+    (
+        "crates/mypass-platform/src/file_store.rs",
+        "remove_file(entry.path())",
+        1,
+    ),
+    (
+        "crates/mypass-platform/src/file_store.rs",
+        "rename(&temp,&target)",
+        1,
+    ),
+    (
+        "crates/mypass-platform/src/file_store.rs",
+        "remove_file(&temp)",
+        1,
+    ),
+    (
+        "crates/mypass-platform/src/file_store.rs",
+        "remove_file(&path)",
+        1,
+    ),
+    // Native-host registration: owned manifests/obsolete dev host, atomic install temp cleanup.
+    (
+        "crates/mypass-platform/src/macos_host_install.rs",
+        "remove_file(&manifest)",
+        1,
+    ),
+    (
+        "crates/mypass-platform/src/macos_host_install.rs",
+        "remove_file(&self.paths.host_exe)",
+        1,
+    ),
+    (
+        "crates/mypass-platform/src/macos_host_install.rs",
+        "remove_file(exe)",
+        1,
+    ),
+    (
+        "crates/mypass-platform/src/macos_host_install.rs",
+        "rename(&temp,dest)",
+        1,
+    ),
+    (
+        "crates/mypass-platform/src/macos_host_install.rs",
+        "remove_file(&temp)",
+        1,
+    ),
+    // Writable extension copy: random staging directory only; source bundle is read-only.
+    (
+        "src-tauri/src/extension_copy.rs",
+        "rename(&temporary,&destination)",
+        1,
+    ),
+    (
+        "src-tauri/src/extension_copy.rs",
+        "remove_dir_all(&temporary)",
+        1,
+    ),
+    // No iCloud cache deletion exception: the implementation retains and refreshes the cache.
+];
+
+fn mutation_calls(source: &str) -> Vec<String> {
+    // Remove only cfg(test) items, keeping production items that follow a test module.
+    let mut code: String = strip_comments_and_strings(source)
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    while let Some(start) = code.find("#[cfg(test)]") {
+        let body = start + "#[cfg(test)]".len();
+        let mut depth = 0;
+        let mut end = code.len();
+        for (offset, c) in code[body..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = body + offset + 1;
+                        break;
+                    }
+                }
+                ';' if depth == 0 => {
+                    end = body + offset + 1;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        code.replace_range(start..end, "");
+    }
+    let mut calls = Vec::new();
+    for operation in ["remove_file", "remove_dir_all", "rename"] {
+        for start in word_positions(&code, operation) {
+            let tail = &code[start + operation.len()..];
+            if !tail.starts_with('(') {
+                continue;
+            }
+            // `rename` is otherwise also a model operation. Only filesystem calls are relevant.
+            if operation == "rename" && !code[..start].ends_with("fs::") {
+                continue;
+            }
+            let mut depth = 0;
+            for (offset, c) in tail.char_indices() {
+                match c {
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    _ => {}
+                }
+                if depth == 0 {
+                    calls.push(code[start..start + operation.len() + offset + 1].to_owned());
+                    break;
+                }
+            }
+        }
+    }
+    calls
+}
+
+#[test]
+fn no_remove_file_calls_outside_allowlist() {
+    let Some(files) = tracked_files() else {
+        return;
+    };
+    let mut actual = std::collections::BTreeMap::new();
+    for path in files {
+        let rel = rel_str(&path);
+        if !(rel.starts_with("crates/") || rel.starts_with("src-tauri/"))
+            || !rel.ends_with(".rs")
+            || rel.contains("/tests/")
+            || rel.ends_with("/tests.rs")
+            || rel.ends_with("_tests.rs")
+            || rel.starts_with("crates/repo-guards/")
+        {
+            continue;
+        }
+        for call in mutation_calls(&read(&rel)) {
+            *actual.entry((rel.clone(), call)).or_insert(0usize) += 1;
+        }
+    }
+    let expected = FILE_MUTATIONS
+        .iter()
+        .map(|(file, call, count)| ((file.to_string(), call.to_string()), *count))
+        .collect();
+    assert_eq!(
+        actual, expected,
+        "filesystem mutation needs a narrowly justified R38 exception"
+    );
+}
+
+#[test]
+fn mutation_scan_detects_new_calls_and_ignores_literals_and_unit_tests() {
+    assert_eq!(
+        mutation_calls("fs::remove_file(vault); fs::rename(a, b); fs::remove_dir_all(vault);"),
+        ["remove_file(vault)", "remove_dir_all(vault)", "rename(a,b)"]
+    );
+    assert!(mutation_calls("// fs::remove_file(vault)\nlet s = \"fs::rename(a,b)\";\n#[cfg(test)]\nmod tests { fn t() { fs::remove_file(vault); } }").is_empty());
 }

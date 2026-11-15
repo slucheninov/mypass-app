@@ -22,6 +22,7 @@ use crate::autolock::AutoLock;
 use crate::backups::{BackupManager, BackupStatus};
 use crate::clipboard_service::ClipboardService;
 use crate::csv_import::{self, CsvImportError};
+use crate::device_unlock::DeviceUnlockService;
 use crate::drafts::{self, DraftStore, DraftVersionDto};
 use crate::dto::{
     AppInfo, CsvPreview, EntryDetailDto, EntryEditModel, EntryQuery, EntrySummary, EntryTypeDto,
@@ -33,6 +34,7 @@ use crate::editing;
 use crate::generator_service;
 use crate::queries;
 use crate::scheduler::{lock, Scheduler, ThreadScheduler};
+use crate::secondary::{SecondaryStatus, SecondarySync};
 use crate::session::{
     GeneratorRulesError, LockReason, SessionDeps, SessionError, SessionStatus, VaultSession,
 };
@@ -65,6 +67,8 @@ pub enum ErrorCode {
     Unsupported,
     ChangedOnDisk,
     Io,
+    /// The vault is in iCloud Drive and did not download in time, try again later.
+    Downloading,
     Quitting,
     GeneratorNoClass,
     GeneratorUnsatisfiable,
@@ -73,6 +77,14 @@ pub enum ErrorCode {
     Invalidated,
     NotEnrolledOnDevice,
     DeviceUnlockUnavailable,
+    MigrationLocked,
+    MigrationTargetUnreadable,
+    MigrationTargetNotAVault,
+    MigrationTargetPasswordMismatch,
+    MigrationTargetWriteFailed,
+    MigrationSourceInvalid,
+    MigrationSameFile,
+    MigrationValidationFailed,
     Internal,
 }
 
@@ -87,7 +99,7 @@ pub struct ApiError {
 }
 
 impl ApiError {
-    fn new(code: ErrorCode, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: ErrorCode, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
@@ -111,6 +123,8 @@ impl From<SessionError> for ApiError {
             S::Unsupported(m) => (C::Unsupported, m.clone()),
             S::ChangedOnDisk => (C::ChangedOnDisk, e.to_string()),
             S::Io(m) => (C::Io, m.clone()),
+            // A bare code: the UI explains it.
+            S::Downloading => (C::Downloading, String::new()),
             S::Quitting => (C::Quitting, e.to_string()),
             // Bare codes: the UI has its own wording for both.
             S::GeneratorRules(GeneratorRulesError::NoClass) => (C::GeneratorNoClass, String::new()),
@@ -170,6 +184,13 @@ impl ProcessLookup for NoOtherProcesses {
     }
 }
 
+/// The worker schedulers of [`AppCore::assemble`] (one shared `ManualScheduler` in tests).
+struct Schedulers {
+    main: Arc<dyn Scheduler>,
+    clipboard: Arc<dyn Scheduler>,
+    sync: Arc<dyn Scheduler>,
+}
+
 fn parse_id(id: &str) -> Result<Uuid, SessionError> {
     Uuid::parse_str(id).map_err(|_| SessionError::InvalidInput("malformed id".into()))
 }
@@ -183,6 +204,11 @@ pub struct AppCore {
     pub clipboard: ClipboardService,
     pub backups: BackupManager,
     pub unlock_requests: UnlockRequestState,
+    /// Device unlock (status, enrolment, the explicit prompt); observes the session.
+    pub device_unlock: DeviceUnlockService,
+    /// Secondary-folder sync (status, `sync_now`, disconnect); observes the session.
+    pub secondary: SecondarySync,
+    pub update: crate::update::UpdateService,
     platform: Platform,
     scheduler: Arc<dyn Scheduler>,
     paths: AppPaths,
@@ -191,6 +217,7 @@ pub struct AppCore {
     /// Serialises draft work. Holds the id of the vault whose draft key was created in memory
     /// but has not yet reached the disk (cleared only by a successful flush).
     drafts: Arc<Mutex<Option<String>>>,
+    migration_gate: Arc<Mutex<()>>,
 }
 
 impl AppCore {
@@ -198,21 +225,38 @@ impl AppCore {
     /// timers. Two schedulers, not one: the session, auto-lock and unlock-request timers share
     /// one, and the clipboard clear has its own, so a vault write that hangs on a stuck drive
     /// cannot hold back the clearing of a copied password. (A single scheduler would otherwise
-    /// serve every service: the services only need the `Scheduler` trait.)
+    /// serve every service: the services only need the `Scheduler` trait.) The secondary-folder
+    /// sync gets a third worker for the same reason: a slow sync folder never delays the
+    /// autosave, auto-lock or unlock-request timers.
     pub fn new(paths: AppPaths, platform: Platform) -> Result<Self, ApiError> {
         let worker = |name: &str| {
             ThreadScheduler::new(name).map_err(|e| ApiError::new(ErrorCode::Io, e.to_string()))
         };
         let scheduler = worker("mypass-scheduler")?;
         let clipboard_scheduler = worker("mypass-clipboard")?;
+        let sync_scheduler = worker("mypass-sync")?;
         let settings = SettingsStore::load(paths.config_dir.join("settings.json"));
-        Ok(Self::assemble(
+        let core = Self::assemble(
             paths,
             platform,
-            scheduler,
-            clipboard_scheduler,
+            Schedulers {
+                main: scheduler,
+                clipboard: clipboard_scheduler,
+                sync: sync_scheduler,
+            },
             settings,
-        ))
+        );
+        // Vaults in iCloud Drive go through the file coordinator, with the offline copy under
+        // `<data dir>/icloud-cache` (stage 5, T8).
+        core.session
+            .set_io_resolver(Some(crate::storage::icloud_resolver(
+                mypass_platform::coordinated_files(),
+                core.paths.home().to_path_buf(),
+                core.paths
+                    .data_dir
+                    .join(mypass_sync::icloud::ICLOUD_CACHE_DIR),
+            )));
+        Ok(core)
     }
 
     /// Wiring for tests: every timer on `scheduler` (a `ManualScheduler`), settings as given.
@@ -222,16 +266,25 @@ impl AppCore {
         scheduler: Arc<dyn Scheduler>,
         settings: SettingsStore,
     ) -> Self {
-        Self::assemble(paths, platform, scheduler.clone(), scheduler, settings)
+        let schedulers = Schedulers {
+            main: scheduler.clone(),
+            clipboard: scheduler.clone(),
+            sync: scheduler,
+        };
+        Self::assemble(paths, platform, schedulers, settings)
     }
 
     fn assemble(
         paths: AppPaths,
         platform: Platform,
-        scheduler: Arc<dyn Scheduler>,
-        clipboard_scheduler: Arc<dyn Scheduler>,
+        schedulers: Schedulers,
         settings: SettingsStore,
     ) -> Self {
+        let Schedulers {
+            main: scheduler,
+            clipboard: clipboard_scheduler,
+            sync: sync_scheduler,
+        } = schedulers;
         let session = VaultSession::new(SessionDeps {
             settings: settings.clone(),
             scheduler: scheduler.clone(),
@@ -244,9 +297,31 @@ impl AppCore {
             clipboard_scheduler,
             settings.clone(),
         );
+        let unlock_requests = UnlockRequestState::new(scheduler.clone());
+        let device_unlock = DeviceUnlockService::new(
+            session.clone(),
+            settings.clone(),
+            platform.device_unlock.clone(),
+            scheduler.clone(),
+            unlock_requests.clone(),
+            &paths,
+        );
+        let secondary =
+            SecondarySync::new(session.clone(), settings.clone(), sync_scheduler, &paths);
+        secondary.attach();
+        let update = crate::update::UpdateService::new(
+            scheduler.clone(),
+            settings.clone(),
+            Arc::new(mypass_update::NoopFeed),
+            "0.0.0",
+            &paths.config_dir,
+        );
         Self {
+            update,
             backups: session.backups(),
-            unlock_requests: UnlockRequestState::new(scheduler.clone()),
+            secondary,
+            unlock_requests,
+            device_unlock,
             session,
             settings,
             autolock,
@@ -256,6 +331,7 @@ impl AppCore {
             paths,
             processes: Arc::new(NoOtherProcesses),
             drafts: Arc::new(Mutex::new(None)),
+            migration_gate: Arc::new(Mutex::new(())),
         }
     }
 
@@ -402,6 +478,12 @@ impl AppCore {
         Ok(self.session.status())
     }
 
+    /// Where the open vault is stored (local or iCloud Drive) and whether it is served from the
+    /// offline copy or still downloading.
+    pub fn vault_storage_status(&self) -> Result<crate::storage::StorageStatus, ApiError> {
+        Ok(self.session.storage_status())
+    }
+
     pub fn vault_create(
         &self,
         path: &str,
@@ -461,7 +543,6 @@ impl AppCore {
         let current = std::env::current_exe().unwrap_or_default();
         Ok(vault_files::open_warnings(
             Path::new(path),
-            self.paths.home(),
             self.processes.as_ref(),
             &current,
         ))
@@ -844,6 +925,7 @@ impl AppCore {
     pub fn settings_update(&self, patch: SettingsPatch) -> Result<Settings, ApiError> {
         let updated = self.settings.update(patch)?;
         self.autolock.settings_changed();
+        self.update.enabled_changed();
         Ok(updated)
     }
 
@@ -874,6 +956,228 @@ impl AppCore {
         Ok(restored?)
     }
 
+    /// Rust-only default for the folder dialog; the webview never chooses this path.
+    pub fn vault_location_start(&self) -> PathBuf {
+        mypass_sync::icloud::ICloudDriveLocation::root(self.paths.home())
+    }
+
+    fn migration_target(&self, folder: &Path) -> Result<PathBuf, ApiError> {
+        self.writable()?;
+        if !folder.is_absolute() || !folder.is_dir() {
+            return Err(ApiError::new(ErrorCode::InvalidInput, "invalidFolder"));
+        }
+        let current = self.session.vault_path().ok_or(SessionError::NoVault)?;
+        let name = current
+            .file_name()
+            .ok_or_else(|| ApiError::new(ErrorCode::InvalidInput, "invalid vault name"))?;
+        let folder = std::fs::canonicalize(folder)
+            .map_err(|_| ApiError::new(ErrorCode::Io, "folder unavailable"))?;
+        Ok(folder.join(name))
+    }
+
+    /// Trusted Rust path redeemed from a folder token by the command wrapper.
+    pub fn vault_location_probe(
+        &self,
+        folder: &Path,
+    ) -> Result<crate::migration::TargetProbe, ApiError> {
+        let target = self.migration_target(folder)?;
+        let storage = self.session.resolve_storage(&target);
+        let backend = mypass_sync::FileIoBackend::new(storage.io, &target);
+        let current = self.session.vault_path().ok_or(SessionError::NoVault)?;
+        let mut probe = crate::migration::VaultMigrationService::probe(&backend, &current)
+            .map_err(migration_error)?;
+        probe.inside_icloud = mypass_sync::icloud::vault_location_of(&target, self.paths.home())
+            == mypass_sync::icloud::VaultLocation::ICloudDrive;
+        Ok(probe)
+    }
+
+    /// A location change keeps the original encrypted file and a verified backup. Never deletes
+    /// a source or rolls a target back over another writer after a partially completed migration.
+    pub fn vault_location_change(
+        &self,
+        folder: &Path,
+        strategy: crate::migration::MigrationStrategy,
+    ) -> Result<SessionStatus, ApiError> {
+        self.migrate_folder(folder, strategy, true, None)?;
+        Ok(self.session.status())
+    }
+
+    /// Connects a trusted, dialog-selected folder using the same one-off strategies.
+    pub fn sync_connect_secondary(
+        &self,
+        folder: &Path,
+        strategy: crate::migration::MigrationStrategy,
+    ) -> Result<SecondaryStatus, ApiError> {
+        self.migrate_folder(folder, strategy, false, None)?;
+        Ok(self.secondary.status())
+    }
+
+    pub fn migrate_folder_for(
+        &self,
+        folder: &Path,
+        strategy: crate::migration::MigrationStrategy,
+        relocate: bool,
+        incarnation: u64,
+    ) -> Result<(), ApiError> {
+        self.migrate_folder(folder, strategy, relocate, Some(incarnation))
+    }
+
+    fn migrate_folder(
+        &self,
+        folder: &Path,
+        strategy: crate::migration::MigrationStrategy,
+        relocate: bool,
+        expected_incarnation: Option<u64>,
+    ) -> Result<(), ApiError> {
+        use crate::migration::{MigrationError, VaultMigrationService};
+        use mypass_sync::{FileIoBackend, StorageBackend, WriteOutcome};
+        let _gate = self
+            .migration_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.secondary.suspend();
+        struct Resume<'a>(&'a SecondarySync);
+        impl Drop for Resume<'_> {
+            fn drop(&mut self) {
+                self.0.resume();
+            }
+        }
+        let _resume = Resume(&self.secondary);
+        let target = self.migration_target(folder)?;
+        self.session.flush()?;
+        let snapshot = self.session.sync_snapshot()?;
+        if expected_incarnation.is_some_and(|expected| expected != snapshot.incarnation) {
+            return Err(SessionError::ChangedOnDisk.into());
+        }
+        if crate::migration::same_file(&target, &snapshot.path) {
+            return Err(migration_error(MigrationError::SameFile));
+        }
+        if !relocate {
+            crate::secondary::validate_folder(
+                &folder.to_string_lossy(),
+                &snapshot.path,
+                target
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .ok_or_else(|| ApiError::new(ErrorCode::InvalidInput, "invalid filename"))?,
+            )
+            .map_err(|_| ApiError::new(ErrorCode::InvalidInput, "invalidFolder"))?;
+        }
+        // A mandatory, create-only, read-back-verified backup, independent of rotation policy.
+        let check = || {
+            if self.session.is_incarnation(snapshot.incarnation) {
+                Ok(())
+            } else {
+                Err(migration_error(MigrationError::Locked))
+            }
+        };
+        check()?;
+        let source_storage = self.session.resolve_storage(&snapshot.path);
+        let source = source_storage
+            .io
+            .read_limited(&snapshot.path, mypass_kdbx::MAX_VAULT_FILE_BYTES)
+            .map_err(|_| migration_error(MigrationError::SourceInvalid))?;
+        check()?;
+        Database::open(&source, &snapshot.password)
+            .map_err(|_| migration_error(MigrationError::SourceInvalid))?;
+        check()?;
+        let backup_dir = self.backups.folder(&snapshot.vault_id)?;
+        std::fs::create_dir_all(&backup_dir)
+            .map_err(|_| ApiError::new(ErrorCode::Io, "backup folder unavailable"))?;
+        let backup = backup_dir.join(format!(
+            "backup-{}-{}.kdbx",
+            self.now_secs(),
+            Uuid::new_v4().as_u128() % 1000000000
+        ));
+        let backup = FileIoBackend::new(Arc::new(PlainFileIo), backup);
+        check()?;
+        if backup
+            .write_if(None, &source)
+            .map_err(|_| migration_error(MigrationError::SourceInvalid))?
+            != WriteOutcome::Written
+        {
+            return Err(migration_error(MigrationError::SourceInvalid));
+        }
+        check()?;
+        if backup
+            .read()
+            .map_err(|_| migration_error(MigrationError::SourceInvalid))?
+            .as_ref()
+            != Some(&source)
+        {
+            return Err(migration_error(MigrationError::SourceInvalid));
+        }
+        let storage = self.session.resolve_storage(&target);
+        let backend = Arc::new(FileIoBackend::new(storage.io.clone(), &target));
+        let outcome = VaultMigrationService::migrate_checked(
+            &snapshot.db,
+            &snapshot.password,
+            backend,
+            strategy,
+            &|| self.session.is_incarnation(snapshot.incarnation),
+        )
+        .map_err(migration_error)?;
+        if relocate {
+            self.session
+                .switch_snapshot(&target, storage.io, outcome.adopted, &snapshot)?;
+        } else {
+            if let Some(adopted) = outcome.adopted {
+                // Continuous secondary sync refuses different root identities. Adopting one
+                // here would leave the new connection permanently unable to reconcile.
+                if adopted.root_id() != snapshot.db.root_id() {
+                    return Err(ApiError::new(
+                        ErrorCode::InvalidInput,
+                        "remoteIsDifferentVault",
+                    ));
+                }
+                self.session
+                    .mutate_if_incarnation(snapshot.incarnation, |live, _| {
+                        if !crate::saving::equivalent_content(live, &snapshot.db) {
+                            return Err(SessionError::ChangedOnDisk);
+                        }
+                        *live = adopted;
+                        Ok(((), true))
+                    })?
+                    .ok_or(SessionError::ChangedOnDisk)?;
+                self.session.flush()?;
+            }
+            self.session
+                .publish_if_current(
+                    snapshot.incarnation,
+                    || true,
+                    || {
+                        self.settings.set_secondary_folder(
+                            target.parent().map(|p| p.to_string_lossy().into_owned()),
+                        )
+                    },
+                )
+                .ok_or(SessionError::ChangedOnDisk)??;
+        }
+        self.secondary.rearm();
+        Ok(())
+    }
+
+    // ---- secondary folder sync ----
+
+    /// The secondary-folder sync status (`off` when no folder is configured).
+    pub fn sync_status(&self) -> Result<SecondaryStatus, ApiError> {
+        Ok(self.secondary.status())
+    }
+
+    /// Syncs the secondary folder now; `Locked` / `NoVault` unless a vault is open.
+    pub fn sync_now(&self) -> Result<SecondaryStatus, ApiError> {
+        self.secondary.sync_now()
+    }
+
+    /// Stops syncing and forgets the folder; the copy in it is left as it is.
+    pub fn sync_disconnect_secondary(&self) -> Result<(), ApiError> {
+        let _gate = self
+            .migration_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.secondary.disconnect()
+    }
+
     // ---- CSV import ----
 
     /// Counts and the first titles of a CSV file; reads the file, never the vault.
@@ -896,6 +1200,21 @@ impl AppCore {
     }
 }
 
+fn migration_error(error: crate::migration::MigrationError) -> ApiError {
+    use crate::migration::MigrationError as M;
+    let code = match error {
+        M::Locked => ErrorCode::MigrationLocked,
+        M::TargetUnreadable => ErrorCode::MigrationTargetUnreadable,
+        M::TargetNotAVault => ErrorCode::MigrationTargetNotAVault,
+        M::TargetPasswordMismatch => ErrorCode::MigrationTargetPasswordMismatch,
+        M::TargetWriteFailed => ErrorCode::MigrationTargetWriteFailed,
+        M::SourceInvalid => ErrorCode::MigrationSourceInvalid,
+        M::SameFile => ErrorCode::MigrationSameFile,
+        M::ValidationFailed => ErrorCode::MigrationValidationFailed,
+    };
+    ApiError::new(code, error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -914,6 +1233,27 @@ mod tests {
     use std::time::{Duration, UNIX_EPOCH};
     use tempfile::TempDir;
     use uuid::Uuid;
+
+    #[test]
+    fn migration_errors_keep_all_eight_typed_api_codes() {
+        use crate::migration::MigrationError as M;
+        let cases = [
+            (M::Locked, ErrorCode::MigrationLocked),
+            (M::TargetUnreadable, ErrorCode::MigrationTargetUnreadable),
+            (M::TargetNotAVault, ErrorCode::MigrationTargetNotAVault),
+            (
+                M::TargetPasswordMismatch,
+                ErrorCode::MigrationTargetPasswordMismatch,
+            ),
+            (M::TargetWriteFailed, ErrorCode::MigrationTargetWriteFailed),
+            (M::SourceInvalid, ErrorCode::MigrationSourceInvalid),
+            (M::SameFile, ErrorCode::MigrationSameFile),
+            (M::ValidationFailed, ErrorCode::MigrationValidationFailed),
+        ];
+        for (error, code) in cases {
+            assert_eq!(migration_error(error).code, code);
+        }
+    }
 
     const T0: u64 = 1_700_000_000;
 
@@ -1005,6 +1345,7 @@ mod tests {
             ),
             (SessionError::ChangedOnDisk, ErrorCode::ChangedOnDisk),
             (SessionError::Io("x".into()), ErrorCode::Io),
+            (SessionError::Downloading, ErrorCode::Downloading),
             (SessionError::Quitting, ErrorCode::Quitting),
             (
                 SessionError::GeneratorRules(G::NoClass),
@@ -1480,7 +1821,7 @@ mod tests {
             f.core
                 .vault_open_warnings(icloud.to_str().unwrap())
                 .unwrap(),
-            vec![OpenWarning::Icloud]
+            Vec::<OpenWarning>::new()
         );
         f.core
             .set_process_lookup(Arc::new(Old(PathBuf::from("/Applications/Old/MyPass"))));
@@ -2207,5 +2548,42 @@ mod tests {
             ErrorCode::Locked
         );
         assert!(!out.exists());
+    }
+
+    #[test]
+    fn sync_commands_report_off_sync_and_disconnect() {
+        let f = fx_open();
+        assert_eq!(f.core.sync_status().unwrap(), SecondaryStatus::Off);
+        assert_eq!(f.core.sync_now().unwrap(), SecondaryStatus::Off);
+        let folder = f.dir.path().join("secondary");
+        std::fs::create_dir_all(&folder).unwrap();
+        f.core
+            .settings
+            .set_secondary_folder(Some(folder.to_string_lossy().into_owned()))
+            .unwrap();
+        f.core.secondary.rearm();
+        let status = f.core.sync_now().unwrap();
+        assert!(
+            matches!(status, SecondaryStatus::Idle { last_sync: Some(_) }),
+            "{status:?}"
+        );
+        assert!(folder.join("v.kdbx").is_file());
+        f.core.sync_disconnect_secondary().unwrap();
+        assert_eq!(f.core.sync_status().unwrap(), SecondaryStatus::Off);
+        assert_eq!(f.core.settings.get().secondary_folder, None);
+        assert!(folder.join("v.kdbx").is_file(), "the copy is left in place");
+    }
+
+    #[test]
+    fn sync_now_while_locked_is_locked() {
+        let f = fx_open();
+        let folder = f.dir.path().join("secondary");
+        std::fs::create_dir_all(&folder).unwrap();
+        f.core
+            .settings
+            .set_secondary_folder(Some(folder.to_string_lossy().into_owned()))
+            .unwrap();
+        f.core.vault_lock().unwrap();
+        assert_eq!(code(f.core.sync_now()), ErrorCode::Locked);
     }
 }

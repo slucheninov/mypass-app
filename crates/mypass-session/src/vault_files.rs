@@ -1,12 +1,13 @@
 //! Facts about vault files on disk: the status of the session's file, `.kdbx` discovery for the
-//! welcome screen, and the open-time guards (iCloud location, the old Swift app running).
+//! welcome screen, and the open-time guard (the old Swift app running).
 
 pub use crate::dto::{FoundVaultFileDto, OpenWarning, RecentVaultDto};
+use mypass_sync::icloud::placeholder_path;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::io::ErrorKind;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 /// What the session's vault file looks like right now. Sizes and instants are `f64` (bytes and
@@ -22,6 +23,9 @@ pub enum VaultFileStatus {
     Missing,
     /// The path exists but its metadata cannot be read.
     Unreadable { message: String },
+    /// The vault is in iCloud Drive and not downloaded to this Mac yet (a placeholder), or the
+    /// last read timed out waiting for the download.
+    Downloading,
 }
 
 /// Stats `path` (one `metadata` call; never reads the content).
@@ -38,6 +42,13 @@ pub fn file_status(path: Option<&Path>) -> VaultFileStatus {
             size: meta.len() as f64,
             modified: millis(&meta),
         },
+        // An evicted iCloud file leaves only its `.name.icloud` placeholder: never "missing".
+        Err(e)
+            if e.kind() == ErrorKind::NotFound
+                && placeholder_path(path).is_some_and(|p| p.exists()) =>
+        {
+            VaultFileStatus::Downloading
+        }
         Err(e) if e.kind() == ErrorKind::NotFound => VaultFileStatus::Missing,
         Err(e) => VaultFileStatus::Unreadable {
             message: e.to_string(),
@@ -225,46 +236,6 @@ pub trait ProcessLookup: Send + Sync {
     fn other_app_executables(&self, bundle_id: &str) -> Vec<PathBuf>;
 }
 
-/// `path` without `.` and resolvable `..` components, no file system access.
-fn lexical(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !matches!(out.components().next_back(), Some(Component::Normal(_))) || !out.pop()
-                {
-                    out.push(component);
-                }
-            }
-            other => out.push(other),
-        }
-    }
-    out
-}
-
-/// `path` with symlinks resolved when it exists, or when its parent does (a file about to be
-/// created); otherwise the lexical form.
-fn resolved(path: &Path) -> PathBuf {
-    if let Ok(real) = std::fs::canonicalize(path) {
-        return real;
-    }
-    if let (Some(parent), Some(name)) = (path.parent(), path.file_name()) {
-        if let Ok(real) = std::fs::canonicalize(parent) {
-            return real.join(name);
-        }
-    }
-    lexical(path)
-}
-
-/// Is `path` inside `<home>/Library/Mobile Documents` (iCloud Drive)? The comparison is by path
-/// component, so `Mobile Documents backup` does not match, and it is made both as written and
-/// with symlinks resolved, so a link into iCloud is caught. Never panics.
-pub fn is_icloud_path(path: &Path, home: &Path) -> bool {
-    let base = home.join("Library").join("Mobile Documents");
-    lexical(path).starts_with(lexical(&base)) || resolved(path).starts_with(resolved(&base))
-}
-
 /// Two executable paths name the same program: canonical forms when both exist, else as given.
 fn same_executable(a: &Path, b: &Path) -> bool {
     match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
@@ -273,21 +244,17 @@ fn same_executable(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// What to confirm before creating or opening the vault at `path`: [`OpenWarning::Icloud`] for an
-/// iCloud location, and one [`OpenWarning::OldAppRunning`] for every distinct `com.mypass.app`
-/// executable that is not `current_exe` (the old Swift app). The UI requires an explicit Continue.
+/// What to confirm before creating or opening the vault at `path`: one
+/// [`OpenWarning::OldAppRunning`] for every distinct `com.mypass.app` executable that is not
+/// `current_exe` (the old Swift app). The UI requires an explicit Continue. A vault in iCloud
+/// Drive needs no confirmation since stage 5 (coordinated access, conflict merging): `path` is
+/// not consulted.
 pub fn open_warnings(
-    path: &Path,
-    home: &Path,
+    _path: &Path,
     procs: &dyn ProcessLookup,
     current_exe: &Path,
 ) -> Vec<OpenWarning> {
     let mut warnings = Vec::new();
-    // STAGE5-REMOVE: stage 5 Task 8 deletes this block (with `is_icloud_path`, the `Icloud`
-    // variant and `icloud_path_warns_until_stage_5`) once vault files may live in iCloud Drive.
-    if is_icloud_path(path, home) {
-        warnings.push(OpenWarning::Icloud);
-    }
     let mut seen: Vec<PathBuf> = Vec::new();
     for exe in procs.other_app_executables(APP_BUNDLE_ID) {
         if same_executable(&exe, current_exe) || seen.contains(&exe) {
@@ -619,26 +586,8 @@ mod tests {
             .join("v.kdbx")
     }
 
-    fn warnings(path: &Path, home: &Path, procs: Vec<PathBuf>, exe: &Path) -> Vec<OpenWarning> {
-        open_warnings(path, home, &Procs(procs), exe)
-    }
-
-    // The block marked STAGE5-REMOVE in `open_warnings` (and this test with it) goes in stage 5.
-    #[test]
-    fn icloud_path_warns_until_stage_5() {
-        let home = tempfile::tempdir().unwrap();
-        let exe = home.path().join("me");
-        assert_eq!(
-            warnings(&icloud_file(home.path()), home.path(), vec![], &exe),
-            vec![OpenWarning::Icloud]
-        );
-        // The same location once it exists on disk.
-        let real = icloud_file(home.path());
-        touch(&real);
-        assert_eq!(
-            warnings(&real, home.path(), vec![], &exe),
-            vec![OpenWarning::Icloud]
-        );
+    fn warnings(path: &Path, _home: &Path, procs: Vec<PathBuf>, exe: &Path) -> Vec<OpenWarning> {
+        open_warnings(path, &Procs(procs), exe)
     }
 
     #[test]
@@ -646,61 +595,22 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let path = home.path().join("Documents").join("v.kdbx");
         assert!(warnings(&path, home.path(), vec![], &home.path().join("me")).is_empty());
-        assert!(!is_icloud_path(Path::new(""), home.path()));
-        assert!(!is_icloud_path(Path::new("."), Path::new("")));
     }
 
     #[test]
-    fn icloud_lookalike_directory_name_does_not_warn() {
+    fn icloud_path_guard_removed_open_under_mobile_documents_needs_no_confirmation() {
         let home = tempfile::tempdir().unwrap();
-        let path = home
-            .path()
-            .join("Documents")
-            .join("Mobile Documents backup")
-            .join("v.kdbx");
-        assert!(!is_icloud_path(&path, home.path()));
-        let sibling = home
-            .path()
-            .join("Library")
-            .join("Mobile Documents backup")
-            .join("v.kdbx");
-        touch(&sibling);
-        assert!(!is_icloud_path(&sibling, home.path()));
-    }
-
-    #[test]
-    fn dot_dot_cannot_hide_an_icloud_path() {
-        let home = tempfile::tempdir().unwrap();
-        let sneaky = home
-            .path()
-            .join("Documents")
-            .join("..")
-            .join("Library")
-            .join("Mobile Documents")
-            .join("v.kdbx");
-        assert!(is_icloud_path(&sneaky, home.path()));
-        let escaping = icloud_file(home.path())
-            .join("..")
-            .join("..")
-            .join("..")
-            .join("v.kdbx");
-        assert!(!is_icloud_path(&escaping, home.path()));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn symlink_into_icloud_warns_when_it_exists() {
-        let home = tempfile::tempdir().unwrap();
+        let exe = home.path().join("me");
         let real = icloud_file(home.path());
+        assert!(warnings(&real, home.path(), vec![], &exe).is_empty());
         touch(&real);
-        let link = home.path().join("Documents").join("link.kdbx");
-        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
-        std::os::unix::fs::symlink(&real, &link).unwrap();
-        assert!(is_icloud_path(&link, home.path()));
-        // A file about to be created inside a linked directory resolves through its parent.
-        let dir_link = home.path().join("linked-dir");
-        std::os::unix::fs::symlink(real.parent().unwrap(), &dir_link).unwrap();
-        assert!(is_icloud_path(&dir_link.join("new.kdbx"), home.path()));
+        assert!(warnings(&real, home.path(), vec![], &exe).is_empty());
+        // The D6 guard is gone for good: no marker and no helper left in the sources.
+        for source in [include_str!("vault_files.rs"), include_str!("dto.rs")] {
+            assert!(!source.contains(concat!("STAGE5", "-REMOVE")));
+            assert!(!source.contains(concat!("is_icloud", "_path")));
+            assert!(!source.contains(concat!("Icl", "oud,")));
+        }
     }
 
     #[test]
@@ -742,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn both_warnings_are_reported_together() {
+    fn old_app_guard_still_warns_for_an_icloud_vault() {
         let home = tempfile::tempdir().unwrap();
         let old = PathBuf::from("/Applications/MyPass.app/Contents/MacOS/MyPass");
         // Helper processes of the old app share one executable: reported once.
@@ -754,12 +664,9 @@ mod tests {
         );
         assert_eq!(
             got,
-            vec![
-                OpenWarning::Icloud,
-                OpenWarning::OldAppRunning {
-                    executable: old.to_string_lossy().into_owned()
-                }
-            ]
+            vec![OpenWarning::OldAppRunning {
+                executable: old.to_string_lossy().into_owned()
+            }]
         );
     }
 
@@ -772,10 +679,6 @@ mod tests {
         assert_eq!(
             v,
             serde_json::json!({"kind": "oldAppRunning", "executable": "x"})
-        );
-        assert_eq!(
-            serde_json::to_value(OpenWarning::Icloud).unwrap(),
-            serde_json::json!({"kind": "icloud"})
         );
     }
 }

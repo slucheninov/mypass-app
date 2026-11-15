@@ -27,6 +27,8 @@ const MAX_TOKENS: usize = 64;
 
 /// The native dialogs. Blocking: callers run it off the async runtime.
 pub trait FilePicker: Send + Sync {
+    /// Native folder selection; the starting folder is computed in Rust.
+    fn pick_folder(&self, start: Option<PathBuf>) -> Option<PathBuf>;
     /// The open dialog for attachments (several files); empty when cancelled.
     fn pick_attachments(&self) -> Vec<PathBuf>;
     /// The open dialog for one CSV file; `None` when cancelled.
@@ -39,6 +41,17 @@ pub trait FilePicker: Send + Sync {
 pub struct TauriFilePicker(pub tauri::AppHandle);
 
 impl FilePicker for TauriFilePicker {
+    fn pick_folder(&self, start: Option<PathBuf>) -> Option<PathBuf> {
+        use tauri_plugin_dialog::DialogExt;
+        let mut dialog = self.0.dialog().file();
+        if let Some(start) = start {
+            dialog = dialog.set_directory(start);
+        }
+        dialog
+            .blocking_pick_folder()
+            .and_then(|p| p.into_path().ok())
+    }
+
     fn pick_attachments(&self) -> Vec<PathBuf> {
         use tauri_plugin_dialog::DialogExt;
         self.0
@@ -75,6 +88,8 @@ impl FilePicker for TauriFilePicker {
 /// A [`FilePicker`] with scripted answers, for tests.
 #[derive(Debug, Default)]
 pub struct FakeFilePicker {
+    pub folder: Mutex<Option<PathBuf>>,
+    pub folder_starts: Mutex<Vec<Option<PathBuf>>>,
     pub attachments: Mutex<Vec<PathBuf>>,
     pub csv: Mutex<Option<PathBuf>>,
     pub save: Mutex<Option<PathBuf>>,
@@ -102,6 +117,18 @@ impl FakeFilePicker {
 }
 
 impl FilePicker for FakeFilePicker {
+    fn pick_folder(&self, start: Option<PathBuf>) -> Option<PathBuf> {
+        self.opened("folder");
+        self.folder_starts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(start);
+        self.folder
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     fn pick_attachments(&self) -> Vec<PathBuf> {
         self.opened("attachments");
         self.attachments
@@ -144,6 +171,7 @@ pub struct PickedFile {
 
 #[derive(Default)]
 struct Grants {
+    folders: VecDeque<(String, PathBuf, u64)>,
     tokens: VecDeque<(String, PathBuf)>,
     csv: Option<PathBuf>,
     /// Bumped by [`FileGrants::clear`]; a [`Redeemed`] from an older generation is not restored.
@@ -169,6 +197,56 @@ fn invalid(message: &str) -> ApiError {
 }
 
 impl FileGrants {
+    pub fn generation(&self) -> u64 {
+        self.with(|g| g.generation)
+    }
+
+    pub fn grant_folder_if_current(
+        &self,
+        generation: u64,
+        incarnation: u64,
+        path: PathBuf,
+    ) -> Result<String, ApiError> {
+        self.with(|g| {
+            if g.generation != generation {
+                return Err(invalid("folder selection expired"));
+            }
+            let token = Uuid::new_v4().to_string();
+            g.folders.push_back((token.clone(), path, incarnation));
+            while g.folders.len() > MAX_TOKENS {
+                g.folders.pop_front();
+            }
+            Ok(token)
+        })
+    }
+
+    #[cfg(test)]
+    pub fn grant_folder(&self, path: PathBuf) -> String {
+        self.grant_folder_if_current(self.generation(), 0, path)
+            .unwrap_or_default()
+    }
+
+    #[cfg(test)]
+    pub fn take_folder(&self, token: &str) -> Result<PathBuf, ApiError> {
+        self.take_folder_for(token, 0)
+    }
+
+    /// Redemption stays bound to the vault that authorized the native picker, including the
+    /// interval before the session observer has cleared the grant generation.
+    pub fn take_folder_for(&self, token: &str, incarnation: u64) -> Result<PathBuf, ApiError> {
+        self.with(|g| {
+            let pos = g
+                .folders
+                .iter()
+                .position(|(t, _, scope)| t == token && *scope == incarnation)
+                .ok_or_else(|| invalid("invalid folder token"))?;
+            g.folders
+                .remove(pos)
+                .map(|(_, p, _)| p)
+                .ok_or_else(|| invalid("invalid folder token"))
+        })
+    }
+
     fn with<R>(&self, f: impl FnOnce(&mut Grants) -> R) -> R {
         f(&mut self.0.lock().unwrap_or_else(PoisonError::into_inner))
     }
@@ -268,5 +346,49 @@ impl FileGrants {
     /// The remembered CSV file, exactly once.
     pub fn take_csv(&self) -> Option<PathBuf> {
         self.with(|g| g.csv.take())
+    }
+}
+
+#[cfg(test)]
+mod folder_tests {
+    use super::*;
+    #[test]
+    fn folder_grant_cannot_cross_a_vault_switch_before_observer_revocation() {
+        let grants = FileGrants::default();
+        let token = grants
+            .grant_folder_if_current(grants.generation(), 7, PathBuf::from("old"))
+            .unwrap();
+        assert!(grants.take_folder_for(&token, 8).is_err());
+        assert_eq!(
+            grants.take_folder_for(&token, 7).unwrap(),
+            PathBuf::from("old")
+        );
+    }
+
+    #[test]
+    fn pending_folder_completion_cannot_renew_a_revoked_generation() {
+        let grants = FileGrants::default();
+        let generation = grants.generation();
+        grants.clear();
+        assert!(grants
+            .grant_folder_if_current(generation, 0, PathBuf::from("old"))
+            .is_err());
+        let token = grants
+            .grant_folder_if_current(grants.generation(), 0, PathBuf::from("new"))
+            .unwrap();
+        assert_eq!(grants.take_folder(&token).unwrap(), PathBuf::from("new"));
+    }
+
+    #[test]
+    fn folder_tokens_are_single_use_separate_from_attachments_and_clear_on_lock() {
+        let grants = FileGrants::default();
+        let path = PathBuf::from("/chosen");
+        let token = grants.grant_folder(path.clone());
+        assert_eq!(grants.take_folder(&token).unwrap(), path);
+        assert!(grants.take_folder(&token).is_err());
+        let token = grants.grant_folder(path);
+        grants.clear();
+        assert!(grants.take_folder(&token).is_err());
+        assert!(grants.take_folder("/arbitrary/path").is_err());
     }
 }

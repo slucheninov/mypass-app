@@ -15,6 +15,7 @@ pub mod app;
 pub mod attachment;
 pub mod backup;
 pub mod browser;
+pub mod device;
 pub mod draft;
 pub mod entry;
 pub mod generator;
@@ -23,6 +24,8 @@ pub mod import;
 pub mod platform;
 pub mod settings;
 pub mod sidebar;
+pub mod sync;
+pub mod update;
 pub mod vault;
 
 use mypass_session::{ApiError, ErrorCode};

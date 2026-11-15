@@ -1,5 +1,5 @@
 //! Feature-gated failure injection for downstream dev-dependencies. Never enable in production.
-use crate::{file::io_error, FileIo, FileMeta, Result};
+use crate::{file::io_error, FileIo, FileMeta, OpenedFile, ReplaceOutcome, Result, SaveOutcome};
 use std::{
     io::ErrorKind,
     path::Path,
@@ -78,6 +78,36 @@ impl FileIo for FailingFileIo {
         }
         self.inner.read(path)
     }
+    fn read_limited(&self, path: &Path, max_len: u64) -> Result<Vec<u8>> {
+        self.reads.fetch_add(1, Ordering::Relaxed);
+        let failure = self.failures().read;
+        if let Some(kind) = failure {
+            return Err(io_error(kind.into()));
+        }
+        self.inner.read_limited(path, max_len)
+    }
+    fn open_read(&self, path: &Path) -> Result<OpenedFile> {
+        self.reads.fetch_add(1, Ordering::Relaxed);
+        let failure = self.failures().read;
+        if let Some(kind) = failure {
+            return Err(io_error(kind.into()));
+        }
+        self.inner.open_read(path)
+    }
+    fn replace_if(
+        &self,
+        path: &Path,
+        expected: Option<&[u8; 32]>,
+        bytes: &[u8],
+        max_len: u64,
+    ) -> Result<ReplaceOutcome> {
+        self.writes.fetch_add(1, Ordering::Relaxed);
+        let failure = self.failures().write;
+        if let Some(kind) = failure {
+            return Err(io_error(kind.into()));
+        }
+        self.inner.replace_if(path, expected, bytes, max_len)
+    }
     fn write_atomic(&self, path: &Path, bytes: &[u8]) -> Result<()> {
         self.writes.fetch_add(1, Ordering::Relaxed);
         let failure = self.failures().write;
@@ -85,6 +115,13 @@ impl FileIo for FailingFileIo {
             return Err(io_error(kind.into()));
         }
         self.inner.write_atomic(path, bytes)
+    }
+    fn write_checked(&self, path: &Path, expected: &[u8; 32], bytes: &[u8]) -> Result<SaveOutcome> {
+        self.writes.fetch_add(1, Ordering::Relaxed);
+        if let Some(kind) = self.failures().write {
+            return Err(io_error(kind.into()));
+        }
+        self.inner.write_checked(path, expected, bytes)
     }
     fn metadata(&self, path: &Path) -> Result<FileMeta> {
         self.metadata.fetch_add(1, Ordering::Relaxed);

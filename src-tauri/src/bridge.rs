@@ -305,12 +305,31 @@ pub fn register_hosts(
 /// Starts the bridge: pairing over the app-only secrets, the endpoint over the host-shared ones,
 /// the loopback server, and the host registration on a worker thread. A locked vault is fine: the
 /// service answers `locked`.
+#[cfg(test)]
 pub fn start_bridge(
     core: &Arc<AppCore>,
     windows: Arc<dyn WindowOps>,
     events: Arc<dyn BridgeEvents>,
     settings_gate: Arc<Mutex<()>>,
     bundled_host: Option<PathBuf>,
+) -> Result<BridgeHandle, BridgeStartError> {
+    start_bridge_with_kind(
+        core,
+        windows,
+        events,
+        settings_gate,
+        bundled_host,
+        mypass_platform::endpoint_store::SharedStoreKind::File,
+    )
+}
+
+fn start_bridge_with_kind(
+    core: &Arc<AppCore>,
+    windows: Arc<dyn WindowOps>,
+    events: Arc<dyn BridgeEvents>,
+    settings_gate: Arc<Mutex<()>>,
+    bundled_host: Option<PathBuf>,
+    store_kind: mypass_platform::endpoint_store::SharedStoreKind,
 ) -> Result<BridgeHandle, BridgeStartError> {
     let platform = core.platform();
     let scheduler = core.scheduler();
@@ -358,7 +377,24 @@ pub fn start_bridge(
         ui: Arc::clone(&ui),
         // The pending table is dropped on lock and on a vault switch by the observer that
         // `register_observer` adds below, once the server is up.
-        passkeys: PasskeyService::new(Arc::clone(&scheduler), ui),
+        passkeys: PasskeyService::with_presence(Arc::clone(&scheduler), ui, {
+            let device = platform.device_unlock.clone();
+            let settings = core.settings.clone();
+            Arc::new(move |create, rp_id| {
+                let key = if create {
+                    "Create a passkey for {0}"
+                } else {
+                    "Sign in to {0} with a passkey"
+                };
+                let reason = crate::i18n::t(settings.get().language, key, &[rp_id]);
+                match device.verify_presence(&reason) {
+                    Ok(()) => Ok(true),
+                    #[cfg(not(target_os = "macos"))]
+                    Err(mypass_platform::PlatformError::DeviceUnlockUnavailable) => Ok(false),
+                    Err(_) => Err(mypass_bridge::passkeys::PresenceError::Cancelled),
+                }
+            })
+        }),
     });
     let handler_service = Arc::clone(&service);
     let server = LoopbackServer::start(
@@ -367,6 +403,19 @@ pub fn start_bridge(
         Arc::new(move |request| handler_service.handle(request)),
     )
     .map_err(BridgeStartError::Server)?;
+
+    // R4/R38: delete ONLY the obsolete endpoint file, after the first successful Keychain
+    // publication. This uses the hardened store's exact service/account deletion path.
+    if store_kind == mypass_platform::endpoint_store::SharedStoreKind::Keychain
+        && EndpointStore::new(Arc::new(mypass_platform::shared_store(core.paths())))
+            .clear()
+            .is_err()
+    {
+        server.shutdown();
+        return Err(BridgeStartError::Thread(
+            "could not remove legacy endpoint".into(),
+        ));
+    }
 
     let registration = Arc::new(Mutex::new(None));
     let thread = {
@@ -422,6 +471,7 @@ type Starter = dyn Fn() -> Result<BridgeHandle, BridgeStartError> + Send + Sync;
 struct StateInner {
     slot: Mutex<Option<Arc<BridgeHandle>>>,
     store_failed: AtomicBool,
+    store_kind: mypass_platform::endpoint_store::SharedStoreKind,
     /// Set by the final quit: nothing starts after it, so a start that was still queued cannot
     /// publish an endpoint record the exiting process never clears.
     quit: AtomicBool,
@@ -443,9 +493,29 @@ impl BridgeState {
         bundled_host: Option<PathBuf>,
         events: Arc<dyn BridgeEvents>,
     ) -> Self {
+        Self::with_store_kind(
+            starter,
+            secrets,
+            bundled_host,
+            events,
+            mypass_platform::endpoint_store::SharedStoreKind::File,
+        )
+    }
+    pub fn store_kind(&self) -> mypass_platform::endpoint_store::SharedStoreKind {
+        self.0.store_kind
+    }
+
+    fn with_store_kind(
+        starter: Box<Starter>,
+        secrets: Arc<dyn SecretStore>,
+        bundled_host: Option<PathBuf>,
+        events: Arc<dyn BridgeEvents>,
+        store_kind: mypass_platform::endpoint_store::SharedStoreKind,
+    ) -> Self {
         Self(Arc::new(StateInner {
             slot: Mutex::new(None),
             store_failed: AtomicBool::new(false),
+            store_kind,
             quit: AtomicBool::new(false),
             starter,
             secrets,
@@ -554,6 +624,19 @@ pub fn extension_folder(
         .find(|candidate| candidate.is_dir())
 }
 
+pub fn endpoint_store_kind() -> mypass_platform::endpoint_store::SharedStoreKind {
+    #[cfg(target_os = "macos")]
+    {
+        mypass_platform::endpoint_store::running_store_kind(
+            mypass_platform::endpoint_store::StoreSide::App,
+        )
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        mypass_platform::endpoint_store::SharedStoreKind::File
+    }
+}
+
 /// The production [`BridgeState`]: starts over `core` with the real windows and events, and the
 /// settings gate shared with `settings_update`.
 pub fn build_state(
@@ -562,28 +645,35 @@ pub fn build_state(
     events: Arc<dyn BridgeEvents>,
     settings_gate: Arc<Mutex<()>>,
 ) -> BridgeState {
-    let bundled_host = std::env::current_exe()
-        .ok()
-        .and_then(|exe| mypass_platform::locate_bundled_host(&exe));
+    let store_kind = endpoint_store_kind();
+    let bundled_host = std::env::current_exe().ok().and_then(|exe| {
+        if store_kind == mypass_platform::endpoint_store::SharedStoreKind::Keychain {
+            mypass_platform::endpoint_store::signed_bundle_host(&exe)
+        } else {
+            mypass_platform::locate_bundled_host(&exe)
+        }
+    });
     let starter = {
         let core = Arc::clone(core);
         let events = Arc::clone(&events);
         let host = bundled_host.clone();
         Box::new(move || {
-            start_bridge(
+            start_bridge_with_kind(
                 &core,
                 Arc::clone(&windows),
                 Arc::clone(&events),
                 Arc::clone(&settings_gate),
                 host.clone(),
+                store_kind,
             )
         })
     };
-    BridgeState::new(
+    BridgeState::with_store_kind(
         starter,
         Arc::clone(&core.platform().secrets),
         bundled_host,
         events,
+        store_kind,
     )
 }
 
@@ -824,6 +914,86 @@ mod tests {
         handle.join_registration();
         assert!(lock(&handle.registration).is_some());
         assert_eq!(f.events.count("bridge_changed"), 1);
+    }
+
+    #[test]
+    fn legacy_endpoint_is_deleted_only_after_successful_keychain_publication() {
+        use mypass_bridge::endpoint::{generate_token, Endpoint};
+        use mypass_platform::endpoint_store::SharedStoreKind;
+        for (kind, fail) in [
+            (SharedStoreKind::Keychain, false),
+            (SharedStoreKind::File, false),
+            (SharedStoreKind::Keychain, true),
+        ] {
+            let f = unstarted(false, None);
+            let legacy =
+                EndpointStore::new(Arc::new(mypass_platform::shared_store(f.w.core.paths())));
+            legacy
+                .save(&Endpoint {
+                    port: 12345,
+                    token: generate_token(),
+                    pid: 1,
+                    started_at: 1,
+                })
+                .unwrap();
+            if fail {
+                use mypass_bridge::pairing::{PAIRING_ACCOUNT, PAIRING_SERVICE};
+                f.w.fake
+                    .secrets
+                    .set(PAIRING_SERVICE, PAIRING_ACCOUNT, b"bad json")
+                    .unwrap();
+            }
+            let result = start_bridge_with_kind(
+                &f.w.core,
+                f.windows.clone(),
+                f.events.clone(),
+                f.settings_gate.clone(),
+                None,
+                kind,
+            );
+            if fail {
+                assert!(result.is_err());
+            } else {
+                let handle = result.unwrap();
+                handle.join_registration();
+                handle.server.shutdown();
+            }
+            assert_eq!(
+                legacy.load().unwrap().is_some(),
+                fail || kind == SharedStoreKind::File
+            );
+        }
+    }
+
+    #[test]
+    fn extension_unlock_request_twice_within_two_seconds_prompts_once_end_to_end() {
+        let f = fixture(true);
+        let secret = pair(&f);
+        f.w.core
+            .device_unlock
+            .configure(Some(crate::testing::pw("pw")), true, false)
+            .unwrap();
+        f.w.core.vault_lock().unwrap();
+        for _ in 0..2 {
+            f.handle().service.handle(Request::RequestUnlock {
+                token: "t".into(),
+                pairing: Some(secret.clone()),
+            });
+        }
+        assert_eq!(f.events.count("unlock_requested"), 1);
+        assert!(f.w.core.device_unlock.consume_extension_request());
+        assert!(!f.w.core.device_unlock.consume_extension_request());
+        f.w.core
+            .device_unlock
+            .unlock_with_device("Unlock MyPass")
+            .unwrap();
+        assert_eq!(f.w.fake.device_unlock.evaluation_count(), 1);
+        f.handle().service.handle(Request::RequestUnlock {
+            token: "t".into(),
+            pairing: Some(secret),
+        });
+        assert!(!f.w.core.device_unlock.consume_extension_request());
+        assert_eq!(f.events.count("unlock_requested"), 1);
     }
 
     #[test]

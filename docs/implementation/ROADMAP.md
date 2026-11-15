@@ -4,7 +4,7 @@
 its tests pass, or, for manual-only items, once the manual check has actually been walked. History
 lives in `git log`, not here.
 
-Last updated: 2026-11-14
+Last updated: 2026-11-15
 
 ---
 
@@ -26,35 +26,13 @@ Last updated: 2026-11-14
   (`mypass-bridge/src/passkeys/create.rs`, `Undo.after` with the new key and, on Replace,
   `Undo.before` with the old one), alive from the write until the confirm answers.
 
-## Stage 2a backend
-
-- [ ] `VaultFile`: reject non-regular files (FIFO/device symlink targets) at open and cap the
-  encoded vault read size, once stage 2 fixes a size policy.
-- [ ] `mypass-platform` macOS bodies that still return `Unsupported`: device unlock (Touch ID and
-  device password) and launch at login. System events, the
-  concealed clipboard, the keyboard layout and the Keychain secret stores already ship.
-
 ## Stage 2a follow-ups
 
-- [ ] Per-window command access: every window (main, settings, tray panel) can call every app
-  command (`app_quit` and `app_show_main` included); add per-window command permissions through a
-  `tauri_build` app manifest so the tray panel and settings window get only what they use. This
-  includes `entry_passkey_details` (it returns a passkey's credential id, so only the main window
-  should call it) and the `browser_*` commands: `browser_proposal_take` returns a proposal's password, so only
-  the main window should be able to call it (and `browser_pairing_cancel`); `browser_status`,
-  `browser_revoke`, `browser_reset_pairings`, `browser_reinstall_host` and
-  `browser_show_extension_folder` are used by the Settings Browser pane, so they belong to the
-  settings window (and `browser_status`, which carries the live pairing code, to the main window too)
-  and not to the tray panel.
-- [ ] Startup failure is reported only on stderr (invisible in a Windows release build and when
-  launched from Finder); show a native dialog.
 - [ ] Quit-dialog default button: with tauri-plugin-dialog 2.8.4 a closed dialog is reported as the
   cancel-slot button, so "Quit anyway" has to be the first (Return) button for Esc to never quit; a
   custom dialog would let Cancel be the default.
 - [ ] Manual: confirm that Cmd+Q and logout/restart raise `ExitRequested` on macOS, and session end
   on Windows (checklist in `RUN.md`).
-- [ ] `secondaryFolder` in settings is a string from the webview; whatever later reads it (Stage 5
-  sync) must treat it as untrusted.
 - [ ] Tray panel position uses the panel window's scale factor; use the scale factor of the monitor
   that holds the tray icon (mixed-DPI setups).
 
@@ -78,16 +56,12 @@ Last updated: 2026-11-14
 ## Stage 3 extension bridge
 
 - [ ] Manual: walk the Stage 3 checklist in `RUN.md` (registration, pairing, endpoint file, autofill,
-  save flows, lock behaviour, crash and quit, other browsers, iCloud guard) on a copy of the owner's
+  save flows, lock behaviour, crash and quit, other browsers, old-app guard) on a copy of the owner's
   vault and record the results in the PR.
 - [ ] `PairingManager`: add one atomic "clear all" (a single save plus the cache). `reset_pairings` on a
   running bridge revokes one browser at a time, so an error midway leaves a partial reset.
 - [ ] Before any `connectNative` use: host handshake lazily on the first frame, reconnect with a fresh
   handshake, never resend a frame already written.
-- [ ] `mypass-host` dev-dependencies enable `mypass-bridge` with the `server` feature, so `cargo test`
-  and `cargo build --workspace` produce a `mypass-host` with the vault crates linked; the shipped
-  binary (`cargo build -p mypass-host` in `scripts/build-host.sh`) does not. Check the shipped
-  binary's dependency tree in CI, and let the e2e suite use that binary.
 - [ ] A failed `LoopbackServer::start` (for example a `secrets/shared` folder with group or other
   bits) shows `listening: false` with no reason and no action in the Browser pane; surface an
   "endpoint store unusable" state.
@@ -99,25 +73,31 @@ Last updated: 2026-11-14
 
 ## Stage 5 macOS release
 
-- [ ] iCloud Drive as a primary vault location with conflict merging and migration.
-- [ ] "Also sync to folder" secondary destination (`mypass-sync`).
-- [ ] Touch ID and device-password unlock, launch at login, and the daily update check.
-- [ ] Move the bridge endpoint from the 0600 file store into a Keychain item that trusts only the
-  host binary inside the signed app bundle, verified against a code requirement pinned to the team
-  (`anchor apple generic and certificate leaf[subject.OU] = "W645B93PPQ"` plus the host
-  identifier); never trust a path under Application Support. Delete-then-add on write (a crash in
-  between only loses the per-launch endpoint), then delete the file.
-  Until then a same-user process that captures the pairing secret can also write passkeys: it can
-  rewrite the passkey fields of any https entry it can name and churn entry history with
-  unbounded confirm calls (each Replace snapshots the entry, bounded only by HistoryMaxItems).
-- [ ] The native messaging manifests point at a host copy under Application Support, which a
-  same-user process can replace (the same accepted risk as the 0600 endpoint file). Point the
-  manifests at the host inside the signed app bundle (`Contents/MacOS/mypass-native-host`, the Tauri sidecar, named so it cannot replace cargo's `mypass-host`, which Chrome
-  accepts as any absolute path) or verify the copy's signature before registering.
-- [ ] Signed macOS packaging with a stable team (DMG, extension zip, checksums, tag-driven release
-  workflow).
-- [ ] Manual checklist against a copy of the owner's vault and the cutover checklist from the old
-  Swift app.
+- [ ] Owner hardware check of iCloud Drive storage on two Macs (RUN.md S1 to S6): NSFileVersion
+  conflict merging, download waits, file presenter, TCC prompts, sign-out and offline cache.
+  A master password changed remotely while the offline cache is ahead, or a remotely deleted
+  vault with cache-only edits, keeps the vault on the cache until the user resolves it.
+- [ ] Manual: walk all Stage 5 S-checks and C1 to C10 in `RUN.md`, including real signed install,
+  update/certificate-renewal Keychain survival, browser host registration, per-ceremony presence,
+  per-window ACLs, startup dialog and the old Swift app cutover. These never block merge or release.
+- [ ] Developer ID Application signing and notarization (Q1). Current releases use Apple Development
+  team W645B93PPQ without notarization and require INSTALL.txt's quarantine-removal steps.
+- [ ] Safe secondary-folder sync on FAT/exFAT: volumes without atomic exchange or hard links
+  currently fail closed with unavailable/unsupportedFolder; never overwrite a competing vault.
+- [ ] Surface retained `.displaced` copies in sync status and provide an explicit cleanup UI.
+  These competing vault copies are deliberately never auto-deleted.
+- [ ] Tighter KDF limits for remote/secondary opens: hostile-input limits exist, but expensive
+  KDF work on an untrusted remote file can still consume substantial CPU/memory.
+- [ ] Upgrade device-unlock storage to `SecAccessControl(biometryCurrentSet)` with a data-protection
+  Keychain and provisioning profile; current ordinary Keychain + LocalAuthentication handling
+  checks biometric domain state for Touch ID-only enrolments.
+- [ ] Intel / universal macOS builds (the current DMG is arm64, macOS 14+).
+- [ ] `.kdbx` file association and a validated OS path-open flow.
+- [ ] Optional Sparkle-style in-app update installation. Current updates only show a banner and
+  open the validated GitHub release page; no installer runs.
+- [ ] Investigate the historical native coordinator test timeout root cause (H-flaky). The timeout
+  was contained and subsequent parallel runs passed; the cause remains unconfirmed. Watch CI
+  recurrence rather than treating serialization as proof of a fix.
 
 ## Stage 6 Windows
 
@@ -140,10 +120,11 @@ Last updated: 2026-11-14
   vector icon) submitted and merged.
 - [ ] Google shows "MyPass" for newly created passkeys. Manual check; depends on Google ingesting
   the registry.
-- [ ] Apply background sync merges locally. The merged result of a background sync is discarded, so
-  entries another device added reach the remote but only appear locally at the next unlock. Apply and
-  publish the merged result without replacing newer local edits made while the sync ran.
 
 ## Vault features
 
-- [ ] Change master password (re-key an open vault).
+- [ ] Change master password (re-key an open vault), including safe secondary rotation across
+  sync runs and restart. A reused sync engine can merge its previously verified old-password
+  secondary copy, but production creates a fresh engine for each sync run. An unreadable
+  secondary therefore fails closed even without a restart, including when its ciphertext
+  matches the checkpoint.

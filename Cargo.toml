@@ -86,12 +86,33 @@ block2 = "0.6.2"
 security-framework = { version = "3.7.0", default-features = false }
 # `CFData` for the add-only `ItemAddOptions` call of the Keychain store.
 core-foundation = "0.10.1"
+# Stage 5: LocalAuthentication (device unlock, passkey presence check); same 0.3.x family as
+# objc2-foundation, default features off, members list the classes they use.
+objc2-local-authentication = { version = "=0.3.2", default-features = false }
+# Stage 5: ServiceManagement `SMAppService` (launch at login, macOS 13+).
+objc2-service-management = { version = "=0.3.2", default-features = false }
 # `image-data` (default) would pull the `image` crate; only text is ever written.
 arboard = { version = "3.7.0", default-features = false }
 chacha20poly1305 = "0.11.0"
 sys-locale = "0.3.2"
 # Constants only (`O_NOFOLLOW`, `O_NONBLOCK`) for the file secret store; never an `unsafe` call.
 libc = "0.2.191"
+
+# --- Stage 5: sync ---
+# Folder watcher of the secondary sync folder: FSEvents on macOS (the default `macos_fsevent`
+# feature), `ReadDirectoryChangesW` on Windows.
+notify = "=8.2.2"
+# Safe wrappers for the guarded replacement of a remote vault (`renameat_with` with `EXCHANGE`
+# and `NOREPLACE`) and the nonblocking open of the bounded read, in `mypass-kdbx` (unix only).
+rustix = { version = "=1.1.6", default-features = false, features = ["std", "fs"] }
+
+# --- Stage 5: update check ---
+# HTTPS client of the GitHub release check, behind the `github` feature of `mypass-update` (only
+# `src-tauri` enables it). TLS is the OS one (Security.framework on macOS, SChannel on Windows)
+# and the roots are the OS trust store: `default-features = false` drops rustls and the bundled
+# Mozilla root list, and the client config selects `RootCerts::PlatformVerifier` explicitly (the
+# `WebPki` default would panic without the bundled list). No gzip, no cookies, no JSON feature.
+ureq = { version = "=3.5.2", default-features = false, features = ["native-tls-no-default"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

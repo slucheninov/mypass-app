@@ -1,17 +1,18 @@
 //! Fallbacks: `Unsupported` stubs for every trait and, off macOS, the `arboard` clipboard.
 //!
 //! Every stub is a one-line `Unsupported` body, so a later stage replaces a body, never a
-//! signature. macOS uses the device unlock and launch-at-login stubs until stage 5;
-//! Windows uses all of them (except the host-shared file secret store) until stage 6.
+//! signature. Windows uses all of them (except the host-shared file secret store) until stage 6.
 
 #[cfg(any(not(target_os = "macos"), test))]
 use crate::SecretStore;
 #[cfg(any(not(target_os = "macos"), test))]
 use crate::{BrowserRegistration, HostRegistrationReport, NativeHostRegistrar};
+#[cfg(any(not(target_os = "macos"), test, feature = "test-util"))]
 use crate::{
     DeviceUnlock, DeviceUnlockAvailability, DeviceUnlockMode, LaunchAtLogin, LoginItemStatus,
     PlatformError, PlatformResult,
 };
+#[cfg(any(not(target_os = "macos"), test, feature = "test-util"))]
 use secrecy::SecretString;
 #[cfg(any(not(target_os = "macos"), test))]
 use std::path::Path;
@@ -53,10 +54,13 @@ impl SecretStore for UnsupportedSecretStore {
     }
 }
 
-/// No device unlock on this platform yet (macOS stage 5).
+/// No device unlock on this platform yet (Windows stage 6); macOS has `macos_device_unlock.rs` and
+/// keeps this stub only for the contract suite.
 #[derive(Debug, Default)]
+#[cfg(any(not(target_os = "macos"), test, feature = "test-util"))]
 pub(crate) struct UnsupportedDeviceUnlock;
 
+#[cfg(any(not(target_os = "macos"), test, feature = "test-util"))]
 impl DeviceUnlock for UnsupportedDeviceUnlock {
     fn availability(&self) -> DeviceUnlockAvailability {
         DeviceUnlockAvailability::Unavailable
@@ -93,10 +97,13 @@ impl NativeHostRegistrar for UnsupportedHostRegistrar {
     }
 }
 
-/// No launch at login on this platform yet (macOS stage 5, Windows stage 6).
+/// No launch at login on this platform yet (Windows stage 6); macOS has `MacLaunchAtLogin`, and
+/// keeps this stub only for the contract suite.
 #[derive(Debug, Default)]
+#[cfg(any(not(target_os = "macos"), test, feature = "test-util"))]
 pub(crate) struct UnsupportedLaunchAtLogin;
 
+#[cfg(any(not(target_os = "macos"), test, feature = "test-util"))]
 impl LaunchAtLogin for UnsupportedLaunchAtLogin {
     fn status(&self) -> PlatformResult<LoginItemStatus> {
         Ok(LoginItemStatus::Unsupported)

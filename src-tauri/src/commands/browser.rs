@@ -93,6 +93,8 @@ pub struct BrowserStatus {
     pub registrations: Vec<BrowserRegistrationDto>,
     /// The host binary shipped with the app, when there is one.
     pub host_path: Option<String>,
+    pub endpoint_store: String,
+    pub can_reinstall_host: bool,
 }
 
 /// Every `PairingError` is the same fixed `Internal` error: no store detail reaches the webview.
@@ -164,6 +166,8 @@ pub fn status(
         paired,
         pairing,
         registrations: registrar.status().iter().map(registration_dto).collect(),
+        endpoint_store: "developmentFile".into(),
+        can_reinstall_host: true,
         host_path: host_path.map(|p| p.display().to_string()),
     }
 }
@@ -202,6 +206,9 @@ pub fn reinstall_host(
     registrar: &dyn NativeHostRegistrar,
     bundled_host: Option<&Path>,
 ) -> Result<Vec<BrowserRegistrationDto>, ApiError> {
+    if state.store_kind() == mypass_platform::endpoint_store::SharedStoreKind::Keychain {
+        return Ok(registrar.status().iter().map(registration_dto).collect());
+    }
     let Some(bundled) = bundled_host else {
         return Err(ApiError {
             code: ErrorCode::NotFound,
@@ -303,18 +310,29 @@ pub async fn browser_status(
     state: State<'_, BridgeState>,
 ) -> Result<BrowserStatus, ApiError> {
     let registrar = app_state.0.platform().host_registrar.clone();
+    let store_kind = state.store_kind();
     let (handle, failed, host) = (
         state.handle(),
         state.pairing_store_failed(),
         state.bundled_host(),
     );
     super::blocking(move || {
-        Ok(status(
+        let mut report = status(
             handle.as_deref(),
             failed,
             registrar.as_ref(),
             host.as_deref(),
-        ))
+        );
+        report.endpoint_store =
+            if store_kind == mypass_platform::endpoint_store::SharedStoreKind::Keychain {
+                "keychain"
+            } else {
+                "developmentFile"
+            }
+            .into();
+        report.can_reinstall_host =
+            store_kind == mypass_platform::endpoint_store::SharedStoreKind::File;
+        Ok(report)
     })
     .await
 }
@@ -368,12 +386,22 @@ pub fn browser_proposal_take(
 /// Reveals the extension folder with the same helper as `app_reveal_backups`.
 #[tauri::command]
 #[specta::specta]
-pub fn browser_show_extension_folder(app: AppHandle) -> Result<(), ApiError> {
+pub async fn browser_show_extension_folder(app: AppHandle) -> Result<(), ApiError> {
     let folder = extension_folder_of(&app).ok_or(ApiError {
         code: ErrorCode::NotFound,
         message: String::new(),
     })?;
-    tauri_plugin_opener::reveal_item_in_dir(folder).map_err(|e| super::internal(e.to_string()))
+    let data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| super::internal(e.to_string()))?;
+    super::blocking(move || {
+        let copy =
+            crate::extension_copy::writable_extension(&folder, &data, env!("CARGO_PKG_VERSION"))
+                .map_err(|e| super::internal(e.to_string()))?;
+        tauri_plugin_opener::reveal_item_in_dir(copy).map_err(|e| super::internal(e.to_string()))
+    })
+    .await
 }
 
 #[cfg(test)]

@@ -2,7 +2,9 @@
   // The screen of a session with no unlocked vault: `noVault` offers create / open / find, `locked`
   // is the vault card with the master password field. The password is an uncontrolled input read
   // once on submit and emptied at once; it is never kept in state.
-  import { tick } from "svelte";
+  import { onMount, tick } from "svelte";
+  import { events } from "../lib/bindings";
+  import { device } from "../lib/stores/device.svelte";
   import { api, errorMessage } from "../lib/api";
   import type { RecentVaultDto } from "../lib/bindings";
   import { formatBytes, formatDate } from "../lib/i18n/format";
@@ -18,6 +20,23 @@
   import KeyboardLayoutBadge from "./KeyboardLayoutBadge.svelte";
   import UnlockExtras from "./UnlockExtras.svelte";
   import { connectedInfo, fileNameOf, folderOf, statusKind, statusLabel } from "./vault-status";
+
+  onMount(() => {
+    let active = true;
+    let off: (() => void) | undefined;
+    const consume = async () => {
+      if (await api.deviceUnlockConsumeExtensionRequest()) {
+        await device.refresh();
+        if (active) await device.unlock();
+      }
+    };
+    void events.unlockRequestedEvent.listen(() => void consume().catch(() => {})).then(unlisten => {
+      if (!active) return unlisten();
+      off = unlisten;
+      void consume().catch(() => {});
+    }).catch(() => {});
+    return () => { active = false; off?.(); };
+  });
 
   let field: PasswordField | undefined = $state();
   let hasPassword = $state(false);
@@ -237,6 +256,9 @@
   }
   .dot.unreadable {
     background: var(--danger);
+  }
+  .dot.downloading {
+    background: #2f7fd9;
   }
   .meta {
     display: flex;

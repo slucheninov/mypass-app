@@ -1,7 +1,7 @@
 <script lang="ts">
-  // An empty slot in this stage: Stage 5 fills it with the device-unlock button. The props and the
-  // test id are a contract.
+  import UnlockDeviceButton from "./UnlockDeviceButton.svelte";
   let { available }: { available: boolean } = $props();
 </script>
-
-<div data-testid="unlock-extras" data-available={available ? "true" : "false"}></div>
+<div data-testid="unlock-extras" data-available={available ? "true" : "false"}>
+  {#if available}<UnlockDeviceButton />{/if}
+</div>

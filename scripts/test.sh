@@ -124,6 +124,9 @@ run_rust() {
   local args=(test --workspace --no-fail-fast)
   [[ $ci -eq 1 ]] && args+=(--locked)
   cargo "${args[@]}"
+  for script in scripts/tests/*.test.sh; do
+    bash "$script"
+  done
 }
 
 # The frontend: a frozen install (the lockfile is the contract), svelte-check with warnings as

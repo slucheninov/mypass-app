@@ -95,7 +95,7 @@ describe("import menu", () => {
     vi.mocked(open).mockResolvedValue("/vaults/Other.kdbx");
     const user = userEvent.setup();
     const { fake } = await unlocked({ session: "unlocked" });
-    fake.state.openWarnings = [{ kind: "icloud" }];
+    fake.state.openWarnings = [{ kind: "oldAppRunning", executable: "MyPass-Swift" }];
     await user.click(screen.getByRole("button", { name: "Import" }));
     await user.click(await screen.findByRole("menuitem", { name: "Open Existing .kdbx…" }));
     const warning = await screen.findByRole("dialog");

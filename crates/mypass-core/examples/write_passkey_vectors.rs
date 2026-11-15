@@ -32,6 +32,7 @@ const CREATED: Timestamp = Timestamp(1_700_000_000);
 
 struct Case {
     name: &'static str,
+    verified: bool,
     create_request: String,
     create_response: Value,
     credential_id: Vec<u8>,
@@ -52,16 +53,19 @@ fn assertions(
     credential_id: &[u8],
     user_handle: &[u8],
     flags: BackupFlags,
+    verified: bool,
 ) -> Vec<(String, Value)> {
     let key = PasskeySigningKey::from_pem(key_pem).unwrap();
     // The first assertion names the credential, the second is a discoverable get (no list) with a
     // different challenge.
     let named = GET_REQUEST.to_owned();
     let named_json = with(&named, |v| {
+        v["userVerification"] = json!("preferred");
         v["allowCredentials"] =
             json!([{ "type": "public-key", "id": b64url::encode(credential_id) }]);
     });
     let discoverable = with(GET_REQUEST, |v| {
+        v["userVerification"] = json!("preferred");
         v["allowCredentials"] = json!([]);
         v["challenge"] = json!(b64url::encode(&[0x5au8; 32]));
     });
@@ -69,8 +73,15 @@ fn assertions(
         .into_iter()
         .map(|request| {
             let validated = parse_get(ORIGIN, &request).unwrap();
-            let outcome =
-                perform_get(&validated, &key, credential_id, Some(user_handle), flags).unwrap();
+            let outcome = perform_get(
+                &validated,
+                &key,
+                credential_id,
+                Some(user_handle),
+                flags,
+                verified,
+            )
+            .unwrap();
             (
                 request,
                 serde_json::from_str(&outcome.response_json).unwrap(),
@@ -92,8 +103,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let fixed_id: [u8; 32] = core::array::from_fn(|i| i as u8);
     let create = parse_create(ORIGIN, CREATE_REQUEST)?;
     let secret = SecretKey::from_pkcs8_pem(PKCS8)?;
-    let fixed = perform_create_with(&create, secret, fixed_id)?;
+    let fixed = perform_create_with(&create, secret, fixed_id, true)?;
     cases.push(Case {
+        verified: true,
         name: "fixed-none",
         create_request: CREATE_REQUEST.to_owned(),
         create_response: serde_json::from_str(&fixed.response_json)?,
@@ -106,6 +118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &fixed.credential_id,
             &user_handle,
             BackupFlags::default(),
+            true,
         ),
     });
 
@@ -113,8 +126,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let direct_request = with(CREATE_REQUEST, |v| v["attestation"] = json!("direct"));
     let create = parse_create(ORIGIN, &direct_request)?;
     let secret = SecretKey::from_pkcs8_pem(PKCS8)?;
-    let packed = perform_create_with(&create, secret, fixed_id)?;
+    let packed = perform_create_with(&create, secret, fixed_id, true)?;
     cases.push(Case {
+        verified: true,
         name: "fixed-packed",
         create_request: direct_request,
         create_response: serde_json::from_str(&packed.response_json)?,
@@ -130,13 +144,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eligible: true,
                 state: false,
             },
+            true,
         ),
     });
 
     // 3. One random run: fresh key and credential id from the OS RNG.
     let create = parse_create(ORIGIN, CREATE_REQUEST)?;
-    let random = perform_create(&create)?;
+    let random = perform_create(&create, true)?;
     cases.push(Case {
+        verified: true,
         name: "random-none",
         create_request: CREATE_REQUEST.to_owned(),
         create_response: serde_json::from_str(&random.response_json)?,
@@ -149,6 +165,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &random.credential_id,
             &user_handle,
             BackupFlags::default(),
+            true,
+        ),
+    });
+
+    let unverified_request = with(CREATE_REQUEST, |v| {
+        v["authenticatorSelection"]["userVerification"] = json!("preferred")
+    });
+    let req = parse_create(ORIGIN, &unverified_request)?;
+    let unverified =
+        perform_create_with(&req, SecretKey::from_pkcs8_pem(PKCS8)?, [0x55; 32], false)?;
+    cases.push(Case {
+        name: "unverified-none",
+        verified: false,
+        create_request: unverified_request,
+        create_response: serde_json::from_str(&unverified.response_json)?,
+        credential_id: unverified.credential_id.clone(),
+        pem: unverified.private_key_pem.to_string(),
+        user_handle: user_handle.clone(),
+        username: "alice@example.com".into(),
+        assertions: assertions(
+            &unverified.private_key_pem,
+            &unverified.credential_id,
+            &user_handle,
+            BackupFlags::default(),
+            false,
         ),
     });
 
@@ -198,6 +239,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "created": "2023-11-14T22:13:20Z",
         "cases": cases.iter().map(|c| json!({
             "name": c.name,
+            "verified": c.verified,
             "create_request": c.create_request,
             "create_response": c.create_response,
             "credential_id": b64url::encode(&c.credential_id),

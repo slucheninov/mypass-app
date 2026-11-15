@@ -2,6 +2,11 @@
   // The current vault (status only: the toolbar owns opening another one) and its backups: how many
   // to keep, how often, the list with Restore (confirmed first) and a button that reveals the folder.
   // The reveal label is the one place the UI names the file manager.
+  import LocationChangeSheet from "../../screens/LocationChangeSheet.svelte";
+  import SecondaryFolderSection from "../../screens/SecondaryFolderSection.svelte";
+  import StorageBanner from "../../screens/StorageBanner.svelte";
+  import { sync } from "../../lib/stores/sync.svelte";
+  import type { FolderProbe_Serialize } from "../../lib/bindings";
   import { onMount } from "svelte";
   import { api, ApiFailure, errorMessage } from "../../lib/api";
   import type { BackupInterval, BackupStatus_Serialize } from "../../lib/bindings";
@@ -20,6 +25,21 @@
   import FormError from "./FormError.svelte";
   import Row from "./Row.svelte";
 
+  let target = $state<FolderProbe_Serialize | null>(null);
+  let choosing = $state(false);
+  let requestedIcloud = $state(false);
+  async function choose(icloud: boolean) {
+    if (choosing || session.status.state !== "unlocked") return;
+    choosing = true; requestedIcloud = icloud;
+    const epoch = session.lockEpoch;
+    try {
+      const token = await api.vaultLocationPick();
+      if (token) {
+        const result = await api.vaultLocationProbe(token);
+        if (epoch === session.lockEpoch && session.status.state === "unlocked") target = result;
+      }
+    } catch (e) { error = errorMessage(e); } finally { choosing = false; }
+  }
   const COUNT_MIN = 1;
   const COUNT_MAX = 50;
 
@@ -115,6 +135,12 @@
   {/if}
 </section>
 
+<StorageBanner />
+<p>{sync.storage.location === "iCloudDrive" ? t("iCloud Drive") : t("Local file")}</p>
+{#if platform.os === "macos"}<Button disabled={choosing || session.status.state !== "unlocked"} onclick={() => void choose(true)}>{t("Choose folder in iCloud Drive…")}</Button>{/if}
+<Button disabled={choosing || session.status.state !== "unlocked"} onclick={() => void choose(false)}>{t("Move to a local folder…")}</Button>
+{#if target}<LocationChangeSheet {target} {requestedIcloud} onclose={() => target = null} />{/if}
+<SecondaryFolderSection />
 <h2>{t("Backups")}</h2>
 {#if settings.value}
   <Row label={t("Keep")}>

@@ -8,17 +8,21 @@ pub mod autolock;
 pub mod backups;
 pub mod clipboard_service;
 pub mod csv_import;
+pub mod device_unlock;
 pub mod drafts;
 pub mod dto;
 pub mod editing;
 pub mod fields;
 pub mod generator_service;
+pub mod migration;
 pub mod queries;
 pub mod saving;
 pub mod scheduler;
+pub mod secondary;
 pub mod session;
 pub mod settings;
 pub mod shortcut;
+pub mod storage;
 pub mod unlock_request;
 pub mod vault_files;
 
@@ -26,11 +30,13 @@ pub use app_core::{ApiError, AppCore, AppPaths, ErrorCode, Platform};
 pub use backups::{BackupFailure, BackupItem, BackupStatus};
 pub use drafts::DraftVersionDto;
 pub use dto::*;
+pub use secondary::{SecondaryError, SecondaryStatus, SecondarySync, SecondaryUnavailable};
 pub use session::{LockReason, SaveState, SaveStatus, SessionState, SessionStatus};
 pub use settings::{
     BackupInterval, GeneratorOptionsDto, IdleTimeout, Language, RequireAccountPasswordWindow,
     Settings, SettingsPatch, Theme, UnlockWithDeviceWindow,
 };
+pub use storage::{ResolvedStorage, StorageStatus};
 pub use vault_files::VaultFileStatus;
 
 /// Test support shared by this crate's tests and by later crates' tests. Not part of the app.
@@ -192,3 +198,5 @@ pub mod testing {
         db
     }
 }
+
+pub mod update;

@@ -113,7 +113,7 @@ fn signer_is_rfc6979_deterministic_a25_sample_vector() {
 fn known_answer_vector_is_byte_stable() {
     let req = parse_create(ORIGIN, CREATE_REQUEST).unwrap();
     let key = p256::SecretKey::from_pem(PKCS8).unwrap();
-    let out = perform_create_with(&req, key, credential_id()).unwrap();
+    let out = perform_create_with(&req, key, credential_id(), true).unwrap();
     assert_eq!(hex(&out.auth_data), CREATE_AUTH_DATA);
     assert_eq!(hex(&out.signature), CREATE_SIGNATURE);
     assert_eq!(
@@ -183,7 +183,15 @@ fn known_answer_assertion_is_byte_stable() {
     );
     let req = parse_get(ORIGIN, &get).unwrap();
     let key = PasskeySigningKey::from_pem(PKCS8).unwrap();
-    let out = perform_get(&req, &key, &id, Some(&[0xa0, 0xa1]), BackupFlags::default()).unwrap();
+    let out = perform_get(
+        &req,
+        &key,
+        &id,
+        Some(&[0xa0, 0xa1]),
+        BackupFlags::default(),
+        true,
+    )
+    .unwrap();
     assert_eq!(hex(&out.auth_data), GET_AUTH_DATA);
     assert_eq!(hex(&out.signature), GET_SIGNATURE);
     verify(&out.auth_data, GET_CLIENT_DATA.as_bytes(), &out.signature);
@@ -194,4 +202,46 @@ fn known_answer_assertion_is_byte_stable() {
     );
     assert_eq!(resp["response"]["userHandle"], "oKE");
     assert_eq!(resp["id"], b64url::encode(&id).as_str());
+}
+
+#[test]
+fn no_uv_without_presence_and_required_refuses_before_key_generation() {
+    let mut raw: serde_json::Value = serde_json::from_str(CREATE_REQUEST).unwrap();
+    raw["authenticatorSelection"]["userVerification"] = serde_json::json!("required");
+    let required = parse_create(ORIGIN, &raw.to_string()).unwrap();
+    assert!(perform_create_with(
+        &required,
+        p256::SecretKey::from_pem(PKCS8).unwrap(),
+        credential_id(),
+        false
+    )
+    .is_err());
+    raw["authenticatorSelection"]["userVerification"] = serde_json::json!("preferred");
+    let preferred = parse_create(ORIGIN, &raw.to_string()).unwrap();
+    let out = perform_create_with(
+        &preferred,
+        p256::SecretKey::from_pem(PKCS8).unwrap(),
+        credential_id(),
+        false,
+    )
+    .unwrap();
+    assert_eq!(out.auth_data[32] & 5, 1);
+}
+
+#[test]
+fn unverified_get_has_up_without_uv_and_required_is_refused() {
+    let id = credential_id();
+    let mut raw: serde_json::Value = serde_json::from_str(GET_REQUEST).unwrap();
+    raw["allowCredentials"] = serde_json::json!([]);
+    raw["userVerification"] = serde_json::json!("preferred");
+    let key = PasskeySigningKey::from_pem(PKCS8).unwrap();
+    let preferred = parse_get(ORIGIN, &raw.to_string()).unwrap();
+    let out = perform_get(&preferred, &key, &id, None, BackupFlags::default(), false).unwrap();
+    assert_eq!(
+        hex(&out.auth_data),
+        GET_AUTH_DATA.replace("471d00000000", "471900000000")
+    );
+    raw["userVerification"] = serde_json::json!("required");
+    let required = parse_get(ORIGIN, &raw.to_string()).unwrap();
+    assert!(perform_get(&required, &key, &id, None, BackupFlags::default(), false).is_err());
 }

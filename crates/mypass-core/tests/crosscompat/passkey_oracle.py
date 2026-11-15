@@ -70,7 +70,8 @@ def check_registration(vectors, case, state_uv="preferred"):
     require(cred is not None, "no attested credential data")
     require(cred.aaguid == AAGUID, "unexpected AAGUID")
     require(cred.credential_id == b64(case["credential_id"]), "credential id mismatch")
-    require(auth_data.is_user_present() and auth_data.is_user_verified(), "UP/UV not set")
+    require(auth_data.is_user_present(), "UP not set")
+    require(auth_data.is_user_verified() == case["verified"], "UV disagrees with ceremony presence")
     require(auth_data.flags & 0x08 and auth_data.flags & 0x10, "BE/BS not set on create")
     require(auth_data.counter == 0, "counter is not 0")
     require(dict(cred.public_key)[3] == -7, "not an ES256 key")
@@ -100,6 +101,8 @@ def check_assertions(vectors, case, cred):
         found = server.authenticate_complete(state, [cred], assertion["response"])
         require(found.credential_id == cred.credential_id, "wrong credential returned")
         response = assertion["response"]["response"]
+        flags = b64(response["authenticatorData"])[32]
+        require(bool(flags & 4) == case["verified"] and bool(flags & 1), "assertion UP/UV disagrees with presence")
         require(b64(response["userHandle"]) == b64(case["user_handle"]), "user handle mismatch")
         ok(f"authenticate_complete accepts assertion {index} of {case['name']}")
     # A tampered signature must be rejected (the oracle is not a rubber stamp).

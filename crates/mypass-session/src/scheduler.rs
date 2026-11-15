@@ -232,7 +232,12 @@ struct ManualState {
 /// panicking job panics `advance` (test support only; production uses [`ThreadScheduler`]).
 pub struct ManualScheduler {
     state: Mutex<ManualState>,
+    /// Called after every job `advance` runs (see [`ManualScheduler::set_after_job`]).
+    after_job: Mutex<Option<AfterJob>>,
 }
+
+/// What [`ManualScheduler::set_after_job`] installs.
+pub type AfterJob = Arc<dyn Fn() + Send + Sync>;
 
 impl ManualScheduler {
     /// A scheduler whose wall clock starts at `start`.
@@ -244,7 +249,16 @@ impl ManualScheduler {
                 seq: 0,
                 items: Vec::new(),
             }),
+            after_job: Mutex::new(None),
         })
+    }
+
+    /// Installs a hook `advance` calls after every job it runs, before it looks for the next due
+    /// job (and with both clocks still at that job's due time). For a service whose jobs only
+    /// hand work to a worker thread of its own: the hook waits for that worker, so the work and
+    /// any job it schedules land on the timeline exactly as if the job had done it inline.
+    pub fn set_after_job(&self, hook: Option<AfterJob>) {
+        *lock(&self.after_job) = hook;
     }
 
     /// Moves both clocks forward by `by`, running due jobs (oldest due first) on the way. Jobs
@@ -284,6 +298,10 @@ impl ManualScheduler {
             // `advance` still runs the remaining jobs. Only tests use `ManualScheduler`.
             if let Err(panic) = catch_unwind(AssertUnwindSafe(job)) {
                 resume_unwind(panic);
+            }
+            let hook = lock(&self.after_job).clone();
+            if let Some(hook) = hook {
+                hook();
             }
         }
     }

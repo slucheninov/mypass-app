@@ -138,6 +138,7 @@ fn golden_fields_match_keepassxc_conventions() {
                 {"origin":"https://example.com","sameOriginWithAncestors":true}}}"#,
         )
         .unwrap(),
+        true,
     )
     .unwrap();
     let mut e = Entry::new(Timestamp(0));
@@ -437,6 +438,7 @@ fn keepassxc_style_entry_reads_and_signs() {
             &r.credential_id,
             r.user_handle.as_deref(),
             r.flags,
+            true,
         )
         .unwrap();
         let spki = b64url::decode(doc["public_key_spki_der_b64url"].as_str().unwrap()).unwrap();

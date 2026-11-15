@@ -178,7 +178,7 @@ enum Slot {
 /// [`InFlight::finish`] ends it normally; if it is dropped unfinished (a panic), `Drop` still
 /// clears the flag, puts the file back and wakes every waiter, so `lock` and `flush` never
 /// hang on a dead operation.
-struct InFlight<'a> {
+pub(crate) struct InFlight<'a> {
     session: &'a VaultSession,
     file: Option<VaultFile>,
     slot: Slot,
@@ -196,6 +196,18 @@ impl<'a> InFlight<'a> {
         }
     }
 
+    /// Reserve the write slot for recovery, without taking the current file out of the session.
+    pub(crate) fn recovery(session: &'a VaultSession, inner: &mut Inner) -> Self {
+        inner.in_flight = true;
+        inner.recovering = true;
+        Self {
+            session,
+            file: None,
+            slot: Slot::File,
+            done: false,
+        }
+    }
+
     /// Runs `op` on the file; `None` only if the file is gone (never, by construction).
     fn run<R>(&mut self, op: impl FnOnce(&mut VaultFile) -> R) -> Option<R> {
         self.file.as_mut().map(op)
@@ -203,6 +215,7 @@ impl<'a> InFlight<'a> {
 
     fn restore(&mut self, inner: &mut Inner) {
         inner.in_flight = false;
+        inner.recovering = false;
         if let Some(file) = self.file.take() {
             match self.slot {
                 Slot::File => inner.file = Some(file),
@@ -212,10 +225,21 @@ impl<'a> InFlight<'a> {
         self.session.0.idle.notify_all();
     }
 
+    /// Finish a recovery reservation while retaining the publication barrier through install.
+    pub(crate) fn finish_unpublished(mut self) -> Finished<'a> {
+        let mut inner = self.session.wait_unpublished(lock(&self.session.0.inner));
+        self.restore(&mut inner);
+        self.done = true;
+        Finished {
+            session: self.session,
+            inner,
+        }
+    }
+
     /// Ends the operation: retakes the session lock, clears the flag, puts the file back and
     /// wakes waiters. The returned guard re-arms the autosave when it is dropped (see
     /// [`Finished`]).
-    fn finish(mut self) -> Finished<'a> {
+    pub(crate) fn finish(mut self) -> Finished<'a> {
         let mut inner = lock(&self.session.0.inner);
         self.restore(&mut inner);
         self.done = true;
@@ -248,7 +272,7 @@ impl Drop for InFlight<'_> {
 /// The session lock held at the end of an operation. Dropping it (after the operation applied
 /// its result) arms the autosave when the session is dirty and no save job is armed: the one
 /// central place that keeps every edit on its way to disk.
-struct Finished<'a> {
+pub(crate) struct Finished<'a> {
     session: &'a VaultSession,
     inner: MutexGuard<'a, Inner>,
 }
@@ -271,6 +295,8 @@ impl Drop for Finished<'_> {
         let inner = &mut *self.inner;
         if inner.db.is_some() && inner.is_dirty() && inner.save_job.is_none() {
             self.session.schedule_autosave(inner);
+        } else if inner.db.is_none() && inner.pending_bytes.is_some() && inner.save_job.is_none() {
+            self.session.schedule_job(inner, PENDING_RETRY, true);
         }
     }
 }
@@ -281,6 +307,11 @@ impl Drop for Finished<'_> {
 /// change. Covers entries, groups, tombstones and metadata, not the save settings.
 pub(crate) fn same_content(merged: &Database, other: &Database) -> bool {
     *merged == merge(other, other)
+}
+
+/// Compare arbitrary databases symmetrically, including unsorted insertion order.
+pub(crate) fn equivalent_content(a: &Database, b: &Database) -> bool {
+    merge(a, a) == merge(b, b)
 }
 
 /// The KDF parameters without the salt or seed (redrawn on every save).
@@ -340,6 +371,13 @@ fn file_unavailable() -> SessionError {
 }
 
 impl VaultSession {
+    pub(crate) fn finish_idle(&self) -> Finished<'_> {
+        Finished {
+            session: self,
+            inner: self.wait_quiescent(lock(&self.0.inner)),
+        }
+    }
+
     fn weak(&self) -> Weak<Shared> {
         Arc::downgrade(&self.0)
     }
@@ -347,6 +385,34 @@ impl VaultSession {
     /// Waits (releasing the lock) until no write or check is in flight.
     pub(crate) fn wait_idle<'a>(&self, mut g: MutexGuard<'a, Inner>) -> MutexGuard<'a, Inner> {
         while g.in_flight {
+            g = self
+                .0
+                .idle
+                .wait(g)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        g
+    }
+
+    /// Waits until no publication ([`VaultSession::publish_if_current`]) is in progress.
+    pub(crate) fn wait_unpublished<'a>(
+        &self,
+        mut g: MutexGuard<'a, Inner>,
+    ) -> MutexGuard<'a, Inner> {
+        while g.publishing > 0 {
+            g = self
+                .0
+                .idle
+                .wait(g)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        g
+    }
+
+    /// Waits until neither a write nor a publication is in progress: what every incarnation
+    /// bump waits for, so nothing is published for an incarnation that has ended.
+    pub(crate) fn wait_quiescent<'a>(&self, mut g: MutexGuard<'a, Inner>) -> MutexGuard<'a, Inner> {
+        while g.in_flight || g.publishing > 0 {
             g = self
                 .0
                 .idle
@@ -372,7 +438,7 @@ impl VaultSession {
                     }
                 }
                 if pending {
-                    let _ = session.retry_pending();
+                    let _ = session.retry_pending(Caller::Job);
                 } else {
                     let _ = session.run_save(Caller::Job);
                 }
@@ -567,7 +633,7 @@ impl VaultSession {
         if unlocked {
             return self.run_save(Caller::Flush);
         }
-        self.retry_pending()
+        self.retry_pending(Caller::Flush)
     }
 
     /// [`VaultSession::flush`] with a deadline (the quit path uses 5 s). On expiry it returns
@@ -609,7 +675,7 @@ impl VaultSession {
         let _ = self.flush();
         let mut out = Outbox::default();
         {
-            let mut inner = self.wait_idle(lock(&self.0.inner));
+            let mut inner = self.wait_quiescent(lock(&self.0.inner));
             if inner.db.is_none() {
                 return;
             }
@@ -627,6 +693,7 @@ impl VaultSession {
             inner.db = None;
             inner.password = None;
             inner.file = None;
+            inner.incarnation = inner.incarnation.wrapping_add(1);
             inner.lock_reason = Some(reason);
             out.state_changed = true;
         }
@@ -636,11 +703,22 @@ impl VaultSession {
     /// Writes the kept edits while locked, only over an unchanged file. `Ok` when nothing is
     /// kept any more. The snapshot before the write is taken on the first attempt for a disk
     /// state only.
-    fn retry_pending(&self) -> Result<(), SessionError> {
+    fn retry_pending(&self, caller: Caller) -> Result<(), SessionError> {
         let (bytes, mut guard, vault_id, snapshot) = {
-            let mut inner = self.wait_idle(lock(&self.0.inner));
-            if inner.db.is_some() {
+            let inner = lock(&self.0.inner);
+            if caller == Caller::Job && inner.in_flight {
                 return Ok(());
+            }
+            let mut inner = self.wait_idle(inner);
+            if inner.db.is_some() {
+                drop(inner);
+                // Recovery can unlock between flush's state check and this acquisition.
+                // A flush must cover its restored edits before acknowledging durability.
+                return if caller == Caller::Flush {
+                    self.run_save(Caller::Flush)
+                } else {
+                    Ok(())
+                };
             }
             let Some(bytes) = inner.pending_bytes.clone() else {
                 return Ok(());
@@ -665,10 +743,8 @@ impl VaultSession {
                             .backups
                             .snapshot_before_save(id, file.path(), now, true);
                     }
-                    self.0
-                        .io
-                        .write_atomic(file.path(), &bytes)
-                        .map(|()| true)
+                    file.save_checked_bytes(&bytes)
+                        .map(|outcome| outcome == SaveOutcome::Saved)
                         .map_err(SessionError::from)
                 }
                 Ok(true) => Ok(false),
@@ -716,7 +792,7 @@ impl VaultSession {
         if unlocked {
             return self.flush();
         }
-        if !kept || self.retry_pending().is_ok() {
+        if !kept || self.retry_pending(Caller::Flush).is_ok() {
             return Ok(());
         }
         self.keep_unsaved_copy().map(|_| ())
@@ -840,7 +916,7 @@ impl VaultSession {
                     .backups
                     .snapshot_before_save(id, file.path(), now, true);
             }
-            self.0.io.write_atomic(file.path(), backup)?;
+            file.io().write_atomic(file.path(), backup)?;
             written.store(true, std::sync::atomic::Ordering::SeqCst);
             file.reload(&password)
         });
@@ -873,7 +949,7 @@ impl VaultSession {
     /// the rules). A reload that fails with `WrongPassword` (the password was changed elsewhere)
     /// is returned as such and leaves the session untouched.
     pub fn check_external_change(&self) -> Result<ExternalChange, SessionError> {
-        let (mut guard, password) = {
+        let (mut guard, password, conflicts) = {
             let mut inner = self.wait_idle(lock(&self.0.inner));
             let Some(password) = inner.password.clone() else {
                 return Err(inner.not_unlocked());
@@ -881,15 +957,22 @@ impl VaultSession {
             let Some(file) = inner.file.take() else {
                 return Err(inner.not_unlocked());
             };
+            let conflicts = self.conflict_resolver_for(inner.storage.as_ref());
             (
                 InFlight::begin(self, &mut inner, file, Slot::File),
                 password,
+                conflicts,
             )
         };
-        let result = guard.run(|file| match file.has_changed_on_disk() {
-            Ok(false) => Ok(None),
-            Ok(true) => file.reload(&password).map(Some),
-            Err(e) => Err(e),
+        let result = guard.run(|file| {
+            // iCloud conflict versions and offline edits are merged into the file first, so the
+            // check below sees (and applies) the merge, never a single side of it.
+            Self::merge_conflicts_before_read(conflicts.as_ref(), file.path(), &password);
+            match file.has_changed_on_disk() {
+                Ok(false) => Ok(None),
+                Ok(true) => file.reload(&password).map(Some),
+                Err(e) => Err(e),
+            }
         });
         let mut out = Outbox::default();
         let mut hook = None;
@@ -1570,6 +1653,17 @@ mod tests {
         assert_eq!(saved, dirty);
         assert_eq!(f.state(), SaveState::Idle);
         assert_eq!(f.session.flush(), Ok(()), "nothing dirty is Ok");
+    }
+
+    #[test]
+    fn pending_flush_covers_edits_when_recovery_unlocked_the_session() {
+        let f = setup();
+        f.add("recovered edit").unwrap();
+        // State at a pending flush's second slot acquisition if recovery installed an
+        // unlocked, dirty database after flush initially observed the locked session.
+        f.session.retry_pending(Caller::Flush).unwrap();
+        assert_eq!(f.disk(), v(&["first", "recovered edit"]));
+        assert_eq!(f.gens().0, f.gens().1);
     }
 
     #[test]

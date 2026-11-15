@@ -22,8 +22,9 @@
 // `unsafe_only_in_allow_listed_modules` keeps `unsafe` out of every other file.
 #![allow(unsafe_code)]
 
-use crate::fallback::{UnsupportedDeviceUnlock, UnsupportedLaunchAtLogin};
+use crate::macos_device_unlock::mac_device_unlock;
 use crate::macos_keychain::MacKeychainSecretStore;
+use crate::macos_login_item::MacLaunchAtLogin;
 use crate::{
     AppPaths, ClipboardStamp, KeyboardLayout, Platform, PlatformError, PlatformResult,
     SecureClipboard, Subscription, SystemEvent, SystemEvents,
@@ -63,17 +64,27 @@ pub(crate) const INPUT_SOURCE_CHANGED: &str =
 const MAIN_THREAD_WAIT: Duration = Duration::from_millis(500);
 
 /// The real macOS platform: events, clipboard, keyboard layout and the app-private Keychain store;
-/// the 0600 file store shared with the native host; the native host registrar; `Unsupported`
-/// placeholders for device unlock and launch at login (stage 5).
+/// the 0600 file store shared with the native host; the native host registrar; the
+/// `SMAppService` login item (`macos_login_item.rs`); device unlock over `LAContext` and the
+/// app-only Keychain store (`macos_device_unlock.rs`).
 pub(crate) fn platform(paths: &AppPaths) -> Platform {
+    let host = std::env::current_exe()
+        .ok()
+        .and_then(|exe| crate::endpoint_store::signed_bundle_host(&exe));
+    let (kind, shared) = crate::endpoint_store::app_shared_store(paths, host.as_deref());
+    let registrar = if kind == crate::endpoint_store::SharedStoreKind::Keychain {
+        crate::MacHostRegistrar::for_bundle(paths.clone(), host)
+    } else {
+        crate::MacHostRegistrar::new(paths.clone())
+    };
     Platform {
         events: Arc::new(MacSystemEvents),
         clipboard: Arc::new(MacClipboard::general()),
         secrets: Arc::new(MacKeychainSecretStore::app_only()),
-        shared_secrets: Arc::new(crate::file_store::shared_store(paths)),
-        device_unlock: Arc::new(UnsupportedDeviceUnlock),
-        host_registrar: Arc::new(crate::MacHostRegistrar::new(paths.clone())),
-        launch_at_login: Arc::new(UnsupportedLaunchAtLogin),
+        shared_secrets: shared,
+        device_unlock: Arc::new(mac_device_unlock()),
+        host_registrar: Arc::new(registrar),
+        launch_at_login: Arc::new(MacLaunchAtLogin),
         keyboard_layout: Arc::new(MacKeyboardLayout),
     }
 }
@@ -391,6 +402,19 @@ pub(crate) fn running_app_executables(bundle_id: &str) -> Vec<PathBuf> {
         .map(|path| PathBuf::from(path.to_string()))
         .collect()
     })
+}
+
+/// NSAlert also works when Tauri failed before it could install the dialog plugin.
+pub(crate) fn show_startup_error(title: &str, message: &str) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    autoreleasepool(|_| {
+        let alert = objc2_app_kit::NSAlert::new(mtm);
+        alert.setMessageText(&NSString::from_str(title));
+        alert.setInformativeText(&NSString::from_str(message));
+        alert.runModal();
+    });
 }
 
 #[cfg(test)]

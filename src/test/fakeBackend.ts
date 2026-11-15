@@ -9,6 +9,8 @@ import { emit } from "@tauri-apps/api/event";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type {
   ApiError,
+  DeviceUnlockStatus_Serialize,
+  UpdateStatus_Serialize,
   AttachmentMeta,
   BackupFailure,
   BackupItem,
@@ -28,10 +30,12 @@ import type {
   PickedFile,
   RecentVaultDto,
   RulesSummary_Serialize,
+  SecondaryStatus_Serialize,
   SessionState,
   SessionStatus_Serialize,
   Settings_Serialize,
   ShortcutConflictEvent,
+  StorageStatus,
   TotpDto,
 } from "../lib/bindings";
 import {
@@ -104,6 +108,9 @@ export interface FakeCall {
 export interface FakeState {
   /** What `browser_status` answers; `browser_revoke`, `browser_pairing_cancel` and `browser_reset_pairings` edit it. */
   browser: BrowserStatus_Serialize;
+  device: DeviceUnlockStatus_Serialize;
+  extensionUnlockRequested: boolean;
+  update: UpdateStatus_Serialize;
   /** What `browser_reinstall_host` answers. */
   browserReinstall: BrowserRegistrationDto_Serialize[];
   /** Save proposals by id: `browser_proposal_take` hands one out once, like the Rust store. */
@@ -118,6 +125,8 @@ export interface FakeState {
   vaults: Record<string, { entries: FixtureEntry[]; groups: GroupNode_Serialize[]; masterPassword?: string }>;
   /** What `vault_open_warnings` answers for every path (default none). */
   openWarnings: OpenWarning[];
+  /** What `vault_storage_status` answers (default a local vault, all clear). */
+  storage: StorageStatus;
   /** The recent-vaults list `vault_recent` returns; `vault_forget` and a successful open/create edit it. */
   recents: RecentVaultDto[];
   /** What `vault_find_files` returns (default none). */
@@ -164,6 +173,8 @@ export interface FakeState {
   shortcutConflicts: ShortcutConflictEvent[];
   /** Ids `entry_touch` was called with, in order. */
   touched: string[];
+  /** What `sync_status` answers; `sync_now` and `sync_disconnect_secondary` edit it. */
+  sync: SecondaryStatus_Serialize;
 }
 
 export interface FakeBackend {
@@ -190,7 +201,12 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       pairing: null,
       registrations: [],
       hostPath: null,
+      endpointStore: "developmentFile",
+      canReinstallHost: true,
     },
+    device: { available: deviceUnlockAvailable, biometrics: deviceUnlockAvailable, enrolled: false, touchIdEnabled: false, macPasswordEnabled: false, canOfferNow: false, reason: "disabled" },
+    extensionUnlockRequested: false,
+    update: { status: { state: "idle" }, banner: null },
     browserReinstall: [],
     proposals: {},
     session: sessionStatus(opts.session ?? "locked"),
@@ -200,6 +216,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     masterPassword: FIXTURE_MASTER_PASSWORD,
     vaults: {},
     openWarnings: [],
+    storage: { location: "local", fallbackActive: false, cacheAhead: false, downloading: false },
     recents: [],
     foundFiles: [],
     existingFiles: [],
@@ -223,6 +240,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     csvFailure: null,
     touched: [],
     shortcutConflicts: [],
+    sync: { state: "off" },
   };
   /** Like the Rust grant: set by a successful preview, spent by the next commit. */
   let csvRemembered: CsvPreview | null = null;
@@ -883,6 +901,55 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     },
     // Take-once like the Rust list: what the hotkey layer could not register at startup.
     shortcutConflictsTake: () => state.shortcutConflicts.splice(0),
+    // Like Rust: `off` without a folder (checked first), otherwise the vault must be open; a
+    // successful sync reports `idle` with the fake's fixed clock.
+    syncNow: () => {
+      if (state.settings.secondaryFolder === null) {
+        state.sync = { state: "off" };
+        return structuredClone(state.sync);
+      }
+      requireUnlocked();
+      state.sync = { state: "idle", lastSync: 1_700_000_000_000 };
+      publish("syncStatusChanged", structuredClone(state.sync));
+      return structuredClone(state.sync);
+    },
+    syncConnectSecondary: () => {
+      requireUnlocked();
+      state.settings.secondaryFolder = "/fake/secondary";
+      publish("settingsChanged", structuredClone(state.settings));
+      state.sync = { state: "idle", lastSync: 1_700_000_000_000 };
+      publish("syncStatusChanged", structuredClone(state.sync));
+      return structuredClone(state.sync);
+    },
+    deviceUnlockStatus: () => structuredClone(state.device),
+    deviceUnlockConfigure: ({ password, touchId, macPassword }) => {
+      requireUnlocked();
+      if ((touchId || macPassword) && !state.device.enrolled && password !== state.masterPassword) throw apiError("wrongPassword");
+      state.device = { ...state.device, enrolled: touchId || macPassword, touchIdEnabled: touchId, macPasswordEnabled: macPassword, canOfferNow: touchId || macPassword, reason: touchId || macPassword ? null : "disabled" };
+      state.settings.unlockTouchIdEnabled = touchId;
+      state.settings.unlockMacPasswordEnabled = macPassword;
+      publish("settingsChanged", structuredClone(state.settings));
+      return structuredClone(state.device);
+    },
+    deviceUnlockConsumeExtensionRequest: () => { const pending = state.extensionUnlockRequested; state.extensionUnlockRequested = false; return pending; },
+    vaultUnlockDevice: () => {
+      if (!state.device.canOfferNow) throw apiError("deviceUnlockUnavailable");
+      setSession({ ...state.session, state: "unlocked", lockReason: null });
+      return structuredClone(state.session);
+    },
+    updateStatus: () => structuredClone(state.update),
+    updateCheckNow: () => { state.update.status = { state: "upToDate", checkedAt: 1_700_000_000_000 }; publish("updateChanged", structuredClone(state.update)); return structuredClone(state.update); },
+    updateDismiss: () => { state.update.banner = null; publish("updateChanged", structuredClone(state.update)); return null; },
+    updateOpenRelease: () => null,
+    syncStatus: () => structuredClone(state.sync),
+    // Like Rust: forgets the folder (the copy in it stays) and reports `off`.
+    syncDisconnectSecondary: () => {
+      state.settings.secondaryFolder = null;
+      publish("settingsChanged", structuredClone(state.settings));
+      state.sync = { state: "off" };
+      publish("syncStatusChanged", structuredClone(state.sync));
+      return null;
+    },
     sidebarGet: () => {
       requireUnlocked();
       return fixtureSidebar(state.entries, state.groups, state.recycleBinEnabled);
@@ -934,6 +1001,18 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     vaultOpenWarnings: () => structuredClone(state.openWarnings),
     vaultRecent: () => structuredClone(state.recents),
     vaultStatus: () => structuredClone(state.session),
+    vaultStorageStatus: () => structuredClone(state.storage),
+    vaultLocationPick: () => { requireUnlocked(); return "fake-folder-token"; },
+    vaultLocationProbe: () => {
+      requireUnlocked();
+      return { probe: { exists: false, modified: null, byteCount: null,
+        looksLikeVault: false, insideIcloud: false, sameAsCurrent: false },
+        folderToken: "fake-probed-folder-token" };
+    },
+    vaultLocationChange: () => {
+      requireUnlocked();
+      return setSession({ ...state.session, vaultPath: "/fake/target/vault.kdbx" });
+    },
     vaultUnlock: ({ password }) => {
       if (state.session.state === "noVault") throw apiError("noVault");
       if (password !== state.masterPassword) throw apiError("wrongPassword");

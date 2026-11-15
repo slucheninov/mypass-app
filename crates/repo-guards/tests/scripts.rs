@@ -117,3 +117,85 @@ fn test_sh_js_part_runs_the_node_suites() {
     assert!(script.contains("node --test scripts/"));
     assert!(script.contains("need_tool node js"));
 }
+
+#[test]
+fn release_scripts_are_bash_clean_and_tests_run_in_rust_part() {
+    for script in [
+        "package-macos",
+        "package-extension",
+        "verify-bundle",
+        "bump-version",
+        "check-version",
+        "release-assets",
+        "check-host-deps",
+    ] {
+        let Some(out) = bash(&["-n", &format!("scripts/{script}.sh")]) else {
+            return;
+        };
+        assert!(out.status.success(), "{script}: {}", stderr(&out));
+    }
+    let entry = repo_guards::read("scripts/test.sh");
+    assert!(entry.contains("scripts/tests/*.test.sh"));
+}
+
+#[test]
+fn tauri_conf_matches_signing_constants_and_resources() {
+    let base: serde_json::Value =
+        serde_json::from_str(&repo_guards::read("src-tauri/tauri.conf.json")).unwrap();
+    let mac: serde_json::Value =
+        serde_json::from_str(&repo_guards::read("src-tauri/tauri.macos.conf.json")).unwrap();
+    assert_eq!(base["identifier"], "com.mypass.app");
+    assert!(base.get("version").is_none());
+    assert_eq!(
+        base["bundle"]["externalBin"],
+        serde_json::json!(["binaries/mypass-native-host"])
+    );
+    assert_eq!(mac["bundle"]["targets"], serde_json::json!(["app"]));
+    assert_eq!(mac["bundle"]["macOS"]["hardenedRuntime"], true);
+    assert_eq!(mac["bundle"]["macOS"]["minimumSystemVersion"], "14.0");
+    assert!(mac["bundle"]["macOS"].get("entitlements").is_none());
+    assert!(mac["bundle"]["macOS"]["signingIdentity"].is_null());
+    for name in ["LICENSE", "THIRD_PARTY_NOTICES.md"] {
+        assert_eq!(mac["bundle"]["resources"][format!("../{name}")], name);
+    }
+    assert!(repo_guards::read("src-tauri/Info.plist").contains("CFBundleDevelopmentRegion"));
+}
+
+#[test]
+fn no_entitlements_file_and_install_notes_cover_release_boundaries() {
+    for path in repo_guards::tracked_files().unwrap_or_default() {
+        assert_ne!(
+            path.extension().and_then(|e| e.to_str()),
+            Some("entitlements")
+        );
+    }
+    let notes = repo_guards::read("scripts/package/INSTALL.txt");
+    for fragment in [
+        "xattr -dr com.apple.quarantine",
+        "Apple Development",
+        "NOT notarized",
+        "mypass-native-host",
+        "com.mypass.extensionbridge.endpoint",
+        "com.mypass.extension.pairing",
+        "com.mypass.app.biometric",
+        "hjijbabodfldconmhdcdphlbgaajkejn",
+    ] {
+        assert!(notes.contains(fragment), "INSTALL.txt missing {fragment}");
+    }
+    assert!(!notes.contains("dev.sh install-host"));
+}
+
+#[test]
+#[ignore = "requires an owner-provided team certificate and performs a real signed package build"]
+fn verify_bundle_accepts_local_signed_build() {
+    if std::env::var("MYPASS_RELEASE_SIGNING_TESTS").as_deref() != Ok("1") {
+        return;
+    }
+    assert!(std::env::var("MYPASS_SIGNING_IDENTITY").is_ok());
+    // The owner chooses an empty output folder. Packaging verifies without the unsigned opt-in.
+    let out_dir = std::env::var("MYPASS_RELEASE_TEST_OUT").expect("set an empty output folder");
+    let Some(out) = bash(&["scripts/package-macos.sh", "--out", &out_dir]) else {
+        return;
+    };
+    assert!(out.status.success(), "{}", stderr(&out));
+}

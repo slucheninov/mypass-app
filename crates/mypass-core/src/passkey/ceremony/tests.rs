@@ -107,7 +107,7 @@ fn spki_from_cose(auth_data: &[u8]) -> Vec<u8> {
 fn create_signature_verifies_with_independent_verifier() {
     for attestation in [None, Some("direct")] {
         let req = create_request(attestation);
-        let out = perform_create(&req).unwrap();
+        let out = perform_create(&req, true).unwrap();
         let resp = response(&out.response_json);
         let att = field_bytes(&resp, &["response", "attestationObject"]);
         let map = cbor_map(&att);
@@ -132,7 +132,7 @@ fn create_signature_verifies_with_independent_verifier() {
 
 #[test]
 fn get_signature_verifies_over_authdata_and_client_data_hash() {
-    let created = perform_create(&create_request(None)).unwrap();
+    let created = perform_create(&create_request(None), true).unwrap();
     let key = PasskeySigningKey::from_pem(&created.private_key_pem).unwrap();
     let spki = field_bytes(
         &response(&created.response_json),
@@ -145,6 +145,7 @@ fn get_signature_verifies_over_authdata_and_client_data_hash() {
         &created.credential_id,
         Some(b"user-handle"),
         BackupFlags::default(),
+        true,
     )
     .unwrap();
     let resp = response(&out.response_json);
@@ -163,7 +164,7 @@ fn get_signature_verifies_over_authdata_and_client_data_hash() {
 
 #[test]
 fn create_auth_data_layout_flags_counter_aaguid_credid_cose() {
-    let out = perform_create(&create_request(None)).unwrap();
+    let out = perform_create(&create_request(None), true).unwrap();
     let a = &out.auth_data;
     assert_eq!(a[32], 0x5D);
     assert_eq!(a[33..37], [0u8; 4]);
@@ -187,7 +188,7 @@ fn create_auth_data_layout_flags_counter_aaguid_credid_cose() {
 
 #[test]
 fn get_auth_data_has_no_attested_credential_data() {
-    let created = perform_create(&create_request(None)).unwrap();
+    let created = perform_create(&create_request(None), true).unwrap();
     let key = PasskeySigningKey::from_pem(&created.private_key_pem).unwrap();
     let out = perform_get(
         &get_request(&[]),
@@ -195,6 +196,7 @@ fn get_auth_data_has_no_attested_credential_data() {
         &created.credential_id,
         None,
         BackupFlags::default(),
+        true,
     )
     .unwrap();
     assert_eq!(out.auth_data.len(), 37);
@@ -206,7 +208,7 @@ fn get_auth_data_has_no_attested_credential_data() {
 fn rp_id_hash_is_sha256_of_rp_id() {
     // The page asked for "Example.COM" / "EXAMPLE.com": the hash is over the canonical rpId.
     let expected = Sha256::digest(RP_ID.as_bytes());
-    let created = perform_create(&create_request(None)).unwrap();
+    let created = perform_create(&create_request(None), true).unwrap();
     assert_eq!(created.auth_data[..32], expected[..]);
     assert_ne!(created.auth_data[..32], Sha256::digest(b"Example.COM")[..]);
     let key = PasskeySigningKey::from_pem(&created.private_key_pem).unwrap();
@@ -216,6 +218,7 @@ fn rp_id_hash_is_sha256_of_rp_id() {
         &created.credential_id,
         None,
         BackupFlags::default(),
+        true,
     )
     .unwrap();
     assert_eq!(got.auth_data[..32], expected[..]);
@@ -224,7 +227,7 @@ fn rp_id_hash_is_sha256_of_rp_id() {
 #[test]
 fn attestation_none_uses_none_format_with_empty_statement() {
     for attestation in [None, Some("none"), Some("bogus"), Some("DIRECT")] {
-        let out = perform_create(&create_request(attestation)).unwrap();
+        let out = perform_create(&create_request(attestation), true).unwrap();
         let att = field_bytes(
             &response(&out.response_json),
             &["response", "attestationObject"],
@@ -239,7 +242,7 @@ fn attestation_none_uses_none_format_with_empty_statement() {
 #[test]
 fn attestation_other_than_none_uses_packed_self_attestation_with_alg_minus_7() {
     for attestation in ["direct", "indirect", "enterprise"] {
-        let out = perform_create(&create_request(Some(attestation))).unwrap();
+        let out = perform_create(&create_request(Some(attestation)), true).unwrap();
         let att = field_bytes(
             &response(&out.response_json),
             &["response", "attestationObject"],
@@ -266,7 +269,7 @@ fn attestation_other_than_none_uses_packed_self_attestation_with_alg_minus_7() {
 #[test]
 fn attestation_object_key_order_is_fmt_attstmt_authdata() {
     for attestation in [None, Some("direct")] {
-        let out = perform_create(&create_request(attestation)).unwrap();
+        let out = perform_create(&create_request(attestation), true).unwrap();
         let att = field_bytes(
             &response(&out.response_json),
             &["response", "attestationObject"],
@@ -289,18 +292,22 @@ fn create_answers_cred_props_rk_true_only_when_requested() {
         create_json(None).replace(r#""extensions":{"#, r#""extensions":{"credProps":true,"#);
     let request = parse_create(ORIGIN, &asked).unwrap();
     assert!(request.request().cred_props);
-    let resp = response(&perform_create(&request).unwrap().response_json);
+    let resp = response(&perform_create(&request, true).unwrap().response_json);
     assert_eq!(
         resp["clientExtensionResults"],
         serde_json::json!({"credProps": {"rk": true}})
     );
-    let resp = response(&perform_create(&create_request(None)).unwrap().response_json);
+    let resp = response(
+        &perform_create(&create_request(None), true)
+            .unwrap()
+            .response_json,
+    );
     assert_eq!(resp["clientExtensionResults"], serde_json::json!({}));
 }
 
 #[test]
 fn create_response_has_chromium_required_fields() {
-    let out = perform_create(&create_request(None)).unwrap();
+    let out = perform_create(&create_request(None), true).unwrap();
     let resp = response(&out.response_json);
     let id = b64url::encode(&out.credential_id);
     assert_eq!(resp["id"], id.as_str());
@@ -340,7 +347,7 @@ fn create_response_has_chromium_required_fields() {
 
 #[test]
 fn get_response_omits_user_handle_when_none_and_includes_it_otherwise() {
-    let created = perform_create(&create_request(None)).unwrap();
+    let created = perform_create(&create_request(None), true).unwrap();
     let key = PasskeySigningKey::from_pem(&created.private_key_pem).unwrap();
     let req = get_request(&[]);
     let none = perform_get(
@@ -349,6 +356,7 @@ fn get_response_omits_user_handle_when_none_and_includes_it_otherwise() {
         &created.credential_id,
         None,
         BackupFlags::default(),
+        true,
     )
     .unwrap();
     let resp = response(&none.response_json);
@@ -363,6 +371,7 @@ fn get_response_omits_user_handle_when_none_and_includes_it_otherwise() {
         &created.credential_id,
         Some(&[0xfb, 0xff]),
         BackupFlags::default(),
+        true,
     )
     .unwrap();
     let resp = response(&some.response_json);
@@ -382,7 +391,7 @@ fn get_response_omits_user_handle_when_none_and_includes_it_otherwise() {
 
 #[test]
 fn get_refuses_a_credential_outside_allow_credentials_and_an_empty_id() {
-    let created = perform_create(&create_request(None)).unwrap();
+    let created = perform_create(&create_request(None), true).unwrap();
     let key = PasskeySigningKey::from_pem(&created.private_key_pem).unwrap();
     let other = [9u8; 32];
     let req = get_request(&[&other]);
@@ -392,13 +401,21 @@ fn get_refuses_a_credential_outside_allow_credentials_and_an_empty_id() {
             &key,
             &created.credential_id,
             None,
-            BackupFlags::default()
+            BackupFlags::default(),
+            true
         ),
         Err(PasskeyError::CredentialNotAllowed)
     );
-    assert!(perform_get(&req, &key, &other, None, BackupFlags::default()).is_ok());
+    assert!(perform_get(&req, &key, &other, None, BackupFlags::default(), true).is_ok());
     assert_eq!(
-        perform_get(&get_request(&[]), &key, &[], None, BackupFlags::default()),
+        perform_get(
+            &get_request(&[]),
+            &key,
+            &[],
+            None,
+            BackupFlags::default(),
+            true
+        ),
         Err(PasskeyError::InvalidRequest)
     );
 }
@@ -421,7 +438,7 @@ fn client_data_json_is_canonical_and_unescaped() {
 
 #[test]
 fn client_data_json_in_responses_uses_the_validated_origin() {
-    let out = perform_create(&create_request(None)).unwrap();
+    let out = perform_create(&create_request(None), true).unwrap();
     let cd = field_bytes(
         &response(&out.response_json),
         &["response", "clientDataJSON"],
@@ -438,7 +455,7 @@ fn credential_ids_are_32_random_bytes_and_unique_over_1000_creates() {
     let mut ids = HashSet::new();
     let mut keys = HashSet::new();
     for _ in 0..1000 {
-        let out = perform_create(&req).unwrap();
+        let out = perform_create(&req, true).unwrap();
         assert_eq!(out.credential_id.len(), 32);
         assert!(ids.insert(out.credential_id.clone()));
         assert!(keys.insert(out.private_key_pem.to_string()));
@@ -447,7 +464,7 @@ fn credential_ids_are_32_random_bytes_and_unique_over_1000_creates() {
 
 #[test]
 fn private_key_pem_is_pkcs8_pem_with_lf_and_round_trips_through_from_pem() {
-    let out = perform_create(&create_request(None)).unwrap();
+    let out = perform_create(&create_request(None), true).unwrap();
     let pem: &str = &out.private_key_pem;
     assert!(
         pem.starts_with("-----BEGIN PRIVATE KEY-----\n"),
@@ -494,7 +511,7 @@ fn from_pem_accepts_sec1_and_rejects_garbage_and_p384() {
 
 #[test]
 fn debug_output_redacts_private_key() {
-    let out = perform_create(&create_request(None)).unwrap();
+    let out = perform_create(&create_request(None), true).unwrap();
     let text = format!("{out:?}");
     assert!(!text.contains("BEGIN"));
     assert!(!text.contains(out.private_key_pem.lines().nth(1).unwrap()));
@@ -503,7 +520,7 @@ fn debug_output_redacts_private_key() {
 
 #[test]
 fn flags_follow_backup_flags_and_bs_requires_be() {
-    let created = perform_create(&create_request(None)).unwrap();
+    let created = perform_create(&create_request(None), true).unwrap();
     let key = PasskeySigningKey::from_pem(&created.private_key_pem).unwrap();
     let spki = field_bytes(
         &response(&created.response_json),
@@ -522,6 +539,7 @@ fn flags_follow_backup_flags_and_bs_requires_be() {
             &created.credential_id,
             None,
             BackupFlags { eligible, state },
+            true,
         )
         .unwrap();
         assert_eq!(out.auth_data[32], expected, "{eligible} {state}");

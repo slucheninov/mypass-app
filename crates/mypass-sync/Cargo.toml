@@ -1,0 +1,31 @@
+[package]
+name = "mypass-sync"
+version = "0.1.0"
+description = "MyPass vault sync: secondary-folder backends, the folder watcher and iCloud Drive file access."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# `forbid` like every member but `mypass-platform`: the Objective-C calls behind iCloud Drive live in
+# `mypass-platform` (the `CoordinatedFiles` seam), so this crate stays safe and portable.
+[lints]
+workspace = true
+
+[dependencies]
+mypass-kdbx = { path = "../mypass-kdbx" }
+mypass-core = { path = "../mypass-core" }
+mypass-platform = { path = "../mypass-platform" }
+notify.workspace = true
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+specta.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+mypass-kdbx = { path = "../mypass-kdbx", features = ["test-util"] }
+mypass-platform = { path = "../mypass-platform", features = ["test-util"] }
+tempfile.workspace = true

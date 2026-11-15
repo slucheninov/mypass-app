@@ -127,6 +127,7 @@ pub fn session_error_response(e: &SessionError) -> Response {
         SessionError::InvalidInput(_) => error("invalid request"),
         SessionError::LimitExceeded(_) => error("limit exceeded"),
         SessionError::ChangedOnDisk => error("the vault file changed, try again"),
+        SessionError::Downloading => error("the vault is still downloading from iCloud, try again"),
         SessionError::WrongPassword
         | SessionError::AlreadyExists
         | SessionError::Corrupt(_)

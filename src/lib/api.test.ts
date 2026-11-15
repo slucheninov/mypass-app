@@ -66,6 +66,9 @@ describe("errorMessage", () => {
     expect(errorMessage(new ApiFailure("locked"))).toBe(t("Vault is locked"));
     expect(errorMessage(new ApiFailure("wrongPassword"))).toBe(t("Wrong master password"));
     expect(errorMessage(new ApiFailure("io", "x"))).toBe(t("Something went wrong"));
+    expect(errorMessage(new ApiFailure("downloading"))).toBe(
+      t("The vault at that location is still downloading from iCloud. Wait until it finishes, then try again."),
+    );
     expect(errorMessage(new Error("boom"))).toBe(t("Something went wrong"));
     expect(errorMessage("plain")).toBe(t("Something went wrong"));
   });
@@ -129,4 +132,20 @@ describe("errorMessage", () => {
       expect(key in en && key in uk && key in ru, key).toBe(true);
     }
   });
+});
+
+it("every migration failure has a distinct actionable translation in every language", () => {
+  const codes: ErrorCode[] = ["migrationLocked", "migrationTargetUnreadable", "migrationTargetNotAVault", "migrationTargetPasswordMismatch", "migrationTargetWriteFailed", "migrationSourceInvalid", "migrationSameFile", "migrationValidationFailed"];
+  setLanguage("en");
+  const keys = codes.map(code => errorMessage(new ApiFailure(code)));
+  for (const lang of ["en", "uk", "ru"] as const) {
+    setLanguage(lang);
+    const messages = codes.map(code => errorMessage(new ApiFailure(code, "RAW-BACKEND-TEXT")));
+    expect(new Set(messages).size).toBe(8);
+    const catalog = { en, uk, ru }[lang];
+    expect(messages).toEqual(keys.map(key => catalog[key as keyof typeof catalog]));
+    for (const message of messages) {
+      expect(message).not.toContain("RAW-BACKEND-TEXT");
+    }
+  }
 });

@@ -130,6 +130,9 @@ fn run_tray_action(app: &AppHandle, action: TrayAction) {
         return;
     };
     match action {
+        TrayAction::OpenRelease => {
+            let _ = crate::commands::update::open_release(app, &core.0);
+        }
         TrayAction::ShowMain => {
             let _ = show_main(shell.windows.as_ref());
         }
@@ -394,6 +397,10 @@ pub fn on_run_event<R: Runtime>(app: &tauri::AppHandle<R>, event: &RunEvent) {
         }
         // Safety net for any exit that did not go through the quit flow; `shutdown` is idempotent.
         RunEvent::Exit => {
+            if let Some(core) = app.try_state::<AppState>() {
+                core.0.secondary.shutdown();
+                core.0.update.shutdown();
+            }
             if let Some(bridge) = app.try_state::<crate::bridge::BridgeState>() {
                 bridge.shutdown();
             }
@@ -458,6 +465,8 @@ fn start_quit_flow<R: Runtime>(app: tauri::AppHandle<R>) {
                 crate::bridge::on_quit_outcome(&bridge, outcome);
             }
             if outcome == ExitOutcome::Exit {
+                core.secondary.shutdown();
+                core.update.shutdown();
                 port.exit();
             }
         });

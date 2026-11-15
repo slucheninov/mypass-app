@@ -85,6 +85,7 @@ fn ci_aggregator_needs_every_job() {
             "crosscompat",
             "js",
             "lint",
+            "package-smoke",
             "test",
             "ui",
             "windows-integration"
@@ -698,4 +699,112 @@ fn ci_ui_job_runs_the_ui_part_with_pnpm_from_package_manager() {
     // The ui job is a hard requirement of the aggregator, never a tolerated skip.
     assert!(!GATED_JOBS.contains(&"ui"));
     assert!(needs_of(job(&doc, "ci")).contains(&"ui".to_owned()));
+}
+
+#[test]
+fn release_workflow_is_tag_only_minimal_and_publishes_last() {
+    let doc = workflow(".github/workflows/release.yml");
+    assert_eq!(triggers(&doc).len(), 1);
+    assert!(triggers(&doc).contains_key("push"));
+    assert_eq!(doc["permissions"]["contents"].as_str(), Some("read"));
+    let publish = job(&doc, "publish");
+    assert_eq!(publish["permissions"]["contents"].as_str(), Some("write"));
+    let mut other_jobs: Vec<_> = jobs(&doc)
+        .keys()
+        .map(|k| k.as_str().unwrap().to_owned())
+        .filter(|k| k != "publish")
+        .collect();
+    other_jobs.sort();
+    let mut needs = needs_of(publish);
+    needs.sort();
+    assert_eq!(needs, other_jobs);
+    for (id, j) in jobs(&doc) {
+        let runs = steps(j)
+            .iter()
+            .map(|s| run_text(s))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if id.as_str() == Some("publish") {
+            assert!(runs.contains("--draft=false"));
+            assert!(runs.contains("check-assets"));
+        } else {
+            assert!(!runs.contains("--draft=false"));
+        }
+    }
+    let build = job(&doc, "release-macos");
+    let all = steps(build)
+        .iter()
+        .map(|s| run_text(s))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for required in [
+        "bash scripts/test.sh --ci",
+        "package-macos.sh --release",
+        "check-host-deps.sh",
+        "check-version.sh",
+        "check-assets",
+        "APPLE_CERTIFICATE",
+        "APPLE_SIGNING_IDENTITY",
+    ] {
+        assert!(all.contains(required), "release workflow lacks {required}");
+    }
+    assert!(steps(build)
+        .iter()
+        .any(|s| s["if"].as_str() == Some("always()") && run_text(s).contains("delete-keychain")));
+}
+
+#[test]
+fn package_smoke_is_gated_and_unsigned() {
+    let doc = workflow(".github/workflows/ci.yml");
+    let smoke = job(&doc, "package-smoke");
+    assert!(smoke["if"]
+        .as_str()
+        .unwrap()
+        .contains("needs.changes.outputs.package"));
+    assert_eq!(needs_of(smoke), ["changes"]);
+    let runs = steps(smoke)
+        .iter()
+        .map(|s| run_text(s))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(runs.contains("package-macos.sh --allow-unsigned"));
+    assert!(runs.contains("check-host-deps.sh"));
+}
+
+#[test]
+fn release_workflow_never_signs_ad_hoc_and_limits_write_permissions() {
+    let doc = workflow(".github/workflows/release.yml");
+    assert_eq!(doc["permissions"].as_mapping().unwrap().len(), 1);
+    for (_, job) in jobs(&doc) {
+        let permissions = job["permissions"].as_mapping().unwrap();
+        assert_eq!(permissions.len(), 1);
+        assert_eq!(permissions["contents"].as_str(), Some("write"));
+    }
+    for path in [
+        ".github/workflows/release.yml",
+        "scripts/package-macos.sh",
+        "scripts/build-host.sh",
+        "src-tauri/tauri.macos.conf.json",
+    ] {
+        let text = read(path);
+        for forbidden in [
+            "--sign -",
+            "--sign '-'",
+            "--sign \"-\"",
+            "signingIdentity\": \"-\"",
+        ] {
+            assert!(!text.contains(forbidden), "{path}: ad-hoc signing");
+        }
+    }
+    let script = read("scripts/package-macos.sh");
+    for fragment in [
+        "--release requires a signing identity",
+        "--allow-unsigned",
+        "--no-sign",
+        "--sign \"$identity\"",
+        "'-r=designated => identifier \"com.mypass.app\"",
+        "'-r=designated => identifier \"com.mypass.chromehost\"",
+    ] {
+        assert!(script.contains(fragment), "packaging missing {fragment}");
+    }
 }

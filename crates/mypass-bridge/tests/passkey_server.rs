@@ -135,7 +135,11 @@ impl App {
         };
         let ui: Arc<dyn BridgeUi> = Arc::new(QuietUi);
         let passkeys = Arc::new(Counting {
-            inner: PasskeyService::new(sched.clone(), Arc::clone(&ui)),
+            inner: PasskeyService::with_presence(
+                sched.clone(),
+                Arc::clone(&ui),
+                Arc::new(|_, _| Ok(true)),
+            ),
             handled: AtomicUsize::new(0),
         });
         let svc = BridgeService::new(BridgeDeps {

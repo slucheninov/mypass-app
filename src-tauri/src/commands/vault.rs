@@ -3,7 +3,7 @@
 use super::{blocking, into_secret};
 use crate::state::AppState;
 use mypass_session::dto::{FoundVaultFileDto, OpenWarning, RecentVaultDto};
-use mypass_session::{ApiError, SessionStatus};
+use mypass_session::{ApiError, SessionStatus, StorageStatus};
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, State};
 
@@ -11,6 +11,14 @@ use tauri::{AppHandle, Manager, State};
 #[specta::specta]
 pub fn vault_status(state: State<'_, AppState>) -> Result<SessionStatus, ApiError> {
     state.0.vault_status()
+}
+
+/// Where the open vault is stored (local or iCloud Drive) and whether it is served from the
+/// offline copy or still downloading.
+#[tauri::command]
+#[specta::specta]
+pub fn vault_storage_status(state: State<'_, AppState>) -> Result<StorageStatus, ApiError> {
+    state.0.vault_storage_status()
 }
 
 #[tauri::command]
@@ -111,4 +119,100 @@ pub async fn vault_open_warnings(
     // Enumerates processes and stats paths.
     let core = state.0.clone();
     blocking(move || core.vault_open_warnings(&path)).await
+}
+
+/// Probe consumes a grant and returns a fresh grant for the user's strategy decision.
+#[derive(serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderProbe {
+    pub probe: mypass_session::migration::TargetProbe,
+    pub folder_token: String,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn vault_location_pick(
+    state: State<'_, AppState>,
+    shell: State<'_, crate::state::ShellState>,
+) -> Result<Option<String>, ApiError> {
+    super::ensure_unlocked(&state.0)?;
+    let incarnation = state.0.session.unlocked_incarnation()?;
+    let generation = shell.grants.generation();
+    let core = state.0.clone();
+    let start = state.0.vault_location_start();
+    let picker = shell.picker.clone();
+    let grants = shell.grants.clone();
+    blocking(move || {
+        let picked = picker.pick_folder(Some(start));
+        if !core.session.is_incarnation(incarnation) {
+            return Err(mypass_session::session::SessionError::ChangedOnDisk.into());
+        }
+        picked
+            .map(|p| grants.grant_folder_if_current(generation, incarnation, p))
+            .transpose()
+    })
+    .await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn vault_location_probe(
+    state: State<'_, AppState>,
+    shell: State<'_, crate::state::ShellState>,
+    folder_token: String,
+) -> Result<FolderProbe, ApiError> {
+    super::ensure_unlocked(&state.0)?;
+    let incarnation = state.0.session.unlocked_incarnation()?;
+    let generation = shell.grants.generation();
+    let folder = shell.grants.take_folder_for(&folder_token, incarnation)?;
+    let core = state.0.clone();
+    let grants = shell.grants.clone();
+    blocking(move || {
+        let probe = core.vault_location_probe(&folder)?;
+        if !core.session.is_incarnation(incarnation) {
+            return Err(mypass_session::session::SessionError::ChangedOnDisk.into());
+        }
+        Ok(FolderProbe {
+            probe,
+            folder_token: grants.grant_folder_if_current(generation, incarnation, folder)?,
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn vault_location_change(
+    state: State<'_, AppState>,
+    shell: State<'_, crate::state::ShellState>,
+    req: mypass_session::migration::LocationChangeRequest,
+) -> Result<SessionStatus, ApiError> {
+    super::ensure_unlocked(&state.0)?;
+    let incarnation = state.0.session.unlocked_incarnation()?;
+    let folder = shell
+        .grants
+        .take_folder_for(&req.folder_token, incarnation)?;
+    let core = state.0.clone();
+    blocking(move || {
+        core.migrate_folder_for(&folder, req.strategy, true, incarnation)?;
+        core.vault_status()
+    })
+    .await
+}
+
+/// The webview's reason key is advisory only; Rust chooses the catalog reason.
+#[tauri::command]
+#[specta::specta]
+pub async fn vault_unlock_device(
+    state: State<'_, AppState>,
+    reason_key: String,
+) -> Result<SessionStatus, ApiError> {
+    let _ = reason_key;
+    let core = state.0.clone();
+    blocking(move || {
+        let reason = crate::i18n::t(core.settings.get().language, "Unlock MyPass", &[]);
+        core.device_unlock.unlock_with_device(&reason)?;
+        core.vault_status()
+    })
+    .await
 }

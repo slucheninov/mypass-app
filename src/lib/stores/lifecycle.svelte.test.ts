@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EntrySummary, Sidebar_Serialize } from "../bindings";
 import { createFakeBackend } from "../../test/fakeBackend";
@@ -243,6 +244,7 @@ describe("startStores", () => {
     const either = 'label !== "settings" && label !== "tray-panel"';
     expect(text).toContain(`entries: ${either}`);
     expect(text).toContain(`saveToast: ${either}`);
+    expect(text).toContain('sync: label !== "tray-panel"');
   });
 
   it("save_toast_false_keeps_the_failed_save_status_but_raises_no_toast", async () => {
@@ -252,5 +254,23 @@ describe("startStores", () => {
     await fake.emit("saveStateChanged", { state: "failed", message: "disk is full" });
     await vi.waitFor(() => expect(session.status.save.state).toBe("failed"));
     expect(toasts.items).toHaveLength(0);
+  });
+});
+
+describe("window bootstrap ACL", () => {
+  it.each(["main", "settings", "tray-panel"])("%s starts only granted commands", async label => {
+    const fake = createFakeBackend({ session: "unlocked" });
+    fake.install();
+    stop = await startStores({ entries: label === "main", saveToast: label === "main", sync: label !== "tray-panel" });
+    const capability = JSON.parse(readFileSync(`src-tauri/capabilities/${label}.json`, "utf8"));
+    const grants = new Set(capability.permissions.filter((p: unknown) => typeof p === "string"));
+    expect(count(fake, "vaultStatus")).toBeGreaterThan(0);
+    for (const { command } of fake.calls) {
+      expect(grants.has(`allow-${command.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`)}`), command).toBe(true);
+    }
+    if (label === "tray-panel") {
+      expect(count(fake, "syncStatus")).toBe(0);
+      expect(count(fake, "vaultStorageStatus")).toBe(0);
+    }
   });
 });

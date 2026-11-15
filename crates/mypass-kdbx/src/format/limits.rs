@@ -29,6 +29,12 @@ pub(crate) const AES_KDF_ROUNDS_MAX: u64 = 1_000_000_000;
 pub(crate) const MAX_BLOCK_LEN: usize = 1 << 30;
 /// Largest accepted decompressed payload, in bytes (1 GiB); the guard against gzip bombs.
 pub(crate) const MAX_DECOMPRESSED_LEN: u64 = 1 << 30;
+/// Largest vault file read from storage that other software writes (a sync folder, iCloud Drive, a
+/// migration target), in bytes: the decompressed cap plus 64 MiB for headers, block framing and
+/// padding, so no file the parsers would accept is refused. The read itself is bounded
+/// (`FileIo::read_limited`), so a huge, growing or endless file is cut off before it can exhaust
+/// memory.
+pub const MAX_VAULT_FILE_BYTES: u64 = MAX_DECOMPRESSED_LEN + 64 * 1024 * 1024;
 /// Deepest accepted XML element nesting.
 pub(crate) const MAX_XML_DEPTH: usize = 100;
 

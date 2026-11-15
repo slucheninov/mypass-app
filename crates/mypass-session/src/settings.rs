@@ -105,6 +105,19 @@ pub enum UnlockWithDeviceWindow {
     Never,
 }
 
+impl UnlockWithDeviceWindow {
+    /// The window in seconds; `None` for `Never` (no limit since the last real event).
+    pub fn seconds(self) -> Option<u64> {
+        match self {
+            Self::OneHour => Some(3600),
+            Self::FourHours => Some(14_400),
+            Self::EightHours => Some(28_800),
+            Self::TwentyFourHours => Some(86_400),
+            Self::Never => None,
+        }
+    }
+}
+
 /// How often the master password is required again regardless of device unlock (stage 5).
 #[derive(Serialize, Deserialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "camelCase")]
@@ -116,6 +129,20 @@ pub enum RequireAccountPasswordWindow {
     ThirtyDays,
     NinetyDays,
     Never,
+}
+
+impl RequireAccountPasswordWindow {
+    /// The window in seconds; `None` for `Never` (no limit since the last master password entry).
+    pub fn seconds(self) -> Option<u64> {
+        match self {
+            Self::OneDay => Some(86_400),
+            Self::SevenDays => Some(604_800),
+            Self::FourteenDays => Some(1_209_600),
+            Self::ThirtyDays => Some(2_592_000),
+            Self::NinetyDays => Some(7_776_000),
+            Self::Never => None,
+        }
+    }
 }
 
 /// Generator defaults remembered between sessions (a partial object fills the rest from the
@@ -274,10 +301,14 @@ where
     Option::<T>::deserialize(d).map(Some)
 }
 
-/// A partial update: every field of [`Settings`] except `recent_vaults` (owned by
-/// [`SettingsStore::remember_vault`] / [`SettingsStore::forget_vault`]). `None` leaves a field
-/// untouched; `vault_path` and `secondary_folder` use `Some(None)` (JSON `null`) to clear;
-/// `generator` replaces the whole options object.
+/// A partial update from the webview: every field of [`Settings`] except `recent_vaults` (owned by
+/// [`SettingsStore::remember_vault`] / [`SettingsStore::forget_vault`]), the two device-unlock
+/// toggles and `secondary_folder`. Those three change only through Rust
+/// ([`SettingsStore::set_device_unlock_toggles`] behind the device-unlock enrolment,
+/// [`SettingsStore::set_secondary_folder`] behind the sync commands), so no window can switch
+/// device unlock on without an enrolment or point sync at a folder it typed. `None` leaves a field
+/// untouched; `vault_path` uses `Some(None)` (JSON `null`) to clear; `generator` replaces the whole
+/// options object.
 #[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Debug, Default)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SettingsPatch {
@@ -310,21 +341,9 @@ pub struct SettingsPatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub passkey_proxy_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub unlock_touch_id_enabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub unlock_mac_password_enabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub unlock_with_device_window: Option<UnlockWithDeviceWindow>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub require_account_password_window: Option<RequireAccountPasswordWindow>,
-    // On the wire a field is missing (untouched), `null` (clear) or a value; the TypeScript type
-    // is the same as for a plain `Option`, `deserialize_with` only tells missing from `null`.
-    #[specta(type = Option<String>)]
-    #[serde(
-        deserialize_with = "double_option",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub secondary_folder: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub update_check_enabled: Option<bool>,
     // On the wire a field is missing (untouched), `null` (clear) or a value; the TypeScript type
@@ -431,6 +450,12 @@ impl SettingsStore {
         lock(&self.0.settings).clone()
     }
 
+    /// Hold the policy snapshot through a session authorization/install decision. Lock order:
+    /// session first, then settings; settings writers never call the session.
+    pub(crate) fn current(&self) -> std::sync::MutexGuard<'_, Settings> {
+        lock(&self.0.settings)
+    }
+
     /// Applies `patch`. Out-of-range counts and delays are clamped; an invalid generator or
     /// shortcut is refused with [`SettingsError::InvalidValue`] and changes nothing. A failed write
     /// keeps the new value in memory and returns [`SettingsError::Io`].
@@ -440,6 +465,33 @@ impl SettingsStore {
         apply_patch(&mut next, patch)?;
         next.normalize();
         *guard = next.clone();
+        self.persist(&guard)?;
+        Ok(next)
+    }
+
+    /// Sets the two device-unlock toggles. Rust-only (not in [`SettingsPatch`]): the device-unlock
+    /// service calls it after an enrolment, a forget or a reconcile. A failed write keeps the new
+    /// values in memory and returns [`SettingsError::Io`].
+    pub fn set_device_unlock_toggles(
+        &self,
+        touch_id: bool,
+        mac_password: bool,
+    ) -> Result<Settings, SettingsError> {
+        let mut guard = lock(&self.0.settings);
+        guard.unlock_touch_id_enabled = touch_id;
+        guard.unlock_mac_password_enabled = mac_password;
+        let next = guard.clone();
+        self.persist(&guard)?;
+        Ok(next)
+    }
+
+    /// Sets or clears the secondary sync folder. Rust-only (not in [`SettingsPatch`]): only the
+    /// sync connect and disconnect commands call it, with a folder picked in a Rust dialog. A
+    /// failed write keeps the new value in memory and returns [`SettingsError::Io`].
+    pub fn set_secondary_folder(&self, folder: Option<String>) -> Result<Settings, SettingsError> {
+        let mut guard = lock(&self.0.settings);
+        guard.secondary_folder = folder;
+        let next = guard.clone();
         self.persist(&guard)?;
         Ok(next)
     }
@@ -573,11 +625,8 @@ fn apply_patch(s: &mut Settings, p: SettingsPatch) -> Result<(), SettingsError> 
         launch_at_login,
         show_menu_bar_extra,
         passkey_proxy_enabled,
-        unlock_touch_id_enabled,
-        unlock_mac_password_enabled,
         unlock_with_device_window,
         require_account_password_window,
-        secondary_folder,
         update_check_enabled,
         vault_path,
     );
@@ -896,9 +945,8 @@ mod tests {
     fn patch_deserialises_null_as_clear_and_missing_as_untouched() {
         let p: SettingsPatch = serde_json::from_str(r#"{"vaultPath":null}"#).unwrap();
         assert_eq!(p.vault_path, Some(None));
-        assert_eq!(p.secondary_folder, None);
-        let p: SettingsPatch = serde_json::from_str(r#"{"secondaryFolder":"/x"}"#).unwrap();
-        assert_eq!(p.secondary_folder, Some(Some("/x".to_owned())));
+        let p: SettingsPatch = serde_json::from_str(r#"{}"#).unwrap();
+        assert_eq!(p.vault_path, None);
         let store = SettingsStore::in_memory();
         store
             .update(SettingsPatch {
@@ -940,15 +988,16 @@ mod tests {
                 symbols: false,
             }),
             passkey_proxy_enabled: Some(false),
-            unlock_touch_id_enabled: Some(true),
-            unlock_mac_password_enabled: Some(true),
             unlock_with_device_window: Some(UnlockWithDeviceWindow::Never),
             require_account_password_window: Some(RequireAccountPasswordWindow::SevenDays),
-            secondary_folder: Some(Some("/secondary".into())),
             update_check_enabled: Some(false),
             vault_path: Some(Some("/vault.kdbx".into())),
         };
-        let saved = store.update(patch).unwrap();
+        store.update(patch).unwrap();
+        store.set_device_unlock_toggles(true, true).unwrap();
+        let saved = store
+            .set_secondary_folder(Some("/secondary".into()))
+            .unwrap();
         store.remember_vault("/a.kdbx");
         let saved = Settings {
             recent_vaults: vec!["/a.kdbx".into()],
@@ -1168,5 +1217,97 @@ mod tests {
         store.remember_vault("/other.kdbx");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
         assert_eq!(fs::read(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn window_seconds_tables() {
+        use RequireAccountPasswordWindow as A;
+        use UnlockWithDeviceWindow as D;
+        for (window, seconds) in [
+            (D::OneHour, Some(3600)),
+            (D::FourHours, Some(14_400)),
+            (D::EightHours, Some(28_800)),
+            (D::TwentyFourHours, Some(86_400)),
+            (D::Never, None),
+        ] {
+            assert_eq!(window.seconds(), seconds, "{window:?}");
+        }
+        for (window, seconds) in [
+            (A::OneDay, Some(86_400)),
+            (A::SevenDays, Some(604_800)),
+            (A::FourteenDays, Some(1_209_600)),
+            (A::ThirtyDays, Some(2_592_000)),
+            (A::NinetyDays, Some(7_776_000)),
+            (A::Never, None),
+        ] {
+            assert_eq!(window.seconds(), seconds, "{window:?}");
+        }
+    }
+
+    /// Stage 5 adds no settings field: the schema snapshot is unchanged (`settings_schema_snapshot`
+    /// runs on the committed 2a file), and the Rust-only unlock timestamps never become settings:
+    /// a `lastDeviceUnlock` key in the file is ignored and never written back.
+    #[test]
+    fn stage_5_adds_no_settings_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, path) = store_in(dir.path());
+        fs::write(
+            &path,
+            r#"{"lastDeviceUnlock":1700000000,"lastFullPassword":1700000000,"theme":"dark"}"#,
+        )
+        .unwrap();
+        let store = SettingsStore::load(path.clone());
+        assert_eq!(store.get().theme, Theme::Dark);
+        store
+            .update(SettingsPatch {
+                language: Some(Language::Uk),
+                ..SettingsPatch::default()
+            })
+            .unwrap();
+        let written: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let keys = written.as_object().unwrap();
+        assert!(!keys.contains_key("lastDeviceUnlock"));
+        assert!(!keys.contains_key("lastFullPassword"));
+        let defaults = serde_json::to_value(Settings::default()).unwrap();
+        let mut expected: Vec<_> = defaults.as_object().unwrap().keys().collect();
+        let mut actual: Vec<_> = keys.keys().collect();
+        expected.sort();
+        actual.sort();
+        assert_eq!(actual, expected);
+    }
+
+    /// R7: the webview cannot switch device unlock on or point sync at a folder through the patch;
+    /// unknown patch keys are ignored like any other unknown key.
+    #[test]
+    fn patch_cannot_set_device_unlock_toggles_or_secondary_folder() {
+        let p: SettingsPatch = serde_json::from_str(
+            r#"{"unlockTouchIdEnabled":true,"unlockMacPasswordEnabled":true,"secondaryFolder":"/x"}"#,
+        )
+        .unwrap();
+        assert_eq!(p, SettingsPatch::default());
+        let store = SettingsStore::in_memory();
+        let s = store.update(p).unwrap();
+        assert!(!s.unlock_touch_id_enabled);
+        assert!(!s.unlock_mac_password_enabled);
+        assert_eq!(s.secondary_folder, None);
+        let wire = serde_json::to_value(SettingsPatch::default()).unwrap();
+        assert_eq!(wire, serde_json::json!({}));
+    }
+
+    #[test]
+    fn rust_only_setters_persist() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, path) = store_in(dir.path());
+        let s = store.set_device_unlock_toggles(true, false).unwrap();
+        assert!(s.unlock_touch_id_enabled && !s.unlock_mac_password_enabled);
+        store.set_secondary_folder(Some("/sync".into())).unwrap();
+        let reloaded = SettingsStore::load(path).get();
+        assert!(reloaded.unlock_touch_id_enabled);
+        assert!(!reloaded.unlock_mac_password_enabled);
+        assert_eq!(reloaded.secondary_folder.as_deref(), Some("/sync"));
+        assert_eq!(
+            store.set_secondary_folder(None).unwrap().secondary_folder,
+            None
+        );
     }
 }

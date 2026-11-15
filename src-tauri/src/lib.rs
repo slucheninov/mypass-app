@@ -7,6 +7,7 @@
 pub mod bridge;
 pub mod commands;
 pub mod events;
+mod extension_copy;
 pub mod files;
 pub mod hotkeys;
 pub mod i18n;
@@ -14,6 +15,7 @@ pub mod lifecycle;
 pub mod navigation;
 pub mod shell;
 pub mod shell_runtime;
+pub mod startup;
 pub mod state;
 #[cfg(test)]
 mod testing;
@@ -25,10 +27,15 @@ use std::path::Path;
 use specta_typescript::Typescript;
 use tauri_specta::{collect_commands, collect_events, Builder, Commands};
 
+// One context macro invocation also avoids duplicate embedded plist symbols in macOS tests.
+fn app_context() -> tauri::Context<tauri::Wry> {
+    tauri::generate_context!()
+}
+
 /// Every command, in one place (the tests read their names from here).
 pub fn commands() -> Commands<tauri::Wry> {
     use commands::{app, attachment, backup, browser, draft, entry, generator, group, import};
-    use commands::{platform, settings, sidebar, vault};
+    use commands::{device, platform, settings, sidebar, sync, update, vault};
     collect_commands![
         app::app_info,
         app::app_open_entry,
@@ -49,6 +56,14 @@ pub fn commands() -> Commands<tauri::Wry> {
         browser::browser_revoke,
         browser::browser_show_extension_folder,
         browser::browser_status,
+        device::device_unlock_status,
+        device::device_unlock_configure,
+        device::device_unlock_consume_extension_request,
+        update::update_status,
+        update::update_check_now,
+        update::update_dismiss,
+        update::update_open_release,
+        vault::vault_unlock_device,
         draft::draft_clear,
         draft::draft_save,
         draft::draft_versions,
@@ -90,14 +105,22 @@ pub fn commands() -> Commands<tauri::Wry> {
         settings::settings_update,
         settings::shortcut_conflicts_take,
         sidebar::sidebar_get,
+        sync::sync_connect_secondary,
+        sync::sync_disconnect_secondary,
+        sync::sync_now,
+        sync::sync_status,
         vault::vault_create,
         vault::vault_find_files,
         vault::vault_forget,
+        vault::vault_location_pick,
+        vault::vault_location_probe,
+        vault::vault_location_change,
         vault::vault_lock,
         vault::vault_open,
         vault::vault_open_warnings,
         vault::vault_recent,
         vault::vault_status,
+        vault::vault_storage_status,
         vault::vault_unlock,
     ]
 }
@@ -108,7 +131,8 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
     use events::{
         BridgeChangedEvent, ClipboardClearedEvent, OpenEntryEvent, PairingChallengeEvent,
         ProposalEvent, SaveStateChanged, SessionChanged, SettingsChanged, SettingsPaneEvent,
-        ShortcutConflictEvent, UnlockRequestedEvent, VaultChanged,
+        ShortcutConflictEvent, StorageStatusChanged, SyncStatusChanged, UnlockRequestedEvent,
+        UpdateChanged, VaultChanged,
     };
     Builder::<tauri::Wry>::new()
         .commands(commands())
@@ -123,6 +147,9 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             SettingsChanged,
             SettingsPaneEvent,
             ShortcutConflictEvent,
+            UpdateChanged,
+            StorageStatusChanged,
+            SyncStatusChanged,
             UnlockRequestedEvent,
             VaultChanged,
         ])
@@ -163,7 +190,7 @@ pub fn run() -> tauri::Result<()> {
             shell_runtime::start(app);
             Ok(())
         })
-        .build(tauri::generate_context!())?;
+        .build(app_context())?;
     app.run(|app, event| shell_runtime::on_run_event(app, &event));
     Ok(())
 }
@@ -251,7 +278,7 @@ mod tests {
         assert_eq!(panel["height"], 440);
     }
 
-    fn command_names() -> Vec<String> {
+    pub(super) fn command_names() -> Vec<String> {
         let mut types = specta::Types::default();
         let collected = (commands().1)(&mut types);
         let mut names: Vec<String> = collected
@@ -269,7 +296,7 @@ mod tests {
 
     #[test]
     fn command_names_follow_domain_verb_convention() {
-        const DOMAINS: [&str; 14] = [
+        const DOMAINS: [&str; 17] = [
             "vault",
             "entry",
             "group",
@@ -284,6 +311,9 @@ mod tests {
             "platform",
             "shortcut",
             "browser",
+            "sync",
+            "device",
+            "update",
         ];
         let names = command_names();
         assert!(!names.is_empty());
@@ -375,6 +405,8 @@ mod tests {
         assert_eq!(events::ProposalEvent::NAME, "proposal-event");
         assert_eq!(events::UnlockRequestedEvent::NAME, "unlock-requested-event");
         assert_eq!(events::SettingsPaneEvent::NAME, "settings-pane-event");
+        assert_eq!(events::SyncStatusChanged::NAME, "sync-status-changed");
+        assert_eq!(events::StorageStatusChanged::NAME, "storage-status-changed");
     }
 
     #[test]
@@ -476,6 +508,8 @@ mod tests {
         let all = capabilities();
         let sorted = |id: &str| {
             let mut set = all.iter().find(|c| c.0 == id).unwrap().2.clone();
+            // App command grants are pinned separately in acl_tests.
+            set.retain(|permission| !permission.starts_with("allow-"));
             set.sort();
             set
         };
@@ -651,3 +685,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod acl_tests;

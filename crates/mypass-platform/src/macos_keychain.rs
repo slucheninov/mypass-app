@@ -7,16 +7,19 @@
 //! involved, and no `kSecAttrAccessible` class is set (file-keychain items never sync to iCloud, so
 //! "this device only" is inherent, and the attribute is rejected or ignored there).
 //!
-//! Items are created with the default access (only the creating application is trusted). There is
-//! no store shared with the native host yet: trusting a host binary needs the signed app bundle
-//! (ROADMAP, Stage 3).
+//! Items are created with the default access (only the creating application is trusted). The
+//! store shared with the native host, whose access list also trusts the team-signed host, is
+//! `macos_keychain_acl.rs` (stage 5, ruling R4).
 //!
-//! Everything goes through the safe `security-framework` crate; this module has no `unsafe`.
+//! Everything goes through the safe `security-framework` crate; this module has no `unsafe`. The
+//! one exception, the attribute-only no-UI lookup of [`ItemStore::attributes_silently`], lives
+//! in the allow-listed `macos_keychain_acl.rs`.
 //! No secret ever reaches an error or a `Debug` output: errors carry the numeric `OSStatus` only.
 
+use crate::keychain_device_unlock::{ItemAttributes, ItemStore};
 use crate::{PlatformError, PlatformResult, SecretStore};
 use core_foundation::data::CFData;
-use security_framework::item::{ItemAddOptions, ItemAddValue, ItemClass};
+use security_framework::item::{ItemAddOptions, ItemAddValue, ItemClass, ItemSearchOptions, Limit};
 use security_framework::passwords::{delete_generic_password, get_generic_password};
 
 /// `errSecItemNotFound`.
@@ -27,6 +30,8 @@ const ERR_SEC_DUPLICATE_ITEM: i32 = -25299;
 const MAX_ADD_ATTEMPTS: usize = 3;
 /// `errSecSuccess`.
 const ERR_SEC_SUCCESS: i32 = 0;
+/// `errSecInteractionNotAllowed`: the silent query would have needed UI.
+const ERR_SEC_INTERACTION_NOT_ALLOWED: i32 = -25308;
 
 /// A [`SecretStore`] on the login keychain.
 #[derive(Debug, Clone, Default)]
@@ -74,13 +79,32 @@ fn next_add_step(code: i32, attempt: usize) -> AddStep {
     }
 }
 
-/// One add-only `SecItemAdd` of a generic password with the default (creator-only) access.
-fn add_item_only(service: &str, account: &str, secret: &[u8]) -> i32 {
+/// The result of a silent attribute lookup, from its status: "no such item" is `None`, and a
+/// lookup that would have needed interaction is an error, never "absent".
+fn silent_lookup(
+    result: Result<Option<Option<String>>, i32>,
+) -> PlatformResult<Option<ItemAttributes>> {
+    match result {
+        Ok(found) => Ok(found.map(|note| ItemAttributes { note })),
+        Err(code) if is_not_found(code) => Ok(None),
+        Err(ERR_SEC_INTERACTION_NOT_ALLOWED) => Err(PlatformError::Failed(format!(
+            "keychain status {ERR_SEC_INTERACTION_NOT_ALLOWED}: the keychain needs interaction"
+        ))),
+        Err(code) => Err(failed(code)),
+    }
+}
+
+/// One add-only `SecItemAdd` of a generic password with the default (creator-only) access and
+/// an optional public note (`kSecAttrComment`).
+fn add_item_only(service: &str, account: &str, secret: &[u8], note: Option<&str>) -> i32 {
     let mut options = ItemAddOptions::new(ItemAddValue::Data {
         class: ItemClass::generic_password(),
         data: CFData::from_buffer(secret),
     });
     options.set_service(service).set_account_name(account);
+    if let Some(note) = note {
+        options.set_comment(note);
+    }
     match options.add() {
         Ok(()) => ERR_SEC_SUCCESS,
         Err(e) => e.code(),
@@ -96,8 +120,15 @@ fn status_ok_or_absent(code: i32) -> PlatformResult<()> {
     }
 }
 
-impl SecretStore for MacKeychainSecretStore {
-    fn set(&self, service: &str, account: &str, secret: &[u8]) -> PlatformResult<()> {
+impl MacKeychainSecretStore {
+    /// `set`, optionally with a public note.
+    fn add_replacing(
+        &self,
+        service: &str,
+        account: &str,
+        secret: &[u8],
+        note: Option<&str>,
+    ) -> PlatformResult<()> {
         // The item is only ever added, never updated: an item another process pre-created under
         // the same service and account may carry a broad access list, and an update (also one that
         // slips in between a delete and an add) would hand our secret to it. `SecItemAdd` refuses
@@ -109,12 +140,18 @@ impl SecretStore for MacKeychainSecretStore {
         let mut attempt = 0;
         loop {
             attempt += 1;
-            match next_add_step(add_item_only(service, account, secret), attempt) {
+            match next_add_step(add_item_only(service, account, secret, note), attempt) {
                 AddStep::Done => return Ok(()),
                 AddStep::Fail(e) => return Err(e),
                 AddStep::DeleteAndRetry => self.delete(service, account)?,
             }
         }
+    }
+}
+
+impl SecretStore for MacKeychainSecretStore {
+    fn set(&self, service: &str, account: &str, secret: &[u8]) -> PlatformResult<()> {
+        self.add_replacing(service, account, secret, None)
     }
 
     fn get(&self, service: &str, account: &str) -> PlatformResult<Option<Vec<u8>>> {
@@ -130,6 +167,51 @@ impl SecretStore for MacKeychainSecretStore {
             Ok(()) => Ok(()),
             Err(e) => status_ok_or_absent(e.code()),
         }
+    }
+}
+
+/// The `kSecAttrAccount` key of a search-result attribute dictionary.
+const ACCOUNT_ATTRIBUTE: &str = "acct";
+
+impl ItemStore for MacKeychainSecretStore {
+    /// Lists the accounts under `service` from the item attributes only (`kSecReturnAttributes`,
+    /// no data), which never shows an access prompt, also for items of other applications.
+    fn accounts(&self, service: &str) -> PlatformResult<Vec<String>> {
+        let results = ItemSearchOptions::new()
+            .class(ItemClass::generic_password())
+            .service(service)
+            .load_attributes(true)
+            .limit(Limit::All)
+            .search();
+        match results {
+            Ok(results) => Ok(results
+                .iter()
+                .filter_map(|r| r.simplify_dict())
+                .filter_map(|mut attributes| attributes.remove(ACCOUNT_ATTRIBUTE))
+                .collect()),
+            Err(e) if is_not_found(e.code()) => Ok(Vec::new()),
+            Err(e) => Err(failed(e.code())),
+        }
+    }
+
+    fn attributes_silently(
+        &self,
+        service: &str,
+        account: &str,
+    ) -> PlatformResult<Option<ItemAttributes>> {
+        silent_lookup(crate::macos_keychain_acl::silent_item_attributes(
+            service, account,
+        ))
+    }
+
+    fn set_with_note(
+        &self,
+        service: &str,
+        account: &str,
+        secret: &[u8],
+        note: &str,
+    ) -> PlatformResult<()> {
+        self.add_replacing(service, account, secret, Some(note))
     }
 }
 
@@ -149,6 +231,27 @@ mod tests {
         assert!(status_ok_or_absent(0).is_ok());
         assert!(status_ok_or_absent(-25300).is_ok());
         assert!(status_ok_or_absent(-25293).is_err());
+    }
+
+    #[test]
+    fn silent_lookup_never_turns_interaction_into_absence() {
+        assert_eq!(silent_lookup(Ok(None)), Ok(None));
+        assert_eq!(silent_lookup(Err(-25300)), Ok(None));
+        assert_eq!(
+            silent_lookup(Ok(Some(Some("ab".into())))),
+            Ok(Some(ItemAttributes {
+                note: Some("ab".into())
+            }))
+        );
+        assert_eq!(
+            silent_lookup(Ok(Some(None))),
+            Ok(Some(ItemAttributes { note: None }))
+        );
+        assert!(matches!(
+            silent_lookup(Err(-25308)),
+            Err(PlatformError::Failed(ref m)) if m.contains("-25308")
+        ));
+        assert_eq!(silent_lookup(Err(-25293)), Err(failed(-25293)));
     }
 
     #[test]
@@ -211,8 +314,24 @@ mod tests {
             store.get(&service, account),
             Ok(Some(b"second \x00\xff".to_vec()))
         );
+        assert_eq!(store.accounts(&service), Ok(vec![account.to_owned()]));
+        assert_eq!(
+            store.attributes_silently(&service, account),
+            Ok(Some(ItemAttributes { note: None }))
+        );
+        store
+            .set_with_note(&service, account, b"third", "00ff")
+            .unwrap();
+        assert_eq!(
+            store.attributes_silently(&service, account),
+            Ok(Some(ItemAttributes {
+                note: Some("00ff".to_owned())
+            }))
+        );
         store.delete(&service, account).unwrap();
+        assert_eq!(store.attributes_silently(&service, account), Ok(None));
         assert_eq!(store.get(&service, account), Ok(None));
+        assert_eq!(store.accounts(&service), Ok(Vec::new()));
         store.delete(&service, account).unwrap();
     }
 }
