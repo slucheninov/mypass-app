@@ -158,7 +158,13 @@ pub(crate) fn handle_approve(
 ) -> Response {
     let epoch = svc.epoch();
     // Single use: from here on every answer has consumed the ceremony.
-    let Some(pending) = svc.take_get(request_id) else {
+    let taken = {
+        let mut table = svc.pending();
+        table
+            .take_get(request_id, svc.scheduler.monotonic_now())
+            .map(|p| (p, table.claim(request_id)))
+    };
+    let Some((pending, claim)) = taken else {
         return get_error(request_id, NOT_ALLOWED, NO_PENDING);
     };
     let verified = match (svc.presence)(false, pending.request.rp_id()) {
@@ -176,10 +182,21 @@ pub(crate) fn handle_approve(
     let Some(target) = parse_wire_id(entry_id) else {
         return Refusal::NotFound.answer(request_id);
     };
-    let signed = match ctx
-        .session
-        .with_db(|db| approve_in_vault_verified(db, &pending, target, verified))
-    {
+    let signed = match ctx.session.with_db(|db| {
+        if claim
+            .compare_exchange(
+                0,
+                2,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_err()
+            || epoch != svc.epoch()
+        {
+            return Err(Refusal::OtherVault);
+        }
+        approve_in_vault_verified(db, &pending, target, verified)
+    }) {
         Ok(Ok(json)) => json,
         Ok(Err(refusal)) => return refusal.answer(request_id),
         Err(_) => return Response::Locked,

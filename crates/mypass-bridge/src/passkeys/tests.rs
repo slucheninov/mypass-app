@@ -580,3 +580,182 @@ fn lock_during_presence_invalidates_a_taken_ceremony() {
     assert!(!response.was_served());
     assert!(!f.session.is_unlocked());
 }
+
+#[test]
+fn cancel_during_successful_presence_prevents_create() {
+    let (f, _) = passkey_fx();
+    let slot = Arc::new(Mutex::new(None::<std::sync::Weak<PasskeyService>>));
+    let callback = slot.clone();
+    let presence_session = f.session.clone();
+    let presence_settings = f.settings.clone();
+    let svc = PasskeyService::with_presence(
+        f.sched.clone(),
+        f.ui.clone(),
+        Arc::new(move |_, _| {
+            let service = callback
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .upgrade()
+                .unwrap();
+            let response = service.handle(
+                &PasskeyContext {
+                    session: &presence_session,
+                    settings: &presence_settings,
+                    unlocked: true,
+                },
+                &Request::PasskeyCancel {
+                    token: "t".into(),
+                    request_id: 77,
+                    pairing: None,
+                },
+            );
+            assert!(matches!(
+                response,
+                Response::PasskeyCancelled { request_id: 77 }
+            ));
+            Ok(true)
+        }),
+    );
+    *slot.lock().unwrap() = Some(Arc::downgrade(&svc));
+    svc.put_create(svc.epoch(), 77, f.session.with_db(pc_for).unwrap());
+    let before = f.session.with_db(Clone::clone).unwrap();
+    let response = svc.handle(
+        &ctx(&f, &f.settings, true),
+        &Request::PasskeyCreateConfirm {
+            token: "t".into(),
+            request_id: 77,
+            entry_id: None,
+            replace: false,
+            pairing: None,
+        },
+    );
+    assert!(matches!(
+        response,
+        Response::PasskeyCreateComplete { error: Some(_), .. }
+    ));
+    assert_eq!(before, f.session.with_db(Clone::clone).unwrap());
+}
+
+#[test]
+fn cancel_during_presence_prevents_replacement_and_get() {
+    for creating in [true, false] {
+        let (f, _) = passkey_fx();
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let enabled = cancel.clone();
+        let slot = Arc::new(Mutex::new(None::<std::sync::Weak<PasskeyService>>));
+        let callback = slot.clone();
+        let presence_session = f.session.clone();
+        let presence_settings = f.settings.clone();
+        let svc = PasskeyService::with_presence(
+            f.sched.clone(),
+            f.ui.clone(),
+            Arc::new(move |_, _| {
+                if enabled.load(std::sync::atomic::Ordering::SeqCst) {
+                    let service = callback
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .unwrap()
+                        .upgrade()
+                        .unwrap();
+                    let response = service.handle(
+                        &PasskeyContext {
+                            session: &presence_session,
+                            settings: &presence_settings,
+                            unlocked: true,
+                        },
+                        &Request::PasskeyCancel {
+                            token: "t".into(),
+                            request_id: 77,
+                            pairing: None,
+                        },
+                    );
+                    assert!(matches!(
+                        response,
+                        Response::PasskeyCancelled { request_id: 77 }
+                    ));
+                }
+                Ok(true)
+            }),
+        );
+        *slot.lock().unwrap() = Some(Arc::downgrade(&svc));
+        svc.put_create(svc.epoch(), 76, f.session.with_db(pc_for).unwrap());
+        let response = svc.handle(
+            &ctx(&f, &f.settings, true),
+            &Request::PasskeyCreateConfirm {
+                token: "t".into(),
+                request_id: 76,
+                entry_id: None,
+                replace: false,
+                pairing: None,
+            },
+        );
+        assert!(matches!(
+            response,
+            Response::PasskeyCreateComplete { error: None, .. }
+        ));
+        let id = f
+            .session
+            .with_db(|db| db.root.entries.last().unwrap().uuid)
+            .unwrap();
+        let before = f.session.with_db(Clone::clone).unwrap();
+        cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+        let response = if creating {
+            let pending = f
+                .session
+                .with_db(|db| PendingCreate::new(db, pending::tests::create_request(), vec![id]))
+                .unwrap();
+            svc.put_create(svc.epoch(), 77, pending);
+            svc.handle(
+                &ctx(&f, &f.settings, true),
+                &Request::PasskeyCreateConfirm {
+                    token: "t".into(),
+                    request_id: 77,
+                    entry_id: Some(id.to_string()),
+                    replace: true,
+                    pairing: None,
+                },
+            )
+        } else {
+            let pending = f
+                .session
+                .with_db(|db| PendingGet::new(db, pending::tests::get_request(), vec![id]))
+                .unwrap();
+            svc.put_get(svc.epoch(), 77, pending);
+            svc.handle(
+                &ctx(&f, &f.settings, true),
+                &Request::PasskeyGetApprove {
+                    token: "t".into(),
+                    request_id: 77,
+                    entry_id: id.to_string(),
+                    pairing: None,
+                },
+            )
+        };
+        assert!(matches!(
+            response,
+            Response::PasskeyCreateComplete { error: Some(_), .. }
+                | Response::PasskeyGetComplete { error: Some(_), .. }
+        ));
+        assert_eq!(before, f.session.with_db(Clone::clone).unwrap());
+    }
+}
+
+#[test]
+fn inflight_claim_revocation_survives_request_id_reuse_and_epoch_clear() {
+    use std::sync::atomic::Ordering;
+    let mut pending = Pending::new();
+    let old = pending.claim(1);
+    pending.remove_both(1);
+    let fresh = pending.claim(1);
+    assert!(old
+        .compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err());
+    assert_eq!(fresh.load(Ordering::SeqCst), 0);
+    pending.clear();
+    assert!(fresh
+        .compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err());
+}

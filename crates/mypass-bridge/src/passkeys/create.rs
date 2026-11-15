@@ -182,7 +182,13 @@ pub(crate) fn handle_confirm(
 ) -> Response {
     let epoch = svc.epoch();
     // Single use: from here on every answer has consumed the ceremony.
-    let Some(pending) = svc.take_create(request_id) else {
+    let taken = {
+        let mut table = svc.pending();
+        table
+            .take_create(request_id, svc.scheduler.monotonic_now())
+            .map(|p| (p, table.claim(request_id)))
+    };
+    let Some((pending, claim)) = taken else {
         return create_error(request_id, NOT_ALLOWED, NO_PENDING);
     };
     let verified = match (svc.presence)(true, pending.request.rp_id()) {
@@ -206,6 +212,20 @@ pub(crate) fn handle_confirm(
 
     let mut refusal = None;
     let written = ctx.session.mutate(|db, now| {
+        if claim
+            .compare_exchange(
+                0,
+                2,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_err()
+            || epoch != svc.epoch()
+        {
+            return Err(SessionError::InvalidInput(
+                "passkey consent withdrawn".into(),
+            ));
+        }
         confirm_in_vault_verified(db, now, &pending, target, replace, verified).map_err(|r| {
             refusal = Some(r);
             // Aborts the mutate (the draft is dropped); the reason travels in `refusal`.

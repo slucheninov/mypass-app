@@ -30,6 +30,11 @@
 //! fields) and the candidate entry ids only. The private key is read from the entry at confirm
 //! or approve time and dropped right after signing.
 
+use std::collections::HashMap;
+use std::sync::{
+    atomic::{AtomicU8, Ordering},
+    Arc, Weak,
+};
 use std::time::Duration;
 
 use mypass_core::passkey::{ValidatedCreate, ValidatedGet};
@@ -126,6 +131,7 @@ struct Slot<T> {
 #[derive(Debug, Default)]
 pub struct Pending {
     epoch: u64,
+    claims: HashMap<i64, Weak<AtomicU8>>,
     creates: Vec<Slot<PendingCreate>>,
     gets: Vec<Slot<PendingGet>>,
 }
@@ -166,6 +172,7 @@ impl Pending {
         if epoch != self.epoch() {
             return false;
         }
+        self.revoke(id);
         put(&mut self.creates, id, p, now);
         true
     }
@@ -180,6 +187,7 @@ impl Pending {
         if epoch != self.epoch() {
             return false;
         }
+        self.revoke(id);
         put(&mut self.gets, id, p, now);
         true
     }
@@ -189,8 +197,28 @@ impl Pending {
         take(&mut self.gets, id, now)
     }
 
+    /// A fresh identity for phase two: 0 waits for presence, 1 is revoked, 2 has acquired
+    /// commit/sign permission inside the session operation. Weak storage cannot retain finished
+    /// operations or let a reused request id revive an old claim.
+    pub fn claim(&mut self, id: i64) -> Arc<AtomicU8> {
+        self.revoke(id);
+        self.claims.retain(|_, c| c.strong_count() > 0);
+        let claim = Arc::new(AtomicU8::new(0));
+        self.claims.insert(id, Arc::downgrade(&claim));
+        claim
+    }
+
+    fn revoke(&mut self, id: i64) {
+        if let Some(c) = self.claims.remove(&id).and_then(|c| c.upgrade()) {
+            let _ = c.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst);
+        }
+    }
+
     /// Drops every ceremony and bumps the epoch (lock, vault switch, toggle off).
     pub fn clear(&mut self) {
+        for c in self.claims.drain().filter_map(|(_, c)| c.upgrade()) {
+            let _ = c.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst);
+        }
         self.epoch = self.epoch.wrapping_add(1);
         self.creates.clear();
         self.gets.clear();
@@ -199,6 +227,7 @@ impl Pending {
     /// Drops the ceremony `id` from both tables (`passkeyCancel`: the extension does not say
     /// which kind it cancels).
     pub fn remove_both(&mut self, id: i64) {
+        self.revoke(id);
         self.creates.retain(|s| s.id != id);
         self.gets.retain(|s| s.id != id);
     }

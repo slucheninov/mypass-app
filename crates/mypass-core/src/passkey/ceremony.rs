@@ -42,10 +42,9 @@
 //! fn show(key: &PasskeySigningKey) -> String { format!("{key:?}") }
 //! ```
 //!
-//! **User presence and verification.** UP is always set; UV is set only after the caller verified presence for this ceremony. MyPass is a software
-//! authenticator: "user verified" means the vault is unlocked and the user clicked to confirm in
-//! the extension popup (the owner's decision for Stage 4, the same as the Swift app). That is also
-//! the answer to `userVerification: "required"`. There is no per-ceremony re-authentication.
+//! **User presence and verification.** UP is always set. Callers may set UV only after
+//! successful device-owner verification for this ceremony. Unsupported platforms use UV=0
+//! and refuse required verification before accessing a private key.
 //!
 //! **Sign counter.** Always 0. No counter is persisted, so copies of a vault synced between
 //! devices never trip a relying party's clone detection (WebAuthn allows a zero counter).
