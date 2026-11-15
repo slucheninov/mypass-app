@@ -249,13 +249,14 @@ impl AppCore {
         // Vaults in iCloud Drive go through the file coordinator, with the offline copy under
         // `<data dir>/icloud-cache` (stage 5, T8).
         core.session
-            .set_io_resolver(Some(crate::storage::icloud_resolver(
+            .set_io_resolver(crate::storage::platform_resolver(
+                cfg!(windows),
                 mypass_platform::coordinated_files(),
                 core.paths.home().to_path_buf(),
                 core.paths
                     .data_dir
                     .join(mypass_sync::icloud::ICLOUD_CACHE_DIR),
-            )));
+            ));
         Ok(core)
     }
 

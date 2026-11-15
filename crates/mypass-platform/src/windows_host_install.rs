@@ -182,6 +182,8 @@ impl WindowsHostRegistrar {
             .host_exe
             .to_str()
             .ok_or_else(|| failed("host path is not Unicode"))?;
+        // Product host-launch compatibility bound; not a proven browser maximum or a
+        // vault-path limit. Supplementary characters count as two UTF-16 units.
         if host.encode_utf16().count() > 240 {
             return Err(failed("host path exceeds 240 UTF-16 units"));
         }

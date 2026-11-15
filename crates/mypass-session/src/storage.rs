@@ -127,6 +127,21 @@ pub fn icloud_resolver(
     })
 }
 
+/// Windows has no coordinated iCloud backend: even a macOS-looking path stays local.
+/// The explicit policy input keeps the Windows selection covered on every test host.
+pub(crate) fn platform_resolver(
+    windows: bool,
+    coordinated: Arc<dyn CoordinatedFiles>,
+    home: PathBuf,
+    cache_dir: PathBuf,
+) -> Option<IoResolver> {
+    if windows {
+        None
+    } else {
+        Some(icloud_resolver(coordinated, home, cache_dir))
+    }
+}
+
 /// Where the open vault is stored and how that storage is doing (the `StorageStatusChanged`
 /// event payload).
 #[derive(Serialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug)]
@@ -165,6 +180,23 @@ mod tests {
     use mypass_kdbx::PlainFileIo;
     use mypass_platform::testing::FakeCoordinatedFiles;
     use mypass_sync::icloud::ICloudDriveLocation;
+
+    #[test]
+    fn windows_production_resolver_keeps_cloud_lookalikes_local() {
+        let home = tempfile::tempdir().unwrap();
+        let inside = ICloudDriveLocation::root(home.path()).join("v.kdbx");
+        for windows in [true, false] {
+            let resolver = platform_resolver(
+                windows,
+                Arc::new(FakeCoordinatedFiles::new()),
+                home.path().into(),
+                home.path().join("cache"),
+            );
+            let resolved = resolver.and_then(|r| r(&inside));
+            assert_eq!(resolved.is_none(), windows);
+        }
+        assert!(!home.path().join("cache").exists());
+    }
 
     #[test]
     fn io_resolver_is_applied_per_vault_path() {

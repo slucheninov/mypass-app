@@ -31,6 +31,13 @@ impl LocalFolderBackend {
     /// The folder is not checked here: an unplugged volume is reported by each operation.
     pub fn new(dir: impl AsRef<Path>, file_name: &str) -> Result<Self, StorageError> {
         validate_file_name(file_name)?;
+        #[cfg(windows)]
+        mypass_platform::windows_paths::validate_path(
+            dir.as_ref()
+                .to_str()
+                .ok_or_else(|| StorageError::InvalidPath("folder is not Unicode".into()))?,
+        )
+        .map_err(|_| StorageError::InvalidPath("invalid Windows folder".into()))?;
         let dir = normalise_dir(dir.as_ref());
         if !dir.is_absolute() {
             return Err(StorageError::InvalidPath(format!(
@@ -118,6 +125,14 @@ impl StorageBackend for LocalFolderBackend {
 }
 
 fn validate_file_name(name: &str) -> Result<(), StorageError> {
+    validate_file_name_for_style(name, PathStyle::current())
+}
+
+fn validate_file_name_for_style(name: &str, style: PathStyle) -> Result<(), StorageError> {
+    if style == PathStyle::Windows {
+        mypass_platform::windows_paths::validate_component(name)
+            .map_err(|_| StorageError::InvalidPath("invalid Windows file name".into()))?;
+    }
     let bad = name.is_empty()
         || name == "."
         || name == ".."
@@ -182,7 +197,10 @@ fn normalise_windows(raw: &str) -> String {
     // Verbatim (`\\?\`) and device (`\\.\`) paths are passed through apart from the tail.
     for verbatim in ["\\\\?\\", "\\\\.\\"] {
         if let Some(rest) = s.strip_prefix(verbatim) {
-            return format!("{verbatim}{}", join_windows(rest, false));
+            return format!(
+                "{verbatim}{}",
+                join_windows(rest, verbatim == "\\\\?\\" && !rest.starts_with("UNC\\"))
+            );
         }
     }
     let (unc, rest) = match s.strip_prefix("\\\\") {
@@ -195,14 +213,14 @@ fn normalise_windows(raw: &str) -> String {
     } else {
         tail.clone()
     };
-    if plain.chars().count() < WINDOWS_LONG_FOLDER_LEN {
+    if plain.encode_utf16().count() < WINDOWS_LONG_FOLDER_LEN {
         return plain;
     }
     if unc {
         // `\\server\share\dir` -> `\\?\UNC\server\share\dir`.
-        format!("\\\\?\\UNC\\{}", resolve_dots(&tail))
+        format!("\\\\?\\UNC\\{}", resolve_dots(&tail, 2))
     } else if is_drive_absolute(&tail) {
-        format!("\\\\?\\{}", resolve_dots(&tail))
+        format!("\\\\?\\{}", resolve_dots(&tail, 1))
     } else {
         plain
     }
@@ -230,14 +248,14 @@ fn is_drive_absolute(s: &str) -> bool {
 }
 
 /// A verbatim path takes `.` and `..` literally, so resolve them first (Windows resolves them
-/// lexically anyway). `..` never climbs above the first component (the drive or the share host).
-fn resolve_dots(path: &str) -> String {
+/// lexically anyway). `..` never climbs above the root components (the drive, or the UNC host and share).
+fn resolve_dots(path: &str, root_parts: usize) -> String {
     let mut out: Vec<&str> = Vec::new();
     for part in path.split('\\') {
         match part {
             "." => {}
             ".." => {
-                if out.len() > 1 {
+                if out.len() > root_parts {
                     out.pop();
                 }
             }
@@ -259,6 +277,34 @@ mod tests {
             .collect();
         names.sort();
         names
+    }
+
+    #[test]
+    fn windows_boundaries_reject_reserved_names_and_preserve_roots() {
+        for name in [
+            "CON",
+            "nul.kdbx",
+            "LPT1",
+            "vault.kdbx.",
+            "vault ",
+            "vault:stream",
+        ] {
+            assert!(
+                validate_file_name_for_style(name, PathStyle::Windows).is_err(),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            normalise_dir_str(r"\\?\C:\", PathStyle::Windows),
+            r"\\?\C:\"
+        );
+        let astral = format!(r"C:\{}", "🔑".repeat(125));
+        assert!(normalise_dir_str(&astral, PathStyle::Windows).starts_with(r"\\?\"));
+        let unc = format!(r"\\host\share\..\{}", "a".repeat(260));
+        assert_eq!(
+            normalise_dir_str(&unc, PathStyle::Windows),
+            format!(r"\\?\UNC\host\share\{}", "a".repeat(260))
+        );
     }
 
     #[test]

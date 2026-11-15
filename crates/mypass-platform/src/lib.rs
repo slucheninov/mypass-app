@@ -5,11 +5,14 @@
 //! `test-util` feature) holds the fakes every other crate's tests build on.
 
 pub mod dev_overrides;
+mod file_identity;
 #[cfg(windows)]
 pub mod windows;
 pub mod windows_desktop;
 pub mod windows_host_install;
+pub mod windows_paths;
 pub mod windows_registry;
+pub use file_identity::{file_identity, FileIdentity};
 
 #[cfg(any(windows, test))]
 mod dpapi;

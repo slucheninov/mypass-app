@@ -113,7 +113,8 @@ use windows::{
     Win32::{
         Foundation::{
             CloseHandle, LocalFree, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND,
-            ERROR_INSUFFICIENT_BUFFER, ERROR_PATH_NOT_FOUND, HANDLE, HLOCAL, WAIT_TIMEOUT,
+            ERROR_INSUFFICIENT_BUFFER, ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER,
+            ERROR_NOT_SUPPORTED, ERROR_PATH_NOT_FOUND, HANDLE, HLOCAL, WAIT_TIMEOUT,
         },
         NetworkManagement::IpHelper::*,
         Networking::WinSock::AF_INET,
@@ -123,6 +124,51 @@ use windows::{
     },
 };
 use zeroize::{Zeroize, Zeroizing};
+
+/// Query by owned handle, following junctions/symlinks; canonical strings cannot identify
+/// hard links or correctly model case-sensitive Windows directories.
+pub(crate) fn file_identity(path: &Path) -> std::io::Result<crate::FileIdentity> {
+    use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+    let file = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES.0)
+        .share_mode(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0 | FILE_SHARE_DELETE.0)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0)
+        .open(path)?;
+    let mut info = FILE_ID_INFO::default();
+    // SAFETY: file owns a live handle throughout the call, and info is a correctly sized
+    // writable output. File closes the handle on every return path. No raw handle escapes.
+    unsafe {
+        GetFileInformationByHandleEx(
+            HANDLE(file.as_raw_handle()),
+            FileIdInfo,
+            (&mut info as *mut FILE_ID_INFO).cast(),
+            size_of::<FILE_ID_INFO>() as u32,
+        )
+    }
+    .map_err(|e| {
+        // The handle and buffer/class are fixed and valid. These errors mean the volume or
+        // redirector cannot supply FileIdInfo; do not guess identity from path spelling.
+        if [
+            ERROR_INVALID_FUNCTION,
+            ERROR_NOT_SUPPORTED,
+            ERROR_INVALID_PARAMETER,
+        ]
+        .iter()
+        .any(|code| e.code() == code.to_hresult())
+        {
+            std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "volume file identity unavailable",
+            )
+        } else {
+            std::io::Error::last_os_error()
+        }
+    })?;
+    Ok(crate::FileIdentity {
+        volume: info.VolumeSerialNumber,
+        file: info.FileId.Identifier,
+    })
+}
 
 fn win_error(e: windows::core::Error) -> PlatformError {
     PlatformError::Failed(format!("Windows error 0x{:08x}", e.code().0))

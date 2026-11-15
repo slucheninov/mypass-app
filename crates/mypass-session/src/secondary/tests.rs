@@ -1616,3 +1616,241 @@ fn primary_reload_before_checkpoint_publication_cannot_authorize_content_loss() 
     );
     assert_eq!(w.primary_titles(), w.remote_titles());
 }
+
+#[test]
+fn secondary_guard_fails_closed_when_primary_identity_is_unavailable() {
+    let d = tempfile::tempdir().unwrap();
+    let folder = d.path().join("copy");
+    fs::create_dir(&folder).unwrap();
+    assert_eq!(
+        validate_folder(folder.to_str().unwrap(), &d.path().join(FILE), FILE),
+        Err(SecondaryUnavailable::InvalidFolder)
+    );
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "native Windows identity; isolated integration runner only"
+)]
+fn windows_integration_secondary_guard_rejects_a_hard_link_to_primary() {
+    #[cfg(windows)]
+    assert_eq!(
+        std::env::var("MYPASS_WINDOWS_INTEGRATION_TESTS").as_deref(),
+        Ok("1")
+    );
+    let w = world();
+    w.open();
+    fs::remove_file(w.remote()).unwrap();
+    fs::hard_link(&w.primary, w.remote()).unwrap();
+    let before = fs::read(&w.primary).unwrap();
+    assert_eq!(
+        validate_folder(w.folder.to_str().unwrap(), &w.primary, FILE),
+        Err(SecondaryUnavailable::InvalidFolder)
+    );
+    assert_eq!(fs::read(&w.primary).unwrap(), before);
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "native Windows identity and junctions; isolated integration runner only"]
+fn windows_integration_secondary_guard_rejects_aliases_and_identity_errors() {
+    use std::os::windows::fs::OpenOptionsExt;
+    assert_eq!(
+        std::env::var("MYPASS_WINDOWS_INTEGRATION_TESTS").as_deref(),
+        Ok("1")
+    );
+    let w = world();
+    w.open();
+    let parent = fs::canonicalize(w.primary.parent().unwrap()).unwrap();
+    let raw = parent.to_str().unwrap();
+    let ordinary = raw.strip_prefix(r"\\?\").unwrap_or(raw);
+    for folder in [
+        raw.to_owned(),
+        ordinary.to_owned(),
+        ordinary.to_lowercase(),
+        format!("{ordinary}\\."),
+        format!("{ordinary}\\"),
+    ] {
+        assert_eq!(
+            validate_folder(&folder, &w.primary, FILE),
+            Err(SecondaryUnavailable::InvalidFolder),
+            "{folder}"
+        );
+    }
+    // mklink /J needs no symlink privilege. Arguments are generated temporary paths, never
+    // a user-selected path. Remove only the junction itself before TempDir cleanup.
+    let junction = w.tmp.path().join("junction");
+    let output = std::process::Command::new("cmd.exe")
+        .args(["/D", "/C", "mklink", "/J"])
+        .arg(&junction)
+        .arg(ordinary)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "junction creation failed: {output:?}"
+    );
+    let result = validate_folder(junction.to_str().unwrap(), &w.primary, FILE);
+    fs::remove_dir(&junction).unwrap();
+    assert_eq!(result, Err(SecondaryUnavailable::InvalidFolder));
+    let exclusive = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&w.primary)
+        .unwrap();
+    assert_eq!(
+        validate_folder(w.folder.to_str().unwrap(), &w.primary, FILE),
+        Err(SecondaryUnavailable::InvalidFolder)
+    );
+    drop(exclusive);
+    let exclusive = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(w.remote())
+        .unwrap();
+    assert_eq!(
+        validate_folder(w.folder.to_str().unwrap(), &w.primary, FILE),
+        Err(SecondaryUnavailable::InvalidFolder)
+    );
+    drop(exclusive);
+    assert!(validate_folder(w.folder.to_str().unwrap(), &w.primary, FILE).is_ok());
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "real Windows sharing violations; isolated integration runner only"]
+fn windows_integration_primary_sharing_failure_defers_checkpoint_after_background_adoption() {
+    use std::os::windows::fs::OpenOptionsExt;
+    assert_eq!(
+        std::env::var("MYPASS_WINDOWS_INTEGRATION_TESTS").as_deref(),
+        Ok("1")
+    );
+    let w = world();
+    w.open();
+    let checkpoint = fs::read(w.checkpoint_file()).unwrap();
+    let primary = fs::read(&w.primary).unwrap();
+    w.foreign_add("remote-during-sharing");
+    // Permit reads and identity queries, but deny the rename needed by write_atomic.
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(3)
+        .open(&w.primary)
+        .unwrap();
+    w.watch.fire();
+    w.advance_ms(0);
+    assert_eq!(w.live_titles(), v(&["remote-during-sharing"]));
+    assert_eq!(fs::read(&w.primary).unwrap(), primary);
+    assert_eq!(fs::read(w.checkpoint_file()).unwrap(), checkpoint);
+    drop(held);
+    w.sync.sync_now().unwrap();
+    assert_eq!(w.primary_titles(), w.remote_titles());
+    assert_eq!(w.primary_titles(), v(&["remote-during-sharing"]));
+    assert_ne!(fs::read(w.checkpoint_file()).unwrap(), checkpoint);
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "real Windows sharing violations; isolated integration runner only"]
+fn windows_integration_secondary_sharing_failure_preserves_remote_and_checkpoint() {
+    use std::os::windows::fs::OpenOptionsExt;
+    assert_eq!(
+        std::env::var("MYPASS_WINDOWS_INTEGRATION_TESTS").as_deref(),
+        Ok("1")
+    );
+    let w = world();
+    w.open();
+    let checkpoint = fs::read(w.checkpoint_file()).unwrap();
+    let remote = w.remote_bytes();
+    w.add("local-during-sharing");
+    w.session.flush().unwrap();
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(3)
+        .open(w.remote())
+        .unwrap();
+    assert!(matches!(
+        w.sync.sync_now().unwrap(),
+        SecondaryStatus::Unavailable {
+            reason: SecondaryUnavailable::ReadOnly
+        } | SecondaryStatus::Error {
+            code: SecondaryError::Io
+        }
+    ));
+    assert_eq!(w.remote_bytes(), remote);
+    assert_eq!(fs::read(w.checkpoint_file()).unwrap(), checkpoint);
+    drop(held);
+    w.sync.sync_now().unwrap();
+    assert_eq!(w.remote_titles(), v(&["local-during-sharing"]));
+    assert_ne!(fs::read(w.checkpoint_file()).unwrap(), checkpoint);
+}
+
+#[test]
+fn background_sync_never_cleans_up_a_retained_competing_copy() {
+    let w = world();
+    w.open();
+    w.foreign_add("retained-competitor");
+    let retained = w.folder.join(".prior-writer.displaced");
+    let competitor = w.remote_bytes();
+    fs::write(&retained, &competitor).unwrap();
+    w.watch.fire();
+    w.advance_ms(0);
+    assert_eq!(w.live_titles(), v(&["retained-competitor"]));
+    assert_eq!(w.primary_titles(), w.remote_titles());
+    w.add("later-edit");
+    w.advance(3);
+    assert_eq!(w.remote_titles(), v(&["later-edit", "retained-competitor"]));
+    assert_eq!(fs::read(retained).unwrap(), competitor);
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "UNC share and native Windows identity require explicit opt-in"]
+fn windows_integration_secondary_unc_aliases_are_rejected_when_available() {
+    assert_eq!(
+        std::env::var("MYPASS_WINDOWS_INTEGRATION_TESTS").as_deref(),
+        Ok("1")
+    );
+    let Some(share) = std::env::var_os("MYPASS_WINDOWS_UNC_TEST") else {
+        eprintln!("UNC guard NOT RUN: MYPASS_WINDOWS_UNC_TEST absent");
+        return;
+    };
+    let tmp = tempfile::tempdir_in(share).unwrap();
+    let folder = tmp.path().join("secondary");
+    let w = world_in(tmp, folder);
+    w.open();
+    let parent = fs::canonicalize(w.primary.parent().unwrap()).unwrap();
+    let raw = parent.to_str().unwrap();
+    let ordinary = raw
+        .strip_prefix(r"\\?\UNC\")
+        .map(|s| format!(r"\\{s}"))
+        .unwrap_or_else(|| raw.into());
+    assert!(ordinary.starts_with(r"\\"));
+    for alias in [
+        ordinary.clone(),
+        format!(r"\\?\UNC\{}", ordinary.trim_start_matches('\\')),
+    ] {
+        assert_eq!(
+            validate_folder(&alias, &w.primary, FILE),
+            Err(SecondaryUnavailable::InvalidFolder)
+        );
+    }
+}
+
+#[test]
+fn unsupported_identity_is_an_unsupported_folder_and_other_inspection_errors_are_invalid() {
+    assert_eq!(
+        identity_error(std::io::ErrorKind::Unsupported.into()),
+        SecondaryUnavailable::UnsupportedFolder
+    );
+    for kind in [
+        std::io::ErrorKind::PermissionDenied,
+        std::io::ErrorKind::NotFound,
+        std::io::ErrorKind::InvalidInput,
+    ] {
+        assert_eq!(
+            identity_error(kind.into()),
+            SecondaryUnavailable::InvalidFolder
+        );
+    }
+}
