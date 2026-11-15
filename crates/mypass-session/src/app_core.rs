@@ -1064,19 +1064,23 @@ impl AppCore {
             .map_err(|_| ApiError::new(ErrorCode::InvalidInput, "invalidFolder"))?;
         }
         // A mandatory, create-only, read-back-verified backup, independent of rotation policy.
+        let check = || {
+            if self.session.is_incarnation(snapshot.incarnation) {
+                Ok(())
+            } else {
+                Err(migration_error(MigrationError::Locked))
+            }
+        };
+        check()?;
         let source_storage = self.session.resolve_storage(&snapshot.path);
         let source = source_storage
             .io
             .read_limited(&snapshot.path, mypass_kdbx::MAX_VAULT_FILE_BYTES)
             .map_err(|_| migration_error(MigrationError::SourceInvalid))?;
-        if !self.session.is_incarnation(snapshot.incarnation) {
-            return Err(migration_error(MigrationError::Locked));
-        }
+        check()?;
         Database::open(&source, &snapshot.password)
             .map_err(|_| migration_error(MigrationError::SourceInvalid))?;
-        if !self.session.is_incarnation(snapshot.incarnation) {
-            return Err(migration_error(MigrationError::Locked));
-        }
+        check()?;
         let backup_dir = self.backups.folder(&snapshot.vault_id)?;
         std::fs::create_dir_all(&backup_dir)
             .map_err(|_| ApiError::new(ErrorCode::Io, "backup folder unavailable"))?;
@@ -1086,15 +1090,20 @@ impl AppCore {
             Uuid::new_v4().as_u128() % 1000000000
         ));
         let backup = FileIoBackend::new(Arc::new(PlainFileIo), backup);
+        check()?;
         if backup
             .write_if(None, &source)
             .map_err(|_| migration_error(MigrationError::SourceInvalid))?
             != WriteOutcome::Written
-            || backup
-                .read()
-                .map_err(|_| migration_error(MigrationError::SourceInvalid))?
-                .as_ref()
-                != Some(&source)
+        {
+            return Err(migration_error(MigrationError::SourceInvalid));
+        }
+        check()?;
+        if backup
+            .read()
+            .map_err(|_| migration_error(MigrationError::SourceInvalid))?
+            .as_ref()
+            != Some(&source)
         {
             return Err(migration_error(MigrationError::SourceInvalid));
         }

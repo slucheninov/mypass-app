@@ -1531,7 +1531,14 @@ impl VaultSession {
             storage = ResolvedStorage::plain(io);
         }
         storage.io = Arc::new(crate::migration::BoundedIo(storage.io));
-        let (file, remote) = VaultFile::open_with(storage.io.clone(), path, &snapshot.password)?;
+        let (file, remote) =
+            VaultFile::open_with_checked(storage.io.clone(), path, &snapshot.password, &|| {
+                if self.is_incarnation(snapshot.incarnation) {
+                    Ok(())
+                } else {
+                    Err(SessionError::ChangedOnDisk)
+                }
+            })?;
         let expected = adopt.as_ref().unwrap_or(&snapshot.db);
         if !crate::saving::equivalent_content(&remote, expected) {
             return Err(SessionError::ChangedOnDisk);

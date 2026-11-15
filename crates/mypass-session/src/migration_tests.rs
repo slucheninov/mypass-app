@@ -963,3 +963,122 @@ fn migrated_icloud_pending_retry_preserves_a_competing_writer() {
     let saved = Database::open(&fs::read(target).unwrap(), &SecretString::from("pw")).unwrap();
     assert_eq!(saved.root.entries.len(), 2);
 }
+
+/// A synchronous withdrawal during a read is an acknowledged barrier, with no timing race.
+struct WithdrawAtRead {
+    session: crate::session::VaultSession,
+    action: u8,
+    next: std::path::PathBuf,
+    at: usize,
+    reads: std::sync::atomic::AtomicUsize,
+    returned: Option<Vec<u8>>,
+}
+impl mypass_kdbx::FileIo for WithdrawAtRead {
+    fn read(&self, _: &Path) -> mypass_kdbx::Result<Vec<u8>> {
+        panic!("unbounded read")
+    }
+    fn read_limited(&self, path: &Path, max: u64) -> mypass_kdbx::Result<Vec<u8>> {
+        if self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1 == self.at {
+            match self.action {
+                0 => self.session.lock(crate::session::LockReason::Manual),
+                1 => self.session.begin_quit(),
+                _ => self
+                    .session
+                    .open_vault(&self.next, SecretString::from("pw"))
+                    .unwrap(),
+            }
+            if let Some(bytes) = &self.returned {
+                return Ok(bytes.clone());
+            }
+        }
+        mypass_kdbx::FileIo::read_limited(&PlainFileIo, path, max)
+    }
+    fn metadata(&self, path: &Path) -> mypass_kdbx::Result<mypass_kdbx::FileMeta> {
+        mypass_kdbx::FileIo::metadata(&PlainFileIo, path)
+    }
+    fn write_atomic(&self, _: &Path, _: &[u8]) -> mypass_kdbx::Result<()> {
+        panic!("unguarded write")
+    }
+}
+
+#[test]
+fn final_migration_reopen_withdrawal_stops_before_decryption() {
+    use crate::session::SessionError;
+    for action in 0..3 {
+        let (d, session) = session_fixture();
+        let target = d.path().join("target.kdbx");
+        fs::copy(d.path().join("old.kdbx"), &target).unwrap();
+        let next = d.path().join("next.kdbx");
+        fs::write(
+            &next,
+            fast_database("next")
+                .save(&SecretString::from("pw"))
+                .unwrap(),
+        )
+        .unwrap();
+        // Valid KDBX under a different password: attempting its KDF returns WrongPassword.
+        // The withdrawal must win before decryption, not merely prevent session installation.
+        let sentinel = fast_database("sentinel")
+            .save(&SecretString::from("other password"))
+            .unwrap();
+        let io = Arc::new(WithdrawAtRead {
+            session: session.clone(),
+            action,
+            next,
+            at: 1,
+            reads: 0.into(),
+            returned: Some(sentinel),
+        });
+        let snapshot = session.sync_snapshot().unwrap();
+        assert_eq!(
+            session.switch_snapshot(&target, io.clone(), None, &snapshot),
+            Err(SessionError::ChangedOnDisk)
+        );
+        assert_eq!(io.reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+}
+
+#[test]
+fn merge_migration_second_missing_read_withdrawal_stops_before_encoding() {
+    for action in 0..3 {
+        let (d, session) = session_fixture();
+        let next = d.path().join("next.kdbx");
+        fs::write(
+            &next,
+            fast_database("next")
+                .save(&SecretString::from("pw"))
+                .unwrap(),
+        )
+        .unwrap();
+        let snapshot = session.sync_snapshot().unwrap();
+        let mut local = snapshot.db;
+        // The save/KDF would fail. Locked, rather than TargetWriteFailed, proves it never starts.
+        if let mypass_kdbx::KdfParams::Argon2 { iterations, .. } = &mut local.settings.kdf {
+            *iterations = 0;
+        }
+        let io = Arc::new(WithdrawAtRead {
+            session: session.clone(),
+            action,
+            next,
+            at: 2,
+            reads: 0.into(),
+            returned: None,
+        });
+        let target = Arc::new(FileIoBackend::new(
+            io.clone(),
+            d.path().join("missing.kdbx"),
+        ));
+        assert_eq!(
+            VaultMigrationService::migrate_checked(
+                &local,
+                &snapshot.password,
+                target,
+                MigrationStrategy::Merge,
+                &|| session.is_incarnation(snapshot.incarnation)
+            )
+            .err(),
+            Some(MigrationError::Locked)
+        );
+        assert_eq!(io.reads.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+}

@@ -117,6 +117,7 @@ impl VaultMigrationService {
         if !unique_ids(&local.root, &mut std::collections::HashSet::new()) {
             return Err(MigrationError::SourceInvalid);
         }
+        check()?;
         let before = target
             .read()
             .map_err(|_| MigrationError::TargetUnreadable)?;
@@ -135,6 +136,7 @@ impl VaultMigrationService {
             let result = engine
                 .sync_checked(local, password, SyncMode::Push, current)
                 .map_err(|e| match e {
+                    SyncError::Cancelled => MigrationError::Locked,
                     SyncError::RemotePasswordMismatch => MigrationError::TargetPasswordMismatch,
                     SyncError::RemoteNotAVault => MigrationError::TargetNotAVault,
                     _ => MigrationError::TargetWriteFailed,
@@ -147,6 +149,7 @@ impl VaultMigrationService {
             }
             // Even explicit overwrite refuses corrupt/unreadable/differently encrypted targets.
             if let Some(b) = &before {
+                check()?;
                 open_target(b, password)?;
             }
             check()?;
@@ -172,6 +175,7 @@ impl VaultMigrationService {
             }
             (local.clone(), true)
         };
+        check()?;
         let bytes = target
             .read()
             .map_err(|_| MigrationError::ValidationFailed)?

@@ -330,10 +330,26 @@ impl VaultFile {
         path: &Path,
         password: &SecretString,
     ) -> Result<(Self, Database)> {
+        Self::open_with_checked(io, path, password, &|| Ok::<(), KdbxError>(()))
+    }
+
+    /// Open with a caller-owned withdrawal fence. Checks before the read and again after it,
+    /// before starting decryption; a KDF already in progress is not interrupted. The caller
+    /// still owns any atomic installation fence after this method returns.
+    pub fn open_with_checked<E: From<KdbxError>>(
+        io: Arc<dyn FileIo>,
+        path: &Path,
+        password: &SecretString,
+        check: &dyn Fn() -> std::result::Result<(), E>,
+    ) -> std::result::Result<(Self, Database), E> {
+        check()?;
         // Path identity is resolved once; every later byte/metadata operation uses the seam.
         let path = resolve_vault_path(path).map_err(io_error)?;
+        check()?;
         let bytes = io.read(&path)?;
+        check()?;
         let db = Database::open(&bytes, password)?;
+        check()?;
         let stamp = stamp(io.metadata(&path)?, &bytes);
         Ok((Self { path, stamp, io }, db))
     }

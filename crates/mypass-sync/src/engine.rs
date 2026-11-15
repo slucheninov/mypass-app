@@ -342,7 +342,11 @@ impl SyncEngine {
             return Err(SyncError::Cancelled);
         }
         let base = rebased.unwrap_or(local);
-        let Some(remote_bytes) = self.remote.read()? else {
+        let remote_bytes = self.remote.read()?;
+        if !still_current() {
+            return Err(SyncError::Cancelled);
+        }
+        let Some(remote_bytes) = remote_bytes else {
             let bytes = encode(base, password)?;
             let adopt = rebased.is_some();
             let write = Write::new(None, &bytes, base, adopt, Upload::Initial);
@@ -391,6 +395,9 @@ impl SyncEngine {
             {
                 return Ok(Attempt::Done(SyncResult::Unchanged(None)));
             }
+            if !still_current() {
+                return Err(SyncError::Cancelled);
+            }
             let bytes = encode(local, password)?;
             let expected = digest(&remote_bytes);
             let write = Write::new(Some(&expected), &bytes, local, false, Upload::Local);
@@ -406,6 +413,9 @@ impl SyncEngine {
                 database: merged,
                 checkpoint: cp,
             }))));
+        }
+        if !still_current() {
+            return Err(SyncError::Cancelled);
         }
         let bytes = encode(&merged, password)?;
         let expected = digest(&remote_bytes);
@@ -442,6 +452,9 @@ impl SyncEngine {
         match self.remote.write_if(write.expected, write.bytes)? {
             WriteOutcome::Conflict => Ok(Attempt::Raced),
             WriteOutcome::Displaced(theirs) => {
+                if !still_current() {
+                    return Err(SyncError::Cancelled);
+                }
                 // Our bytes are on the remote, but they displaced a version another writer
                 // committed in the last instant: merge it back on the next attempt.
                 let theirs =
@@ -452,6 +465,9 @@ impl SyncEngine {
                 Ok(Attempt::Rebase(Box::new(merge(write.content, &theirs))))
             }
             WriteOutcome::Written => {
+                if !still_current() {
+                    return Err(SyncError::Cancelled);
+                }
                 // Read back: a writer that replaced the file right after us is merged by the next
                 // attempt and never described by our checkpoint.
                 if self.remote.read()?.as_deref() != Some(write.bytes) {
