@@ -85,6 +85,11 @@ pub(crate) fn platform(paths: &AppPaths) -> crate::Platform {
     let mut platform = crate::fallback::platform(paths);
     platform.secrets = std::sync::Arc::new(crate::DpapiSecretStore::app(paths));
     platform.shared_secrets = crate::app_shared_store(paths, None).1;
+    platform.host_registrar =
+        std::sync::Arc::new(crate::windows_host_install::WindowsHostRegistrar::new(
+            paths.clone(),
+            std::sync::Arc::new(WinRegistry::new()),
+        ));
     platform
 }
 
@@ -762,5 +767,461 @@ mod tests {
     fn from_wide_round_trips_unpaired_surrogate_on_windows() {
         let value = from_wide(&[0xd800, 65]);
         assert_eq!(to_wide(&value).unwrap(), vec![0xd800, 65, 0]);
+    }
+}
+
+// Typed registry adapter. Only HKCU writes are permitted; HKLM is read-only.
+use crate::windows_registry::{Hive, Key, Read as RegistryRead, Registry, Value, ValueType, View};
+use windows::Win32::Foundation::ERROR_MORE_DATA;
+use windows::Win32::System::Registry::*;
+
+struct RegistryHandle(HKEY);
+impl Drop for RegistryHandle {
+    fn drop(&mut self) {
+        // SAFETY: this is an owned opened/created key, never a predefined hive handle.
+        let _ = unsafe { RegCloseKey(self.0) };
+    }
+}
+#[derive(Default)]
+pub struct WinRegistry {
+    test_root: Option<String>,
+}
+impl WinRegistry {
+    /// Production adapter: paths remain relative to the selected hive.
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// Every operation, including HKLM reads, is confined to a generated HKCU test subtree.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn isolated() -> Self {
+        Self {
+            test_root: Some(format!("Software\\MyPassTests\\{}", uuid::Uuid::new_v4())),
+        }
+    }
+    fn mapped(&self, key: &Key) -> PlatformResult<Key> {
+        if let Some(root) = &self.test_root {
+            Key::new(
+                Hive::CurrentUser,
+                key.view,
+                &format!(
+                    "{root}\\{}",
+                    key.subkey()
+                        .strip_prefix("software\\")
+                        .unwrap_or(key.subkey())
+                ),
+            )
+        } else {
+            Ok(key.clone())
+        }
+    }
+    fn open(
+        &self,
+        key: &Key,
+        access: REG_SAM_FLAGS,
+        create: bool,
+    ) -> PlatformResult<Option<RegistryHandle>> {
+        let key = self.mapped(key)?;
+        let path = to_wide(OsStr::new(key.subkey()))?;
+        let root = match key.hive {
+            Hive::CurrentUser => HKEY_CURRENT_USER,
+            Hive::LocalMachine => HKEY_LOCAL_MACHINE,
+        };
+        let view = match key.view {
+            View::Registry32 => KEY_WOW64_32KEY,
+            View::Registry64 => KEY_WOW64_64KEY,
+        };
+        let mut result = HKEY::default();
+        // SAFETY: validated relative key, terminated path and live output; only returned owned
+        // keys enter RegistryHandle. No caller can pass raw handles or override access flags.
+        let code = unsafe {
+            if create {
+                RegCreateKeyExW(
+                    root,
+                    PCWSTR(path.as_ptr()),
+                    None,
+                    PCWSTR::null(),
+                    REG_OPTION_NON_VOLATILE,
+                    access | view,
+                    None,
+                    &mut result,
+                    None,
+                )
+            } else {
+                RegOpenKeyExW(
+                    root,
+                    PCWSTR(path.as_ptr()),
+                    None,
+                    access | view,
+                    &mut result,
+                )
+            }
+        };
+        if code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND {
+            return Ok(None);
+        }
+        code.ok().map_err(win_error)?;
+        Ok(Some(RegistryHandle(result)))
+    }
+    fn write_allowed(&self, key: &Key) -> PlatformResult<()> {
+        if self.test_root.is_none() && key.hive != Hive::CurrentUser {
+            return Err(PlatformError::Failed("HKLM writes denied".into()));
+        }
+        Ok(())
+    }
+}
+impl Drop for WinRegistry {
+    fn drop(&mut self) {
+        if let Some(root) = &self.test_root {
+            if let Ok(wide) = to_wide(OsStr::new(root)) {
+                // SAFETY: root is generated internally, never caller supplied; recursive cleanup
+                // is confined to this adapter's unique test subtree, not any production host key.
+                let _ = unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, PCWSTR(wide.as_ptr())) };
+            }
+        }
+    }
+}
+impl Registry for WinRegistry {
+    fn key_exists(&self, key: &Key) -> PlatformResult<bool> {
+        Ok(self.open(key, KEY_READ, false)?.is_some())
+    }
+    fn read(&self, key: &Key, name: &str, kind: ValueType) -> PlatformResult<RegistryRead> {
+        let wide = to_wide(OsStr::new(name))?;
+        let Some(handle) = self.open(key, KEY_QUERY_VALUE, false)? else {
+            return Ok(RegistryRead::Missing);
+        };
+        // Bounded, single-buffer read: concurrent growth yields an error, never unbounded retries.
+        let mut bytes = vec![0u8; 65536];
+        let mut length = bytes.len() as u32;
+        let mut ty = REG_VALUE_TYPE::default();
+        // SAFETY: owned key, terminated name, and output pointers into live sized allocations.
+        let code = unsafe {
+            RegQueryValueExW(
+                handle.0,
+                PCWSTR(wide.as_ptr()),
+                None,
+                Some(&mut ty),
+                Some(bytes.as_mut_ptr()),
+                Some(&mut length),
+            )
+        };
+        if code == ERROR_FILE_NOT_FOUND {
+            return Ok(RegistryRead::Missing);
+        }
+        if code == ERROR_MORE_DATA {
+            return Err(PlatformError::Failed("registry value exceeds limit".into()));
+        }
+        code.ok().map_err(win_error)?;
+        bytes.truncate(length as usize);
+        match (ty, kind) {
+            (REG_BINARY, ValueType::Binary) => Ok(RegistryRead::Value(Value::Binary(bytes))),
+            (REG_SZ, ValueType::String) => {
+                if !bytes.len().is_multiple_of(2) {
+                    return Err(invalid());
+                }
+                let mut units: Vec<u16> = bytes
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|p| u16::from_le_bytes(*p))
+                    .collect();
+                if units.last() == Some(&0) {
+                    units.pop();
+                }
+                if units.contains(&0) {
+                    return Err(invalid());
+                }
+                let text = String::from_utf16(&units).map_err(|_| invalid())?;
+                Ok(RegistryRead::Value(Value::String(text)))
+            }
+            _ => Ok(RegistryRead::WrongType),
+        }
+    }
+    fn create(&self, key: &Key) -> PlatformResult<()> {
+        self.write_allowed(key)?;
+        self.open(key, KEY_SET_VALUE, true)?.ok_or_else(invalid)?;
+        Ok(())
+    }
+    fn set(&self, key: &Key, name: &str, value: Value) -> PlatformResult<()> {
+        self.write_allowed(key)?;
+        let name = to_wide(OsStr::new(name))?;
+        let (kind, bytes) = match value {
+            Value::String(s) => (
+                REG_SZ,
+                to_wide(OsStr::new(&s))?
+                    .into_iter()
+                    .flat_map(u16::to_le_bytes)
+                    .collect::<Vec<_>>(),
+            ),
+            Value::Binary(b) => (REG_BINARY, b),
+        };
+        if bytes.len() > 65536 {
+            return Err(invalid());
+        }
+        let handle = self.open(key, KEY_SET_VALUE, false)?.ok_or_else(invalid)?;
+        // SAFETY: owned key, terminated name, borrowed byte buffer lives through the call.
+        unsafe { RegSetValueExW(handle.0, PCWSTR(name.as_ptr()), None, kind, Some(&bytes)) }
+            .ok()
+            .map_err(win_error)
+    }
+    fn delete_value(&self, key: &Key, name: &str) -> PlatformResult<()> {
+        self.write_allowed(key)?;
+        let name = to_wide(OsStr::new(name))?;
+        let Some(handle) = self.open(key, KEY_SET_VALUE, false)? else {
+            return Ok(());
+        };
+        // SAFETY: owned key and terminated value name; no subtree deletion.
+        let code = unsafe { RegDeleteValueW(handle.0, PCWSTR(name.as_ptr())) };
+        if code == ERROR_FILE_NOT_FOUND {
+            return Ok(());
+        }
+        code.ok().map_err(win_error)
+    }
+    fn delete_owned_key(&self, key: &Key, name: &str, owner: &Value) -> PlatformResult<bool> {
+        self.write_allowed(key)?;
+        let kind = match owner {
+            Value::String(_) => ValueType::String,
+            Value::Binary(_) => ValueType::Binary,
+        };
+        if self.read(key, name, kind)? != RegistryRead::Value(owner.clone()) {
+            return Ok(false);
+        }
+        self.delete_value(key, name)?;
+        let Some(handle) = self.open(key, KEY_READ, false)? else {
+            return Ok(true);
+        };
+        let (mut children, mut values) = (0, 0);
+        // SAFETY: owned key; only requested count outputs are non-null and live.
+        unsafe {
+            RegQueryInfoKeyW(
+                handle.0,
+                None,
+                None,
+                None,
+                Some(&mut children),
+                None,
+                None,
+                Some(&mut values),
+                None,
+                None,
+                None,
+                None,
+            )
+        }
+        .ok()
+        .map_err(win_error)?;
+        if children == 0 && values == 0 {
+            let mapped = self.mapped(key)?;
+            let path = to_wide(OsStr::new(mapped.subkey()))?;
+            let view = match mapped.view {
+                View::Registry32 => KEY_WOW64_32KEY,
+                View::Registry64 => KEY_WOW64_64KEY,
+            };
+            // SAFETY: HKCU-only validated relative key and explicit view. RegDeleteKeyEx is
+            // nonrecursive; newly appearing children prevent deletion rather than being removed.
+            let code =
+                unsafe { RegDeleteKeyExW(HKEY_CURRENT_USER, PCWSTR(path.as_ptr()), view.0, None) };
+            if code != ERROR_FILE_NOT_FOUND {
+                code.ok().map_err(win_error)?;
+            }
+        }
+        Ok(true)
+    }
+}
+
+use crate::windows_host_install::{InstallDirectory, InstallFiles, MoveError, MAX_HOST_BYTES};
+use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION};
+/// Safe callers receive a session retaining all ancestor handles, never raw Win32 handles.
+pub struct HostFiles;
+struct HostDirectory {
+    path: PathBuf,
+    _pins: Vec<File>,
+    user: TokenUserBuffer,
+}
+fn pin_host_ancestors(path: &Path, user: &TokenUserBuffer) -> PlatformResult<Vec<File>> {
+    validate_secret_path(path)?;
+    let mut pinned = Vec::new();
+    let mut current = PathBuf::new();
+    for part in path.components() {
+        current.push(part.as_os_str());
+        if matches!(part, Component::Prefix(_)) {
+            continue;
+        }
+        pinned.push(open_checked(&current, true, false, user)?.ok_or_else(invalid)?);
+    }
+    Ok(pinned)
+}
+fn read_host_file(file: File) -> PlatformResult<Vec<u8>> {
+    let mut bytes = Vec::new();
+    file.take(MAX_HOST_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| invalid())?;
+    if bytes.len() > MAX_HOST_BYTES {
+        return Err(invalid());
+    }
+    Ok(bytes)
+}
+// Browser manifests keep their ordinary <=240-unit path. Internal create-new and backup
+// names can be longer, so native file operations use explicit extended paths, without relying
+// on the launching browser/test executable carrying a longPathAware process manifest.
+fn extended_host_path(path: &Path) -> PlatformResult<PathBuf> {
+    use std::path::Prefix;
+    validate_secret_path(path)?;
+    let Some(Component::Prefix(prefix)) = path.components().next() else {
+        return Err(invalid());
+    };
+    match prefix.kind() {
+        Prefix::VerbatimDisk(_) | Prefix::VerbatimUNC(_, _) => Ok(path.into()),
+        Prefix::Disk(_) => {
+            let mut value = OsString::from(r"\\?\");
+            value.push(path);
+            Ok(value.into())
+        }
+        Prefix::UNC(_, _) => {
+            let units: Vec<_> = path.as_os_str().encode_wide().skip(2).collect();
+            let mut value = OsString::from(r"\\?\UNC\");
+            value.push(from_wide(&units));
+            Ok(value.into())
+        }
+        _ => Err(invalid()),
+    }
+}
+impl InstallFiles for HostFiles {
+    fn source(&self, path: &Path) -> PlatformResult<Vec<u8>> {
+        let user = TokenUserBuffer::current()?;
+        let path = extended_host_path(path)?;
+        let path = path.as_path();
+        validate_secret_path(path)?;
+        let _pins = pin_host_ancestors(path.parent().ok_or_else(invalid)?, &user)?;
+        read_host_file(open_checked(path, false, false, &user)?.ok_or_else(invalid)?)
+    }
+    fn directory(
+        &self,
+        path: &Path,
+        create: bool,
+    ) -> PlatformResult<Option<Box<dyn InstallDirectory>>> {
+        let user = TokenUserBuffer::current()?;
+        let path = extended_host_path(path)?;
+        let path = path.as_path();
+        let Some(pins) = protected_directory(path, create, &user)? else {
+            return Ok(None);
+        };
+        Ok(Some(Box::new(HostDirectory {
+            path: path.into(),
+            _pins: pins,
+            user,
+        })))
+    }
+}
+impl HostDirectory {
+    fn child(&self, name: &str) -> PlatformResult<PathBuf> {
+        if name.is_empty()
+            || name.contains(['/', '\\', ':', '\0'])
+            || name == "."
+            || name == ".."
+            || name.ends_with(['.', ' '])
+        {
+            return Err(invalid());
+        }
+        Ok(self.path.join(name))
+    }
+}
+impl InstallDirectory for HostDirectory {
+    fn read(&self, name: &str) -> PlatformResult<Option<Vec<u8>>> {
+        open_checked(&self.child(name)?, false, true, &self.user)?
+            .map(read_host_file)
+            .transpose()
+    }
+    fn create_new(&self, name: &str, bytes: &[u8]) -> PlatformResult<()> {
+        use std::os::windows::io::FromRawHandle;
+        if bytes.len() > MAX_HOST_BYTES {
+            return Err(invalid());
+        }
+        let path = self.child(name)?;
+        let wide = to_wide(path.as_os_str())?;
+        let descriptor = protected_descriptor(&self.user)?;
+        let attrs = SECURITY_ATTRIBUTES {
+            nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: descriptor.0,
+            bInheritHandle: false.into(),
+        };
+        // SAFETY: create-new in the pinned, protected host directory; explicit protected DACL,
+        // terminated child path and live attributes. Successful handle gets a unique File owner.
+        let handle = unsafe {
+            CreateFileW(
+                PCWSTR(wide.as_ptr()),
+                FILE_GENERIC_WRITE.0,
+                FILE_SHARE_READ,
+                Some(&attrs),
+                CREATE_NEW,
+                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+                None,
+            )
+        }
+        .map_err(win_error)?;
+        // SAFETY: successful CreateFileW transferred its unique live handle to File.
+        let mut file = unsafe { File::from_raw_handle(handle.0) };
+        let result = file
+            .write_all(bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|_| invalid());
+        drop(file);
+        if result.is_err() {
+            let _ = self.remove(name);
+        }
+        result
+    }
+    fn rename(&self, from: &str, to: &str, replace: bool) -> Result<(), MoveError> {
+        let operation = (|| {
+            let from = self.child(from)?;
+            let to = self.child(to)?;
+            drop(open_checked(&from, false, true, &self.user)?.ok_or_else(invalid)?);
+            drop(open_checked(&to, false, true, &self.user)?);
+            Ok::<_, PlatformError>((to_wide(from.as_os_str())?, to_wide(to.as_os_str())?))
+        })()
+        .map_err(MoveError::Failed)?;
+        let flags = if replace {
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
+        } else {
+            MOVEFILE_WRITE_THROUGH
+        };
+        // SAFETY: both validated regular children of pinned protected ancestors, terminated
+        // paths live through the call. No-replace is used for move-aside and rollback.
+        match unsafe {
+            MoveFileExW(
+                PCWSTR(operation.0.as_ptr()),
+                PCWSTR(operation.1.as_ptr()),
+                flags,
+            )
+        } {
+            Ok(()) => Ok(()),
+            Err(e)
+                if e.code() == ERROR_ACCESS_DENIED.to_hresult()
+                    || e.code() == ERROR_SHARING_VIOLATION.to_hresult() =>
+            {
+                Err(MoveError::Busy)
+            }
+            Err(e) => Err(MoveError::Failed(win_error(e))),
+        }
+    }
+    fn remove(&self, name: &str) -> PlatformResult<()> {
+        let path = self.child(name)?;
+        let Some(_validated) = open_checked(&path, false, true, &self.user)? else {
+            return Ok(());
+        };
+        // Caller proves exact manifest/hash receipt/temp/obsolete-name ownership; pinned ancestry
+        // and the validated delete-shared regular file handle rule out reparse traversal.
+        std::fs::remove_file(&path).map_err(|e| PlatformError::Failed(e.to_string()))
+    }
+    fn names(&self) -> PlatformResult<Vec<String>> {
+        let entries =
+            std::fs::read_dir(&self.path).map_err(|e| PlatformError::Failed(e.to_string()))?;
+        entries
+            .map(|e| {
+                e.map_err(|e| PlatformError::Failed(e.to_string()))?
+                    .file_name()
+                    .into_string()
+                    .map_err(|_| invalid())
+            })
+            .collect()
     }
 }

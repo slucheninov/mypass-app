@@ -42,3 +42,45 @@ fn windows_registry_isolation_cannot_escape_test_root() {
         assert!(Key::new(Hive::CurrentUser, View::Registry64, invalid).is_err());
     }
 }
+
+#[test]
+fn windows_targets_always_include_chrome_and_edge_and_paths_are_exact() {
+    use mypass_platform::{windows_host_key, WINDOWS_REGISTRY_TARGETS};
+    for (id, vendor) in [("chrome", "Google\\Chrome"), ("edge", "Microsoft\\Edge")] {
+        let target = WINDOWS_REGISTRY_TARGETS
+            .iter()
+            .find(|t| t.id == id)
+            .unwrap();
+        assert!(target.always);
+        assert_eq!(
+            windows_host_key(target, View::Registry32).unwrap(),
+            Key::new(
+                Hive::CurrentUser,
+                View::Registry32,
+                &format!("Software\\{vendor}\\NativeMessagingHosts\\com.mypass.chromehost")
+            )
+            .unwrap()
+        );
+    }
+    assert_eq!(WINDOWS_REGISTRY_TARGETS.len(), 3);
+    assert!(WINDOWS_REGISTRY_TARGETS
+        .iter()
+        .all(|t| !t.subkey.to_lowercase().contains("wow6432node")));
+}
+
+#[test]
+fn registry_owned_delete_preserves_named_values_and_children() {
+    let r = MemoryRegistry::default();
+    let key = Key::new(Hive::CurrentUser, View::Registry64, "Software\\host").unwrap();
+    r.create(&key).unwrap();
+    let owner = Value::String("ours".into());
+    r.set(&key, "", owner.clone()).unwrap();
+    r.set(&key, "foreign", Value::Binary(vec![42])).unwrap();
+    assert!(r.delete_owned_key(&key, "", &owner).unwrap());
+    assert_eq!(r.read(&key, "", ValueType::String).unwrap(), Read::Missing);
+    assert_eq!(
+        r.read(&key, "foreign", ValueType::Binary).unwrap(),
+        Read::Value(Value::Binary(vec![42]))
+    );
+    assert!(r.key_exists(&key).unwrap());
+}

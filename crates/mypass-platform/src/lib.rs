@@ -7,6 +7,7 @@
 pub mod dev_overrides;
 #[cfg(windows)]
 pub mod windows;
+pub mod windows_host_install;
 pub mod windows_registry;
 
 #[cfg(any(windows, test))]
@@ -62,8 +63,9 @@ pub use error::{PlatformError, PlatformResult};
 pub use events::{Subscription, SystemEvent, SystemEvents};
 pub use file_store::{shared_store, FileSecretStore};
 pub use host_registrar::{
-    locate_bundled_host, manifest_json, BrowserRegistration, HostRegistrationReport, ManifestError,
-    NativeHostRegistrar, RegistrationState, BUNDLED_HOST_FILE, EXTENSION_ID, HOST_NAME,
+    locate_bundled_host, manifest_json, windows_host_key, BrowserRegistration,
+    HostRegistrationReport, ManifestError, NativeHostRegistrar, RegistrationState, RegistryTarget,
+    BUNDLED_HOST_FILE, EXTENSION_ID, HOST_NAME, WINDOWS_REGISTRY_TARGETS,
 };
 pub use keyboard_layout::KeyboardLayout;
 pub use launch_at_login::{map_sm_status, LaunchAtLogin, LoginItemStatus};

@@ -63,11 +63,12 @@ impl Key {
 }
 
 pub trait Registry: Send + Sync {
+    fn key_exists(&self, key: &Key) -> PlatformResult<bool>;
     fn read(&self, key: &Key, name: &str, kind: ValueType) -> PlatformResult<Read>;
     fn create(&self, key: &Key) -> PlatformResult<()>;
     fn set(&self, key: &Key, name: &str, value: Value) -> PlatformResult<()>;
     fn delete_value(&self, key: &Key, name: &str) -> PlatformResult<()>;
-    /// Delete a leaf key only after verifying its ownership value; never recursive deletion.
+    /// Delete only the matching owned value, then its key if empty; preserve other values/children.
     fn delete_owned_key(&self, key: &Key, owner_name: &str, owner: &Value) -> PlatformResult<bool>;
 }
 
@@ -102,6 +103,9 @@ impl<R> IsolatedRegistry<R> {
     }
 }
 impl<R: Registry> Registry for IsolatedRegistry<R> {
+    fn key_exists(&self, k: &Key) -> PlatformResult<bool> {
+        self.inner.key_exists(&self.map(k)?)
+    }
     fn read(&self, k: &Key, n: &str, t: ValueType) -> PlatformResult<Read> {
         self.inner.read(&self.map(k)?, n, t)
     }
@@ -133,6 +137,13 @@ impl MemoryRegistry {
     }
 }
 impl Registry for MemoryRegistry {
+    fn key_exists(&self, k: &Key) -> PlatformResult<bool> {
+        Ok(self
+            .keys
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains_key(k))
+    }
     fn read(&self, k: &Key, n: &str, t: ValueType) -> PlatformResult<Read> {
         if n.contains('\0') {
             return Err(PlatformError::Failed("invalid registry value name".into()));
@@ -192,13 +203,19 @@ impl Registry for MemoryRegistry {
         Self::write_key(k, n)?;
         let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
         let prefix = format!("{}\\", k.subkey());
-        if keys.keys().any(|child| {
-            child.hive == k.hive && child.view == k.view && child.subkey().starts_with(&prefix)
-        }) || keys.get(k).and_then(|v| v.get(&n.to_ascii_lowercase())) != Some(owner)
-        {
+        if keys.get(k).and_then(|v| v.get(&n.to_ascii_lowercase())) != Some(owner) {
             return Ok(false);
         }
-        keys.remove(k);
+        if let Some(values) = keys.get_mut(k) {
+            values.remove(&n.to_ascii_lowercase());
+        }
+        if keys.get(k).is_some_and(BTreeMap::is_empty)
+            && !keys.keys().any(|child| {
+                child.hive == k.hive && child.view == k.view && child.subkey().starts_with(&prefix)
+            })
+        {
+            keys.remove(k);
+        }
         Ok(true)
     }
 }

@@ -946,6 +946,13 @@ const FILE_MUTATIONS: &[(&str, &str, usize)] = &[
         "remove_file(path)",
         2,
     ),
+    // Host lifecycle: a checked regular child of pinned protected host ancestors only.
+    // The portable core verifies exact manifest/receipt/temp/obsolete hash ownership first.
+    (
+        "crates/mypass-platform/src/windows.rs",
+        "remove_file(&path)",
+        1,
+    ),
     // File secret store: private temps and secret deletion, including the retired endpoint.
     (
         "crates/mypass-platform/src/file_store.rs",

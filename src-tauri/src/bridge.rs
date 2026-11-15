@@ -285,7 +285,7 @@ pub struct BridgeHandle {
 }
 
 impl BridgeHandle {
-    /// Waits for the startup registration to finish (tests, and nothing else).
+    /// Joins the startup worker during teardown, and at explicit test barriers.
     pub fn join_registration(&self) {
         let thread = lock(&self.registration_thread).take();
         if let Some(thread) = thread {
@@ -598,6 +598,7 @@ impl BridgeState {
             slot.clone()
         };
         if let Some(handle) = handle {
+            handle.join_registration();
             handle.server.shutdown();
         }
     }
@@ -899,6 +900,16 @@ mod tests {
         f.w.core.vault_lock().unwrap();
         let reply = ask(&handle, &serde_json::json!({"type": "getFavorites"}));
         assert_eq!(reply["type"], "locked");
+    }
+
+    #[test]
+    fn shutdown_joins_the_registration_worker_and_startup_is_unconditional() {
+        let f = unstarted(false, Some(PathBuf::from("/h/mypass-host")));
+        f.state.start().unwrap();
+        let handle = f.handle();
+        f.state.shutdown();
+        assert!(lock(&handle.registration_thread).is_none());
+        assert_eq!(f.w.fake.host_registrar.register_calls(), 1);
     }
 
     #[test]
