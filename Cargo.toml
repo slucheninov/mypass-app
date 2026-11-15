@@ -98,6 +98,9 @@ sys-locale = "0.3.2"
 # Constants only (`O_NOFOLLOW`, `O_NONBLOCK`) for the file secret store; never an `unsafe` call.
 libc = "0.2.191"
 
+# Stage 6: the Win32 bindings already present in the locked Tauri graph.
+windows = { version = "=0.62.2", features = ["Win32_UI_Shell", "Win32_System_Com"] }
+
 # --- Stage 5: sync ---
 # Folder watcher of the secondary sync folder: FSEvents on macOS (the default `macos_fsevent`
 # feature), `ReadDirectoryChangesW` on Windows.
