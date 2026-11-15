@@ -176,20 +176,20 @@ fn placeholder_name_is_dot_name_dot_icloud() {
 
 /// A fake clock: `sleep` advances time and records the slept durations.
 #[derive(Default)]
-struct FakeClock {
+pub(crate) struct FakeClock {
     start: Option<Instant>,
     elapsed: Mutex<Duration>,
     sleeps: Mutex<Vec<Duration>>,
 }
 
 impl FakeClock {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             start: Some(Instant::now()),
             ..Self::default()
         }
     }
-    fn elapsed(&self) -> Duration {
+    pub(crate) fn elapsed(&self) -> Duration {
         *self.elapsed.lock().unwrap()
     }
 }

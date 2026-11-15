@@ -13,8 +13,13 @@
 //! `ConflictVersions` live here; the session's `storage.rs` holds the status and the resolver.
 //! [`DownloadState`] and [`ConflictVersion`] are the platform's types.
 
+mod file_io;
 #[cfg(test)]
 mod tests;
+
+pub use file_io::{
+    ICloudFileIo, IoHealth, CACHE_STATE_SUFFIX, COORDINATION_TIMEOUT, ICLOUD_CACHE_DIR,
+};
 
 use mypass_kdbx::{Database, FileIo, KdbxError, PlainFileIo, MAX_VAULT_FILE_BYTES};
 pub use mypass_platform::{ConflictVersion, CoordinatedFiles, DownloadState};
@@ -86,7 +91,7 @@ fn lexical(path: &Path) -> PathBuf {
 
 /// `path` with symlinks resolved: the whole path when it exists, else its parent plus the name
 /// (a file about to be created), else the lexical form.
-fn resolved(path: &Path) -> PathBuf {
+pub(crate) fn resolved(path: &Path) -> PathBuf {
     if let Ok(real) = std::fs::canonicalize(path) {
         return real;
     }

@@ -23,7 +23,8 @@ pub use engine::{
 pub use icloud::{
     ensure_downloaded, merge_vault_bytes, resolve_conflicts, vault_location_of, Clock,
     ConflictOutcome, ConflictVersions, CoordinatedProbe, DownloadProbe, ICloudDriveLocation,
-    ICloudError, PlatformVersions, SystemClock, VaultLocation, DOWNLOAD_TIMEOUT,
+    ICloudError, ICloudFileIo, IoHealth, PlatformVersions, SystemClock, VaultLocation,
+    DOWNLOAD_TIMEOUT,
 };
 pub use local_folder::LocalFolderBackend;
 pub use watcher::{Debouncer, EchoFilter, FolderWatcher, WATCH_DEBOUNCE};
