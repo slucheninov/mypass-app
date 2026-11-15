@@ -356,6 +356,34 @@ impl VaultSession {
         g
     }
 
+    /// Waits until no publication ([`VaultSession::publish_if_current`]) is in progress.
+    pub(crate) fn wait_unpublished<'a>(
+        &self,
+        mut g: MutexGuard<'a, Inner>,
+    ) -> MutexGuard<'a, Inner> {
+        while g.publishing > 0 {
+            g = self
+                .0
+                .idle
+                .wait(g)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        g
+    }
+
+    /// Waits until neither a write nor a publication is in progress: what every incarnation
+    /// bump waits for, so nothing is published for an incarnation that has ended.
+    pub(crate) fn wait_quiescent<'a>(&self, mut g: MutexGuard<'a, Inner>) -> MutexGuard<'a, Inner> {
+        while g.in_flight || g.publishing > 0 {
+            g = self
+                .0
+                .idle
+                .wait(g)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        g
+    }
+
     fn schedule_job(&self, inner: &mut Inner, after: Duration, pending: bool) {
         inner.cancel_save_job();
         inner.save_job_id = inner.save_job_id.wrapping_add(1);
@@ -609,7 +637,7 @@ impl VaultSession {
         let _ = self.flush();
         let mut out = Outbox::default();
         {
-            let mut inner = self.wait_idle(lock(&self.0.inner));
+            let mut inner = self.wait_quiescent(lock(&self.0.inner));
             if inner.db.is_none() {
                 return;
             }

@@ -323,6 +323,12 @@ pub(crate) struct Inner {
     pub(crate) save_job: Option<TaskHandle>,
     /// A write (or a check) runs outside the lock; `Shared::idle` is signalled when it ends.
     pub(crate) in_flight: bool,
+    /// Publications in progress ([`VaultSession::publish_if_current`]: a sync checkpoint being
+    /// written for this incarnation). Every incarnation bump (lock, open, unlock, relocation),
+    /// `begin_quit` and the secondary sync's arm changes wait for it to drop to zero, so nothing
+    /// is published for a vault that was locked, switched or relocated, or for an arm that was
+    /// replaced, once that change has happened. `Shared::idle` is signalled when it drops.
+    pub(crate) publishing: u32,
     /// The next save is the first since this vault was opened or unlocked (always snapshots).
     pub(crate) first_write_of_session: bool,
     /// The file was created by this session; its first save takes no snapshot (there is
@@ -364,6 +370,7 @@ impl Inner {
             conflict_hook: Arc::new(|_| {}),
             save_job: None,
             in_flight: false,
+            publishing: 0,
             first_write_of_session: false,
             fresh_file: false,
             save_job_id: 0,
@@ -624,7 +631,7 @@ impl VaultSession {
         self.prepare_switch()?;
         let mut out = Outbox::default();
         let path = {
-            let mut inner = self.wait_idle(lock(&self.0.inner));
+            let mut inner = self.wait_quiescent(lock(&self.0.inner));
             if inner.quitting {
                 return Err(SessionError::Quitting);
             }
@@ -811,7 +818,7 @@ impl VaultSession {
             let had_pending = restored.is_some();
             let mut out = Outbox::default();
             let vault_id = {
-                let mut inner = self.wait_idle(lock(&self.0.inner));
+                let mut inner = self.wait_quiescent(lock(&self.0.inner));
                 if inner.quitting {
                     return Err(SessionError::Quitting);
                 }
@@ -1023,12 +1030,58 @@ impl VaultSession {
         self.mutate_inner(Some(incarnation), f)
     }
 
+    /// Runs `publish` (a local side effect describing the vault of `incarnation`, such as the
+    /// secondary sync's checkpoint) only while the session still holds that vault unlocked and
+    /// is not quitting, and while `still` (the caller's own identity check, asked under the
+    /// session lock) holds; `None` when anything changed. The check is atomic with every
+    /// invalidation: `publish` runs outside the session lock (it does file I/O), but while it
+    /// runs every incarnation bump, `begin_quit` and [`VaultSession::while_unpublished`] wait
+    /// for it, so a lock, switch, relocation, quit or arm change either happens before the
+    /// check (nothing is published) or after the publication completed.
+    pub(crate) fn publish_if_current<R>(
+        &self,
+        incarnation: u64,
+        still: impl FnOnce() -> bool,
+        publish: impl FnOnce() -> R,
+    ) -> Option<R> {
+        {
+            let mut inner = lock(&self.0.inner);
+            if inner.quitting || inner.db.is_none() || inner.incarnation != incarnation || !still()
+            {
+                return None;
+            }
+            inner.publishing = inner.publishing.saturating_add(1);
+        }
+        /// Ends the publication on every exit, a panic included, so no waiter hangs.
+        struct Published<'a>(&'a VaultSession);
+        impl Drop for Published<'_> {
+            fn drop(&mut self) {
+                let mut inner = lock(&self.0 .0.inner);
+                inner.publishing = inner.publishing.saturating_sub(1);
+                drop(inner);
+                self.0 .0.idle.notify_all();
+            }
+        }
+        let _published = Published(self);
+        Some(publish())
+    }
+
+    /// Runs `f` under the session lock once no publication is in progress: an invalidation
+    /// outside the session (the secondary sync's arm changes) serialised against
+    /// [`VaultSession::publish_if_current`]. `f` must not call back into the session.
+    pub(crate) fn while_unpublished<R>(&self, f: impl FnOnce() -> R) -> R {
+        let inner = self.wait_unpublished(lock(&self.0.inner));
+        let r = f();
+        drop(inner);
+        r
+    }
+
     /// Whether `content` is on the local disk: the session still holds the vault of
     /// `incarnation`, has no unsaved edit (so the live vault is what the last write put on disk)
     /// and the live vault already holds everything in `content`. Waits for an in-flight write.
     pub(crate) fn durably_holds(&self, incarnation: u64, content: &Database) -> Durability {
         let inner = self.wait_idle(lock(&self.0.inner));
-        if inner.incarnation != incarnation {
+        if inner.quitting || inner.incarnation != incarnation {
             return Durability::Stale;
         }
         let Some(live) = &inner.db else {
@@ -1065,7 +1118,7 @@ impl VaultSession {
     }
 
     fn relocate_locked(&self, new_path: &Path, io: Arc<dyn FileIo>) -> Result<(), SessionError> {
-        let inner = self.wait_idle(lock(&self.0.inner));
+        let inner = self.wait_quiescent(lock(&self.0.inner));
         if inner.quitting {
             return Err(SessionError::Quitting);
         }
@@ -1117,7 +1170,9 @@ impl VaultSession {
     /// `touch` and `relocate` fail with `Quitting`; `lock`, `flush`, `status` and `with_db` keep
     /// working. Idempotent.
     pub fn begin_quit(&self) {
-        lock(&self.0.inner).quitting = true;
+        // Waits for a publication in progress (a local checkpoint write), never for a vault
+        // write: the quit flow bounds that wait itself (`flush_blocking`).
+        self.wait_unpublished(lock(&self.0.inner)).quitting = true;
     }
 
     /// Re-opens the session after a cancelled quit.
@@ -1659,6 +1714,39 @@ mod tests {
         failing.heal();
         f.session.flush().unwrap();
         assert_eq!(f.session.status().save, SaveStatus::idle());
+    }
+
+    #[test]
+    fn publication_runs_only_for_the_current_unlocked_incarnation() {
+        let f = fx();
+        f.created();
+        let current = lock(&f.session.0.inner).incarnation;
+        let publish = |inc: u64, still: bool| f.session.publish_if_current(inc, || still, || 7);
+        assert_eq!(publish(current, true), Some(7));
+        assert_eq!(publish(current, false), None, "the caller's own check");
+        assert_eq!(publish(current.wrapping_add(1), true), None);
+        f.session.lock(LockReason::Manual);
+        assert_eq!(publish(current, true), None, "locked");
+        f.session.unlock(pw("pw")).unwrap();
+        let unlocked = lock(&f.session.0.inner).incarnation;
+        assert_ne!(unlocked, current);
+        assert_eq!(publish(current, true), None, "an earlier unlock");
+        assert_eq!(publish(unlocked, true), Some(7));
+        f.session.begin_quit();
+        assert_eq!(publish(unlocked, true), None, "quitting");
+        // The publication count drops again on every exit, a panic included.
+        f.session.cancel_quit();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            f.session
+                .publish_if_current(unlocked, || true, || panic!("publication failed"))
+        }));
+        assert!(panicked.is_err());
+        assert_eq!(lock(&f.session.0.inner).publishing, 0);
+        f.session.lock(LockReason::Manual);
+        assert!(
+            !f.session.is_unlocked(),
+            "a lock never hangs after a failed publication"
+        );
     }
 
     #[test]

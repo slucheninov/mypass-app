@@ -26,10 +26,14 @@
 //!   writes.
 //! - **Adopting remote changes, then durability, then the checkpoint.** A `SyncResult::Merged` is
 //!   merged INTO the live database (never a replacement, so an edit made while the engine ran is
-//!   kept) inside one session-lock acquisition that first re-checks the incarnation; a changed
-//!   one discards the result (the re-arm that came with the change schedules the next run). The
-//!   synced content is then flushed to the primary file, and only once the session reports it
-//!   on disk (`VaultSession::durably_holds`) is the engine's checkpoint committed. The checkpoint
+//!   kept) inside one session-lock acquisition that first re-checks the incarnation (lock,
+//!   unlock, switch, relocation), the unlocked state, quitting and the arm epoch (a folder
+//!   change or disarm); anything changed discards the result (the re-arm that came with the
+//!   change schedules the next run). The synced content is then flushed to the primary file,
+//!   and only once the session reports it on disk (`VaultSession::durably_holds`) is the
+//!   engine's checkpoint committed, through `VaultSession::publish_if_current`: the same
+//!   checks, atomic with the publication, which every invalidation waits for (the checkpoint
+//!   is a small file in the app's own data folder, never the remote). The checkpoint
 //!   means "the copy holds nothing the primary file on disk lacks", so a crash at any point
 //!   before the commit only costs an idempotent re-merge on the next run, never a blind push
 //!   over remote-only changes. A primary that cannot be written leaves the checkpoint as it was
@@ -69,7 +73,10 @@
 //! session lock is held only for the snapshot, the adoption and the durability check, never
 //! across remote I/O; the service's state lock is never held while calling the session, the
 //! scheduler's jobs or a watcher's `stop` (which joins the watcher thread, whose callback takes
-//! the state lock). The worker queue's lock is a leaf: nothing else is taken while holding it.
+//! the state lock). The state lock may be taken UNDER the session lock (the arm checks of the
+//! adoption and the publication, and the epoch bumps of `rearm` and `shutdown` inside
+//! `VaultSession::while_unpublished`), never the other way round. The worker queue's lock is a
+//! leaf: nothing else is taken while holding it.
 
 use crate::app_core::ApiError;
 use crate::saving::same_content;
@@ -132,6 +139,10 @@ pub enum SecondaryUnavailable {
     ReadOnly,
     /// The storage did not answer in time.
     TimedOut,
+    /// The folder's volume cannot replace the copy without risking another writer's version
+    /// (no atomic exchange and no hard links: FAT, exFAT, some network shares). Not retried:
+    /// choose a folder on another volume.
+    UnsupportedFolder,
 }
 
 /// Why the last secondary sync failed (a localisable code). The remote was left as it was.
@@ -175,7 +186,8 @@ pub enum SecondaryStatus {
     },
     /// A sync is running.
     Syncing,
-    /// The folder cannot be used; retried every [`SECONDARY_RETRY`] except for `invalidFolder`.
+    /// The folder cannot be used; retried every [`SECONDARY_RETRY`] except for `invalidFolder`
+    /// and `unsupportedFolder`.
     Unavailable { reason: SecondaryUnavailable },
     /// The last sync failed; the remote and the primary are untouched.
     Error { code: SecondaryError },
@@ -365,6 +377,12 @@ pub(crate) struct Probe {
     pub(crate) before_durable: Hook,
     /// Runs after the primary is durable, before the checkpoint is committed.
     pub(crate) before_commit: Hook,
+    /// Runs inside the checkpoint publication, after its checks passed.
+    pub(crate) during_publish: Hook,
+    /// `(incarnation, epoch)` of the run behind every accepted adoption.
+    pub(crate) adopted: Mutex<Vec<(u64, u64)>>,
+    /// `(incarnation, epoch)` of the run behind every committed checkpoint.
+    pub(crate) published: Mutex<Vec<(u64, u64)>>,
 }
 
 #[cfg(test)]
@@ -615,7 +633,8 @@ impl SecondarySync {
     /// thread then ends. Nothing is synced afterwards; [`SecondarySync::wait_idle`] waits for
     /// the worker with a bound.
     pub fn shutdown(&self) {
-        let (old, changed) = {
+        // Serialised against a checkpoint publication (see `rearm`).
+        let (old, changed) = self.0.session.while_unpublished(|| {
             let mut st = lock(&self.0.state);
             st.epoch = st.epoch.wrapping_add(1);
             st.jobs.cancel_all();
@@ -627,7 +646,7 @@ impl SecondarySync {
             };
             let changed = old.is_some().then(|| set_status(&mut st, status)).flatten();
             (old, changed)
-        };
+        });
         self.0.worker.stop();
         if let Some(watcher) = old.and_then(|a| a.watcher) {
             watcher.stop();
@@ -751,7 +770,12 @@ impl SecondarySync {
         let desired = self.desired_key();
         let vault_id = self.0.session.vault_id();
         let folder = self.0.settings.get().secondary_folder;
-        let (old, changed) = {
+        // The epoch bump runs under the session lock once no checkpoint publication is in
+        // progress (`VaultSession::while_unpublished`): a run's adoption and its checkpoint
+        // commit check the epoch under that same lock, so an arm change either comes first
+        // (the run's result is discarded) or after the publication completed. Nothing in here
+        // calls back into the session.
+        let rearmed = self.0.session.while_unpublished(|| {
             let mut st = lock(&self.0.state);
             if st.armed.as_ref().map(|a| &a.key) == desired.as_ref() {
                 // Still disarmed: only the configured / not configured status can have changed.
@@ -761,11 +785,7 @@ impl SecondarySync {
                 } else {
                     None
                 };
-                drop(st);
-                if let Some(status) = changed {
-                    self.notify(&status);
-                }
-                return;
+                return Err(changed);
             }
             st.epoch = st.epoch.wrapping_add(1);
             st.jobs.cancel_all();
@@ -782,7 +802,16 @@ impl SecondarySync {
             }
             let status = idle_status(&st, vault_id.as_deref(), folder.as_deref());
             let changed = set_status(&mut st, status);
-            (old, changed)
+            Ok((old, changed))
+        });
+        let (old, changed) = match rearmed {
+            Ok(rearmed) => rearmed,
+            Err(changed) => {
+                if let Some(status) = changed {
+                    self.notify(&status);
+                }
+                return;
+            }
         };
         if let Some(watcher) = old.and_then(|a| a.watcher) {
             watcher.stop();
@@ -991,7 +1020,7 @@ impl SecondarySync {
             &still_current,
         );
         let outcome = match synced {
-            Ok(result) => self.settle(&engine, &snapshot, result),
+            Ok(result) => self.settle(&engine, &snapshot, epoch, result),
             Err(SyncError::Cancelled) => Outcome::Stale,
             Err(e) => Outcome::Failed(e),
         };
@@ -1003,18 +1032,31 @@ impl SecondarySync {
     /// current (and the app is not quitting). Never holds the state lock while asking the
     /// session.
     fn is_current(&self, epoch: u64, incarnation: u64) -> bool {
-        let armed = {
-            let st = lock(&self.0.state);
-            st.epoch == epoch && st.armed.is_some()
-        };
-        armed && self.0.session.is_incarnation(incarnation)
+        self.arm_is(epoch) && self.0.session.is_incarnation(incarnation)
+    }
+
+    /// Whether the arm of `epoch` is still the current one. Takes only the state lock, so it
+    /// may run under the session lock (the session lock is taken before the state lock, never
+    /// the other way round).
+    fn arm_is(&self, epoch: u64) -> bool {
+        let st = lock(&self.0.state);
+        st.epoch == epoch && st.armed.is_some()
     }
 
     /// Adopts a merge into the LIVE database (edits made while the engine ran are kept), makes
     /// the synced content durable in the primary file, and only then commits the checkpoint.
-    /// A change of the open vault in between (lock, unlock, switch, relocation, quit) discards
-    /// the result and commits nothing, so the next run merges again.
-    fn settle(&self, engine: &SyncEngine, snapshot: &SyncSnapshot, result: SyncResult) -> Outcome {
+    /// A change of the open vault (lock, unlock, switch, relocation, quit) or of the arm (a
+    /// folder change, a disarm) in between discards the result and commits nothing, so the
+    /// next run merges again. Both side effects re-check the incarnation, the unlocked state,
+    /// quitting and the arm epoch atomically with the effect: the adoption inside its session
+    /// lock acquisition, the checkpoint through `VaultSession::publish_if_current`.
+    fn settle(
+        &self,
+        engine: &SyncEngine,
+        snapshot: &SyncSnapshot,
+        epoch: u64,
+        result: SyncResult,
+    ) -> Outcome {
         let (merged, pending) = result.into_parts();
         if let Some(remote) = &merged {
             #[cfg(test)]
@@ -1023,14 +1065,20 @@ impl SecondarySync {
                 self.0
                     .session
                     .mutate_if_incarnation(snapshot.incarnation, |live, _now| {
+                        // Under the session lock, like the arm changes (`rearm`).
+                        if !self.arm_is(epoch) {
+                            return Ok((false, false));
+                        }
+                        #[cfg(test)]
+                        lock(&self.0.probe.adopted).push((snapshot.incarnation, epoch));
                         let next = merge(live, remote);
                         if same_content(&next, live) {
-                            return Ok(((), false));
+                            return Ok((true, false));
                         }
                         *live = next;
-                        Ok(((), true))
+                        Ok((true, true))
                     });
-            if !matches!(adopted, Ok(Some(()))) {
+            if !matches!(adopted, Ok(Some(true))) {
                 return Outcome::Stale;
             }
         }
@@ -1047,9 +1095,24 @@ impl SecondarySync {
         }
         #[cfg(test)]
         run_hook(&self.0.probe.before_commit);
-        match engine.commit(pending) {
-            Ok(()) => Outcome::Synced,
-            Err(e) => Outcome::Failed(e),
+        let published = self.0.session.publish_if_current(
+            snapshot.incarnation,
+            || self.arm_is(epoch),
+            || {
+                #[cfg(test)]
+                run_hook(&self.0.probe.during_publish);
+                let committed = engine.commit(pending);
+                #[cfg(test)]
+                if committed.is_ok() {
+                    lock(&self.0.probe.published).push((snapshot.incarnation, epoch));
+                }
+                committed
+            },
+        );
+        match published {
+            None => Outcome::Stale,
+            Some(Ok(())) => Outcome::Synced,
+            Some(Err(e)) => Outcome::Failed(e),
         }
     }
 
@@ -1218,7 +1281,10 @@ fn last_sync_for(st: &State, vault_id: Option<&str>, folder: &str) -> Option<f64
 /// Whether the retry timer should run for this status.
 fn is_transient(status: &SecondaryStatus) -> bool {
     match status {
-        SecondaryStatus::Unavailable { reason } => *reason != SecondaryUnavailable::InvalidFolder,
+        SecondaryStatus::Unavailable { reason } => !matches!(
+            reason,
+            SecondaryUnavailable::InvalidFolder | SecondaryUnavailable::UnsupportedFolder
+        ),
         SecondaryStatus::Error { code } => {
             matches!(code, SecondaryError::Io | SecondaryError::RemoteBusy)
         }
@@ -1232,6 +1298,9 @@ fn storage_outcome(e: StorageError) -> Outcome {
         StorageError::ReadOnly => Outcome::Unavailable(SecondaryUnavailable::ReadOnly),
         StorageError::TimedOut => Outcome::Unavailable(SecondaryUnavailable::TimedOut),
         StorageError::InvalidPath(_) => Outcome::Unavailable(SecondaryUnavailable::InvalidFolder),
+        StorageError::NoSafeReplace => {
+            Outcome::Unavailable(SecondaryUnavailable::UnsupportedFolder)
+        }
         other => Outcome::Failed(SyncError::Storage(other)),
     }
 }

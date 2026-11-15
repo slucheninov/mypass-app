@@ -969,7 +969,10 @@ export type SecondaryStatus_Deserialize =
 { state: "idle"; lastSync?: number | null } | 
 /**  A sync is running. */
 { state: "syncing" } | 
-/**  The folder cannot be used; retried every [`SECONDARY_RETRY`] except for `invalidFolder`. */
+/**
+ *  The folder cannot be used; retried every [`SECONDARY_RETRY`] except for `invalidFolder`
+ *  and `unsupportedFolder`.
+ */
 { state: "unavailable"; reason: SecondaryUnavailable } | 
 /**  The last sync failed; the remote and the primary are untouched. */
 { state: "error"; code: SecondaryError };
@@ -985,7 +988,10 @@ export type SecondaryStatus_Serialize =
 { state: "idle"; lastSync: number | null } | 
 /**  A sync is running. */
 { state: "syncing" } | 
-/**  The folder cannot be used; retried every [`SECONDARY_RETRY`] except for `invalidFolder`. */
+/**
+ *  The folder cannot be used; retried every [`SECONDARY_RETRY`] except for `invalidFolder`
+ *  and `unsupportedFolder`.
+ */
 { state: "unavailable"; reason: SecondaryUnavailable } | 
 /**  The last sync failed; the remote and the primary are untouched. */
 { state: "error"; code: SecondaryError };
@@ -999,7 +1005,13 @@ export type SecondaryUnavailable =
 /**  The folder or the copy in it cannot be written. */
 "readOnly" | 
 /**  The storage did not answer in time. */
-"timedOut";
+"timedOut" | 
+/**
+ *  The folder's volume cannot replace the copy without risking another writer's version
+ *  (no atomic exchange and no hard links: FAT, exFAT, some network shares). Not retried:
+ *  choose a folder on another volume.
+ */
+"unsupportedFolder";
 
 export type SecurityFlag = "reused" | "weak" | "emptyPassword" | "insecureUrl";
 

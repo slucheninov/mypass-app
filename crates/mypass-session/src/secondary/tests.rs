@@ -1277,3 +1277,259 @@ fn a_vault_switch_is_not_blocked_by_a_hung_sync() {
         "nothing written for the old vault"
     );
 }
+
+// --- D-3: every adoption and checkpoint publication re-checks the arm and the incarnation ---
+
+impl World {
+    /// The incarnation of the open vault right now (what a run's snapshot records).
+    fn incarnation(&self) -> u64 {
+        lock(&self.session.0.inner).incarnation
+    }
+
+    fn adopted(&self) -> Vec<(u64, u64)> {
+        self.sync.probe().adopted.lock().unwrap().clone()
+    }
+
+    fn published(&self) -> Vec<(u64, u64)> {
+        self.sync.probe().published.lock().unwrap().clone()
+    }
+
+    /// Arms a merge: the copy gains "B", the next watcher event runs a sync that merges it.
+    fn foreign_change(&self) -> Vec<u8> {
+        let checkpoint = fs::read(self.checkpoint_file()).unwrap();
+        self.foreign_add("B");
+        checkpoint
+    }
+
+    fn run_watch(&self) {
+        self.watch.fire();
+        self.advance_ms(0);
+    }
+}
+
+/// Re-review reproduction 1: only the folder changes (no vault switch, the incarnation stays)
+/// right before the adoption. The disarmed run's merge is never adopted.
+#[test]
+fn a_folder_change_before_the_adoption_discards_the_old_result() {
+    let w = world();
+    w.open();
+    let checkpoint = w.foreign_change();
+    let (settings, sync) = (w.settings.clone(), w.sync.clone());
+    let mut once = true;
+    w.set_hook(&w.sync.probe().before_adopt, move || {
+        if std::mem::take(&mut once) {
+            settings.set_secondary_folder(None).unwrap();
+            sync.rearm();
+        }
+    });
+    let incarnation = w.incarnation();
+    let published = w.published().len();
+    w.run_watch();
+    assert_eq!(w.incarnation(), incarnation, "no vault change: folder only");
+    assert!(w.live_titles().is_empty(), "stale arm adopted its merge");
+    assert!(w.adopted().is_empty());
+    w.advance(5);
+    assert!(w.primary_titles().is_empty());
+    assert_eq!(fs::read(w.checkpoint_file()).unwrap(), checkpoint);
+    assert_eq!(w.published().len(), published);
+}
+
+/// Re-review reproduction 2: a lock between durability and the commit. No checkpoint is
+/// published for the locked vault.
+#[test]
+fn a_lock_before_the_commit_publishes_no_checkpoint() {
+    let w = world();
+    w.open();
+    let checkpoint = w.foreign_change();
+    let published = w.published().len();
+    let session = w.session.clone();
+    let mut once = true;
+    w.set_hook(&w.sync.probe().before_commit, move || {
+        if std::mem::take(&mut once) {
+            session.lock(LockReason::Manual);
+        }
+    });
+    w.run_watch();
+    assert!(!w.session.is_unlocked());
+    assert_eq!(
+        fs::read(w.checkpoint_file()).unwrap(),
+        checkpoint,
+        "stale incarnation committed"
+    );
+    assert_eq!(w.published().len(), published);
+}
+
+/// A folder change alone (the incarnation stays) between durability and the commit.
+#[test]
+fn a_folder_change_before_the_commit_publishes_no_checkpoint() {
+    let w = world();
+    w.open();
+    let checkpoint = w.foreign_change();
+    let published = w.published().len();
+    let (settings, sync) = (w.settings.clone(), w.sync.clone());
+    let mut once = true;
+    w.set_hook(&w.sync.probe().before_commit, move || {
+        if std::mem::take(&mut once) {
+            settings.set_secondary_folder(None).unwrap();
+            sync.rearm();
+        }
+    });
+    w.run_watch();
+    assert!(w.session.is_unlocked());
+    assert_eq!(fs::read(w.checkpoint_file()).unwrap(), checkpoint);
+    assert_eq!(w.published().len(), published);
+}
+
+/// Quitting between durability and the commit publishes nothing.
+#[test]
+fn quitting_before_the_commit_publishes_no_checkpoint() {
+    let w = world();
+    w.open();
+    let checkpoint = w.foreign_change();
+    let published = w.published().len();
+    let session = w.session.clone();
+    let mut once = true;
+    w.set_hook(&w.sync.probe().before_commit, move || {
+        if std::mem::take(&mut once) {
+            session.begin_quit();
+        }
+    });
+    w.run_watch();
+    assert!(w.session.is_quitting());
+    assert_eq!(fs::read(w.checkpoint_file()).unwrap(), checkpoint);
+    assert_eq!(w.published().len(), published);
+}
+
+/// A lock and an unlock of the same vault before the adoption: the old run's merge is never
+/// adopted into the new unlock; the re-arm that came with the unlock merges again.
+#[test]
+fn a_lock_and_unlock_before_the_adoption_never_adopts_the_old_result() {
+    let w = world();
+    w.open();
+    w.foreign_change();
+    let session = w.session.clone();
+    let stale = Arc::new(Mutex::new(None));
+    let seen = stale.clone();
+    let mut once = true;
+    w.set_hook(&w.sync.probe().before_adopt, move || {
+        if std::mem::take(&mut once) {
+            *seen.lock().unwrap() = Some(lock(&session.0.inner).incarnation);
+            session.lock(LockReason::Manual);
+            session.unlock(pw()).unwrap();
+        }
+    });
+    let earlier = w.published().len();
+    w.run_watch();
+    w.advance(5);
+    let stale = stale.lock().unwrap().expect("the hook ran");
+    assert!(w.session.is_unlocked());
+    assert!(
+        w.adopted().iter().all(|(i, _)| *i != stale),
+        "the old run adopted into the new unlock: {:?}",
+        w.adopted()
+    );
+    let later = w.published().split_off(earlier);
+    assert!(
+        later.iter().all(|(i, _)| *i != stale),
+        "the old run published: {later:?}"
+    );
+    assert_eq!(w.live_titles(), v(&["B"]), "the re-armed run merged it");
+}
+
+/// A lock and an unlock between durability and the commit: only the run of the new unlock
+/// publishes.
+#[test]
+fn a_lock_and_unlock_before_the_commit_publishes_only_for_the_new_unlock() {
+    let w = world();
+    w.open();
+    w.foreign_change();
+    let session = w.session.clone();
+    let stale = Arc::new(Mutex::new(None));
+    let seen = stale.clone();
+    let mut once = true;
+    w.set_hook(&w.sync.probe().before_commit, move || {
+        if std::mem::take(&mut once) {
+            *seen.lock().unwrap() = Some(lock(&session.0.inner).incarnation);
+            session.lock(LockReason::Manual);
+            session.unlock(pw()).unwrap();
+        }
+    });
+    let earlier = w.published().len();
+    w.run_watch();
+    w.advance(5);
+    let stale = stale.lock().unwrap().expect("the hook ran");
+    let later = w.published().split_off(earlier);
+    assert!(
+        later.iter().all(|(i, _)| *i != stale),
+        "the old run published: {later:?}"
+    );
+    assert!(
+        later.iter().any(|(i, _)| *i == w.incarnation()),
+        "the re-armed run published: {later:?}"
+    );
+    assert!(w.idle_synced());
+}
+
+/// The publication is atomic with the invalidations: a lock that arrives while the checkpoint
+/// is being written waits for it (and so never sees a publication land after it).
+#[test]
+fn a_lock_waits_for_a_publication_in_progress() {
+    let w = world();
+    w.open();
+    w.foreign_change();
+    let before = w.incarnation();
+    let session = w.session.clone();
+    let early = Arc::new(AtomicBool::new(false));
+    let pending = Arc::new(Mutex::new(None));
+    let (flag, slot) = (early.clone(), pending.clone());
+    let mut once = true;
+    w.set_hook(&w.sync.probe().during_publish, move || {
+        if !std::mem::take(&mut once) {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let s = session.clone();
+        std::thread::spawn(move || {
+            s.lock(LockReason::Manual);
+            let _ = tx.send(());
+        });
+        // The window only gives a broken fence the chance to fail; with the fence the lock
+        // cannot complete before the publication does, whatever the timing.
+        flag.store(
+            rx.recv_timeout(Duration::from_millis(200)).is_ok(),
+            Ordering::SeqCst,
+        );
+        *slot.lock().unwrap() = Some(rx);
+    });
+    w.run_watch();
+    assert!(
+        !early.load(Ordering::SeqCst),
+        "the lock completed while a publication was in progress"
+    );
+    let rx = pending.lock().unwrap().take().expect("the hook ran");
+    assert_eq!(rx.recv_timeout(WORKER_BOUND), Ok(()), "the lock completed");
+    assert!(!w.session.is_unlocked());
+    assert!(
+        w.published().iter().any(|(i, _)| *i == before),
+        "the publication that began before the lock completed: {:?}",
+        w.published()
+    );
+}
+
+/// C2: a folder on a volume that cannot replace the copy safely shows `unsupportedFolder` and
+/// is not retried on the timer (the next folder change or unlock tries again).
+#[test]
+fn a_volume_without_a_safe_replacement_is_an_unsupported_folder() {
+    let status = failure_status(&SyncError::Storage(StorageError::NoSafeReplace));
+    assert_eq!(
+        status,
+        SecondaryStatus::Unavailable {
+            reason: SecondaryUnavailable::UnsupportedFolder
+        }
+    );
+    assert!(!is_transient(&status));
+    assert_eq!(
+        serde_json::to_value(&status).unwrap(),
+        serde_json::json!({"state": "unavailable", "reason": "unsupportedFolder"})
+    );
+}
