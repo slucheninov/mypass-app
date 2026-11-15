@@ -345,11 +345,34 @@ fn windows_integration_job_is_gated_on_the_variable() {
         job.get("runs-on").and_then(Value::as_str),
         Some("windows-latest")
     );
+    let job_steps = steps(job);
+    let native_step = job_steps
+        .iter()
+        .find(|s| run_text(s).trim() == "bash scripts/test.sh --ci --only rust")
+        .expect("native runner step");
+    let env = native_step.get("env").unwrap();
+    assert_eq!(
+        env.get("MYPASS_WINDOWS_INTEGRATION_TESTS")
+            .and_then(Value::as_str),
+        Some("1")
+    );
+    assert_eq!(
+        env.get("RUST_TEST_THREADS").and_then(Value::as_str),
+        Some("1")
+    );
+    let runner = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/windows-integration.py"),
+    )
+    .unwrap();
+    assert!(runner.contains("\"--ignored\", \"windows_integration\""));
+    assert!(!runner.contains("--include-ignored"));
+    assert!(runner.contains("verify_execution(names, result.stdout)"));
     let runs: Vec<String> = steps(job).iter().map(|s| run_text(s)).collect();
     assert!(
         runs.iter()
-            .any(|r| r.trim() == "cargo test --workspace -- --ignored windows_integration"),
-        "missing the `cargo test --workspace -- --ignored windows_integration` step"
+            .any(|r| r.trim() == "bash scripts/test.sh --ci --only rust"),
+        "missing the isolated Windows integration test runner"
     );
 }
 

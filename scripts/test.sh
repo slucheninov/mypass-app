@@ -124,6 +124,10 @@ run_rust() {
   local args=(test --workspace --no-fail-fast)
   [[ $ci -eq 1 ]] && args+=(--locked)
   cargo "${args[@]}"
+  if [[ "${MYPASS_WINDOWS_INTEGRATION_TESTS:-}" == "1" ]]; then
+    need_tool python3 windows-integration
+    python3 scripts/windows-integration.py
+  fi
   for script in scripts/tests/*.test.sh; do
     bash "$script"
   done

@@ -177,7 +177,7 @@ jobs:
       - name: UI tests
         run: bash scripts/test.sh --ci --only ui
 
-  # Disabled skeleton for stage 6: with the repository variable unset the job is `skipped`.
+  # Real native tests stay opt-in; the runner rejects an empty test inventory.
   windows-integration:
     runs-on: windows-latest
     timeout-minutes: 45
@@ -196,7 +196,9 @@ jobs:
       - name: Windows integration tests
         env:
           MYPASS_WINDOWS_INTEGRATION_TESTS: "1"
-        run: cargo test --workspace -- --ignored windows_integration
+          RUST_TEST_THREADS: "1"
+        shell: bash
+        run: bash scripts/test.sh --ci --only rust
 
   crosscompat:
     runs-on: ubuntu-latest
