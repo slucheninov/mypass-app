@@ -246,6 +246,15 @@ pub(crate) fn with_deadline<R>(
     cancel: impl FnOnce() + Send,
     body: impl FnOnce(&DeadlineGate) -> R,
 ) -> R {
+    /// Ends the watcher's wait also when `body` unwinds (a panicking accessor is resumed after
+    /// the coordination call), so the scope never waits out the timeout.
+    struct Finish<'a>(&'a DeadlineGate);
+    impl Drop for Finish<'_> {
+        fn drop(&mut self) {
+            self.0.finish();
+        }
+    }
+
     let gate = DeadlineGate::default();
     std::thread::scope(|scope| {
         let watcher = scope.spawn(|| {
@@ -253,8 +262,10 @@ pub(crate) fn with_deadline<R>(
                 cancel();
             }
         });
-        let result = body(&gate);
-        gate.finish();
+        let result = {
+            let _finish = Finish(&gate);
+            body(&gate)
+        };
         // A panic in `cancel` must not escape as a second panic of the scope.
         let _ = watcher.join();
         result
@@ -384,6 +395,28 @@ mod tests {
             DeadlineGate::expired,
         );
         assert!(!expired);
+        assert!(!cancelled.load(Ordering::SeqCst));
+        assert!(
+            start.elapsed() < Duration::from_secs(30),
+            "the watcher waited out the timeout"
+        );
+    }
+
+    #[test]
+    fn a_panicking_body_ends_the_watcher_without_cancelling() {
+        let cancelled = AtomicBool::new(false);
+        let start = std::time::Instant::now();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_deadline(
+                Duration::from_secs(60),
+                || cancelled.store(true, Ordering::SeqCst),
+                |gate| {
+                    assert!(gate.enter());
+                    panic!("accessor boom");
+                },
+            )
+        }));
+        assert!(result.is_err());
         assert!(!cancelled.load(Ordering::SeqCst));
         assert!(
             start.elapsed() < Duration::from_secs(30),
