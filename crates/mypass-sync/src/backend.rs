@@ -41,6 +41,11 @@ pub enum StorageError {
     /// The folder or file name cannot name a vault file (relative folder, separators in the name).
     #[error("invalid storage path: {0}")]
     InvalidPath(String),
+    /// The storage cannot replace the file without risking another writer's copy (a volume
+    /// with neither an atomic exchange nor hard links: FAT, exFAT, some network shares).
+    /// Nothing was written; the remote is untouched.
+    #[error("the storage cannot replace the file safely")]
+    NoSafeReplace,
 }
 
 /// One vault file in remote storage. `read` returns `Ok(None)` only when the file is missing; every
@@ -58,8 +63,9 @@ pub trait StorageBackend: Send + Sync {
     /// Replace the file with `bytes` only while it still holds the content whose SHA-256 is
     /// `expected` (`None`: only while the file is missing, never replacing one that appeared).
     /// A writer that slipped in after the final check is returned as
-    /// [`WriteOutcome::Displaced`] instead of being destroyed where the storage can swap
-    /// atomically; see `mypass_kdbx::PlainFileIo::replace_if` for the remaining window elsewhere.
+    /// [`WriteOutcome::Displaced`] instead of being destroyed; storage that cannot guarantee
+    /// that refuses with [`StorageError::NoSafeReplace`] (see
+    /// `mypass_kdbx::PlainFileIo::replace_if` for which volumes take which path).
     fn write_if(
         &self,
         expected: Option<&[u8; 32]>,
@@ -74,9 +80,10 @@ pub enum WriteOutcome {
     Written,
     /// The file no longer holds the expected content; nothing was written.
     Conflict,
-    /// The bytes are in place, but they displaced a version another writer committed in the
-    /// last instant. That version (empty when unreadable) must be merged back; the storage also
-    /// kept it on disk.
+    /// A version another writer committed in the last instant was displaced (kept on disk by
+    /// the storage) and must be merged back (empty when unreadable). The bytes are normally in
+    /// place, but not when yet another writer created the file meanwhile: the next attempt
+    /// re-reads the file either way.
     Displaced(Vec<u8>),
 }
 
@@ -183,6 +190,11 @@ fn write_error(e: KdbxError, path: &Path) -> StorageError {
             kind: ErrorKind::IsADirectory,
             ..
         } => StorageError::NotRegularFile,
+        // No exchange and no hard links (or a backend without a guarded replacement).
+        KdbxError::Io {
+            kind: ErrorKind::Unsupported,
+            ..
+        } => StorageError::NoSafeReplace,
         other => common_error(other),
     }
 }
@@ -382,6 +394,46 @@ mod tests {
         let failing = FileIoBackend::new(io, &path);
         assert_eq!(failing.write_if(None, b"y"), Err(StorageError::ReadOnly));
         assert_eq!(fs::read(&path).unwrap(), [7u8; 32]);
+    }
+
+    /// A `FileIo` whose guarded replacement refuses like a volume without an atomic exchange or
+    /// hard links.
+    struct NoLinks;
+    impl FileIo for NoLinks {
+        fn read(&self, path: &Path) -> mypass_kdbx::Result<Vec<u8>> {
+            PlainFileIo.read(path)
+        }
+        fn write_atomic(&self, path: &Path, bytes: &[u8]) -> mypass_kdbx::Result<()> {
+            PlainFileIo.write_atomic(path, bytes)
+        }
+        fn metadata(&self, path: &Path) -> mypass_kdbx::Result<FileMeta> {
+            PlainFileIo.metadata(path)
+        }
+        fn replace_if(
+            &self,
+            _: &Path,
+            _: Option<&[u8; 32]>,
+            _: &[u8],
+            _: u64,
+        ) -> mypass_kdbx::Result<ReplaceOutcome> {
+            Err(KdbxError::Io {
+                kind: ErrorKind::Unsupported,
+                message: "no exchange and no hard links".into(),
+            })
+        }
+    }
+
+    #[test]
+    fn a_volume_that_cannot_replace_safely_is_refused_untouched() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("vault.kdbx");
+        fs::write(&path, b"theirs").unwrap();
+        let backend = FileIoBackend::new(Arc::new(NoLinks), &path);
+        assert_eq!(
+            backend.write_if(Some(&digest(b"theirs")), b"ours"),
+            Err(StorageError::NoSafeReplace)
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"theirs");
     }
 
     #[test]

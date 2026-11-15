@@ -275,8 +275,10 @@ impl NameFilter {
     }
 
     /// NTFS does not normalise names: a byte comparison is exact.
+    /// The folder is only needed for the Unix inode comparison.
     #[cfg(not(unix))]
     fn same_file_other_spelling(&self, _name: &std::ffi::OsStr) -> bool {
+        let _ = &self.dir;
         false
     }
 }
