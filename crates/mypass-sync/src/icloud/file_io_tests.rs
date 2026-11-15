@@ -423,3 +423,95 @@ fn real_icloud_round_trip() {
     assert_eq!(io.read(&path).unwrap(), b"probe");
     assert!(!io.health().fallback_active);
 }
+
+#[test]
+fn cache_marker_is_bounded_and_regular_only() {
+    let s = Setup::new();
+    let io = s.io();
+    io.write_atomic(&s.vault, b"cached").unwrap();
+    fs::write(io.state_path(), vec![b'x'; 1024]).unwrap();
+    assert!(io.health().cache_ahead);
+    fs::remove_file(io.state_path()).unwrap();
+    fs::create_dir(io.state_path()).unwrap();
+    assert!(io.health().cache_ahead);
+    fs::remove_dir(io.state_path()).unwrap();
+    #[cfg(unix)]
+    {
+        assert!(std::process::Command::new("mkfifo")
+            .arg(io.state_path())
+            .status()
+            .unwrap()
+            .success());
+        assert!(io.health().cache_ahead);
+    }
+}
+
+#[test]
+fn recovery_never_acknowledges_a_newer_cache_written_by_another_handle() {
+    let s = Setup::new();
+    let io = s.io();
+    io.write_atomic(&s.vault, b"base").unwrap();
+    s.take_folder_away();
+    io.write_atomic(&s.vault, b"offline").unwrap();
+    s.bring_folder_back();
+    let other = s.io();
+    let mut once = false;
+    let result = io.resolve_conflicts(&mut |_, _| {
+        if !once {
+            once = true;
+            other.write_atomic(&s.vault, b"newest edit").unwrap();
+        }
+        Ok(b"older merge".to_vec())
+    });
+    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::WouldBlock);
+    assert!(io.health().cache_ahead);
+    assert_eq!(fs::read(io.cache_path()).unwrap(), b"newest edit");
+    io.resolve_conflicts(&mut |_, version| Ok(version.to_vec()))
+        .unwrap();
+    assert_eq!(fs::read(&s.vault).unwrap(), b"newest edit");
+    assert!(!io.health().cache_ahead);
+}
+
+#[test]
+fn creation_rechecks_cache_and_placeholder_at_write_acquisition() {
+    for placeholder in [false, true] {
+        let s = Setup::new();
+        let io = s.io();
+        fs::create_dir_all(&s.cache_dir).unwrap();
+        let existing = if placeholder {
+            s.drive.join(".v.kdbx.icloud")
+        } else {
+            io.cache_path().to_path_buf()
+        };
+        let path = existing.clone();
+        s.fake.before_next_write(move || {
+            fs::write(path, b"prior vault").unwrap();
+        });
+        assert_eq!(
+            kind(&io.create_new(b"new vault").unwrap_err()),
+            Some(io::ErrorKind::AlreadyExists)
+        );
+        assert_eq!(fs::read(existing).unwrap(), b"prior vault");
+        assert!(!s.vault.exists());
+    }
+}
+
+#[test]
+fn recovery_refuses_a_writer_committed_during_merge() {
+    let s = Setup::new();
+    let io = s.io();
+    io.write_atomic(&s.vault, b"base").unwrap();
+    s.take_folder_away();
+    io.write_atomic(&s.vault, b"offline").unwrap();
+    s.bring_folder_back();
+    let result = io.resolve_conflicts(&mut |_, _| {
+        PlainFileIo
+            .write_atomic(&s.vault, b"competing writer")
+            .unwrap();
+        Ok(b"stale merge".to_vec())
+    });
+    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::WouldBlock);
+    assert_eq!(fs::read(&s.vault).unwrap(), b"competing writer");
+    assert_eq!(fs::read(io.cache_path()).unwrap(), b"offline");
+    assert!(io.health().cache_ahead);
+}

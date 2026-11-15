@@ -45,6 +45,14 @@ pub trait FileIo: Send + Sync {
     /// Replace the vault atomically; an error can occur after replacement commits.
     /// Follow the permission and durability policy of [`write_atomic`].
     fn write_atomic(&self, path: &Path, bytes: &[u8]) -> Result<()>;
+    /// Commit bytes checked against the caller's last read. Backends with transaction support
+    /// override this to revalidate inside their write transaction. The default retains the
+    /// best-effort guard used by plain local primary storage.
+    fn write_checked(&self, path: &Path, expected: &[u8; 32], bytes: &[u8]) -> Result<SaveOutcome> {
+        let _ = expected;
+        self.write_atomic(path, bytes)?;
+        Ok(SaveOutcome::Saved)
+    }
     /// Read length and modification time, following the resolved target.
     fn metadata(&self, path: &Path) -> Result<FileMeta>;
     /// Open `path` for a bounded read, without blocking: a FIFO or a device never hangs the open.
@@ -380,8 +388,17 @@ impl VaultFile {
         if self.has_changed_on_disk()? {
             return Ok(SaveOutcome::ChangedOnDisk);
         }
-        self.save_bytes(&bytes)?;
-        Ok(SaveOutcome::Saved)
+        self.save_checked_bytes(&bytes)
+    }
+    /// Writes already encrypted pending edits using the same transaction guard as `save`.
+    pub fn save_checked_bytes(&mut self, bytes: &[u8]) -> Result<SaveOutcome> {
+        let outcome = self
+            .io
+            .write_checked(&self.path, &self.stamp.sha256, bytes)?;
+        if outcome == SaveOutcome::Saved {
+            self.stamp = stamp(self.io.metadata(&self.path)?, bytes);
+        }
+        Ok(outcome)
     }
     /// Serialize and replace without checking for external changes.
     /// Uses the permission policy of [`write_atomic`]. An error after commit keeps
@@ -797,17 +814,36 @@ fn replace_if_with(
     Ok(outcome)
 }
 
-/// Proves that this volume has hard links by linking the temp file to a fresh probe name (then
-/// removing that name, a second link to our own temp file). Refuses with `Unsupported`
-/// otherwise; a vanished folder stays `NotFound`.
+/// Only confirmed missing filesystem primitives are permanent capability failures.
+fn link_failure(e: io::Error) -> KdbxError {
+    let capability = matches!(
+        e.kind(),
+        io::ErrorKind::Unsupported | io::ErrorKind::CrossesDevices
+    );
+    #[cfg(unix)]
+    let capability = capability
+        || matches!(e.raw_os_error(), Some(code) if code == rustix::io::Errno::PERM.raw_os_error());
+    #[cfg(windows)]
+    let capability = capability || matches!(e.raw_os_error(), Some(1 | 17 | 50));
+    if capability {
+        no_safe_replace(&e)
+    } else {
+        io_error(e)
+    }
+}
+
+/// Proves hard-link support before moving any target. Sharing violations use bounded backoff;
+/// timeouts, permission and resource failures keep their original retryable classification.
 fn probe_links(names: &SiblingNames, seams: &mut Seams<'_>) -> Result<()> {
-    match (seams.link)(&names.temp, &names.probe) {
+    match retry_rename(
+        || (seams.link)(&names.temp, &names.probe),
+        &mut *seams.sleep,
+    ) {
         Ok(()) => {
             let _ = fs::remove_file(&names.probe);
             Ok(())
         }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Err(io_error(e)),
-        Err(e) => Err(no_safe_replace(&e)),
+        Err(e) => Err(link_failure(e)),
     }
 }
 
@@ -840,9 +876,7 @@ fn install_new(
     match linked {
         Ok(()) => Ok(ReplaceOutcome::Replaced),
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(ReplaceOutcome::Conflict),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Err(io_error(e)),
-        // No `NOREPLACE` and no hard links: refuse rather than check-then-rename.
-        Err(e) => Err(no_safe_replace(&e)),
+        Err(e) => Err(link_failure(e)),
     }
 }
 
@@ -1877,6 +1911,63 @@ mod tests {
         assert_eq!(fs::read(&p).unwrap(), b"third");
         assert_eq!(fs::read_dir(d.path()).unwrap().count(), 2);
     }
+    #[test]
+    fn transient_link_errors_remain_retryable_and_recover() {
+        for existing in [false, true] {
+            for kind in [
+                ErrorKind::TimedOut,
+                ErrorKind::StorageFull,
+                ErrorKind::PermissionDenied,
+            ] {
+                let d = tempfile::tempdir().unwrap();
+                let p = d.path().join("vault");
+                if existing {
+                    fs::write(&p, b"old").unwrap();
+                }
+                let mut race = Race::new(false);
+                race.link = Box::new(move |_, _| Err(io::Error::from(kind)));
+                io_kind(
+                    race.run(&p, existing.then_some(b"old".as_slice()), b"new"),
+                    kind,
+                );
+                if existing {
+                    assert_eq!(fs::read(&p).unwrap(), b"old");
+                } else {
+                    assert!(!p.exists());
+                }
+                race.link = Box::new(|a, b| fs::hard_link(a, b));
+                assert_eq!(
+                    race.run(&p, existing.then_some(b"old".as_slice()), b"new")
+                        .unwrap(),
+                    ReplaceOutcome::Replaced
+                );
+                assert_eq!(fs::read(&p).unwrap(), b"new");
+            }
+        }
+    }
+
+    #[test]
+    fn probe_retries_a_single_sharing_failure() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("vault");
+        fs::write(&p, b"old").unwrap();
+        let mut race = Race::new(false);
+        let mut calls = 0;
+        race.link = Box::new(move |a, b| {
+            calls += 1;
+            if calls == 1 {
+                Err(io::Error::from(ErrorKind::PermissionDenied))
+            } else {
+                fs::hard_link(a, b)
+            }
+        });
+        assert_eq!(
+            race.run(&p, Some(b"old"), b"new").unwrap(),
+            ReplaceOutcome::Replaced
+        );
+        assert_eq!(fs::read(&p).unwrap(), b"new");
+    }
+
     #[test]
     fn a_volume_without_exchange_or_hard_links_is_refused_untouched() {
         // C2: no blind rename over the target. Without an atomic exchange or hard links the

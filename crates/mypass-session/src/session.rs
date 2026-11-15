@@ -23,7 +23,7 @@
 
 use crate::backups::BackupManager;
 use crate::scheduler::{lock, Scheduler, TaskHandle};
-use crate::settings::{SettingsPatch, SettingsStore};
+use crate::settings::{Settings, SettingsPatch, SettingsStore};
 use crate::storage::{
     ConflictResolver, IoResolver, ResolvedStorage, StorageObserver, StorageStatus,
     REMOTE_CHANGE_DEBOUNCE,
@@ -38,6 +38,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, PoisonError, RwLock};
 use std::time::UNIX_EPOCH;
 use subtle::ConstantTimeEq;
+
+type UnlockAuthorization<'a> = (&'a SettingsStore, &'a dyn Fn(&Settings) -> bool);
 
 /// Lifecycle state shown by the UI.
 #[derive(Serialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug)]
@@ -851,10 +853,25 @@ impl VaultSession {
         storage: ResolvedStorage,
     ) -> Result<(), SessionError> {
         self.prepare_switch()?;
+        self.finish_open_reserved(file, db, password, fresh, storage, None)
+    }
+
+    fn finish_open_reserved(
+        &self,
+        file: VaultFile,
+        db: Database,
+        password: SecretString,
+        fresh: bool,
+        storage: ResolvedStorage,
+        operation: Option<crate::saving::InFlight<'_>>,
+    ) -> Result<(), SessionError> {
         let mut out = Outbox::default();
         let old_storage;
         let path = {
-            let mut inner = self.wait_quiescent(lock(&self.0.inner));
+            let mut inner = match operation {
+                Some(operation) => operation.finish(),
+                None => self.finish_idle(),
+            };
             if inner.quitting {
                 return Err(SessionError::Quitting);
             }
@@ -919,7 +936,22 @@ impl VaultSession {
         }
         let bytes = db.save(&password)?;
         let storage = self.resolve_storage(path);
-        storage.io.write_atomic(path, &bytes)?;
+        if let Some(icloud) = &storage.icloud {
+            if let Err(e) = icloud.create_new(&bytes) {
+                if matches!(
+                    e,
+                    KdbxError::Io {
+                        kind: ErrorKind::AlreadyExists,
+                        ..
+                    }
+                ) {
+                    return Err(SessionError::AlreadyExists);
+                }
+                return Err(e.into());
+            }
+        } else {
+            storage.io.write_atomic(path, &bytes)?;
+        }
         let (file, db) = VaultFile::open_with(storage.io.clone(), path, &password)?;
         self.finish_open(file, db, password, true, storage)
     }
@@ -954,10 +986,15 @@ impl VaultSession {
         // iCloud conflict versions (and offline edits) are merged into the file before it is
         // read, with the password just typed.
         let conflicts = self.conflict_resolver_for(Some(&storage));
+        self.prepare_switch()?;
+        let operation = conflicts.as_ref().map(|_| {
+            let mut inner = self.wait_quiescent(lock(&self.0.inner));
+            crate::saving::InFlight::recovery(self, &mut inner)
+        });
         Self::merge_conflicts_before_read(conflicts.as_ref(), path, &password);
         let (file, db) =
             VaultFile::open_with(storage.io.clone(), path, &password).map_err(open_error)?;
-        self.finish_open(file, db, password, false, storage)
+        self.finish_open_reserved(file, db, password, false, storage, operation)
     }
 
     /// Unlocks the locked vault with `password`. Unlocking an unlocked session only verifies the
@@ -968,7 +1005,7 @@ impl VaultSession {
     /// password that opens the disk but not the kept edits (or the reverse) is `WrongPassword`
     /// and keeps them; see the module docs for the recovery path.
     pub fn unlock(&self, password: SecretString) -> Result<(), SessionError> {
-        let r = self.unlock_inner(password, None).map(|_| ());
+        let r = self.unlock_inner(password, None, None).map(|_| ());
         if r.is_err() {
             // A failed read may have changed the storage health (still downloading).
             self.notify_storage();
@@ -996,17 +1033,23 @@ impl VaultSession {
         &self,
         password: SecretString,
         incarnation: u64,
+        settings: &SettingsStore,
+        allowed: &dyn Fn(&Settings) -> bool,
     ) -> Result<ConditionalUnlock, SessionError> {
-        self.unlock_inner(password, Some(incarnation))
+        self.unlock_inner(password, Some(incarnation), Some((settings, allowed)))
     }
 
     /// The unlocked vault's id and a copy of its password, read in one acquisition of the session
     /// lock (so the two always belong to the same vault). For device-unlock enrolment; the copy is
     /// zeroized on drop and never logged.
-    pub(crate) fn identity_with_password(&self) -> Result<(String, SecretString), SessionError> {
+    pub(crate) fn identity_with_password(
+        &self,
+    ) -> Result<(u64, String, SecretString), SessionError> {
         let inner = lock(&self.0.inner);
         match (&inner.db, &inner.password, &inner.vault_id) {
-            (Some(_), Some(p), Some(id)) => Ok((id.clone(), p.clone())),
+            (Some(_), Some(p), Some(id)) if !inner.quitting => {
+                Ok((inner.incarnation, id.clone(), p.clone()))
+            }
             _ => Err(inner.not_unlocked()),
         }
     }
@@ -1017,14 +1060,15 @@ impl VaultSession {
         &self,
         password: SecretString,
         expected: Option<u64>,
+        authorization: Option<UnlockAuthorization<'_>>,
     ) -> Result<ConditionalUnlock, SessionError> {
         let superseded =
             |inner: &Inner| expected.is_some_and(|i| i != inner.incarnation || inner.db.is_some());
         // The KDF runs without the session lock; a retry write that consumed the kept edits
         // meanwhile makes the loop start over with the new state.
         for _ in 0..3 {
-            let (path, pending, base, storage) = {
-                let inner = self.wait_idle(lock(&self.0.inner));
+            let (path, pending, base, storage, operation) = {
+                let mut inner = self.wait_quiescent(lock(&self.0.inner));
                 if inner.quitting {
                     return Err(SessionError::Quitting);
                 }
@@ -1039,12 +1083,13 @@ impl VaultSession {
                     return Ok(ConditionalUnlock::Unlocked);
                 }
                 let path = inner.path.clone().ok_or(SessionError::NoVault)?;
-                (
-                    path,
-                    inner.pending_bytes.clone(),
-                    inner.disk_meta.clone(),
-                    inner.storage.clone(),
-                )
+                let pending = inner.pending_bytes.clone();
+                let base = inner.disk_meta.clone();
+                let storage = inner.storage.clone();
+                let operation = self
+                    .conflict_resolver_for(storage.as_ref())
+                    .map(|_| crate::saving::InFlight::recovery(self, &mut inner));
+                (path, pending, base, storage, operation)
             };
             let storage = storage.unwrap_or_else(|| self.resolve_storage(&path));
             let conflicts = self.conflict_resolver_for(Some(&storage));
@@ -1063,7 +1108,10 @@ impl VaultSession {
             let mut out = Outbox::default();
             let old_storage;
             let vault_id = {
-                let mut inner = self.wait_quiescent(lock(&self.0.inner));
+                let mut inner = match operation {
+                    Some(operation) => operation.finish(),
+                    None => self.finish_idle(),
+                };
                 if inner.quitting {
                     return Err(SessionError::Quitting);
                 }
@@ -1080,6 +1128,14 @@ impl VaultSession {
                 }
                 if inner.pending_bytes != pending {
                     continue;
+                }
+                // Serialize the CURRENT policy check with settings writes through installation.
+                // A settings change during KDF is therefore checked too.
+                let policy = authorization.map(|(store, _)| store.current());
+                if let (Some((_, allowed)), Some(settings)) = (authorization, policy.as_deref()) {
+                    if !allowed(settings) {
+                        return Ok(ConditionalUnlock::Superseded);
+                    }
                 }
                 match restored {
                     Some(merged) => {
@@ -1264,6 +1320,20 @@ impl VaultSession {
     pub(crate) fn is_incarnation(&self, incarnation: u64) -> bool {
         let inner = lock(&self.0.inner);
         !inner.quitting && inner.db.is_some() && inner.incarnation == incarnation
+    }
+
+    /// Commit a small configuration result only for the same unlocked session incarnation.
+    /// The closure follows the session -> settings lock order and must not call the session.
+    pub(crate) fn configure_if_incarnation<R>(
+        &self,
+        incarnation: u64,
+        f: impl FnOnce() -> R,
+    ) -> Option<R> {
+        let inner = lock(&self.0.inner);
+        if inner.quitting || inner.db.is_none() || inner.incarnation != incarnation {
+            return None;
+        }
+        Some(f())
     }
 
     /// [`VaultSession::mutate_tracked`] that runs only while the session still holds the vault

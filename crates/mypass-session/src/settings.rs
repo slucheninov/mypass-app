@@ -450,6 +450,12 @@ impl SettingsStore {
         lock(&self.0.settings).clone()
     }
 
+    /// Hold the policy snapshot through a session authorization/install decision. Lock order:
+    /// session first, then settings; settings writers never call the session.
+    pub(crate) fn current(&self) -> std::sync::MutexGuard<'_, Settings> {
+        lock(&self.0.settings)
+    }
+
     /// Applies `patch`. Out-of-range counts and delays are clamped; an invalid generator or
     /// shortcut is refused with [`SettingsError::InvalidValue`] and changes nothing. A failed write
     /// keeps the new value in memory and returns [`SettingsError::Io`].

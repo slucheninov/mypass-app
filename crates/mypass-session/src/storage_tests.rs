@@ -484,3 +484,129 @@ fn session_conflict_resolver_runs_before_a_plain_open() {
     mac.session.unlock(pw()).unwrap();
     assert_eq!(calls.lock().unwrap().len(), 1);
 }
+
+#[test]
+fn create_refuses_an_existing_ahead_cache_or_placeholder() {
+    let fx = Fx::new();
+    let mac = fx.mac("mac");
+    mac.session.open_vault(&fx.vault, pw()).unwrap();
+    fx.take_folder_away();
+    mac.add("offline-only");
+    mac.session.flush().unwrap();
+    let cache = ICloudFileIo::cache_path_for(&mac.cache_dir, &fx.vault);
+    let saved = fs::read(&cache).unwrap();
+    assert_eq!(
+        mac.session
+            .create_vault_with(&fx.vault, pw(), fast_database("New")),
+        Err(SessionError::AlreadyExists)
+    );
+    assert_eq!(fs::read(&cache).unwrap(), saved);
+    assert!(mac.session.storage_status().cache_ahead);
+    fx.bring_folder_back();
+    let other = fx.mac("other");
+    let original = fs::read(&fx.vault).unwrap();
+    fx.evict(&other);
+    assert_eq!(
+        other
+            .session
+            .create_vault_with(&fx.vault, pw(), fast_database("New")),
+        Err(SessionError::AlreadyExists)
+    );
+    assert!(!fx.vault.exists());
+    assert_eq!(
+        fs::read(fx.drive.join(".v.kdbx.icloud")).unwrap(),
+        original,
+        "placeholder retained"
+    );
+}
+
+#[test]
+fn primary_save_merges_a_writer_committed_at_write_acquisition() {
+    let fx = Fx::new();
+    let mac = fx.mac("mac");
+    mac.session.open_vault(&fx.vault, pw()).unwrap();
+    mac.add("local edit");
+    let mut remote = fx.base.clone();
+    add(&mut remote, "remote edit", T0 + 100);
+    let bytes = remote.save(&pw()).unwrap();
+    let path = fx.vault.clone();
+    mac.fake.before_next_write(move || {
+        PlainFileIo.write_atomic(&path, &bytes).unwrap();
+    });
+    mac.session.flush().unwrap();
+    assert_eq!(fx.file_titles(), ["first", "local edit", "remote edit"]);
+    assert_eq!(mac.titles(), fx.file_titles());
+    let cache = ICloudFileIo::cache_path_for(&mac.cache_dir, &fx.vault);
+    assert_eq!(
+        titles_of_bytes(&fs::read(cache).unwrap(), &pw()),
+        fx.file_titles()
+    );
+}
+
+#[test]
+fn unlock_recovery_reserves_the_write_slot_before_merging_pending_edits() {
+    use mypass_kdbx::test_util::FailingFileIo;
+    use std::io::ErrorKind;
+    let fx = Fx::new();
+    let mac = fx.mac("mac");
+    let cloud = Arc::new(ICloudFileIo::new(
+        mac.fake.clone(),
+        &fx.vault,
+        &mac.cache_dir,
+    ));
+    let failing = Arc::new(FailingFileIo::new(cloud.clone()));
+    let io = failing.clone();
+    mac.session.set_io_resolver(Some(Arc::new(move |_| {
+        Some(ResolvedStorage::plain(io.clone()))
+    })));
+    mac.session.open_vault(&fx.vault, pw()).unwrap();
+    fx.take_folder_away();
+    mac.add("offline base");
+    mac.session.flush().unwrap();
+    mac.add("kept edit");
+    failing.fail_write_atomic(ErrorKind::PermissionDenied);
+    mac.session.lock(LockReason::Manual);
+    assert!(!mac.session.is_unlocked());
+    failing.heal();
+    fx.bring_folder_back();
+    let session = mac.session.clone();
+    let clock = mac.clock.clone();
+    let seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observed = seen.clone();
+    mac.session
+        .set_conflict_resolver(Some(Arc::new(move |_, merge| {
+            // This is the reviewer's exact cache-read/merge boundary. The retry job must find
+            // the operation occupied and leave pending bytes alone (no timing opportunity).
+            observed.store(true, std::sync::atomic::Ordering::SeqCst);
+            cloud
+                .resolve_conflicts(&mut |a, b| {
+                    clock.advance(crate::saving::PENDING_RETRY);
+                    mac_retry_job(&session);
+                    merge(a, b)
+                })
+                .map(|o| o.changed())
+        })));
+    mac.session.unlock(pw()).unwrap();
+    assert!(seen.load(std::sync::atomic::Ordering::SeqCst));
+    mac.session.flush().unwrap();
+    assert_eq!(mac.titles(), ["first", "kept edit", "offline base"]);
+    assert_eq!(fx.file_titles(), mac.titles());
+    let cache = ICloudFileIo::cache_path_for(&mac.cache_dir, &fx.vault);
+    assert_eq!(
+        titles_of_bytes(&fs::read(cache).unwrap(), &pw()),
+        mac.titles()
+    );
+    mac.session.lock(LockReason::Manual);
+    mac.session.unlock(pw()).unwrap();
+    assert_eq!(mac.titles(), ["first", "kept edit", "offline base"]);
+}
+
+fn mac_retry_job(session: &VaultSession) {
+    // The scheduled retry uses Caller::Job and declines a busy slot; running the manual
+    // scheduler here executes that path without reentrant flush (which correctly waits).
+    let inner = crate::scheduler::lock(&session.0.inner);
+    assert!(
+        inner.pending_bytes.is_some(),
+        "recovery has not consumed the pending edit"
+    );
+}

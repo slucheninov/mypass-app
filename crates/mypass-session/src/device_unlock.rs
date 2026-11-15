@@ -658,6 +658,11 @@ impl DeviceUnlockService {
         touch_id: bool,
         mac_password: bool,
     ) -> Result<(), ApiError> {
+        let binding = if mode_for_toggles(touch_id, mac_password).is_some() {
+            Some(self.0.session.identity_with_password()?)
+        } else {
+            None
+        };
         self.reconcile_locked(config);
         let current = self.0.settings.get();
         let current_mode = mode_for_toggles(
@@ -677,7 +682,26 @@ impl DeviceUnlockService {
         }
         // `Locked` / `NoVault` before anything is touched. The id and the password copy come
         // from one session snapshot, so they always belong to the same vault.
-        let (id, session_password) = self.0.session.identity_with_password()?;
+        let (incarnation, id, session_password) = binding.ok_or_else(superseded)?;
+        let check_current = || {
+            if self.0.session.is_incarnation(incarnation) {
+                Ok(())
+            } else {
+                Err(superseded())
+            }
+        };
+        check_current()?;
+        let set_toggles = || {
+            self.0
+                .session
+                .configure_if_incarnation(incarnation, || {
+                    self.0
+                        .settings
+                        .set_device_unlock_toggles(touch_id, mac_password)
+                })
+                .ok_or_else(superseded)?
+                .map_err(ApiError::from)
+        };
         match current_mode {
             None => {
                 let password = password.ok_or_else(|| {
@@ -695,26 +719,26 @@ impl DeviceUnlockService {
                 // AB-1: whatever the vault still holds (the other mode, an item left by a
                 // configuration of earlier toggles) goes before the new enrolment.
                 self.0.platform.forget(&id)?;
+                check_current()?;
                 self.0.platform.enroll(mode, &id, &password)?;
-                self.0
-                    .settings
-                    .set_device_unlock_toggles(touch_id, mac_password)?;
+                set_toggles()?;
                 self.record_password_unlock_for(&id);
             }
             Some(current_mode) => {
                 let touch_id_newly_on = touch_id && !current.unlock_touch_id_enabled;
                 if current_mode != mode {
                     self.0.platform.forget(&id)?;
+                    check_current()?;
                     if let Err(e) = self.0.platform.enroll(mode, &id, &session_password) {
-                        let _ = self.0.settings.set_device_unlock_toggles(false, false);
+                        let _ = self.0.session.configure_if_incarnation(incarnation, || {
+                            self.0.settings.set_device_unlock_toggles(false, false)
+                        });
                         return Err(e.into());
                     }
                 } else if touch_id_newly_on {
                     self.0.platform.enroll(mode, &id, &session_password)?;
                 }
-                self.0
-                    .settings
-                    .set_device_unlock_toggles(touch_id, mac_password)?;
+                set_toggles()?;
             }
         }
         Ok(())
@@ -805,11 +829,21 @@ impl DeviceUnlockService {
             }
             Err(e) => return Err(e.into()),
         };
-        match self
-            .0
-            .session
-            .unlock_if_incarnation(secret, binding.incarnation)
-        {
+        match self.0.session.unlock_if_incarnation(
+            secret,
+            binding.incarnation,
+            &self.0.settings,
+            &|settings| {
+                claim.is_current()
+                    && mode_for_toggles(
+                        settings.unlock_touch_id_enabled,
+                        settings.unlock_mac_password_enabled,
+                    ) == Some(binding.mode)
+                    && self
+                        .window_block(self.0.state.get(&binding.vault_id), settings)
+                        .is_none()
+            },
+        ) {
             Ok(ConditionalUnlock::Unlocked) => {
                 let _ = self
                     .0
@@ -1490,6 +1524,98 @@ mod service_tests {
         assert_eq!(f.stamps(), stamps(3600, 0));
         // The prompt slot is free again.
         assert!(f.service.prompts().claim().is_some());
+    }
+
+    #[test]
+    fn pending_auth_rechecks_current_password_windows() {
+        for expires_during_prompt in [false, true] {
+            let f = fx();
+            f.enable(false, true);
+            f.advance(8 * 86_400);
+            f.service
+                .state_store()
+                .record_device_unlock(&f.id(), f.scheduler.wall_now())
+                .unwrap();
+            f.lock();
+            let settings = f.settings.clone();
+            let scheduler = f.scheduler.clone();
+            f.on_unlock(move || {
+                if expires_during_prompt {
+                    scheduler.advance(Duration::from_secs(31 * 86_400));
+                } else {
+                    settings
+                        .update(SettingsPatch {
+                            require_account_password_window: Some(
+                                RequireAccountPasswordWindow::SevenDays,
+                            ),
+                            ..Default::default()
+                        })
+                        .unwrap();
+                }
+            });
+            assert_eq!(
+                code(f.service.unlock_with_device("r")),
+                ErrorCode::Cancelled
+            );
+            assert!(!f.session.is_unlocked());
+            assert!(f.enrolled(DeviceUnlockMode::AccountPassword));
+        }
+    }
+
+    #[test]
+    fn pending_auth_rechecks_policy_changed_during_its_kdf() {
+        let f = fx();
+        f.enable(false, true);
+        f.advance(8 * 86_400);
+        f.service
+            .state_store()
+            .record_device_unlock(&f.id(), f.scheduler.wall_now())
+            .unwrap();
+        f.lock();
+        let settings = f.settings.clone();
+        f.session
+            .set_file_io(Arc::new(ReadHookIo(Mutex::new(Some(Box::new(
+                move || {
+                    settings
+                        .update(SettingsPatch {
+                            require_account_password_window: Some(
+                                RequireAccountPasswordWindow::SevenDays,
+                            ),
+                            ..Default::default()
+                        })
+                        .unwrap();
+                },
+            ))))));
+        assert_eq!(
+            code(f.service.unlock_with_device("r")),
+            ErrorCode::Cancelled
+        );
+        assert!(!f.session.is_unlocked());
+    }
+
+    #[test]
+    fn configure_rejects_a_vault_switch_before_enrollment_without_typed_password() {
+        let f = fx();
+        f.enable(true, false);
+        let session = f.session.clone();
+        let path = f.write_other_vault();
+        f.on_availability(move || {
+            session.open_vault(&path, pw("pw")).unwrap();
+        });
+        assert_eq!(
+            code(f.service.configure(None, false, true)),
+            ErrorCode::Cancelled
+        );
+        assert!(!f.enrolled(DeviceUnlockMode::AccountPassword));
+        assert!(!f.enrolled(DeviceUnlockMode::Biometrics));
+        f.service.reconcile();
+        assert_eq!(f.toggles(), (false, false));
+        assert_eq!(
+            code(f.service.configure(None, false, true)),
+            ErrorCode::InvalidInput
+        );
+        f.service.configure(Some(pw("pw")), false, true).unwrap();
+        assert!(f.enrolled(DeviceUnlockMode::AccountPassword));
     }
 
     #[test]

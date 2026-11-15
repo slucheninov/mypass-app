@@ -60,6 +60,7 @@ struct State {
     timeouts: HashMap<CoordinatedOp, Duration>,
     /// Coordinated reads and writes that timed out.
     timed_out: usize,
+    before_write: Option<Box<dyn FnOnce() + Send>>,
 }
 
 /// A scriptable [`CoordinatedFiles`]; see the module docs.
@@ -100,6 +101,11 @@ impl std::fmt::Debug for FakeCoordinatedFiles {
 }
 
 impl FakeCoordinatedFiles {
+    /// Runs once immediately before the next write accessor, modelling a competing commit.
+    pub fn before_next_write(&self, hook: impl FnOnce() + Send + 'static) {
+        lock(&self.state).before_write = Some(Box::new(hook));
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -213,7 +219,15 @@ impl FakeCoordinatedFiles {
             state.timed_out += 1;
             return Err(coordination_timed_out());
         }
+        let hook = if op == CoordinatedOp::Write {
+            state.before_write.take()
+        } else {
+            None
+        };
         drop(state);
+        if let Some(hook) = hook {
+            hook();
+        }
         accessor(path)
     }
 

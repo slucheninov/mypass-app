@@ -4,7 +4,8 @@
 //! - **Coordinated access.** Every read and write of the vault goes through the platform's file
 //!   coordinator ([`CoordinatedFiles`]), bounded by [`COORDINATION_TIMEOUT`]; the bytes inside the
 //!   accessor are read bounded and regular-file only (`MAX_VAULT_FILE_BYTES`, R20) and written
-//!   with the atomic same-folder replacement of `PlainFileIo`.
+//!   through `PlainFileIo`. Primary saves recheck the expected digest inside the write
+//!   accessor and preserve racing copies with guarded replacement.
 //! - **Downloads.** A vault that is still a placeholder (also the legacy `.name.icloud` one) is
 //!   downloaded first and waited for at most [`DOWNLOAD_TIMEOUT`]; then the read fails with
 //!   `ErrorKind::TimedOut` (R17), never `NotFound` and never the cached copy.
@@ -29,16 +30,18 @@ use super::{
     PlatformVersions, SystemClock, DOWNLOAD_TIMEOUT,
 };
 use mypass_kdbx::{
-    FileIo, FileMeta, KdbxError, PlainFileIo, ReplaceOutcome, Result, MAX_VAULT_FILE_BYTES,
+    FileIo, FileMeta, KdbxError, PlainFileIo, ReplaceOutcome, Result, SaveOutcome,
+    MAX_VAULT_FILE_BYTES,
 };
 use mypass_platform::{ChangeCallback, ConflictVersion, CoordinatedFiles, Subscription};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashMap,
     fmt, fs, io,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex, PoisonError,
+        Arc, Mutex, OnceLock, PoisonError, Weak,
     },
     time::Duration,
 };
@@ -49,6 +52,9 @@ pub const COORDINATION_TIMEOUT: Duration = Duration::from_secs(10);
 pub const CACHE_STATE_SUFFIX: &str = ".state";
 /// The folder of the offline caches inside the app's data folder.
 pub const ICLOUD_CACHE_DIR: &str = "icloud-cache";
+
+/// Maximum size of the two fixed cache-state records.
+pub const MAX_CACHE_STATE_BYTES: u64 = 32;
 
 const STATE_AHEAD: &[u8] = b"{\"ahead\":true}\n";
 const STATE_SYNCED: &[u8] = b"{\"ahead\":false}\n";
@@ -71,6 +77,7 @@ pub struct ICloudFileIo {
     /// The vault path with symlinks resolved where it exists (the key of the platform calls).
     vault: PathBuf,
     cache: PathBuf,
+    cache_gate: Arc<Mutex<()>>,
     clock: Arc<dyn Clock>,
     download_timeout: Duration,
     coordination_timeout: Duration,
@@ -95,6 +102,7 @@ impl ICloudFileIo {
         let vault = resolved(vault);
         let cache = Self::cache_path_for(cache_dir, &vault);
         Self {
+            cache_gate: cache_gate(&cache),
             coordinated,
             vault,
             cache,
@@ -105,6 +113,51 @@ impl ICloudFileIo {
             downloading: AtomicBool::new(false),
             presenter: Mutex::new(None),
         }
+    }
+
+    /// Creates a primary vault only when no primary, placeholder or offline copy exists.
+    /// The no-replace install runs inside coordination and shares the cache publication gate.
+    pub fn create_new(&self, bytes: &[u8]) -> Result<()> {
+        let mut out = Err(io_kdbx(io::Error::other(
+            "the coordinator skipped creation",
+        )));
+        // Refuse cached vault state even when the remote folder is unavailable.
+        let exists = || {
+            fs::symlink_metadata(&self.cache).is_ok()
+                || fs::symlink_metadata(self.state_path()).is_ok()
+                || fs::symlink_metadata(&self.vault).is_ok()
+                || placeholder_path(&self.vault).is_some_and(|p| fs::symlink_metadata(p).is_ok())
+        };
+        {
+            let _gate = self
+                .cache_gate
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if exists() {
+                return Err(io_kdbx(io::ErrorKind::AlreadyExists.into()));
+            }
+        }
+        self.coordinated
+            .coordinated_write(&self.vault, self.coordination_timeout, &mut |p| {
+                let _gate = self
+                    .cache_gate
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                out = if exists() {
+                    Err(io_kdbx(io::ErrorKind::AlreadyExists.into()))
+                } else {
+                    match PlainFileIo.replace_if(p, None, bytes, MAX_VAULT_FILE_BYTES) {
+                        Ok(ReplaceOutcome::Replaced) => Ok(()),
+                        Ok(_) => Err(io_kdbx(io::ErrorKind::AlreadyExists.into())),
+                        Err(e) => Err(e),
+                    }
+                };
+                Ok(())
+            })
+            .map_err(io_kdbx)?;
+        out?;
+        self.refresh_cache(bytes);
+        Ok(())
     }
 
     /// Replaces the clock (tests advance a fake one).
@@ -242,13 +295,21 @@ impl ICloudFileIo {
         let current = PlainFileIo
             .read_limited(path, MAX_VAULT_FILE_BYTES)
             .map_err(kdbx_to_io)?;
+        let expected: [u8; 32] = Sha256::digest(&current).into();
         let source = Versions {
             io: self,
             ahead,
             written: Mutex::new(None),
+            cached: Mutex::new(None),
         };
         let mut write = |bytes: &[u8]| {
-            PlainFileIo.write_atomic(path, bytes).map_err(kdbx_to_io)?;
+            match PlainFileIo
+                .replace_if(path, Some(&expected), bytes, MAX_VAULT_FILE_BYTES)
+                .map_err(kdbx_to_io)?
+            {
+                ReplaceOutcome::Replaced => {}
+                _ => return Err(io::Error::from(io::ErrorKind::WouldBlock)),
+            }
             *source
                 .written
                 .lock()
@@ -261,9 +322,12 @@ impl ICloudFileIo {
     /// Whether the cache holds edits not in iCloud yet. A state file that cannot be read or
     /// parsed counts as ahead (merging an up-to-date cache again is harmless).
     fn cache_ahead(&self) -> bool {
-        match fs::read(self.state_path()) {
+        match PlainFileIo.read_limited(&self.state_path(), MAX_CACHE_STATE_BYTES) {
             Ok(bytes) => bytes.as_slice() != STATE_SYNCED,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+            Err(KdbxError::Io {
+                kind: io::ErrorKind::NotFound,
+                ..
+            }) => fs::symlink_metadata(self.state_path()).is_ok(),
             Err(_) => true,
         }
     }
@@ -295,6 +359,10 @@ impl ICloudFileIo {
     }
 
     fn read_cache(&self, max_len: u64) -> Result<Vec<u8>> {
+        let _gate = self
+            .cache_gate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         self.served_from_cache.store(true, Ordering::SeqCst);
         match PlainFileIo.read_limited(&self.cache, max_len) {
             Err(KdbxError::Io {
@@ -316,6 +384,10 @@ impl ICloudFileIo {
 
     /// Best effort: keeps the cache equal to what iCloud holds, while it is not ahead.
     fn refresh_cache(&self, bytes: &[u8]) {
+        let _gate = self
+            .cache_gate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         if self.cache_ahead() {
             return;
         }
@@ -404,8 +476,14 @@ impl FileIo for ICloudFileIo {
         if !self.is_vault(path) {
             return self.write_coordinated(path, bytes);
         }
-        if self.use_cache()? {
-            return self.write_cache_ahead(bytes);
+        {
+            let _gate = self
+                .cache_gate
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if self.use_cache()? {
+                return self.write_cache_ahead(bytes);
+            }
         }
         match self.write_coordinated(path, bytes) {
             Ok(()) => {
@@ -414,8 +492,69 @@ impl FileIo for ICloudFileIo {
                 Ok(())
             }
             // The folder vanished between the check and the write: keep the bytes offline.
-            Err(_) if !self.folder_available().unwrap_or(true) => self.write_cache_ahead(bytes),
+            Err(_) if !self.folder_available().unwrap_or(true) => {
+                let _gate = self
+                    .cache_gate
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                self.write_cache_ahead(bytes)
+            }
             Err(e) => Err(e),
+        }
+    }
+
+    fn write_checked(&self, path: &Path, expected: &[u8; 32], bytes: &[u8]) -> Result<SaveOutcome> {
+        {
+            let _gate = self
+                .cache_gate
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if self.is_vault(path) && self.use_cache()? {
+                let current = PlainFileIo.read_limited(&self.cache, MAX_VAULT_FILE_BYTES)?;
+                if <[u8; 32]>::from(Sha256::digest(&current)) != *expected {
+                    return Ok(SaveOutcome::ChangedOnDisk);
+                }
+                self.write_cache_ahead(bytes)?;
+                return Ok(SaveOutcome::Saved);
+            }
+        }
+        let mut out = None;
+        self.coordinated
+            .coordinated_write(path, self.coordination_timeout, &mut |p| {
+                let _gate = self
+                    .cache_gate
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                out = Some(
+                    if self.is_vault(path) && self.use_cache().map_err(kdbx_to_io)? {
+                        // Destination changed after the caller's read: retry from the selected copy.
+                        Ok(ReplaceOutcome::Conflict)
+                    } else {
+                        PlainFileIo.replace_if(p, Some(expected), bytes, MAX_VAULT_FILE_BYTES)
+                    },
+                );
+                Ok(())
+            })
+            .map_err(io_kdbx)?;
+        match out.unwrap_or_else(|| {
+            Err(io_kdbx(io::Error::other(
+                "the coordinator skipped the write",
+            )))
+        })? {
+            ReplaceOutcome::Replaced => {
+                self.served_from_cache.store(false, Ordering::SeqCst);
+                self.refresh_cache(bytes);
+                Ok(SaveOutcome::Saved)
+            }
+            ReplaceOutcome::Conflict => Ok(SaveOutcome::ChangedOnDisk),
+            // The foreign copy remains at `kept`; never acknowledge it as merged.
+            ReplaceOutcome::Displaced { kept, .. } => Err(io_kdbx(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!(
+                    "a concurrent vault copy was preserved at {}",
+                    kept.display()
+                ),
+            ))),
         }
     }
 
@@ -480,6 +619,7 @@ struct Versions<'a> {
     /// The merged bytes once written (the cache is rewritten with them before it is marked not
     /// ahead).
     written: Mutex<Option<Vec<u8>>>,
+    cached: Mutex<Option<Vec<u8>>>,
 }
 
 impl Versions<'_> {
@@ -503,6 +643,18 @@ impl ConflictVersions for Versions<'_> {
     }
 
     fn read_version(&self, version: &ConflictVersion) -> io::Result<Vec<u8>> {
+        if self.is_cache(version) {
+            let _gate = self
+                .io
+                .cache_gate
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let bytes = PlainFileIo
+                .read_limited(&version.path, MAX_VAULT_FILE_BYTES)
+                .map_err(kdbx_to_io)?;
+            *self.cached.lock().unwrap_or_else(PoisonError::into_inner) = Some(bytes.clone());
+            return Ok(bytes);
+        }
         PlatformVersions(self.io.coordinated.as_ref()).read_version(version)
     }
 
@@ -510,6 +662,18 @@ impl ConflictVersions for Versions<'_> {
         let (cache, platform): (Vec<_>, Vec<_>) =
             versions.iter().cloned().partition(|v| self.is_cache(v));
         if !cache.is_empty() {
+            let _gate = self
+                .io
+                .cache_gate
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let cached = self.cached.lock().unwrap_or_else(PoisonError::into_inner);
+            let current = PlainFileIo
+                .read_limited(&self.io.cache, MAX_VAULT_FILE_BYTES)
+                .map_err(kdbx_to_io)?;
+            if cached.as_ref() != Some(&current) {
+                return Err(io::Error::from(io::ErrorKind::WouldBlock));
+            }
             let written = self
                 .written
                 .lock()
@@ -538,4 +702,21 @@ fn io_kdbx(e: io::Error) -> KdbxError {
         kind: e.kind(),
         message: e.to_string(),
     }
+}
+
+// Independently resolved handles of the same cache share a publication lock. Weak entries do
+// not retain a vault handle or any secret-bearing content.
+fn cache_gate(path: &Path) -> Arc<Mutex<()>> {
+    static GATES: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
+    let mut gates = GATES
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    gates.retain(|_, gate| gate.strong_count() > 0);
+    if let Some(gate) = gates.get(path).and_then(Weak::upgrade) {
+        return gate;
+    }
+    let gate = Arc::new(Mutex::new(()));
+    gates.insert(path.to_path_buf(), Arc::downgrade(&gate));
+    gate
 }

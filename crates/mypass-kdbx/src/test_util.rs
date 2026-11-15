@@ -1,5 +1,5 @@
 //! Feature-gated failure injection for downstream dev-dependencies. Never enable in production.
-use crate::{file::io_error, FileIo, FileMeta, OpenedFile, ReplaceOutcome, Result};
+use crate::{file::io_error, FileIo, FileMeta, OpenedFile, ReplaceOutcome, Result, SaveOutcome};
 use std::{
     io::ErrorKind,
     path::Path,
@@ -115,6 +115,13 @@ impl FileIo for FailingFileIo {
             return Err(io_error(kind.into()));
         }
         self.inner.write_atomic(path, bytes)
+    }
+    fn write_checked(&self, path: &Path, expected: &[u8; 32], bytes: &[u8]) -> Result<SaveOutcome> {
+        self.writes.fetch_add(1, Ordering::Relaxed);
+        if let Some(kind) = self.failures().write {
+            return Err(io_error(kind.into()));
+        }
+        self.inner.write_checked(path, expected, bytes)
     }
     fn metadata(&self, path: &Path) -> Result<FileMeta> {
         self.metadata.fetch_add(1, Ordering::Relaxed);
