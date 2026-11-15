@@ -23,7 +23,9 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `mypass-kdbx` | implemented | KDBX4 engine: format pipeline, model, database API, vault file, `FileIo` seam |
 | `mypass-core` | implemented | Everything that consumes the model: TOTP, generator and password rules, Public Suffix List, entry matcher, merge engine, WebAuthn passkey ceremonies and the KeePassXC passkey record (`passkey`) |
 | `repo-guards` | implemented | Test-only (`publish = false`, never shipped): guard tests for the workspace, CI, docs and scripts |
-| `mypass-platform` | macOS bodies for events, clipboard, keyboard layout and Keychain; the hardened 0600 `FileSecretStore` is the host-shared store on macOS and, until DPAPI, Windows; the macOS native messaging host registrar (stage 3); device unlock and launch at login in stage 5; Windows in stage 6 | OS glue behind traits (system events, secure clipboard, secret stores, device unlock, native host registrar, launch at login, keyboard layout) and `AppPaths`; fakes behind the `test-util` feature, `Unsupported` fallbacks where a platform body has not landed |
+| `mypass-platform` | macOS implemented: events, clipboard, keyboard layout, Keychain, native host registration, device unlock, launch at login and coordinated iCloud access; Windows bodies in stage 6 | OS glue behind traits (system events, secure clipboard, secret stores, device unlock, native host registrar, launch at login, keyboard layout) and `AppPaths`; fakes behind the `test-util` feature, `Unsupported` fallbacks where a platform body has not landed |
+| `mypass-sync` | implemented | Secondary-folder sync, hash checkpoints, watcher and coordinated iCloud storage with offline cache and conflict merging |
+| `mypass-update` | implemented | GitHub release checks behind the `github` feature; banner-only updates, no automatic installation |
 | `mypass-session` | implemented | Vault session, settings, scheduling and the `AppCore` command facade; no Tauri dependency |
 | `src/` (Svelte UI) | implemented (stage 2b) | The webview UI: typed API wrapper, stores (`src/lib/stores`), i18n, design kit, the screens (`src/screens`, `src/screens/editors`) and the windows (`src/windows`: main, settings, tray panel) |
 | `src-tauri` (package `mypass-app`, lib `mypass_app_lib`) | implemented | The Tauri 2 app shell: the typed commands and events (`tauri-specta`), capabilities, native file dialogs, plugins, tray, global hotkeys, single instance, quit flow, native-side i18n; a workspace member listed explicitly |
@@ -38,7 +40,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `Cargo.toml` | Workspace manifest. `members = ["crates/*", "src-tauri"]`; the single `[workspace.dependencies]` version table; `[workspace.lints]` |
 | `rust-toolchain.toml` | Pinned toolchain `1.99.1` (components `rustfmt`, `clippy`) |
 | `crates/` | The Rust crates listed above |
-| `src-tauri/` | The Tauri app shell (`mypass-app`): `tauri.conf.json`, capabilities, placeholder icons (replaced in stage 5) |
+| `src-tauri/` | The Tauri app shell (`mypass-app`): `tauri.conf.json`, capabilities, owner artwork in `icons/source.png` and generated app icons |
 | `src/lib/bindings.ts` | Generated TypeScript bindings of the Tauri commands; never edited by hand |
 | `pnpm-workspace.yaml` | pnpm settings: `allowBuilds: esbuild: false` (esbuild's postinstall is not needed, the platform binary comes as an optional dependency) |
 | `package.json`, `pnpm-lock.yaml`, `.nvmrc` | Node and pnpm pins, the exact-pinned npm dependencies and the scripts `dev`, `build`, `check`, `test`, `tauri`; the lockfile is committed |
@@ -46,10 +48,13 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `src/` | The UI: `main.ts` picks the root for the window label (`windows/`), `lib/` the API wrapper, stores and i18n, `screens/` the screens and editors, `test/` holds the fake backend (type-checked against the bindings), the render helper and the shared source scan `textScan.ts`, `scaffold.test.ts` holds the static source guards, `journey.test.ts`, `a11y.test.ts` and `i18n.audit.test.ts` the journey, accessibility and string-audit suites |
 | `scripts/test.sh` | The single local and CI test entry point |
 | `scripts/build-host.sh`, `scripts/dev-app.sh` | Build the `mypass-host` sidecar (signed when `MYPASS_SIGNING_IDENTITY` names a certificate SHA-1; never ad-hoc), and build and run the app locally with it |
+| `scripts/package-macos.sh`, `scripts/verify-bundle.sh`, `scripts/check-host-deps.sh` | arm64 DMG, signed app/host verification and isolated shipped-host dependency check |
+| `scripts/bump-version.sh`, `scripts/check-version.sh`, `scripts/package-extension.sh`, `scripts/verify-release-assets.sh` | Version consistency, deterministic extension ZIP and release artifact verification |
+| `.github/workflows/release.yml` | Tag-driven signed release: full tests, temporary certificate import, verified draft assets, publish last |
 | `scripts/test-extension.sh` | Runs every `extension/tests/*.test.js` suite in its own node process (`--list` prints them); part of the `js` part |
 | `scripts/convert-xcstrings.mjs` | One-time converter of the old app's String Catalogs; its output (`src/lib/i18n/locales/{en,uk,ru}.json`, `src-tauri/resources/macos/*.lproj/InfoPlist.strings`) is then the hand-edited source of truth |
 | `.github/` | Workflows (`ci.yml`, `codeql.yml`), Dependabot config, issue forms, pull request template |
-| `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts), the Stage 2b UI walk-through and the Stage 3 browser bridge checklist (M1 to M14) and the Stage 4 passkey checklist (P1 to P13) |
+| `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts), the Stage 2b UI walk-through and the Stage 3 browser bridge checklist (M1 to M14) and the Stage 4 passkey checklist (P1 to P13), Stage 5 checks (S1 to S21) and cutover (C1 to C10) |
 | `docs/implementation/ROADMAP.md` | The only tracked document under `docs/`: unfinished work |
 | `LICENSE`, `THIRD_PARTY_NOTICES.md` | Apache-2.0 and the notices for vendored data and linked crates |
 
@@ -61,7 +66,8 @@ Stage 2a (the app backend behind the glass: `mypass-platform` macOS bodies, `myp
 Stage 2b (the Svelte UI: unlock, create and open, the three-pane shell, editors, history and bin, generator, settings window, CSV import, tray panel, themes, uk/ru/en) has landed; its manual checks live in `RUN.md`.
 Stage 3 (the browser bridge: `mypass-bridge`, the `mypass-host` native messaging host, the Settings Browser pane with pairing and save proposals, and the extension moved into `extension/` with its suites in CI) is implemented apart from the owner's manual checks, which live in `RUN.md`.
 Stage 4 (passkeys: the WebAuthn create and get ceremonies in `mypass_core::passkey`, the bridge `PasskeyService`, the app commands and toggle, and the passkey UI) is implemented apart from the owner's manual checks, which live in `RUN.md`.
-Later stages (the rest of the app backend, macOS release, Windows) are listed in `docs/implementation/ROADMAP.md`.
+Stage 5 (iCloud primary storage and relocation, secondary-folder sync, device unlock, per-ceremony passkey presence, launch at login, update checks, signed arm64 packaging and release tooling) is implemented apart from the owner's manual checks in `RUN.md`.
+Later stages and deferred release work (including Windows) are listed in `docs/implementation/ROADMAP.md`.
 
 ## Build, run, test
 
@@ -128,10 +134,12 @@ jobs are independent and run in parallel, so the wall-clock time is the slowest 
 - `ui` runs on Ubuntu with pnpm (`pnpm/action-setup`, `version` equal to `packageManager`) and Node from
   `.nvmrc` with the pnpm cache: `bash scripts/test.sh --ci --only ui`. It has no rust-cache (it never
   runs cargo), always runs and must be `success`.
+- `package-smoke` is path-gated on pull requests and runs on main/manual builds: it packages and
+  verifies an explicitly unsigned arm64 development build without signing secrets.
 - `windows-integration` is a disabled skeleton for stage 6: it runs only when the repository variable
   `MYPASS_WINDOWS_INTEGRATION_TESTS` is `true`, otherwise it is skipped.
 - `ci` is the aggregator and the required status check. It needs every other job (`changes`, `lint`,
-  `test`, `js`, `ui`, `windows-integration`, `crosscompat`); a gated job may be `skipped`, every other result
+  `test`, `js`, `ui`, `windows-integration`, `crosscompat`, `package-smoke`); a gated job may be `skipped`, every other result
   (`lint` and `test` included) must be `success`. A job added later must be wired into it
   (pinned by `ci_aggregator_needs_every_job`).
 - `.github/workflows/codeql.yml` is a separate workflow (push to `main`, weekly, manual; never on pull
@@ -256,8 +264,9 @@ change is done.
 - **Browser bridge.** Three hops: the extension talks to `mypass-host` (native messaging, one host process per
   message), the host to the app's loopback server (`127.0.0.1`, `mypass_bridge::server`, thread per connection, no async
   runtime). The host never links the session, core or KDBX crates. Each launch draws a fresh token and port and
-  publishes them as an endpoint record in the hardened 0600 file store under `AppPaths::secrets_shared`
-  (read by the host); the pairing hashes live in the app-only Keychain and the host can never read them. A connection
+  publishes them as an endpoint record in the team-restricted Keychain store for signed macOS
+  builds (0600 `AppPaths::secrets_shared` file store for unsigned development); the pairing hashes
+  live in the app-only Keychain and the host can never read them. A connection
   starts with a handshake: the host sends a hello with a fresh nonce, the server answers with an HMAC proof over
   the token, and only after the host verified it does the host send a token-bearing request, so a squatter on a stale
   port never receives the token; unauthenticated connections have an absolute deadline. The gate order is quitting,
@@ -285,12 +294,16 @@ change is done.
   on) detaches the extension's WebAuthn proxy when off. Locking does not detach it: while MyPass is locked the
   proxy stays as it was, and the bridge gate answers every passkey request `locked`, so the page gets
   `NotAllowedError` "MyPass is locked".
-  - Every macOS phase two verifies device-owner presence before taking the session lock. The
+  - Stage 5 closed the missing per-ceremony UV/presence check and broad webview command access:
+    per-window ACLs now restrict every command to its intended windows. Every macOS phase two
+    verifies device-owner presence before taking the session lock. The
     localized prompt names the validated rpId; cancellation and timeout give `NotAllowedError`.
     UV is set only when that ceremony's presence check succeeded; a platform without presence
     refuses `userVerification: required` before key access. UP stays 1. Client extensions are
     `credProps` only, the counter stays 0, and attestation stays `none` (packed self-attestation
     for `direct`, `indirect` and `enterprise`).
+  - Device unlock uses ordinary Keychain items plus LocalAuthentication and biometric-domain
+    invalidation; a `SecAccessControl(biometryCurrentSet)` upgrade remains deferred.
   - **Residual risks (owner-accepted).**
     3. The pending table fails closed: an evicted or expired item answers `NotAllowedError`. Two copies of the same
        vault share a root UUID, so `vault_matches` cannot tell them apart; the lock observer clears pending items on a
@@ -304,7 +317,10 @@ change is done.
     5. While the proxy is attached, hardware keys and other providers are unavailable to Chrome, also while MyPass
        is locked (the proxy stays attached and every request fails with "MyPass is locked"; only the toggle
        detaches it), and a conflicting proxy-owning extension surfaces as `attachment-error`. Passkeys work only on `https` sites.
-- **Signing.** The stable team `W645B93PPQ` arrives in stage 5. Never sign ad-hoc: it breaks the
+- **Signing.** Stage 5 uses the stable team `W645B93PPQ` with an Apple Development certificate,
+  explicit app/host identifier-plus-team designated requirements and hardened runtime. The release
+  workflow signs but does not notarize (owner policy Q1); INSTALL.txt documents quarantine removal.
+  Developer ID signing and notarization remain deferred. Never sign ad-hoc: it breaks the
   Keychain access that guards the unlock key.
 - **Manual checks and the old app.** The manual checks of every stage live in `RUN.md` (Ukrainian). Never run the old
   Swift MyPass side by side with this app, and open only a copy of a real vault.

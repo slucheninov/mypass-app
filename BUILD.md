@@ -24,6 +24,8 @@ On Windows, run `cargo` commands from PowerShell and `scripts/*.sh` from Git Bas
 | `mypass-core` | implemented | TOTP, generator and password rules, Public Suffix List, entry matcher, merge engine |
 | `repo-guards` | implemented | Test-only guard tests for the workspace, CI, docs and scripts (never shipped) |
 | `mypass-platform` | implemented | OS glue behind traits (system events, secure clipboard, secret stores, device unlock, native host registrar, launch at login, keyboard layout) and `AppPaths`; fakes behind the `test-util` feature, `Unsupported` fallbacks where a platform body has not landed |
+| `mypass-sync` | implemented | Secondary-folder sync and iCloud storage, offline cache and conflict merging |
+| `mypass-update` | implemented | GitHub release checks and persisted banner dismissal; no automatic installation |
 | `mypass-session` | implemented | Vault session, settings, scheduling and the command facade; no Tauri dependency |
 | `src/` (Svelte UI) | implemented (stage 2b) | The webview UI: typed API wrapper, stores, i18n, design kit, screens and the three windows (main, settings, tray panel), with its Vitest suites |
 | `src-tauri` (`mypass-app`) | implemented | The Tauri 2 app shell and the typed IPC bindings (`src/lib/bindings.ts`, generated) |
@@ -76,7 +78,7 @@ cargo run -p mypass-kdbx --example write_crosscompat -- <out.kdbx>   # synthetic
 - Argon2 at 64 MiB x 3 passes takes minutes at opt-level 0, so dependencies are built at opt-level 3
   in the dev and test profiles (`[profile.dev.package."*"]`, `[profile.test.package."*"]`).
 - CI runs `lint` (clippy on macOS and Windows, format check on macOS), `test` (macOS and Windows),
-  `js` (the `js` part on Ubuntu), `ui` (the `ui` part on Ubuntu: frozen pnpm install, check, tests, build), `crosscompat` and a disabled Windows integration skeleton as
+  `js` (the `js` part on Ubuntu), `ui` (the `ui` part on Ubuntu: frozen pnpm install, check, tests, build), `crosscompat`, path-gated `package-smoke` and a disabled Windows integration skeleton as
   parallel jobs, joined by the `ci`
   aggregator.
 - The `crosscompat` CI job (Rust writes and Python reads, then the reverse) uses `pykeepass`. The
@@ -161,3 +163,15 @@ credentials are present in the environment. Users follow INSTALL.txt's
 Intel/universal builds and `.kdbx` association are future work. Icons are generated
 with `pnpm tauri icon src-tauri/icons/source.png`; the source was recovered from
 the owner's old Swift AppIcon asset catalog (1024px `icon_512x512@2x.png`).
+
+The Rust test entry point also runs `scripts/tests/*.test.sh` (offline version,
+packaging and verification tests). Regenerate dependency notices with
+`python3 crates/mypass-kdbx/tests/crosscompat/update_notices.py`; `--check` verifies
+that the committed table matches Cargo metadata without editing it.
+
+Before a release, run `bash scripts/check-version.sh`, commit the version change,
+merge it through the normal review process, then create and push `vX.Y.Z` when
+publishing is authorized. The workflow has no manual-dispatch release path.
+Signed installation, certificate renewal, quarantine removal, release failure
+paths and cutover remain owner checks in `RUN.md`; local script tests do not
+establish Gatekeeper acceptance or real Keychain behavior.

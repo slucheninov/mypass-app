@@ -364,3 +364,42 @@ fn run_md_has_the_stage_3_sections_and_only_open_boxes() {
         );
     }
 }
+
+#[test]
+fn run_md_has_the_stage_5_sections_and_only_open_boxes() {
+    let run = read("RUN.md");
+    for prefix in ["S", "C"] {
+        let end = if prefix == "S" { 21 } else { 10 };
+        for n in 1..=end {
+            let marker = format!("**{prefix}{n} ");
+            assert_eq!(
+                run.matches(&marker).count(),
+                1,
+                "missing or duplicate {marker}"
+            );
+        }
+    }
+    for line in run.lines().filter(|l| l.trim_start().starts_with("- [")) {
+        assert!(
+            line.trim_start().starts_with("- [ ]"),
+            "unwalked only: {line}"
+        );
+    }
+}
+
+#[test]
+fn agents_documents_stage_5_delivery_and_remaining_boundaries() {
+    let agents = squash(&read("AGENTS.md"));
+    for needle in [
+        "`mypass-sync`",
+        "`mypass-update`",
+        "scripts/package-macos.sh",
+        "release.yml",
+        "Stage 5",
+        "Apple Development",
+        "notarization",
+        "SecAccessControl",
+    ] {
+        assert!(agents.contains(needle), "AGENTS.md must mention {needle}");
+    }
+}

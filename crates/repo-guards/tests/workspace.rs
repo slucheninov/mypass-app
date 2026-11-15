@@ -868,3 +868,230 @@ fn http_client_code_only_in_update_github_rs() {
         offenders.join("\n")
     );
 }
+
+/// Narrow call-expression exceptions, never whole files or arbitrary vault-path deletion.
+/// The count also catches a duplicated call in an otherwise allowed module.
+const FILE_MUTATIONS: &[(&str, &str, usize)] = &[
+    // Atomic writer: armed private temp; rename is its existing atomic replacement primitive.
+    (
+        "crates/mypass-kdbx/src/file.rs",
+        "remove_file(&self.path)",
+        1,
+    ),
+    ("crates/mypass-kdbx/src/file.rs", "rename(source,target)", 1),
+    // Compare-and-replace moves aside competing bytes; only checked/merged bytes are unlinked.
+    ("crates/mypass-kdbx/src/file.rs", "rename(from,to)", 1),
+    (
+        "crates/mypass-kdbx/src/file.rs",
+        "remove_file(&names.probe)",
+        1,
+    ),
+    ("crates/mypass-kdbx/src/file.rs", "remove_file(at)", 1),
+    // Existing backup retention and failure marker; not an active primary or secondary vault.
+    (
+        "crates/mypass-session/src/backups.rs",
+        "remove_file(folder.join(item.id))",
+        1,
+    ),
+    (
+        "crates/mypass-session/src/backups.rs",
+        "remove_file(folder.join(FAILURE_FILE))",
+        1,
+    ),
+    // Settings quarantine and private draft retention/unreadable-file quarantine.
+    (
+        "crates/mypass-session/src/settings.rs",
+        "rename(&path,PathBuf::from(bad))",
+        1,
+    ),
+    (
+        "crates/mypass-session/src/drafts.rs",
+        "rename(self.path(entry),self.unreadable_path(entry))",
+        1,
+    ),
+    (
+        "crates/mypass-session/src/drafts.rs",
+        "remove_file(self.path(entry))",
+        1,
+    ),
+    (
+        "crates/mypass-session/src/drafts.rs",
+        "remove_file(self.unreadable_path(entry))",
+        1,
+    ),
+    (
+        "crates/mypass-session/src/drafts.rs",
+        "remove_file(item.path())",
+        1,
+    ),
+    (
+        "crates/mypass-session/src/drafts.rs",
+        "remove_file(&path)",
+        3,
+    ),
+    // Unsaved-copy temporary name only, after attempting a no-replace hard-link publication.
+    (
+        "crates/mypass-session/src/saving.rs",
+        "remove_file(&temp)",
+        1,
+    ),
+    // Update state atomic publication and temp cleanup (sync state uses write_atomic).
+    ("crates/mypass-update/src/state.rs", "rename(&tmp,path)", 1),
+    ("crates/mypass-update/src/state.rs", "remove_file(&tmp)", 1),
+    // File secret store: private temps and secret deletion, including the retired endpoint.
+    (
+        "crates/mypass-platform/src/file_store.rs",
+        "remove_file(entry.path())",
+        1,
+    ),
+    (
+        "crates/mypass-platform/src/file_store.rs",
+        "rename(&temp,&target)",
+        1,
+    ),
+    (
+        "crates/mypass-platform/src/file_store.rs",
+        "remove_file(&temp)",
+        1,
+    ),
+    (
+        "crates/mypass-platform/src/file_store.rs",
+        "remove_file(&path)",
+        1,
+    ),
+    // Native-host registration: owned manifests/obsolete dev host, atomic install temp cleanup.
+    (
+        "crates/mypass-platform/src/macos_host_install.rs",
+        "remove_file(&manifest)",
+        1,
+    ),
+    (
+        "crates/mypass-platform/src/macos_host_install.rs",
+        "remove_file(&self.paths.host_exe)",
+        1,
+    ),
+    (
+        "crates/mypass-platform/src/macos_host_install.rs",
+        "remove_file(exe)",
+        1,
+    ),
+    (
+        "crates/mypass-platform/src/macos_host_install.rs",
+        "rename(&temp,dest)",
+        1,
+    ),
+    (
+        "crates/mypass-platform/src/macos_host_install.rs",
+        "remove_file(&temp)",
+        1,
+    ),
+    // Writable extension copy: random staging directory only; source bundle is read-only.
+    (
+        "src-tauri/src/extension_copy.rs",
+        "rename(&temporary,&destination)",
+        1,
+    ),
+    (
+        "src-tauri/src/extension_copy.rs",
+        "remove_dir_all(&temporary)",
+        1,
+    ),
+    // No iCloud cache deletion exception: the implementation retains and refreshes the cache.
+];
+
+fn mutation_calls(source: &str) -> Vec<String> {
+    // Remove only cfg(test) items, keeping production items that follow a test module.
+    let mut code: String = strip_comments_and_strings(source)
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    while let Some(start) = code.find("#[cfg(test)]") {
+        let body = start + "#[cfg(test)]".len();
+        let mut depth = 0;
+        let mut end = code.len();
+        for (offset, c) in code[body..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = body + offset + 1;
+                        break;
+                    }
+                }
+                ';' if depth == 0 => {
+                    end = body + offset + 1;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        code.replace_range(start..end, "");
+    }
+    let mut calls = Vec::new();
+    for operation in ["remove_file", "remove_dir_all", "rename"] {
+        for start in word_positions(&code, operation) {
+            let tail = &code[start + operation.len()..];
+            if !tail.starts_with('(') {
+                continue;
+            }
+            // `rename` is otherwise also a model operation. Only filesystem calls are relevant.
+            if operation == "rename" && !code[..start].ends_with("fs::") {
+                continue;
+            }
+            let mut depth = 0;
+            for (offset, c) in tail.char_indices() {
+                match c {
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    _ => {}
+                }
+                if depth == 0 {
+                    calls.push(code[start..start + operation.len() + offset + 1].to_owned());
+                    break;
+                }
+            }
+        }
+    }
+    calls
+}
+
+#[test]
+fn no_remove_file_calls_outside_allowlist() {
+    let Some(files) = tracked_files() else {
+        return;
+    };
+    let mut actual = std::collections::BTreeMap::new();
+    for path in files {
+        let rel = rel_str(&path);
+        if !(rel.starts_with("crates/") || rel.starts_with("src-tauri/"))
+            || !rel.ends_with(".rs")
+            || rel.contains("/tests/")
+            || rel.ends_with("/tests.rs")
+            || rel.ends_with("_tests.rs")
+            || rel.starts_with("crates/repo-guards/")
+        {
+            continue;
+        }
+        for call in mutation_calls(&read(&rel)) {
+            *actual.entry((rel.clone(), call)).or_insert(0usize) += 1;
+        }
+    }
+    let expected = FILE_MUTATIONS
+        .iter()
+        .map(|(file, call, count)| ((file.to_string(), call.to_string()), *count))
+        .collect();
+    assert_eq!(
+        actual, expected,
+        "filesystem mutation needs a narrowly justified R38 exception"
+    );
+}
+
+#[test]
+fn mutation_scan_detects_new_calls_and_ignores_literals_and_unit_tests() {
+    assert_eq!(
+        mutation_calls("fs::remove_file(vault); fs::rename(a, b); fs::remove_dir_all(vault);"),
+        ["remove_file(vault)", "remove_dir_all(vault)", "rename(a,b)"]
+    );
+    assert!(mutation_calls("// fs::remove_file(vault)\nlet s = \"fs::rename(a,b)\";\n#[cfg(test)]\nmod tests { fn t() { fs::remove_file(vault); } }").is_empty());
+}
