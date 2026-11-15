@@ -35,6 +35,9 @@ impl WinLaunchAtLogin {
     }
 }
 impl LaunchAtLogin for WinLaunchAtLogin {
+    fn preserve_intent_on_approval(&self) -> bool {
+        true
+    }
     fn status(&self) -> PlatformResult<LoginItemStatus> {
         match self.run_value()? {
             Read::Missing => return Ok(LoginItemStatus::Disabled),
@@ -66,7 +69,7 @@ impl LaunchAtLogin for WinLaunchAtLogin {
         }
     }
     fn prepare_startup(&self, desired: bool) -> PlatformResult<()> {
-        if !desired || self.status()? != LoginItemStatus::Enabled {
+        if !desired {
             return Ok(());
         }
         if let Read::Value(Value::String(old)) = self.run_value()? {

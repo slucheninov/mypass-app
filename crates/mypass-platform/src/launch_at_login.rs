@@ -24,6 +24,12 @@ pub trait LaunchAtLogin: Send + Sync {
     fn prepare_startup(&self, _desired: bool) -> PlatformResult<()> {
         Ok(())
     }
+    /// Whether approval is OS status independent of persisted user intent. Windows keeps its
+    /// Run registration while StartupApproved is unknown or disabled; macOS retains its existing
+    /// effective-state setting behavior.
+    fn preserve_intent_on_approval(&self) -> bool {
+        false
+    }
     /// Current status; unsupported platforms return `Ok(LoginItemStatus::Unsupported)`.
     fn status(&self) -> PlatformResult<LoginItemStatus>;
     /// `true` only for [`LoginItemStatus::Enabled`].

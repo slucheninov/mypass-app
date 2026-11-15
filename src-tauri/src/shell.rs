@@ -128,8 +128,8 @@ pub enum LoginItemOutcome {
     InSync,
     /// The OS was changed and now matches.
     Applied,
-    /// Registered but waiting for the user's approval in System Settings; the item is not
-    /// active, so the setting is written back off.
+    /// Registered but waiting for OS approval. Windows preserves user intent independently
+    /// of this effective status; macOS writes the effective state back.
     NeedsApproval { setting_should_be: bool },
     /// The OS refused or ended in another state than requested.
     Failed {
@@ -178,7 +178,7 @@ pub fn reconcile_login_item(desired: bool, launcher: &dyn LaunchAtLogin) -> Logi
         // Already registered and only waiting for the user: registering again cannot help.
         LoginItemStatus::RequiresApproval if desired => {
             return LoginItemOutcome::NeedsApproval {
-                setting_should_be: false,
+                setting_should_be: launcher.preserve_intent_on_approval(),
             }
         }
         LoginItemStatus::Enabled if desired => return LoginItemOutcome::InSync,
@@ -201,7 +201,7 @@ pub fn reconcile_login_item(desired: bool, launcher: &dyn LaunchAtLogin) -> Logi
         Ok(LoginItemStatus::Enabled) if desired => LoginItemOutcome::Applied,
         Ok(LoginItemStatus::Disabled) if !desired => LoginItemOutcome::Applied,
         Ok(LoginItemStatus::RequiresApproval) if desired => LoginItemOutcome::NeedsApproval {
-            setting_should_be: false,
+            setting_should_be: launcher.preserve_intent_on_approval(),
         },
         Ok(LoginItemStatus::RequiresApproval) => LoginItemOutcome::Applied,
         other => {
@@ -702,6 +702,95 @@ mod windows_batch_f_tests {
             reconcile_login_item(false, &launcher),
             LoginItemOutcome::Applied
         );
+    }
+
+    #[test]
+    fn windows_approval_fallback_preserves_intent_across_two_launches() {
+        use mypass_platform::{
+            windows_launch_at_login::WinLaunchAtLogin,
+            windows_registry::{Hive, Key, MemoryRegistry, Read, Registry, Value, ValueType, View},
+        };
+        let run = Key::new(
+            Hive::CurrentUser,
+            View::Registry64,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+        )
+        .unwrap();
+        let approved = Key::new(
+            Hive::CurrentUser,
+            View::Registry64,
+            r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run",
+        )
+        .unwrap();
+        for record in [vec![], vec![2, 0, 0, 0], vec![3, 0, 0, 0], vec![255; 12]] {
+            let registry = std::sync::Arc::new(MemoryRegistry::default());
+            registry.create(&run).unwrap();
+            registry
+                .set(
+                    &run,
+                    "MyPass",
+                    Value::String(r#""C:\old\MyPass.exe" --autostarted"#.into()),
+                )
+                .unwrap();
+            registry.create(&approved).unwrap();
+            registry
+                .set(&approved, "MyPass", Value::Binary(record.clone()))
+                .unwrap();
+            let mut saved_intent = true;
+            for _ in 0..2 {
+                let launcher = WinLaunchAtLogin::new(registry.clone(), r"C:\new\MyPass.exe".into());
+                let outcome = reconcile_login_item(saved_intent, &launcher);
+                // Model the setting persisted by lifecycle::sync_login_item_report.
+                if let LoginItemOutcome::NeedsApproval { setting_should_be }
+                | LoginItemOutcome::Failed {
+                    setting_should_be, ..
+                } = outcome
+                {
+                    saved_intent = setting_should_be;
+                }
+            }
+            assert_eq!(
+                registry.read(&run, "MyPass", ValueType::String).unwrap(),
+                Read::Value(Value::String(r#""C:\new\MyPass.exe" --autostarted"#.into()))
+            );
+            assert!(saved_intent);
+            let launcher = WinLaunchAtLogin::new(registry.clone(), r"C:\new\MyPass.exe".into());
+            assert_eq!(
+                launcher.status().unwrap(),
+                LoginItemStatus::RequiresApproval
+            );
+            assert_eq!(
+                registry
+                    .read(&approved, "MyPass", ValueType::Binary)
+                    .unwrap(),
+                Read::Value(Value::Binary(record))
+            );
+            assert_eq!(
+                reconcile_login_item(false, &launcher),
+                LoginItemOutcome::Applied
+            );
+            assert_eq!(
+                registry.read(&run, "MyPass", ValueType::String).unwrap(),
+                Read::Missing
+            );
+            assert_eq!(
+                reconcile_login_item(false, &launcher),
+                LoginItemOutcome::InSync
+            );
+            // Explicit enable with a surviving approval record also preserves intent.
+            assert_eq!(
+                reconcile_login_item(true, &launcher),
+                LoginItemOutcome::NeedsApproval {
+                    setting_should_be: true
+                }
+            );
+            // Windows removing its restriction makes the existing registration effective.
+            registry.delete_value(&approved, "MyPass").unwrap();
+            assert_eq!(
+                reconcile_login_item(true, &launcher),
+                LoginItemOutcome::InSync
+            );
+        }
     }
 
     #[test]
