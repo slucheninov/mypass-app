@@ -3,8 +3,8 @@ use crate::scheduler::{lock, Scheduler, TaskHandle};
 use crate::settings::SettingsStore;
 use mypass_update::UpdateStatus as PolicyStatus;
 use mypass_update::{
-    BannerChange, BeginDecision, FinishInput, ReleaseFeed, ReleaseInfo, SemanticVersion,
-    UpdatePolicy, UpdateStateStore,
+    current_release_platform, BannerChange, BeginDecision, FinishInput, ReleaseFeed, ReleaseInfo,
+    ReleasePlatform, SemanticVersion, UpdatePolicy, UpdateStateStore,
 };
 use serde::Serialize;
 use std::path::Path;
@@ -62,6 +62,7 @@ struct Inner {
     settings: SettingsStore,
     feed: Arc<dyn ReleaseFeed>,
     current: Option<SemanticVersion>,
+    platform: Option<ReleasePlatform>,
     store: UpdateStateStore,
     state: Mutex<State>,
 }
@@ -75,11 +76,30 @@ impl UpdateService {
         version: &str,
         config_dir: &Path,
     ) -> Self {
+        Self::new_with_platform(
+            scheduler,
+            settings,
+            feed,
+            version,
+            config_dir,
+            current_release_platform(),
+        )
+    }
+    /// Explicit target injection for deterministic hosts and tests, before scheduling begins.
+    pub fn new_with_platform(
+        scheduler: Arc<dyn Scheduler>,
+        settings: SettingsStore,
+        feed: Arc<dyn ReleaseFeed>,
+        version: &str,
+        config_dir: &Path,
+        platform: Option<ReleasePlatform>,
+    ) -> Self {
         Self(Arc::new(Inner {
             scheduler,
             settings,
             feed,
             current: SemanticVersion::parse(version).ok(),
+            platform,
             store: UpdateStateStore::new(config_dir),
             state: Mutex::new(State {
                 status: PolicyStatus::Idle,
@@ -163,6 +183,7 @@ impl UpdateService {
                     let out = UpdatePolicy::finish(FinishInput {
                         result: &result,
                         current,
+                        platform: self.0.platform,
                         previous: &previous,
                         manual: s.flight.unwrap_or(manual),
                         dismissed_version: state.dismissed_version.as_deref(),
