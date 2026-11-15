@@ -2824,6 +2824,8 @@ dependencies = [
  "arboard",
  "block2",
  "core-foundation",
+ "getrandom 0.4.3",
+ "hmac",
  "libc",
  "mypass-platform",
  "objc2",

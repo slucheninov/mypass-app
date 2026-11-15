@@ -84,7 +84,7 @@ pub fn resolve_windows() -> PlatformResult<AppPaths> {
 pub(crate) fn platform(paths: &AppPaths) -> crate::Platform {
     crate::Platform {
         events: std::sync::Arc::new(WinSystemEvents),
-        clipboard: std::sync::Arc::new(WinClipboard),
+        clipboard: std::sync::Arc::new(WinClipboard::default()),
         secrets: std::sync::Arc::new(crate::DpapiSecretStore::app(paths)),
         shared_secrets: crate::app_shared_store(paths, None).1,
         device_unlock: std::sync::Arc::new(crate::fallback::UnsupportedDeviceUnlock),
@@ -1789,8 +1789,11 @@ fn desktop_dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
 }
 
 /// Each transaction uses an owned hidden HWND on a dedicated thread. No HWND, open clipboard
-/// guard or native allocation crosses threads. No persistent secret or clipboard read-back hash.
-pub struct WinClipboard;
+/// guard or native allocation crosses threads. Retain only a per-write key and keyed digest.
+#[derive(Default)]
+pub struct WinClipboard {
+    written: std::sync::Mutex<Option<Arc<desktop::ClipboardWrite>>>,
+}
 fn clipboard_call<T: Send + 'static>(
     call: impl FnOnce(&mut NativeClipboard) -> PlatformResult<T> + Send + 'static,
 ) -> PlatformResult<T> {
@@ -1812,12 +1815,33 @@ fn clipboard_call<T: Send + 'static>(
 }
 impl SecureClipboard for WinClipboard {
     fn write_secret(&self, text: &str) -> PlatformResult<ClipboardStamp> {
+        let mut written = self
+            .written
+            .lock()
+            .map_err(|_| PlatformError::Failed("clipboard state poisoned".into()))?;
         let text = Zeroizing::new(text.to_owned());
-        clipboard_call(move |tx| desktop::write_clipboard(tx, &text))
+        let next = clipboard_call(move |tx| desktop::write_clipboard(tx, &text))?;
+        let stamp = next.stamp.clone();
+        *written = Some(Arc::new(next));
+        Ok(stamp)
     }
     fn clear_if_unchanged(&self, stamp: &ClipboardStamp) -> PlatformResult<bool> {
-        let stamp = stamp.clone();
-        clipboard_call(move |tx| desktop::clear_clipboard(tx, &stamp))
+        let mut written = self
+            .written
+            .lock()
+            .map_err(|_| PlatformError::Failed("clipboard state poisoned".into()))?;
+        let Some(identity) = written
+            .as_ref()
+            .filter(|identity| identity.stamp == *stamp)
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        let result = clipboard_call(move |tx| desktop::clear_clipboard(tx, &identity));
+        if result.is_ok() {
+            *written = None;
+        }
+        result
     }
 }
 struct NativeClipboard;
@@ -1857,20 +1881,37 @@ impl ClipboardTransaction for NativeClipboard {
         }
         Ok(u64::from(sequence))
     }
+    fn has_format(&self, format: &str) -> PlatformResult<bool> {
+        let id = clipboard_format(format)?;
+        // SAFETY: non-mutating availability query under this guard's open clipboard lock.
+        Ok(unsafe { IsClipboardFormatAvailable(id) }.is_ok())
+    }
+    fn read_unicode_text(&self) -> PlatformResult<Option<Zeroizing<Vec<u8>>>> {
+        if !self.has_format("CF_UNICODETEXT")? {
+            return Ok(None);
+        }
+        // SAFETY: this guard holds the clipboard lock throughout handle lookup and readback.
+        let data = unsafe { GetClipboardData(13) }.map_err(win_error)?;
+        let handle = HGLOBAL(data.0);
+        // SAFETY: CF_UNICODETEXT is an OS-owned HGLOBAL, pinned by the open clipboard.
+        let length = unsafe { GlobalSize(handle) };
+        if !(2..=desktop::MAX_CLIPBOARD_BYTES).contains(&length) {
+            return Ok(None);
+        }
+        // SAFETY: the OS-owned allocation stays live, locked only for the bounded copy below.
+        let pointer = unsafe { GlobalLock(handle) };
+        if pointer.is_null() {
+            return Err(win_error(windows::core::Error::from_thread()));
+        }
+        // SAFETY: GlobalLock succeeded and GlobalSize bounds this borrowed readable byte range.
+        let bytes = unsafe { std::slice::from_raw_parts(pointer.cast::<u8>(), length) };
+        let text = desktop::bounded_unicode_text(bytes);
+        // SAFETY: release our successful lock, never free or modify the Windows-owned allocation.
+        let _ = unsafe { GlobalUnlock(handle) };
+        Ok(text)
+    }
     fn set(&mut self, format: &str, bytes: &[u8]) -> PlatformResult<()> {
-        let id = if format == "CF_UNICODETEXT" {
-            13
-        } else {
-            let name = to_wide(OsStr::new(format))?;
-            // SAFETY: terminated name is borrowed for this call only.
-            let id = unsafe { RegisterClipboardFormatW(PCWSTR(name.as_ptr())) };
-            if id == 0 {
-                return Err(win_error(windows::core::Error::from_thread()));
-            }
-            id
-        };
-        // The empty legacy marker uses a zero-sized GMEM_MOVEABLE block: a valid
-        // block is a valid discarded block with logical size zero; no delayed rendering/null handle.
+        let id = clipboard_format(format)?;
         let mut allocation = ClipboardMemory::new(bytes)?;
         // SAFETY: clipboard open, owner is non-null; unlocked GMEM_MOVEABLE transfers only on Ok.
         unsafe { SetClipboardData(id, Some(HANDLE(allocation.0 .0))) }.map_err(win_error)?;
@@ -1878,11 +1919,28 @@ impl ClipboardTransaction for NativeClipboard {
         Ok(())
     }
 }
+fn clipboard_format(format: &str) -> PlatformResult<u32> {
+    if format == "CF_UNICODETEXT" {
+        return Ok(13);
+    }
+    let name = to_wide(OsStr::new(format))?;
+    // SAFETY: terminated name is borrowed for this call only.
+    let id = unsafe { RegisterClipboardFormatW(PCWSTR(name.as_ptr())) };
+    if id == 0 {
+        return Err(win_error(windows::core::Error::from_thread()));
+    }
+    Ok(id)
+}
 struct ClipboardMemory(HGLOBAL);
 impl ClipboardMemory {
     fn new(bytes: &[u8]) -> PlatformResult<Self> {
-        // SAFETY: request a movable, zero-initialized block. Empty marker owns a valid zero-size
-        // discarded block; never lock it or treat it as a delayed-rendering null HANDLE.
+        if bytes.is_empty() {
+            return Err(PlatformError::Failed(
+                "zero-size clipboard allocation".into(),
+            ));
+        }
+        // SAFETY: request a nonzero movable, zero-initialized block. In particular, the legacy
+        // presence marker needs one byte: SetClipboardData rejects zero-size discarded handles.
         let allocation = Self(
             unsafe { GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, bytes.len()) }
                 .map_err(win_error)?,
@@ -2092,10 +2150,9 @@ mod desktop_windows_integration {
     fn native_clipboard_checks() {
         // This is deliberately destructive ONLY in the serial, isolated opt-in CI session. No
         // text-only backup pretends to preserve arbitrary user formats. Cleanup uses the stamp.
-        let clipboard = WinClipboard;
+        let clipboard = WinClipboard::default();
         let stamp = clipboard.write_secret("A\u{0443}\u{1f512}").unwrap();
         clipboard_call(move |tx| {
-            assert_eq!(tx.sequence().unwrap(), stamp.0);
             for (format, payload) in desktop::EXCLUSIONS {
                 let name = to_wide(OsStr::new(format)).unwrap();
                 // SAFETY: registered name and currently open clipboard; handle stays OS-owned.
@@ -2104,6 +2161,8 @@ mod desktop_windows_integration {
                 let data = unsafe { GetClipboardData(id) }.unwrap();
                 if !payload.is_empty() {
                     let handle = HGLOBAL(data.0);
+                    // SAFETY: OS-owned HGLOBAL remains pinned under this clipboard lock.
+                    assert!(unsafe { GlobalSize(handle) } >= payload.len());
                     let pointer = unsafe { GlobalLock(handle) };
                     assert!(!pointer.is_null());
                     assert_eq!(
@@ -2113,35 +2172,49 @@ mod desktop_windows_integration {
                     let _ = unsafe { GlobalUnlock(handle) };
                 }
             }
-            // SAFETY: open clipboard pins the OS-owned text allocation while reading it.
-            let text = unsafe { GetClipboardData(13) }.unwrap();
-            let handle = HGLOBAL(text.0);
-            let pointer = unsafe { GlobalLock(handle) };
-            assert!(!pointer.is_null());
-            let len = unsafe { GlobalSize(handle) } / 2;
-            let units = unsafe { std::slice::from_raw_parts(pointer.cast::<u16>(), len) };
-            let end = units.iter().position(|c| *c == 0).unwrap();
             assert_eq!(
-                String::from_utf16(&units[..end]).unwrap(),
-                "A\u{0443}\u{1f512}"
+                *tx.read_unicode_text()?.unwrap(),
+                [65, 0, 67, 4, 61, 216, 18, 221, 0, 0]
             );
-            let _ = unsafe { GlobalUnlock(handle) };
             // Deterministic OS-lock barrier: another thread's entire bounded open retry fails
             // while this transaction remains open. No probabilistic alternating loop.
-            let other = std::thread::spawn(|| WinClipboard.write_secret("blocked"));
+            let other = std::thread::spawn(|| WinClipboard::default().write_secret("blocked"));
             assert!(other.join().unwrap().is_err());
             Ok(())
         })
         .unwrap();
-        let foreign = clipboard_call(|tx| {
-            tx.empty()?;
-            tx.set("CF_UNICODETEXT", &[70, 0, 0, 0])?;
-            tx.sequence().map(ClipboardStamp)
-        })
-        .unwrap();
+        // write_secret returned only after CloseClipboard synthesis and owner HWND destruction.
+        assert!(clipboard.clear_if_unchanged(&stamp).unwrap());
         assert!(!clipboard.clear_if_unchanged(&stamp).unwrap());
-        assert!(clipboard.clear_if_unchanged(&foreign).unwrap());
+        for foreign_text in ["F", "A\u{0443}\u{1f512}"] {
+            let stamp = clipboard.write_secret("A\u{0443}\u{1f512}").unwrap();
+            let bytes: Vec<_> = foreign_text
+                .encode_utf16()
+                .chain([0])
+                .flat_map(u16::to_le_bytes)
+                .collect();
+            clipboard_call(move |tx| {
+                tx.empty()?;
+                tx.set("CF_UNICODETEXT", &bytes)
+            })
+            .unwrap();
+            assert!(!clipboard.clear_if_unchanged(&stamp).unwrap());
+            clipboard_call(move |tx| {
+                let bytes = tx.read_unicode_text()?.unwrap();
+                let expected: Vec<_> = foreign_text
+                    .encode_utf16()
+                    .chain([0])
+                    .flat_map(u16::to_le_bytes)
+                    .collect();
+                assert_eq!(*bytes, expected);
+                assert!(!tx.has_format(desktop::OUR_MARKER)?);
+                Ok(())
+            })
+            .unwrap();
+        }
+        let stale = clipboard.write_secret("cleanup").unwrap();
         let again = clipboard.write_secret("cleanup").unwrap();
+        assert!(!clipboard.clear_if_unchanged(&stale).unwrap());
         assert!(clipboard.clear_if_unchanged(&again).unwrap());
         assert!(!clipboard.clear_if_unchanged(&again).unwrap());
     }
