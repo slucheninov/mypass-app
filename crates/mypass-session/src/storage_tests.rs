@@ -475,7 +475,10 @@ fn session_conflict_resolver_runs_before_a_plain_open() {
         },
     )));
     mac.session.open_vault(&local, pw()).unwrap();
-    assert_eq!(calls.lock().unwrap().as_slice(), std::slice::from_ref(&local));
+    assert_eq!(
+        calls.lock().unwrap().as_slice(),
+        std::slice::from_ref(&local)
+    );
     mac.session.set_conflict_resolver(None);
     mac.session.lock(LockReason::Manual);
     mac.session.unlock(pw()).unwrap();

@@ -145,6 +145,7 @@ export const api = {
   settingsUpdate: wrap(commands.settingsUpdate),
   sidebarGet: wrap(commands.sidebarGet),
   syncDisconnectSecondary: wrap(commands.syncDisconnectSecondary),
+  syncConnectSecondary: wrap(commands.syncConnectSecondary),
   syncNow: wrap(commands.syncNow),
   syncStatus: wrap(commands.syncStatus),
   vaultCreate: wrap(commands.vaultCreate),
@@ -156,6 +157,9 @@ export const api = {
   vaultRecent: wrap(commands.vaultRecent),
   vaultStatus: wrap(commands.vaultStatus),
   vaultStorageStatus: wrap(commands.vaultStorageStatus),
+  vaultLocationPick: wrap(commands.vaultLocationPick),
+  vaultLocationProbe: wrap(commands.vaultLocationProbe),
+  vaultLocationChange: wrap(commands.vaultLocationChange),
   vaultUnlock: wrap(commands.vaultUnlock),
   shortcutConflictsTake,
 } satisfies Record<keyof typeof commands, unknown>;

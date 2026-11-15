@@ -25,3 +25,17 @@ pub async fn sync_disconnect_secondary(state: State<'_, AppState>) -> Result<(),
     let core = state.0.clone();
     blocking(move || core.sync_disconnect_secondary()).await
 }
+
+#[tauri::command]
+#[specta::specta]
+pub async fn sync_connect_secondary(
+    state: State<'_, AppState>,
+    shell: State<'_, crate::state::ShellState>,
+    folder_token: String,
+    strategy: mypass_session::migration::MigrationStrategy,
+) -> Result<SecondaryStatus, ApiError> {
+    super::ensure_unlocked(&state.0)?;
+    let folder = shell.grants.take_folder(&folder_token)?;
+    let core = state.0.clone();
+    blocking(move || core.sync_connect_secondary(&folder, strategy)).await
+}

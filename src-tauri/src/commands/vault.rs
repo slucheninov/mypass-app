@@ -120,3 +120,63 @@ pub async fn vault_open_warnings(
     let core = state.0.clone();
     blocking(move || core.vault_open_warnings(&path)).await
 }
+
+/// Probe consumes a grant and returns a fresh grant for the user's strategy decision.
+#[derive(serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderProbe {
+    pub probe: mypass_session::migration::TargetProbe,
+    pub folder_token: String,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn vault_location_pick(
+    state: State<'_, AppState>,
+    shell: State<'_, crate::state::ShellState>,
+) -> Result<Option<String>, ApiError> {
+    super::ensure_unlocked(&state.0)?;
+    let start = state.0.vault_location_start();
+    let picker = shell.picker.clone();
+    let grants = shell.grants.clone();
+    blocking(move || {
+        Ok(picker
+            .pick_folder(Some(start))
+            .map(|p| grants.grant_folder(p)))
+    })
+    .await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn vault_location_probe(
+    state: State<'_, AppState>,
+    shell: State<'_, crate::state::ShellState>,
+    folder_token: String,
+) -> Result<FolderProbe, ApiError> {
+    super::ensure_unlocked(&state.0)?;
+    let folder = shell.grants.take_folder(&folder_token)?;
+    let core = state.0.clone();
+    let grants = shell.grants.clone();
+    blocking(move || {
+        let probe = core.vault_location_probe(&folder)?;
+        Ok(FolderProbe {
+            probe,
+            folder_token: grants.grant_folder(folder),
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn vault_location_change(
+    state: State<'_, AppState>,
+    shell: State<'_, crate::state::ShellState>,
+    req: mypass_session::migration::LocationChangeRequest,
+) -> Result<SessionStatus, ApiError> {
+    super::ensure_unlocked(&state.0)?;
+    let folder = shell.grants.take_folder(&req.folder_token)?;
+    let core = state.0.clone();
+    blocking(move || core.vault_location_change(&folder, req.strategy)).await
+}

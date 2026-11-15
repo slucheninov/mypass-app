@@ -58,12 +58,16 @@ settings_login_item_status
 settings_update
 shortcut_conflicts_take
 sidebar_get
+sync_connect_secondary
 sync_disconnect_secondary
 sync_now
 sync_status
 vault_create
 vault_find_files
 vault_forget
+vault_location_change
+vault_location_pick
+vault_location_probe
 vault_lock
 vault_open
 vault_open_warnings

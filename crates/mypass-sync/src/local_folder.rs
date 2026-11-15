@@ -84,6 +84,9 @@ impl LocalFolderBackend {
 }
 
 impl StorageBackend for LocalFolderBackend {
+    fn vault_path(&self) -> Option<&Path> {
+        Some(self.path())
+    }
     fn exists(&self) -> Result<bool, StorageError> {
         self.check_dir()?;
         self.inner.exists()

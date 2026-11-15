@@ -51,6 +51,10 @@ pub enum StorageError {
 /// One vault file in remote storage. `read` returns `Ok(None)` only when the file is missing; every
 /// other failure is an error, so a caller never mistakes an unreadable file for an absent one.
 pub trait StorageBackend: Send + Sync {
+    /// The target path when this backend represents a file.
+    fn vault_path(&self) -> Option<&Path> {
+        None
+    }
     /// Whether the file exists (a missing folder is `Unavailable`, not `false`).
     fn exists(&self) -> Result<bool, StorageError>;
     /// The file's modification time; `None` when the file is missing or the backend has none.
@@ -210,6 +214,9 @@ fn is_not_found(e: &KdbxError) -> bool {
 }
 
 impl StorageBackend for FileIoBackend {
+    fn vault_path(&self) -> Option<&Path> {
+        Some(&self.path)
+    }
     fn exists(&self) -> Result<bool, StorageError> {
         match self.io.metadata(&self.path) {
             Ok(_) => Ok(true),

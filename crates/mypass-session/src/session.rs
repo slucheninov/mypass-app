@@ -261,6 +261,22 @@ impl SwitchIo {
 }
 
 impl FileIo for SwitchIo {
+    fn open_read(&self, path: &Path) -> mypass_kdbx::Result<mypass_kdbx::OpenedFile> {
+        self.get().open_read(path)
+    }
+    fn read_limited(&self, path: &Path, max_len: u64) -> mypass_kdbx::Result<Vec<u8>> {
+        self.get().read_limited(path, max_len)
+    }
+    fn replace_if(
+        &self,
+        path: &Path,
+        expected: Option<&[u8; 32]>,
+        bytes: &[u8],
+        max_len: u64,
+    ) -> mypass_kdbx::Result<mypass_kdbx::ReplaceOutcome> {
+        self.get().replace_if(path, expected, bytes, max_len)
+    }
+
     fn read(&self, path: &Path) -> mypass_kdbx::Result<Vec<u8>> {
         self.get().read(path)
     }
@@ -672,7 +688,7 @@ impl VaultSession {
     }
 
     /// The storage of the vault at `path`: the resolver's answer, else the session's IO seam.
-    fn resolve_storage(&self, path: &Path) -> ResolvedStorage {
+    pub(crate) fn resolve_storage(&self, path: &Path) -> ResolvedStorage {
         let resolver = self
             .0
             .resolver
@@ -1392,6 +1408,66 @@ impl VaultSession {
                 Err(e.into())
             }
         }
+    }
+
+    /// Switches to an existing, validated target without writing or removing either file.
+    /// IO and decryption run outside the session lock; edits, locks and switches fence commit.
+    pub fn switch_to(
+        &self,
+        path: &Path,
+        io: Arc<dyn FileIo>,
+        adopt: Option<Database>,
+    ) -> Result<(), SessionError> {
+        self.flush()?;
+        let snapshot = self.sync_snapshot()?;
+        self.switch_snapshot(path, io, adopt, &snapshot)
+    }
+
+    pub(crate) fn switch_snapshot(
+        &self,
+        path: &Path,
+        io: Arc<dyn FileIo>,
+        adopt: Option<Database>,
+        snapshot: &SyncSnapshot,
+    ) -> Result<(), SessionError> {
+        let mut storage = self.resolve_storage(path);
+        if storage.icloud.is_none() {
+            storage = ResolvedStorage::plain(io);
+        }
+        storage.io = Arc::new(crate::migration::BoundedIo(storage.io));
+        let (file, remote) = VaultFile::open_with(storage.io.clone(), path, &snapshot.password)?;
+        let expected = adopt.as_ref().unwrap_or(&snapshot.db);
+        if !crate::saving::same_content(&remote, expected) {
+            return Err(SessionError::ChangedOnDisk);
+        }
+        let old_storage;
+        {
+            let mut inner = self.wait_quiescent(lock(&self.0.inner));
+            if inner.quitting {
+                return Err(SessionError::Quitting);
+            }
+            if inner.incarnation != snapshot.incarnation
+                || inner.is_dirty()
+                || !inner
+                    .db
+                    .as_ref()
+                    .is_some_and(|db| crate::saving::same_content(db, &snapshot.db))
+            {
+                return Err(SessionError::ChangedOnDisk);
+            }
+            inner.install(file, remote, snapshot.password.clone());
+            old_storage = self.replace_storage(&mut inner, storage);
+        }
+        self.attach_presenter(old_storage);
+        if let Some(path) = self.vault_path() {
+            self.remember(&path);
+        }
+        self.emit(Outbox {
+            state_changed: true,
+            vault_changed: true,
+            ..Outbox::default()
+        });
+        Ok(())
     }
 
     /// Swaps the IO seam for the next open or save.

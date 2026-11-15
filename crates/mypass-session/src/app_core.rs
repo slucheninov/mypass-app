@@ -936,6 +936,161 @@ impl AppCore {
         Ok(restored?)
     }
 
+    /// Rust-only default for the folder dialog; the webview never chooses this path.
+    pub fn vault_location_start(&self) -> PathBuf {
+        mypass_sync::icloud::ICloudDriveLocation::root(self.paths.home())
+    }
+
+    fn migration_target(&self, folder: &Path) -> Result<PathBuf, ApiError> {
+        self.writable()?;
+        if !folder.is_absolute() || !folder.is_dir() {
+            return Err(ApiError::new(ErrorCode::InvalidInput, "invalidFolder"));
+        }
+        let current = self.session.vault_path().ok_or(SessionError::NoVault)?;
+        let name = current
+            .file_name()
+            .ok_or_else(|| ApiError::new(ErrorCode::InvalidInput, "invalid vault name"))?;
+        let folder = std::fs::canonicalize(folder)
+            .map_err(|_| ApiError::new(ErrorCode::Io, "folder unavailable"))?;
+        Ok(folder.join(name))
+    }
+
+    /// Trusted Rust path redeemed from a folder token by the command wrapper.
+    pub fn vault_location_probe(
+        &self,
+        folder: &Path,
+    ) -> Result<crate::migration::TargetProbe, ApiError> {
+        let target = self.migration_target(folder)?;
+        let storage = self.session.resolve_storage(&target);
+        let backend = mypass_sync::FileIoBackend::new(storage.io, &target);
+        let current = self.session.vault_path().ok_or(SessionError::NoVault)?;
+        let mut probe = crate::migration::VaultMigrationService::probe(&backend, &current)
+            .map_err(migration_error)?;
+        probe.inside_icloud = mypass_sync::icloud::vault_location_of(&target, self.paths.home())
+            == mypass_sync::icloud::VaultLocation::ICloudDrive;
+        Ok(probe)
+    }
+
+    /// A location change keeps the original encrypted file and a verified backup. Never deletes
+    /// a source or rolls a target back over another writer after a partially completed migration.
+    pub fn vault_location_change(
+        &self,
+        folder: &Path,
+        strategy: crate::migration::MigrationStrategy,
+    ) -> Result<SessionStatus, ApiError> {
+        self.migrate_folder(folder, strategy, true)?;
+        Ok(self.session.status())
+    }
+
+    /// Connects a trusted, dialog-selected folder using the same one-off strategies.
+    pub fn sync_connect_secondary(
+        &self,
+        folder: &Path,
+        strategy: crate::migration::MigrationStrategy,
+    ) -> Result<SecondaryStatus, ApiError> {
+        self.migrate_folder(folder, strategy, false)?;
+        Ok(self.secondary.status())
+    }
+
+    fn migrate_folder(
+        &self,
+        folder: &Path,
+        strategy: crate::migration::MigrationStrategy,
+        relocate: bool,
+    ) -> Result<(), ApiError> {
+        use crate::migration::{MigrationError, VaultMigrationService};
+        use mypass_sync::{FileIoBackend, StorageBackend, WriteOutcome};
+        let target = self.migration_target(folder)?;
+        self.session.flush()?;
+        let snapshot = self.session.sync_snapshot()?;
+        if crate::migration::same_file(&target, &snapshot.path) {
+            return Err(migration_error(MigrationError::SameFile));
+        }
+        if !relocate {
+            crate::secondary::validate_folder(
+                &folder.to_string_lossy(),
+                &snapshot.path,
+                target
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .ok_or_else(|| ApiError::new(ErrorCode::InvalidInput, "invalid filename"))?,
+            )
+            .map_err(|_| ApiError::new(ErrorCode::InvalidInput, "invalidFolder"))?;
+        }
+        // A mandatory, create-only, read-back-verified backup, independent of rotation policy.
+        let source_storage = self.session.resolve_storage(&snapshot.path);
+        let source = source_storage
+            .io
+            .read_limited(&snapshot.path, mypass_kdbx::MAX_VAULT_FILE_BYTES)
+            .map_err(|_| migration_error(MigrationError::SourceInvalid))?;
+        Database::open(&source, &snapshot.password)
+            .map_err(|_| migration_error(MigrationError::SourceInvalid))?;
+        let backup_dir = self.backups.folder(&snapshot.vault_id)?;
+        std::fs::create_dir_all(&backup_dir)
+            .map_err(|_| ApiError::new(ErrorCode::Io, "backup folder unavailable"))?;
+        let backup = backup_dir.join(format!(
+            "backup-{}-{}.kdbx",
+            self.now_secs(),
+            Uuid::new_v4().as_u128() % 1000000000
+        ));
+        let backup = FileIoBackend::new(Arc::new(PlainFileIo), backup);
+        if backup
+            .write_if(None, &source)
+            .map_err(|_| migration_error(MigrationError::SourceInvalid))?
+            != WriteOutcome::Written
+            || backup
+                .read()
+                .map_err(|_| migration_error(MigrationError::SourceInvalid))?
+                .as_ref()
+                != Some(&source)
+        {
+            return Err(migration_error(MigrationError::SourceInvalid));
+        }
+        let storage = self.session.resolve_storage(&target);
+        let backend = Arc::new(FileIoBackend::new(storage.io.clone(), &target));
+        let outcome =
+            VaultMigrationService::migrate(&snapshot.db, &snapshot.password, backend, strategy)
+                .map_err(migration_error)?;
+        if relocate {
+            self.session
+                .switch_snapshot(&target, storage.io, outcome.adopted, &snapshot)?;
+        } else {
+            if let Some(adopted) = outcome.adopted {
+                // Continuous secondary sync refuses different root identities. Adopting one
+                // here would leave the new connection permanently unable to reconcile.
+                if adopted.root_id() != snapshot.db.root_id() {
+                    return Err(ApiError::new(
+                        ErrorCode::InvalidInput,
+                        "remoteIsDifferentVault",
+                    ));
+                }
+                self.session
+                    .mutate_if_incarnation(snapshot.incarnation, |live, _| {
+                        if !crate::saving::same_content(live, &snapshot.db) {
+                            return Err(SessionError::ChangedOnDisk);
+                        }
+                        *live = adopted;
+                        Ok(((), true))
+                    })?
+                    .ok_or(SessionError::ChangedOnDisk)?;
+                self.session.flush()?;
+            }
+            self.session
+                .publish_if_current(
+                    snapshot.incarnation,
+                    || true,
+                    || {
+                        self.settings.set_secondary_folder(
+                            target.parent().map(|p| p.to_string_lossy().into_owned()),
+                        )
+                    },
+                )
+                .ok_or(SessionError::ChangedOnDisk)??;
+        }
+        self.secondary.rearm();
+        Ok(())
+    }
+
     // ---- secondary folder sync ----
 
     /// The secondary-folder sync status (`off` when no folder is configured).
@@ -973,6 +1128,17 @@ impl AppCore {
         let imported = csv_import::import_logins(&self.session, group, parse.logins)?;
         Ok(ImportResult { imported, skipped })
     }
+}
+
+fn migration_error(error: crate::migration::MigrationError) -> ApiError {
+    use crate::migration::MigrationError as M;
+    let code = match error {
+        M::Locked => ErrorCode::Locked,
+        M::TargetPasswordMismatch => ErrorCode::WrongPassword,
+        M::SameFile | M::TargetNotAVault | M::SourceInvalid => ErrorCode::InvalidInput,
+        M::TargetUnreadable | M::TargetWriteFailed | M::ValidationFailed => ErrorCode::Io,
+    };
+    ApiError::new(code, error.to_string())
 }
 
 #[cfg(test)]

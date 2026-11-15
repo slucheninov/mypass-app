@@ -90,12 +90,16 @@ pub fn commands() -> Commands<tauri::Wry> {
         settings::settings_update,
         settings::shortcut_conflicts_take,
         sidebar::sidebar_get,
+        sync::sync_connect_secondary,
         sync::sync_disconnect_secondary,
         sync::sync_now,
         sync::sync_status,
         vault::vault_create,
         vault::vault_find_files,
         vault::vault_forget,
+        vault::vault_location_pick,
+        vault::vault_location_probe,
+        vault::vault_location_change,
         vault::vault_lock,
         vault::vault_open,
         vault::vault_open_warnings,
@@ -276,7 +280,7 @@ mod tests {
 
     #[test]
     fn command_names_follow_domain_verb_convention() {
-        const DOMAINS: [&str; 15] = [
+        const DOMAINS: [&str; 17] = [
             "vault",
             "entry",
             "group",
@@ -292,6 +296,8 @@ mod tests {
             "shortcut",
             "browser",
             "sync",
+            "device",
+            "update",
         ];
         let names = command_names();
         assert!(!names.is_empty());

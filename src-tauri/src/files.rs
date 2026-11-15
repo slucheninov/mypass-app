@@ -27,6 +27,8 @@ const MAX_TOKENS: usize = 64;
 
 /// The native dialogs. Blocking: callers run it off the async runtime.
 pub trait FilePicker: Send + Sync {
+    /// Native folder selection; the starting folder is computed in Rust.
+    fn pick_folder(&self, start: Option<PathBuf>) -> Option<PathBuf>;
     /// The open dialog for attachments (several files); empty when cancelled.
     fn pick_attachments(&self) -> Vec<PathBuf>;
     /// The open dialog for one CSV file; `None` when cancelled.
@@ -39,6 +41,17 @@ pub trait FilePicker: Send + Sync {
 pub struct TauriFilePicker(pub tauri::AppHandle);
 
 impl FilePicker for TauriFilePicker {
+    fn pick_folder(&self, start: Option<PathBuf>) -> Option<PathBuf> {
+        use tauri_plugin_dialog::DialogExt;
+        let mut dialog = self.0.dialog().file();
+        if let Some(start) = start {
+            dialog = dialog.set_directory(start);
+        }
+        dialog
+            .blocking_pick_folder()
+            .and_then(|p| p.into_path().ok())
+    }
+
     fn pick_attachments(&self) -> Vec<PathBuf> {
         use tauri_plugin_dialog::DialogExt;
         self.0
@@ -75,6 +88,8 @@ impl FilePicker for TauriFilePicker {
 /// A [`FilePicker`] with scripted answers, for tests.
 #[derive(Debug, Default)]
 pub struct FakeFilePicker {
+    pub folder: Mutex<Option<PathBuf>>,
+    pub folder_starts: Mutex<Vec<Option<PathBuf>>>,
     pub attachments: Mutex<Vec<PathBuf>>,
     pub csv: Mutex<Option<PathBuf>>,
     pub save: Mutex<Option<PathBuf>>,
@@ -102,6 +117,18 @@ impl FakeFilePicker {
 }
 
 impl FilePicker for FakeFilePicker {
+    fn pick_folder(&self, start: Option<PathBuf>) -> Option<PathBuf> {
+        self.opened("folder");
+        self.folder_starts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(start);
+        self.folder
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     fn pick_attachments(&self) -> Vec<PathBuf> {
         self.opened("attachments");
         self.attachments
@@ -144,6 +171,7 @@ pub struct PickedFile {
 
 #[derive(Default)]
 struct Grants {
+    folders: VecDeque<(String, PathBuf)>,
     tokens: VecDeque<(String, PathBuf)>,
     csv: Option<PathBuf>,
     /// Bumped by [`FileGrants::clear`]; a [`Redeemed`] from an older generation is not restored.
@@ -169,6 +197,31 @@ fn invalid(message: &str) -> ApiError {
 }
 
 impl FileGrants {
+    /// Folder grants are a separate namespace from attachment grants.
+    pub fn grant_folder(&self, path: PathBuf) -> String {
+        let token = Uuid::new_v4().to_string();
+        self.with(|g| {
+            g.folders.push_back((token.clone(), path));
+            while g.folders.len() > MAX_TOKENS {
+                g.folders.pop_front();
+            }
+        });
+        token
+    }
+    pub fn take_folder(&self, token: &str) -> Result<PathBuf, ApiError> {
+        self.with(|g| {
+            let pos = g
+                .folders
+                .iter()
+                .position(|(t, _)| t == token)
+                .ok_or_else(|| invalid("invalid folder token"))?;
+            g.folders
+                .remove(pos)
+                .map(|(_, p)| p)
+                .ok_or_else(|| invalid("invalid folder token"))
+        })
+    }
+
     fn with<R>(&self, f: impl FnOnce(&mut Grants) -> R) -> R {
         f(&mut self.0.lock().unwrap_or_else(PoisonError::into_inner))
     }
@@ -268,5 +321,22 @@ impl FileGrants {
     /// The remembered CSV file, exactly once.
     pub fn take_csv(&self) -> Option<PathBuf> {
         self.with(|g| g.csv.take())
+    }
+}
+
+#[cfg(test)]
+mod folder_tests {
+    use super::*;
+    #[test]
+    fn folder_tokens_are_single_use_separate_from_attachments_and_clear_on_lock() {
+        let grants = FileGrants::default();
+        let path = PathBuf::from("/chosen");
+        let token = grants.grant_folder(path.clone());
+        assert_eq!(grants.take_folder(&token).unwrap(), path);
+        assert!(grants.take_folder(&token).is_err());
+        let token = grants.grant_folder(path);
+        grants.clear();
+        assert!(grants.take_folder(&token).is_err());
+        assert!(grants.take_folder("/arbitrary/path").is_err());
     }
 }

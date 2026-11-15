@@ -903,6 +903,13 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       publish("syncStatusChanged", structuredClone(state.sync));
       return structuredClone(state.sync);
     },
+    syncConnectSecondary: () => {
+      requireUnlocked();
+      state.settings.secondaryFolder = "/fake/secondary";
+      state.sync = { state: "idle", lastSync: 1_700_000_000_000 };
+      publish("syncStatusChanged", structuredClone(state.sync));
+      return structuredClone(state.sync);
+    },
     syncStatus: () => structuredClone(state.sync),
     // Like Rust: forgets the folder (the copy in it stays) and reports `off`.
     syncDisconnectSecondary: () => {
@@ -963,6 +970,17 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     vaultRecent: () => structuredClone(state.recents),
     vaultStatus: () => structuredClone(state.session),
     vaultStorageStatus: () => structuredClone(state.storage),
+    vaultLocationPick: () => { requireUnlocked(); return "fake-folder-token"; },
+    vaultLocationProbe: () => {
+      requireUnlocked();
+      return { probe: { exists: false, modified: null, byteCount: null,
+        looksLikeVault: false, insideIcloud: false, sameAsCurrent: false },
+        folderToken: "fake-probed-folder-token" };
+    },
+    vaultLocationChange: () => {
+      requireUnlocked();
+      return setSession({ ...state.session, vaultPath: "/fake/target/vault.kdbx" });
+    },
     vaultUnlock: ({ password }) => {
       if (state.session.state === "noVault") throw apiError("noVault");
       if (password !== state.masterPassword) throw apiError("wrongPassword");

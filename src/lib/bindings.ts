@@ -88,12 +88,16 @@ export const commands = {
 	 */
 	shortcutConflictsTake: () => __TAURI_INVOKE<ShortcutConflictEvent[]>("shortcut_conflicts_take"),
 	sidebarGet: () => typedError<Sidebar_Serialize, ApiError>(__TAURI_INVOKE("sidebar_get")),
+	syncConnectSecondary: (folderToken: string, strategy: MigrationStrategy) => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_connect_secondary", { folderToken, strategy })),
 	syncDisconnectSecondary: () => typedError<null, ApiError>(__TAURI_INVOKE("sync_disconnect_secondary")),
 	syncNow: () => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_now")),
 	syncStatus: () => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_status")),
 	vaultCreate: (path: string, password: string, name: string) => typedError<SessionStatus_Serialize, ApiError>(__TAURI_INVOKE("vault_create", { path, password, name })),
 	vaultFindFiles: () => typedError<FoundVaultFileDto[], ApiError>(__TAURI_INVOKE("vault_find_files")),
 	vaultForget: (path: string) => typedError<null, ApiError>(__TAURI_INVOKE("vault_forget", { path })),
+	vaultLocationPick: () => typedError<string | null, ApiError>(__TAURI_INVOKE("vault_location_pick")),
+	vaultLocationProbe: (folderToken: string) => typedError<FolderProbe_Serialize, ApiError>(__TAURI_INVOKE("vault_location_probe", { folderToken })),
+	vaultLocationChange: (req: LocationChangeRequest) => typedError<SessionStatus_Serialize, ApiError>(__TAURI_INVOKE("vault_location_change", { req })),
 	vaultLock: () => typedError<null, ApiError>(__TAURI_INVOKE("vault_lock")),
 	vaultOpen: (path: string, password: string) => typedError<SessionStatus_Serialize, ApiError>(__TAURI_INVOKE("vault_open", { path, password })),
 	vaultOpenWarnings: (path: string) => typedError<OpenWarning[], ApiError>(__TAURI_INVOKE("vault_open_warnings", { path })),
@@ -550,6 +554,21 @@ export type ErrorCode = "locked" | "noVault" | "wrongPassword" | "alreadyExists"
 /**  A single field to reveal or copy. `Totp` resolves to the current code. */
 export type FieldRef = { kind: "username" } | { kind: "password" } | { kind: "url" } | { kind: "notesBody" } | { kind: "cardNumber" } | { kind: "cardCvv" } | { kind: "totp" } | { kind: "custom"; key: string };
 
+/**  Probe consumes a grant and returns a fresh grant for the user's strategy decision. */
+export type FolderProbe = FolderProbe_Serialize | FolderProbe_Deserialize;
+
+/**  Probe consumes a grant and returns a fresh grant for the user's strategy decision. */
+export type FolderProbe_Deserialize = {
+	probe: TargetProbe_Deserialize,
+	folderToken: string,
+};
+
+/**  Probe consumes a grant and returns a fresh grant for the user's strategy decision. */
+export type FolderProbe_Serialize = {
+	probe: TargetProbe_Serialize,
+	folderToken: string,
+};
+
 /**  A `.kdbx` file found by the scanner. `modified` is Unix milliseconds, `size` bytes. */
 export type FoundVaultFileDto = {
 	path: string,
@@ -686,6 +705,11 @@ export type ImportResult = {
 
 export type Language = "system" | "en" | "uk" | "ru";
 
+export type LocationChangeRequest = {
+	folderToken: string,
+	strategy: MigrationStrategy,
+};
+
 /**  Why the session was locked. */
 export type LockReason = "manual" | "idle" | "sleep" | "screenLock" | "hotkey" | "quit";
 
@@ -694,6 +718,8 @@ export type LockReason = "manual" | "idle" | "sleep" | "screenLock" | "hotkey" |
  *  crate needs no `specta`. `Unsupported` is a value: the General pane hides the row.
  */
 export type LoginItemStatus = "enabled" | "disabled" | "requiresApproval" | "notFound" | "unsupported";
+
+export type MigrationStrategy = "seedRemote" | "merge" | "adoptRemote" | "overwriteRemote";
 
 /**  The main window should open entry `id` (in the editor when `edit`). */
 export type OpenEntryEvent = {
@@ -1304,6 +1330,28 @@ export type SyncStatusChanged_Deserialize = SecondaryStatus_Deserialize;
 
 /**  The secondary-folder sync status changed. */
 export type SyncStatusChanged_Serialize = SecondaryStatus_Serialize;
+
+export type TargetProbe = TargetProbe_Serialize | TargetProbe_Deserialize;
+
+export type TargetProbe_Deserialize = {
+	exists: boolean,
+	/**  Unix seconds; f64 at the IPC boundary, as for the other session DTOs. */
+	modified?: number | null,
+	byteCount?: number | null,
+	looksLikeVault: boolean,
+	insideIcloud: boolean,
+	sameAsCurrent: boolean,
+};
+
+export type TargetProbe_Serialize = {
+	exists: boolean,
+	/**  Unix seconds; f64 at the IPC boundary, as for the other session DTOs. */
+	modified: number | null,
+	byteCount: number | null,
+	looksLikeVault: boolean,
+	insideIcloud: boolean,
+	sameAsCurrent: boolean,
+};
 
 export type Theme = "system" | "light" | "dark";
 
