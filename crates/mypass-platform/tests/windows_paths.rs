@@ -40,13 +40,17 @@ fn windows_local_paths_refuse_namespace_aliases_and_devices() {
         r"C:\",
         r"c:\Vaults\.",
         r"C:/Vaults/../Copy/",
-        r"\\host\share\Паролі 🔑",
+        "\\\\host\\share\\\u{041f}\u{0430}\u{0440}\u{043e}\u{043b}\u{0456} \u{1f511}",
         r"\\?\C:\Vaults",
         r"\\?\UNC\host\share\Vaults\",
     ] {
         assert!(validate_path(path).is_ok(), "{path:?}");
     }
-    for name in ["Console.kdbx", "COM10", "Паролі 🔑.kdbx"] {
+    for name in [
+        "Console.kdbx",
+        "COM10",
+        "\u{041f}\u{0430}\u{0440}\u{043e}\u{043b}\u{0456} \u{1f511}.kdbx",
+    ] {
         assert!(validate_component(name).is_ok());
     }
 }

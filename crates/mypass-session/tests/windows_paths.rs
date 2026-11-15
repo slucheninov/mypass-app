@@ -51,7 +51,8 @@ fn long_path_over_260_chars_saves_and_reopens() {
 fn non_ascii_directory_saves_and_reopens() {
     let tmp = tempfile::tempdir().unwrap();
     round_trip(
-        &tmp.path().join("Паролі 🔑"),
+        &tmp.path()
+            .join("\u{041f}\u{0430}\u{0440}\u{043e}\u{043b}\u{0456} \u{1f511}"),
         &tmp.path().join("data/backups"),
     );
 }
