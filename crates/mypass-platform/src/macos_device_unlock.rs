@@ -20,7 +20,7 @@
 #![allow(unsafe_code)]
 
 use crate::keychain_device_unlock::{
-    map_la_error, AuthPolicy, KeychainDeviceUnlock, LocalAuth, SERVICE,
+    map_la_error, AuthPolicy, KeychainDeviceUnlock, LocalAuth, Preflight, SERVICE,
 };
 use crate::macos_keychain::MacKeychainSecretStore;
 use crate::{PlatformError, PlatformResult};
@@ -83,7 +83,7 @@ impl LocalAuth for LaContextAuth {
         autoreleasepool(|_| can_evaluate_with(&new_context(), policy))
     }
 
-    fn biometric_domain_state(&self) -> Result<Option<Vec<u8>>, i64> {
+    fn biometric_domain_state(&self) -> Preflight {
         autoreleasepool(|_| {
             let context = new_context();
             // The state is populated by a successful biometric preflight. A failed preflight

@@ -165,6 +165,9 @@ pub(crate) fn map_la_error(code: i64) -> PlatformError {
 /// `LAErrorBiometryNotEnrolled`: no fingers are enrolled on this Mac.
 const LA_BIOMETRY_NOT_ENROLLED: i64 = -7;
 
+/// The raw result of a biometric preflight: the domain state, or the `LAError` code.
+pub(crate) type Preflight = Result<Option<Vec<u8>>, i64>;
+
 /// What a silent biometric preflight says about the enrolled fingers.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CurrentBiometrics {
@@ -181,9 +184,7 @@ pub(crate) enum CurrentBiometrics {
 /// Classifies the result of a biometric preflight ([`LocalAuth::biometric_domain_state`]): `Err`
 /// carries the `LAError` code of `canEvaluatePolicy`, `Ok(None)` a successful preflight without a
 /// state (which Apple's contract rules out; treated as unknown, never as a change).
-pub(crate) fn classify_biometric_preflight(
-    result: Result<Option<Vec<u8>>, i64>,
-) -> CurrentBiometrics {
+pub(crate) fn classify_biometric_preflight(result: Preflight) -> CurrentBiometrics {
     match result {
         Ok(Some(state)) => CurrentBiometrics::State(state),
         Ok(None) => CurrentBiometrics::Unknown(PlatformError::Failed(
@@ -203,9 +204,7 @@ fn to_hex(bytes: &[u8]) -> String {
 
 /// The bytes of a lowercase or uppercase hex string; `None` for anything else.
 fn from_hex(text: &str) -> Option<Vec<u8>> {
-    if text.len() % 2 != 0 {
-        return None;
-    }
+    // An odd length leaves a one-byte last chunk, which the match refuses.
     let digit = |c: u8| char::from(c).to_digit(16);
     text.as_bytes()
         .chunks(2)
@@ -245,7 +244,7 @@ pub(crate) trait LocalAuth: Send + Sync {
     /// The current biometric domain state, read without a prompt after a biometric preflight;
     /// `Err` carries the preflight's `LAError` code (classified by
     /// [`classify_biometric_preflight`]), `Ok(None)` a successful preflight without a state.
-    fn biometric_domain_state(&self) -> Result<Option<Vec<u8>>, i64>;
+    fn biometric_domain_state(&self) -> Preflight;
     /// Shows the prompt (`reason`) and waits at most `timeout`; a timeout cancels the prompt and
     /// reports `Cancelled`. `Ok` carries the domain state the evaluation saw, when any.
     fn evaluate(
@@ -649,7 +648,7 @@ mod tests {
                 AuthPolicy::DeviceOwner => Err(-5),
             }
         }
-        fn biometric_domain_state(&self) -> Result<Option<Vec<u8>>, i64> {
+        fn biometric_domain_state(&self) -> Preflight {
             let s = lock(&self.0);
             if let Some(code) = s.preflight_error {
                 return Err(code);
@@ -727,7 +726,7 @@ mod tests {
     #[test]
     fn biometric_preflight_mapping_table() {
         use CurrentBiometrics::{NoneEnrolled, State, Unknown};
-        let cases: [(Result<Option<Vec<u8>>, i64>, CurrentBiometrics); 8] = [
+        let cases: [(Preflight, CurrentBiometrics); 8] = [
             (Ok(Some(b"s".to_vec())), State(b"s".to_vec())),
             // Only an emptied finger set says the enrolled fingers changed.
             (Err(-7), NoneEnrolled),
@@ -1136,7 +1135,7 @@ mod tests {
             fn can_evaluate(&self, p: AuthPolicy) -> Result<(), i64> {
                 self.0.can_evaluate(p)
             }
-            fn biometric_domain_state(&self) -> Result<Option<Vec<u8>>, i64> {
+            fn biometric_domain_state(&self) -> Preflight {
                 self.0.biometric_domain_state()
             }
             fn evaluate(
