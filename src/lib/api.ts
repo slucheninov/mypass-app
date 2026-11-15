@@ -107,6 +107,7 @@ export const api = {
   backupRestore: wrap(commands.backupRestore),
   browserPairingCancel: wrap(commands.browserPairingCancel),
   browserProposalTake: wrap(commands.browserProposalTake),
+  browserUnregisterHost: wrap(commands.browserUnregisterHost),
   browserReinstallHost: wrap(commands.browserReinstallHost),
   browserResetPairings: wrap(commands.browserResetPairings),
   browserRevoke: wrap(commands.browserRevoke),

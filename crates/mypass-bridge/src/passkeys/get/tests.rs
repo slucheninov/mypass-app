@@ -1057,3 +1057,67 @@ fn get_rows_fall_back_to_the_passkey_user_name_when_the_entry_has_none() {
     assert_eq!(by_id(ids.a), "alice");
     assert_eq!(by_id(ids.b), "someone");
 }
+
+/// R23: an unsupported presence provider still requires explicit popup approval. Required UV
+/// must refuse even with corrupt key material; preferred/discouraged sign with UP, without UV.
+#[test]
+fn windows_unavailable_presence_get_requires_consent_and_never_claims_uv() {
+    for verification in ["discouraged", "preferred", "required"] {
+        let (f, _, ids) = sample_fx();
+        let svc = PasskeyService::with_presence(
+            f.sched.clone(),
+            f.ui.clone(),
+            Arc::new(|_, _| Ok(false)),
+        );
+        if verification == "required" {
+            f.session
+                .mutate(|db, now| {
+                    db.update_entry(ids.a, now, |e| {
+                        e.set_field(
+                            "KPEX_PASSKEY_PRIVATE_KEY_PEM",
+                            "invalid-key-must-not-be-parsed",
+                            true,
+                        )
+                    })
+                    .unwrap();
+                    Ok(())
+                })
+                .unwrap();
+        }
+        let before = snapshot(&f);
+        let mut json = request_json(ORIGIN, Some(RP), &[]);
+        json["userVerification"] = json!(verification);
+        let pending = svc.handle(
+            &ctx(&f, &f.settings, true),
+            &Request::PasskeyGet {
+                token: "t".into(),
+                request_id: 981,
+                request_details_json: json.to_string(),
+                origin_url: ORIGIN.into(),
+                pairing: None,
+            },
+        );
+        assert!(matches!(pending, Response::PasskeyGetPending { .. }));
+        assert_eq!(
+            snapshot(&f),
+            before,
+            "phase one must not touch the key or entry"
+        );
+        let result = svc.handle(
+            &ctx(&f, &f.settings, true),
+            &Request::PasskeyGetApprove {
+                token: "t".into(),
+                request_id: 981,
+                entry_id: wire_id(ids.a),
+                pairing: None,
+            },
+        );
+        if verification == "required" {
+            assert_failure(&result, "NotAllowedError", NO_PENDING);
+            assert_eq!(snapshot(&f), before);
+        } else {
+            let auth = verify(&f, ids.a, &success(&result));
+            assert_eq!(auth[32] & 0x05, 0x01, "UP set, UV clear");
+        }
+    }
+}

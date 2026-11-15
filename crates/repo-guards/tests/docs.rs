@@ -4,7 +4,7 @@
 //! test-only support code: helpers here unwrap and index freely, a guard must fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
-use repo_guards::{read, rel_str, repo_root, tracked_files};
+use repo_guards::{read, rel_str, repo_root, tracked_files, working_tree_files};
 
 /// The sentence D11 requires verbatim in AGENTS.md.
 const MANUAL_CHECKS_SENTENCE: &str = "Manual-only checks (signed-build, Windows, real-vault) are walked by the owner in daily use and never block a merge or a release; a task whose only open work is a manual check is complete once its automated part is green.";
@@ -28,7 +28,9 @@ fn roadmap_has_only_open_boxes() {
 }
 
 #[test]
-fn roadmap_lists_every_later_stage() {
+fn roadmap_lists_open_stage_followups() {
+    // Completed implementations keep a heading while deferred/manual follow-ups remain.
+    // Remove a stage here only when its last open follow-up has actually been resolved.
     let roadmap = read("docs/implementation/ROADMAP.md");
     let headings: Vec<&str> = roadmap.lines().filter(|l| l.starts_with('#')).collect();
     for stage in [
@@ -230,28 +232,81 @@ fn cyrillic_detector_detects_cyrillic() {
     assert!(!has_cyrillic("privit, plain ASCII and caf\u{e9}"));
 }
 
+fn cyrillic_violations(root: &std::path::Path) -> Option<Vec<String>> {
+    let files = working_tree_files(root)?;
+    Some(
+        files
+            .into_iter()
+            .filter_map(|file| {
+                let rel = rel_str(&file);
+                if cyrillic_allowed(&rel) {
+                    return None;
+                }
+                let bytes = std::fs::read(root.join(&file)).ok()?;
+                let text = String::from_utf8(bytes).ok()?;
+                has_cyrillic(&text).then_some(rel)
+            })
+            .collect(),
+    )
+}
+
 #[test]
 fn cyrillic_only_in_allowed_files() {
-    let Some(files) = tracked_files() else {
+    let Some(violations) = cyrillic_violations(&repo_root()) else {
         println!("skipped: git is not available");
         return;
     };
-    for file in files {
-        let rel = rel_str(&file);
-        if cyrillic_allowed(&rel) {
-            continue;
+    assert!(violations.is_empty(), "{violations:?} contain Cyrillic; use \\u{{..}} escapes (see AGENTS.md for the exact allow-list)");
+}
+
+#[test]
+fn cyrillic_guard_checks_unstaged_windows_sources_and_preserves_exemptions() {
+    use std::{
+        fs,
+        process::Command,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+    // Isolated inventory: never stage files or change ignore rules in the real repository.
+    struct Scratch(std::path::PathBuf);
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).unwrap();
         }
-        let Ok(bytes) = std::fs::read(repo_root().join(&file)) else {
-            continue;
-        };
-        let Ok(text) = String::from_utf8(bytes) else {
-            continue;
-        };
-        assert!(
-            !has_cyrillic(&text),
-            "{rel} contains Cyrillic; use \\u{{..}} escapes (literal Cyrillic is allowed only in *.xcstrings, RUN.md, src/lib/i18n/locales/{{uk,ru}}.json, src-tauri/resources/macos/{{uk,ru}}.lproj/InfoPlist.strings, five extension files listed in AGENTS.md, crates/mypass-kdbx/tests/unicode.rs, vendored data under crates/mypass-core/resources/ and binary fixtures crates/mypass-kdbx/tests/fixtures/*.kdbx)"
-        );
     }
+    let root = Scratch(std::env::temp_dir().join(format!("mypass-cyrillic-{}-{}",
+        std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos())));
+    fs::create_dir(&root.0).unwrap();
+    let git = |args: &[&str]| {
+        assert!(Command::new("git")
+            .arg("-C")
+            .arg(&root.0)
+            .args(args)
+            .output()
+            .unwrap()
+            .status
+            .success());
+    };
+    git(&["init", "--quiet"]);
+    fs::write(root.0.join("tracked.rs"), "// \u{41f}").unwrap();
+    git(&["add", "tracked.rs"]);
+    fs::create_dir_all(root.0.join("crates/example/tests")).unwrap();
+    let untracked = "crates/example/tests/windows_paths.rs";
+    fs::write(root.0.join(untracked), "#![cfg(windows)]\n// \u{41f}").unwrap();
+    fs::write(root.0.join(".gitignore"), "ignored.rs\n").unwrap();
+    fs::write(root.0.join("ignored.rs"), "// \u{41f}").unwrap();
+    fs::write(root.0.join("RUN.md"), "\u{41f}").unwrap();
+    fs::write(root.0.join("escaped.rs"), r"// \u{41f}").unwrap();
+    assert_eq!(
+        cyrillic_violations(&root.0).unwrap(),
+        [untracked, "tracked.rs"]
+    );
+    // Staging must not hide or duplicate a violation; ignored tracked files still count.
+    git(&["add", untracked]);
+    git(&["add", "--force", "ignored.rs"]);
+    assert_eq!(
+        cyrillic_violations(&root.0).unwrap(),
+        [untracked, "ignored.rs", "tracked.rs"]
+    );
 }
 
 #[test]
@@ -402,4 +457,122 @@ fn agents_documents_stage_5_delivery_and_remaining_boundaries() {
     ] {
         assert!(agents.contains(needle), "AGENTS.md must mention {needle}");
     }
+}
+
+#[test]
+fn agents_md_documents_windows_layout() {
+    let agents = squash(&read("AGENTS.md"));
+    for needle in [
+        r"%LOCALAPPDATA%\MyPass",
+        "MYPASS_WINDOWS_INTEGRATION_TESTS",
+        "MYPASS_WINDOWS_DATA_ROOT",
+        "DPAPI",
+        "Credential Manager",
+        r"HKCU\Software\Google\Chrome\NativeMessagingHosts\com.mypass.chromehost",
+        r"HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.mypass.chromehost",
+        "scripts/package-windows.sh",
+        "content",
+        "digest",
+        "same-user",
+        "StartupApproved",
+        "windows-x64.zip.sha256",
+        "Stage 6",
+    ] {
+        assert!(
+            agents.contains(needle),
+            "missing Windows contract: {needle}"
+        );
+    }
+    assert_eq!(agents.matches(MANUAL_CHECKS_SENTENCE).count(), 1);
+    assert!(!agents.contains("Windows bodies in stage 6"));
+}
+
+#[test]
+fn third_party_notices_lists_windows_crate_and_7zip_note() {
+    let notices = read("THIRD_PARTY_NOTICES.md");
+    assert!(notices.contains("| `windows` | 0.62.2 | MIT OR Apache-2.0 |"));
+    assert!(notices.contains("7-Zip is a build tool, not shipped"));
+}
+
+#[test]
+fn roadmap_windows_items() {
+    let roadmap = read("docs/implementation/ROADMAP.md");
+    let windows = roadmap
+        .split("## Stage 6 Windows")
+        .nth(1)
+        .unwrap()
+        .split("\n## ")
+        .next()
+        .unwrap();
+    for needle in [
+        "Windows Hello",
+        "Authenticode",
+        "installer",
+        "ARM64",
+        "snap-layout",
+        "Brave/Vivaldi/Opera",
+        "W1",
+        "W17",
+    ] {
+        assert!(
+            windows.contains(needle),
+            "missing deferred Windows item: {needle}"
+        );
+    }
+    for stale in [
+        "Windows bodies of every",
+        "UnsupportedSecretStore",
+        "Windows jobs in CI and",
+    ] {
+        assert!(!windows.contains(stale), "implemented item: {stale}");
+    }
+}
+
+#[test]
+fn run_md_has_windows_section() {
+    let run = read("RUN.md");
+    assert_eq!(run.matches("## Stage 6 Windows").count(), 1);
+    let windows = run.split("## Stage 6 Windows").nth(1).unwrap();
+    for n in 1..=17 {
+        let heading = format!("### W{n} ");
+        assert_eq!(windows.matches(&heading).count(), 1, "{heading}");
+        let item = windows
+            .split(&heading)
+            .nth(1)
+            .unwrap()
+            .split("\n### ")
+            .next()
+            .unwrap();
+        // Expected-result label, escaped to preserve the repository's source language rule.
+        assert!(item.contains("\u{41e}\u{447}\u{456}\u{43a}\u{443}\u{432}\u{430}\u{43d}\u{438}\u{439} \u{440}\u{435}\u{437}\u{443}\u{43b}\u{44c}\u{442}\u{430}\u{442}:"), "W{n} needs an expected result");
+        assert!(item.contains("- [ ]"));
+    }
+    for needle in [
+        "userVerification",
+        "required",
+        "preferred",
+        "discouraged",
+        "StartupApproved",
+        "icacls",
+        "SYSTEM",
+        "ReparsePoint",
+    ] {
+        assert!(windows.contains(needle), "missing owner check: {needle}");
+    }
+}
+
+#[test]
+fn readme_install_section_links_windows_zip() {
+    let readme = read("README.md");
+    let install = readme
+        .split("## Install")
+        .nth(1)
+        .unwrap()
+        .split("\n## ")
+        .next()
+        .unwrap();
+    assert!(install.contains("windows-x64.zip"));
+    assert!(install.contains("https://github.com/slucheninov/mypass-app/releases"));
+    assert!(install.contains("Unblock"));
+    assert!(!install.contains("run the installer"));
 }

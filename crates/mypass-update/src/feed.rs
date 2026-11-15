@@ -4,6 +4,7 @@
 //! The HTTP client itself is behind the `github` feature (`github.rs`); everything here is plain
 //! data and string handling, so it is tested without a network and linked by every host.
 
+use crate::asset::ReleaseAsset;
 use crate::version::SemanticVersion;
 use serde::Deserialize;
 use url::Url;
@@ -23,6 +24,8 @@ pub struct ReleaseInfo {
     /// The release page, validated by [`validate_release_url`]: always
     /// `https://github.com/slucheninov/mypass-app/releases/...`, no credentials, query or fragment.
     pub url: String,
+    /// Published asset names only; no download URLs.
+    pub assets: Vec<ReleaseAsset>,
 }
 
 /// Why the feed produced no release. The variants carry no free text that could reach a webview;
@@ -140,6 +143,8 @@ fn is_plain_segment(segment: &str) -> bool {
 struct Payload {
     tag_name: String,
     html_url: String,
+    #[serde(default)]
+    assets: Vec<ReleaseAsset>,
 }
 
 /// Turns the body of a `200` answer into a [`ReleaseInfo`]. `releases/latest` already excludes
@@ -152,6 +157,7 @@ pub fn parse_release_payload(body: &[u8]) -> Result<ReleaseInfo, ReleaseFeedErro
     Ok(ReleaseInfo {
         version,
         tag: payload.tag_name,
+        assets: payload.assets,
         url,
     })
 }

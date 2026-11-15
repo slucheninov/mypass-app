@@ -4,6 +4,22 @@
 //! [`current`] wires the real implementations of the running OS; [`testing`] (behind the
 //! `test-util` feature) holds the fakes every other crate's tests build on.
 
+pub mod dev_overrides;
+mod file_identity;
+#[cfg(windows)]
+pub mod windows;
+pub mod windows_desktop;
+pub mod windows_host_install;
+#[path = "windows/launch_at_login.rs"]
+pub mod windows_launch_at_login;
+pub mod windows_paths;
+pub mod windows_registry;
+pub use file_identity::{file_identity, FileIdentity};
+
+#[cfg(any(windows, test))]
+mod dpapi;
+#[cfg(windows)]
+pub use dpapi::{DpapiSecretStore, SecretClass};
 mod clipboard;
 mod coordinated;
 mod device_unlock;
@@ -53,8 +69,9 @@ pub use error::{PlatformError, PlatformResult};
 pub use events::{Subscription, SystemEvent, SystemEvents};
 pub use file_store::{shared_store, FileSecretStore};
 pub use host_registrar::{
-    locate_bundled_host, manifest_json, BrowserRegistration, HostRegistrationReport, ManifestError,
-    NativeHostRegistrar, RegistrationState, BUNDLED_HOST_FILE, EXTENSION_ID, HOST_NAME,
+    locate_bundled_host, manifest_json, windows_host_key, BrowserRegistration,
+    HostRegistrationReport, ManifestError, NativeHostRegistrar, RegistrationState, RegistryTarget,
+    BUNDLED_HOST_FILE, EXTENSION_ID, HOST_NAME, WINDOWS_REGISTRY_TARGETS,
 };
 pub use keyboard_layout::KeyboardLayout;
 pub use launch_at_login::{map_sm_status, LaunchAtLogin, LoginItemStatus};
@@ -90,7 +107,9 @@ impl std::fmt::Debug for Platform {
 pub fn current(paths: &AppPaths) -> Platform {
     #[cfg(target_os = "macos")]
     return macos::platform(paths);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    return windows::platform(paths);
+    #[cfg(not(any(target_os = "macos", windows)))]
     return fallback::platform(paths);
 }
 
@@ -132,6 +151,8 @@ pub mod peer_process;
 pub fn show_startup_error(title: &str, message: &str) {
     #[cfg(target_os = "macos")]
     macos::show_startup_error(title, message);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    windows::show_startup_error(title, message);
+    #[cfg(not(any(target_os = "macos", windows)))]
     let _ = (title, message);
 }

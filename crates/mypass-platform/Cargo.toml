@@ -9,9 +9,9 @@ repository.workspace = true
 publish = false
 
 # The only member with its own lint tables (guard `workspace_lints_forbid_unsafe`): an exact copy
-# of `[workspace.lints]` except `unsafe_code = "deny"` instead of `forbid`, because the macOS glue
-# calls Objective-C, Carbon and Security. `deny` can be lifted per module; only the allow-listed
-# macOS glue files do so (guard `unsafe_only_in_allow_listed_modules`, list in AGENTS.md). Keep
+# of `[workspace.lints]` except `unsafe_code = "deny"` instead of `forbid`, because native glue
+# calls Objective-C, Carbon, Security and Win32. `deny` can be lifted per module; only the allow-listed
+# native glue files do so (guard `unsafe_only_in_allow_listed_modules`, list in AGENTS.md). Keep
 # these tables in sync with the workspace.
 [lints.rust]
 unsafe_code = "deny"
@@ -27,17 +27,23 @@ default = []
 test-util = []
 
 [dependencies]
+getrandom.workspace = true
+hmac.workspace = true
 secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+uuid.workspace = true
 zeroize.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
-[target.'cfg(not(target_os = "macos"))'.dependencies]
+[target.'cfg(not(any(target_os = "macos", windows)))'.dependencies]
 arboard.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]

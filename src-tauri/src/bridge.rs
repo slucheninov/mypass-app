@@ -278,14 +278,13 @@ pub struct BridgeHandle {
     pub pairing: Arc<PairingManager>,
     pub diagnostics: Arc<DiagnosticsStore>,
     pub proposals: Arc<ProposalStore>,
-    /// The last host registration report (`None` until the startup registration ran, or when it
-    /// failed).
+    /// The last host registration report (`None` until the startup registration ran).
     pub registration: Arc<Mutex<Option<HostRegistrationReport>>>,
     registration_thread: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl BridgeHandle {
-    /// Waits for the startup registration to finish (tests, and nothing else).
+    /// Joins the startup worker during teardown, and at explicit test barriers.
     pub fn join_registration(&self) {
         let thread = lock(&self.registration_thread).take();
         if let Some(thread) = thread {
@@ -294,35 +293,44 @@ impl BridgeHandle {
     }
 }
 
-/// Registers the host with the browsers. A failure is reported as `None`, never fatal.
+pub(crate) fn registration_failure(
+    registrar: &dyn NativeHostRegistrar,
+    detail: String,
+) -> HostRegistrationReport {
+    HostRegistrationReport {
+        registrations: registrar
+            .status()
+            .into_iter()
+            .map(|mut row| {
+                row.state = mypass_platform::RegistrationState::Error;
+                row.detail = Some(detail.clone());
+                row
+            })
+            .collect(),
+        ..HostRegistrationReport::default()
+    }
+}
+
+/// Registers the host with the browsers. Failures stay in per-browser reports, never fatal.
 pub fn register_hosts(
     registrar: &dyn NativeHostRegistrar,
     bundled_host: Option<&Path>,
 ) -> Option<HostRegistrationReport> {
-    registrar.register(bundled_host?).ok()
+    let result = bundled_host.map_or_else(
+        || {
+            Err(mypass_platform::PlatformError::Failed(
+                "the host binary is not bundled with this build".into(),
+            ))
+        },
+        |host| registrar.register(host),
+    );
+    Some(result.unwrap_or_else(|e| registration_failure(registrar, e.to_string())))
 }
 
 /// Starts the bridge: pairing over the app-only secrets, the endpoint over the host-shared ones,
 /// the loopback server, and the host registration on a worker thread. A locked vault is fine: the
 /// service answers `locked`.
-#[cfg(test)]
-pub fn start_bridge(
-    core: &Arc<AppCore>,
-    windows: Arc<dyn WindowOps>,
-    events: Arc<dyn BridgeEvents>,
-    settings_gate: Arc<Mutex<()>>,
-    bundled_host: Option<PathBuf>,
-) -> Result<BridgeHandle, BridgeStartError> {
-    start_bridge_with_kind(
-        core,
-        windows,
-        events,
-        settings_gate,
-        bundled_host,
-        mypass_platform::endpoint_store::SharedStoreKind::File,
-    )
-}
-
+#[allow(clippy::too_many_arguments)]
 fn start_bridge_with_kind(
     core: &Arc<AppCore>,
     windows: Arc<dyn WindowOps>,
@@ -330,6 +338,7 @@ fn start_bridge_with_kind(
     settings_gate: Arc<Mutex<()>>,
     bundled_host: Option<PathBuf>,
     store_kind: mypass_platform::endpoint_store::SharedStoreKind,
+    registration_gate: Arc<Mutex<bool>>,
 ) -> Result<BridgeHandle, BridgeStartError> {
     let platform = core.platform();
     let scheduler = core.scheduler();
@@ -404,6 +413,8 @@ fn start_bridge_with_kind(
     )
     .map_err(BridgeStartError::Server)?;
 
+    // DPAPI uses the identical hashed filename: encrypted atomic publication itself retires
+    // the old plaintext record. Never delete it through FileSecretStore after publication.
     // R4/R38: delete ONLY the obsolete endpoint file, after the first successful Keychain
     // publication. This uses the hardened store's exact service/account deletion path.
     if store_kind == mypass_platform::endpoint_store::SharedStoreKind::Keychain
@@ -424,7 +435,11 @@ fn start_bridge_with_kind(
         std::thread::Builder::new()
             .name("mypass-host-register".into())
             .spawn(move || {
-                *lock(&slot) = register_hosts(registrar.as_ref(), bundled_host.as_deref());
+                let suppressed = lock(&registration_gate);
+                if !*suppressed {
+                    *lock(&slot) = register_hosts(registrar.as_ref(), bundled_host.as_deref());
+                }
+                drop(suppressed);
                 events.bridge_changed();
             })
             .map_err(|e| {
@@ -466,7 +481,7 @@ fn start_bridge_with_kind(
     })
 }
 
-type Starter = dyn Fn() -> Result<BridgeHandle, BridgeStartError> + Send + Sync;
+type Starter = dyn Fn(Arc<Mutex<bool>>) -> Result<BridgeHandle, BridgeStartError> + Send + Sync;
 
 struct StateInner {
     slot: Mutex<Option<Arc<BridgeHandle>>>,
@@ -476,6 +491,7 @@ struct StateInner {
     /// publish an endpoint record the exiting process never clears.
     quit: AtomicBool,
     starter: Box<Starter>,
+    registration_gate: Arc<Mutex<bool>>,
     secrets: Arc<dyn SecretStore>,
     bundled_host: Option<PathBuf>,
     events: Arc<dyn BridgeEvents>,
@@ -518,6 +534,7 @@ impl BridgeState {
             store_kind,
             quit: AtomicBool::new(false),
             starter,
+            registration_gate: Arc::new(Mutex::new(false)),
             secrets,
             bundled_host,
             events,
@@ -534,7 +551,7 @@ impl BridgeState {
         if slot.is_some() || self.0.quit.load(Ordering::SeqCst) {
             return Ok(());
         }
-        match (self.0.starter)() {
+        match (self.0.starter)(Arc::clone(&self.0.registration_gate)) {
             Ok(handle) => {
                 self.0.store_failed.store(false, Ordering::SeqCst);
                 *slot = Some(Arc::new(handle));
@@ -558,6 +575,12 @@ impl BridgeState {
 
     pub fn bundled_host(&self) -> Option<PathBuf> {
         self.0.bundled_host.clone()
+    }
+
+    /// Orders startup, repair and removal, including removal before the bridge can start.
+    /// The flag suppresses automatic registration for this run; explicit repair clears it.
+    pub(crate) fn registration_gate(&self) -> MutexGuard<'_, bool> {
+        lock(&self.0.registration_gate)
     }
 
     /// Keeps the report of a registration the user asked for and tells the webview.
@@ -596,6 +619,7 @@ impl BridgeState {
             slot.clone()
         };
         if let Some(handle) = handle {
+            handle.join_registration();
             handle.server.shutdown();
         }
     }
@@ -625,16 +649,9 @@ pub fn extension_folder(
 }
 
 pub fn endpoint_store_kind() -> mypass_platform::endpoint_store::SharedStoreKind {
-    #[cfg(target_os = "macos")]
-    {
-        mypass_platform::endpoint_store::running_store_kind(
-            mypass_platform::endpoint_store::StoreSide::App,
-        )
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        mypass_platform::endpoint_store::SharedStoreKind::File
-    }
+    mypass_platform::endpoint_store::running_store_kind(
+        mypass_platform::endpoint_store::StoreSide::App,
+    )
 }
 
 /// The production [`BridgeState`]: starts over `core` with the real windows and events, and the
@@ -657,7 +674,7 @@ pub fn build_state(
         let core = Arc::clone(core);
         let events = Arc::clone(&events);
         let host = bundled_host.clone();
-        Box::new(move || {
+        Box::new(move |registration_gate| {
             start_bridge_with_kind(
                 &core,
                 Arc::clone(&windows),
@@ -665,6 +682,7 @@ pub fn build_state(
                 Arc::clone(&settings_gate),
                 host.clone(),
                 store_kind,
+                registration_gate,
             )
         })
     };
@@ -764,13 +782,15 @@ pub(crate) mod test_support {
             let events: Arc<dyn BridgeEvents> = events.clone();
             let host = bundled_host.clone();
             let gate = Arc::clone(&settings_gate);
-            Box::new(move || {
-                start_bridge(
+            Box::new(move |registration_gate| {
+                start_bridge_with_kind(
                     &core,
                     Arc::clone(&windows),
                     Arc::clone(&events),
                     Arc::clone(&gate),
                     host.clone(),
+                    mypass_platform::endpoint_store::SharedStoreKind::File,
+                    registration_gate,
                 )
             })
         };
@@ -900,10 +920,30 @@ mod tests {
         let handle = f.handle();
         handle.join_registration();
         assert_eq!(f.w.fake.host_registrar.register_calls(), 1);
-        assert!(lock(&handle.registration).is_none());
+        assert!(lock(&handle.registration)
+            .as_ref()
+            .unwrap()
+            .registrations
+            .iter()
+            .all(|r| r.state == mypass_platform::RegistrationState::Error));
         f.w.core.vault_lock().unwrap();
         let reply = ask(&handle, &serde_json::json!({"type": "getFavorites"}));
         assert_eq!(reply["type"], "locked");
+    }
+
+    #[test]
+    fn shutdown_joins_the_registration_worker_and_startup_is_unconditional() {
+        let f = unstarted(false, Some(PathBuf::from("/h/mypass-host")));
+        for browser in mypass_platform::Browser::ALL {
+            f.w.fake
+                .host_registrar
+                .set_state(browser, mypass_platform::RegistrationState::Ok);
+        }
+        f.state.start().unwrap();
+        let handle = f.handle();
+        f.state.shutdown();
+        assert!(lock(&handle.registration_thread).is_none());
+        assert_eq!(f.w.fake.host_registrar.register_calls(), 1);
     }
 
     #[test]
@@ -923,6 +963,7 @@ mod tests {
         for (kind, fail) in [
             (SharedStoreKind::Keychain, false),
             (SharedStoreKind::File, false),
+            (SharedStoreKind::Dpapi, false),
             (SharedStoreKind::Keychain, true),
         ] {
             let f = unstarted(false, None);
@@ -950,6 +991,7 @@ mod tests {
                 f.settings_gate.clone(),
                 None,
                 kind,
+                Arc::new(Mutex::new(false)),
             );
             if fail {
                 assert!(result.is_err());
@@ -960,7 +1002,7 @@ mod tests {
             }
             assert_eq!(
                 legacy.load().unwrap().is_some(),
-                fail || kind == SharedStoreKind::File
+                fail || kind != SharedStoreKind::Keychain
             );
         }
     }

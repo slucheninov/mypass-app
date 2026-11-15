@@ -212,3 +212,57 @@ mod tests {
         );
     }
 }
+
+/// Windows registry targets, independent of the macOS channel directory table.
+#[derive(Debug, Clone, Copy)]
+pub struct RegistryTarget {
+    pub id: &'static str,
+    pub display: &'static str,
+    pub subkey: &'static str,
+    pub always: bool,
+    pub vendor_marker: Option<&'static str>,
+}
+/// Verified 2026-11-15 against Chrome and Edge primary documentation:
+/// https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging
+/// https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/native-messaging
+/// Chrome searches 32-bit then 64-bit views. Edge stops at its first matching key and falls
+/// back Edge -> Chromium -> Chrome. Every view/target we write points at one identical manifest.
+/// No documented separate vendor key was found in Brave/Vivaldi/Arc primary documentation;
+/// their Chrome fallback support remains unverified. Opera documents the Chrome location at
+/// https://help.opera.com/en/extensions/message-passing/ (not a separate Opera key).
+pub const WINDOWS_REGISTRY_TARGETS: [RegistryTarget; 3] = [
+    RegistryTarget {
+        id: "chrome",
+        display: "Google Chrome",
+        subkey: "Google\\Chrome",
+        always: true,
+        vendor_marker: None,
+    },
+    RegistryTarget {
+        id: "edge",
+        display: "Microsoft Edge",
+        subkey: "Microsoft\\Edge",
+        always: true,
+        vendor_marker: None,
+    },
+    RegistryTarget {
+        id: "chromium",
+        display: "Chromium",
+        subkey: "Chromium",
+        always: false,
+        vendor_marker: Some("Chromium"),
+    },
+];
+pub fn windows_host_key(
+    target: &RegistryTarget,
+    view: crate::windows_registry::View,
+) -> PlatformResult<crate::windows_registry::Key> {
+    crate::windows_registry::Key::new(
+        crate::windows_registry::Hive::CurrentUser,
+        view,
+        &format!(
+            "Software\\{}\\NativeMessagingHosts\\{HOST_NAME}",
+            target.subkey
+        ),
+    )
+}

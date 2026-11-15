@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { platform } from "../../lib/platform.svelte";
   import { api } from "../../lib/api";
   import { events, type Language, type LoginItemStatus, type SettingsPatch_Deserialize, type ShortcutKind } from "../../lib/bindings";
   import { t } from "../../lib/i18n/index.svelte";
@@ -34,7 +35,8 @@
     return error === null;
   }
 
-  // ---- launch at login: the platform status drives the row, re-read on open and after each toggle ----
+  // Windows keeps user intent separate from OS approval; macOS displays effective status.
+  // Re-read status on open and after each toggle.
   let loginStatus = $state<LoginItemStatus | null>(null);
   let loginError = $state<string | null>(null);
 
@@ -107,10 +109,18 @@
 
   {#if loginStatus !== null && loginStatus !== "unsupported"}
     <Row label={t("Launch at login")}>
-      <Toggle checked={loginStatus === "enabled"} label={t("Launch at login")} onchange={toggleLogin} />
+      <Toggle
+        checked={platform.os === "windows" ? settings.value.launchAtLogin : loginStatus === "enabled"}
+        label={t("Launch at login")}
+        onchange={toggleLogin}
+      />
       {#snippet hint()}
         {#if loginStatus === "requiresApproval"}
-          {t("Approval required. Open System Settings > General > Login Items and allow MyPass.")}
+          {#if platform.os === "windows"}
+            {t("Disabled in Windows Startup settings. Open Windows Settings > Apps > Startup and allow MyPass.")}
+          {:else}
+            {t("Approval required. Open System Settings > General > Login Items and allow MyPass.")}
+          {/if}
         {/if}
         {#if loginError}<span class="problem" role="alert">{loginError}</span>{/if}
       {/snippet}
@@ -140,6 +150,7 @@
     {/snippet}
   </Row>
 
+  {#if platform.os === "windows"}<p>{t("Ctrl+Shift+L is also used by Word and some editors. MyPass overrides it while running; you can change the lock hotkey here.")}</p>{/if}
   <HotkeyRow
     label={t("Lock hotkey")}
     value={settings.value.shortcutLock}

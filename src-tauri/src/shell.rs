@@ -128,8 +128,8 @@ pub enum LoginItemOutcome {
     InSync,
     /// The OS was changed and now matches.
     Applied,
-    /// Registered but waiting for the user's approval in System Settings; the item is not
-    /// active, so the setting is written back off.
+    /// Registered but waiting for OS approval. Windows preserves user intent independently
+    /// of this effective status; macOS writes the effective state back.
     NeedsApproval { setting_should_be: bool },
     /// The OS refused or ended in another state than requested.
     Failed {
@@ -142,6 +142,12 @@ pub enum LoginItemOutcome {
 
 /// Bring the OS login item to `desired` (startup and `SetAutostart`). Never panics.
 pub fn reconcile_login_item(desired: bool, launcher: &dyn LaunchAtLogin) -> LoginItemOutcome {
+    if let Err(error) = launcher.prepare_startup(desired) {
+        return LoginItemOutcome::Failed {
+            setting_should_be: false,
+            message: error.to_string(),
+        };
+    }
     let status = match launcher.status() {
         Ok(status) => status,
         Err(PlatformError::Unsupported(_)) => {
@@ -172,7 +178,7 @@ pub fn reconcile_login_item(desired: bool, launcher: &dyn LaunchAtLogin) -> Logi
         // Already registered and only waiting for the user: registering again cannot help.
         LoginItemStatus::RequiresApproval if desired => {
             return LoginItemOutcome::NeedsApproval {
-                setting_should_be: false,
+                setting_should_be: launcher.preserve_intent_on_approval(),
             }
         }
         LoginItemStatus::Enabled if desired => return LoginItemOutcome::InSync,
@@ -195,7 +201,7 @@ pub fn reconcile_login_item(desired: bool, launcher: &dyn LaunchAtLogin) -> Logi
         Ok(LoginItemStatus::Enabled) if desired => LoginItemOutcome::Applied,
         Ok(LoginItemStatus::Disabled) if !desired => LoginItemOutcome::Applied,
         Ok(LoginItemStatus::RequiresApproval) if desired => LoginItemOutcome::NeedsApproval {
-            setting_should_be: false,
+            setting_should_be: launcher.preserve_intent_on_approval(),
         },
         Ok(LoginItemStatus::RequiresApproval) => LoginItemOutcome::Applied,
         other => {
@@ -665,5 +671,228 @@ mod tests {
                 ("focus".to_string(), "main".to_string())
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod windows_batch_f_tests {
+    use super::*;
+    #[test]
+    fn reconcile_login_item_with_win_launch_at_login_round_trips() {
+        use mypass_platform::{
+            windows_launch_at_login::WinLaunchAtLogin, windows_registry::MemoryRegistry,
+        };
+        let launcher = WinLaunchAtLogin::new(
+            std::sync::Arc::new(MemoryRegistry::default()),
+            r"C:\MyPass.exe".into(),
+        );
+        assert_eq!(
+            reconcile_login_item(false, &launcher),
+            LoginItemOutcome::InSync
+        );
+        assert_eq!(
+            reconcile_login_item(true, &launcher),
+            LoginItemOutcome::Applied
+        );
+        assert_eq!(
+            reconcile_login_item(true, &launcher),
+            LoginItemOutcome::InSync
+        );
+        assert_eq!(
+            reconcile_login_item(false, &launcher),
+            LoginItemOutcome::Applied
+        );
+    }
+
+    #[test]
+    fn windows_approval_fallback_preserves_intent_across_two_launches() {
+        use mypass_platform::{
+            windows_launch_at_login::WinLaunchAtLogin,
+            windows_registry::{Hive, Key, MemoryRegistry, Read, Registry, Value, ValueType, View},
+        };
+        let run = Key::new(
+            Hive::CurrentUser,
+            View::Registry64,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+        )
+        .unwrap();
+        let approved = Key::new(
+            Hive::CurrentUser,
+            View::Registry64,
+            r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run",
+        )
+        .unwrap();
+        for record in [vec![], vec![2, 0, 0, 0], vec![3, 0, 0, 0], vec![255; 12]] {
+            let registry = std::sync::Arc::new(MemoryRegistry::default());
+            registry.create(&run).unwrap();
+            registry
+                .set(
+                    &run,
+                    "MyPass",
+                    Value::String(r#""C:\old\MyPass.exe" --autostarted"#.into()),
+                )
+                .unwrap();
+            registry.create(&approved).unwrap();
+            registry
+                .set(&approved, "MyPass", Value::Binary(record.clone()))
+                .unwrap();
+            let mut saved_intent = true;
+            for _ in 0..2 {
+                let launcher = WinLaunchAtLogin::new(registry.clone(), r"C:\new\MyPass.exe".into());
+                let outcome = reconcile_login_item(saved_intent, &launcher);
+                // Model the setting persisted by lifecycle::sync_login_item_report.
+                if let LoginItemOutcome::NeedsApproval { setting_should_be }
+                | LoginItemOutcome::Failed {
+                    setting_should_be, ..
+                } = outcome
+                {
+                    saved_intent = setting_should_be;
+                }
+            }
+            assert_eq!(
+                registry.read(&run, "MyPass", ValueType::String).unwrap(),
+                Read::Value(Value::String(r#""C:\new\MyPass.exe" --autostarted"#.into()))
+            );
+            assert!(saved_intent);
+            let launcher = WinLaunchAtLogin::new(registry.clone(), r"C:\new\MyPass.exe".into());
+            assert_eq!(
+                launcher.status().unwrap(),
+                LoginItemStatus::RequiresApproval
+            );
+            assert_eq!(
+                registry
+                    .read(&approved, "MyPass", ValueType::Binary)
+                    .unwrap(),
+                Read::Value(Value::Binary(record))
+            );
+            assert_eq!(
+                reconcile_login_item(false, &launcher),
+                LoginItemOutcome::Applied
+            );
+            assert_eq!(
+                registry.read(&run, "MyPass", ValueType::String).unwrap(),
+                Read::Missing
+            );
+            assert_eq!(
+                reconcile_login_item(false, &launcher),
+                LoginItemOutcome::InSync
+            );
+            // Explicit enable with a surviving approval record also preserves intent.
+            assert_eq!(
+                reconcile_login_item(true, &launcher),
+                LoginItemOutcome::NeedsApproval {
+                    setting_should_be: true
+                }
+            );
+            // Windows removing its restriction makes the existing registration effective.
+            registry.delete_value(&approved, "MyPass").unwrap();
+            assert_eq!(
+                reconcile_login_item(true, &launcher),
+                LoginItemOutcome::InSync
+            );
+        }
+    }
+
+    #[test]
+    fn panel_position_windows_table() {
+        for scale in [1.0, 1.5, 2.0] {
+            let work = PanelRect {
+                x: -1920.0,
+                y: 0.0,
+                w: 1920.0,
+                h: 1040.0,
+            };
+            for tray in [
+                PanelRect {
+                    x: -50.0,
+                    y: 1040.0,
+                    w: 32.0,
+                    h: 40.0,
+                },
+                PanelRect {
+                    x: -50.0,
+                    y: -40.0,
+                    w: 32.0,
+                    h: 40.0,
+                },
+                PanelRect {
+                    x: -1960.0,
+                    y: 500.0,
+                    w: 40.0,
+                    h: 32.0,
+                },
+                PanelRect {
+                    x: 0.0,
+                    y: 500.0,
+                    w: 40.0,
+                    h: 32.0,
+                },
+            ] {
+                let (x, y) =
+                    panel_position_windows(tray, work, 360.0 * scale, 420.0 * scale, scale);
+                assert!(x >= work.x && y >= work.y);
+                assert!(
+                    x + 360.0 * scale <= work.x + work.w && y + 420.0 * scale <= work.y + work.h
+                );
+                if tray.x < work.x {
+                    assert_eq!(x, work.x + 8.0 * scale);
+                }
+                if tray.x >= work.x + work.w {
+                    assert_eq!(x + 360.0 * scale, work.x + work.w - 8.0 * scale);
+                }
+            }
+        }
+    }
+    #[test]
+    fn tray_toggle_debounce_suppresses_blur_then_click() {
+        let mut gate = TrayToggleDebounce::default();
+        assert!(!gate.suppress(std::time::Duration::ZERO));
+        gate.blur(std::time::Duration::from_secs(1));
+        assert!(gate.suppress(std::time::Duration::from_millis(1249)));
+        gate.blur(std::time::Duration::from_secs(1));
+        assert!(!gate.suppress(std::time::Duration::from_millis(1250)));
+    }
+}
+
+/// Physical pixels throughout. Infer the taskbar edge from the icon relative to the work area.
+pub fn panel_position_windows(
+    tray: PanelRect,
+    work: PanelRect,
+    panel_w: f64,
+    panel_h: f64,
+    scale: f64,
+) -> (f64, f64) {
+    let margin = PANEL_MARGIN * scale;
+    let mut x = tray.x + tray.w / 2.0 - panel_w / 2.0;
+    let mut y = tray.y + tray.h + margin;
+    if tray.x + tray.w <= work.x {
+        x = work.x + margin;
+        y = tray.y + tray.h / 2.0 - panel_h / 2.0;
+    } else if tray.x >= work.x + work.w {
+        x = work.x + work.w - panel_w - margin;
+        y = tray.y + tray.h / 2.0 - panel_h / 2.0;
+    } else if tray.y >= work.y + work.h {
+        y = tray.y - panel_h - margin;
+    }
+    (
+        clamp_to(x, work.x + margin, work.x + work.w - panel_w - margin),
+        clamp_to(y, work.y + margin, work.y + work.h - panel_h - margin),
+    )
+}
+
+/// Monotonic timestamps are supplied by the runtime; tests advance them without sleeping.
+#[derive(Default)]
+pub struct TrayToggleDebounce {
+    last_blur: Option<std::time::Duration>,
+}
+impl TrayToggleDebounce {
+    pub fn blur(&mut self, now: std::time::Duration) {
+        self.last_blur = Some(now);
+    }
+    pub fn suppress(&mut self, now: std::time::Duration) -> bool {
+        self.last_blur
+            .take()
+            .and_then(|blur| now.checked_sub(blur))
+            .is_some_and(|elapsed| elapsed < std::time::Duration::from_millis(250))
     }
 }

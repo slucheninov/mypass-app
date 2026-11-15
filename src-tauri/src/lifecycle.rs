@@ -330,12 +330,24 @@ pub fn start_external_poll(
 /// (the caller emits `SettingsChanged`). Never calls the `settings_update` command, so it is safe
 /// under the settings gate.
 pub fn sync_login_item(core: &AppCore, desired: bool) -> Option<Settings> {
+    sync_login_item_report(core, desired, || {})
+}
+
+/// Startup supplies a native, sanitized failure notice; portable callers inject a recorder.
+pub fn sync_login_item_report(
+    core: &AppCore,
+    desired: bool,
+    failed: impl FnOnce(),
+) -> Option<Settings> {
     let should_be = match reconcile_login_item(desired, core.platform().launch_at_login.as_ref()) {
         LoginItemOutcome::InSync | LoginItemOutcome::Applied => return None,
-        LoginItemOutcome::NeedsApproval { setting_should_be }
-        | LoginItemOutcome::Failed {
+        LoginItemOutcome::Failed {
             setting_should_be, ..
+        } => {
+            failed();
+            setting_should_be
         }
+        LoginItemOutcome::NeedsApproval { setting_should_be }
         | LoginItemOutcome::Unsupported { setting_should_be } => setting_should_be,
     };
     if core.settings.get().launch_at_login == should_be {

@@ -33,6 +33,10 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+case "${TARGET:-$(uname -s)}" in
+  *windows*|MINGW*|MSYS*) unset MYPASS_SIGNING_IDENTITY APPLE_SIGNING_IDENTITY ;;
+esac
+
 # Never sign ad-hoc ("-" makes codesign and Tauri sign ad-hoc; an empty value is a mistake).
 if [[ -n "${MYPASS_SIGNING_IDENTITY+set}" ]]; then
   if [[ -z "$MYPASS_SIGNING_IDENTITY" || "$MYPASS_SIGNING_IDENTITY" == "-" ]]; then
@@ -62,6 +66,8 @@ if [[ -z "$TRIPLE" ]]; then
   echo "Error: could not read the host target triple from 'rustc -vV'." >&2
   exit 1
 fi
+
+bash scripts/check-host-deps.sh --target "$TRIPLE"
 
 cargo build -p mypass-host ${CARGO_FLAGS[@]+"${CARGO_FLAGS[@]}"}
 

@@ -127,6 +127,7 @@ fn release_scripts_are_bash_clean_and_tests_run_in_rust_part() {
         "bump-version",
         "check-version",
         "release-assets",
+        "publish-release",
         "check-host-deps",
     ] {
         let Some(out) = bash(&["-n", &format!("scripts/{script}.sh")]) else {

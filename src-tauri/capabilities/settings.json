@@ -26,6 +26,7 @@
     "allow-browser-revoke",
     "allow-browser-show-extension-folder",
     "allow-browser-status",
+    "allow-browser-unregister-host",
     "allow-device-unlock-configure",
     "allow-device-unlock-status",
     "allow-settings-get",

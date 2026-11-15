@@ -2,8 +2,8 @@
 
 use crate::PlatformResult;
 
-/// Identifies one write of ours: the macOS `changeCount`, elsewhere a write counter checked
-/// together with a content hash.
+/// Identifies one write: the macOS changeCount, a Windows token selecting a retained keyed
+/// content digest, or a fallback write counter checked together with a content hash.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClipboardStamp(pub u64);
 
@@ -15,7 +15,9 @@ pub trait SecureClipboard: Send + Sync {
     /// Clears the clipboard if it still holds the write identified by `stamp`. `Ok(true)` means
     /// cleared, `Ok(false)` means the user copied something else since, which is left alone.
     ///
-    /// The OS APIs offer no atomic compare-and-clear, so a copy made by another app between the
-    /// check and the clear can be wiped. The window is a few microseconds and is accepted.
+    /// Windows compares and clears under one open OS clipboard lock. macOS and fallback
+    /// APIs retain a small accepted check/clear race; their implementations document it.
+    /// Windows permits close-time format synthesis; content must match and our exclusion
+    /// marker must remain present. An identical re-copy retaining that marker may be cleared.
     fn clear_if_unchanged(&self, stamp: &ClipboardStamp) -> PlatformResult<bool>;
 }

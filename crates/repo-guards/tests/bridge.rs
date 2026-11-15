@@ -100,3 +100,42 @@ fn not_supported_passkeys_no_longer_exists() {
         "{needle} is still named in {offenders:?}"
     );
 }
+
+#[test]
+fn windows_host_protected_fixtures_are_statically_ignored_and_opted_in() {
+    for file in [
+        "crates/mypass-host/tests/host.rs",
+        "crates/mypass-host/tests/e2e.rs",
+    ] {
+        let src = read(file);
+        let mut count = 0;
+        for (header, body) in src
+            .split("#[test]")
+            .skip(1)
+            .filter_map(|part| part.split_once("fn "))
+        {
+            if body.starts_with("windows_integration_") {
+                assert!(
+                    header.contains("ignore ="),
+                    "{file}: native test is not statically ignored"
+                );
+                assert!(
+                    body.split_once('{')
+                        .unwrap()
+                        .1
+                        .trim_start()
+                        .starts_with("require_native_opt_in();"),
+                    "{file}: native test does not check the integration opt-in"
+                );
+                count += 1;
+            }
+        }
+        assert!(count >= 2, "{file}: lost protected host fixture inventory");
+        assert!(src.contains("host_shared_store(&paths(root), None)"));
+        assert!(!src.contains("dev-secret-store"));
+    }
+    let main = read("crates/mypass-host/src/main.rs");
+    assert!(main.contains("endpoint_peer_is_trusted(kind, port, pid)"));
+    assert!(!main.contains("DpapiSecretStore::app"));
+    assert!(!main.contains("platform::current"));
+}

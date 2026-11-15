@@ -9,7 +9,12 @@ use serde_yaml_ng::{Mapping, Value};
 /// Jobs whose `skipped` result the aggregator may accept: gated on a repository variable
 /// (`windows-integration`) or on changed paths (`crosscompat`, `package-smoke`, added by later
 /// tasks). Every other job, `changes` included, must be `success`.
-const GATED_JOBS: [&str; 3] = ["windows-integration", "crosscompat", "package-smoke"];
+const GATED_JOBS: [&str; 4] = [
+    "windows-integration",
+    "crosscompat",
+    "package-smoke",
+    "windows-package",
+];
 
 fn workflow(rel: &str) -> Value {
     serde_yaml_ng::from_str(&read(rel)).unwrap_or_else(|e| panic!("{rel} does not parse: {e}"))
@@ -88,7 +93,9 @@ fn ci_aggregator_needs_every_job() {
             "package-smoke",
             "test",
             "ui",
-            "windows-integration"
+            "windows-app",
+            "windows-integration",
+            "windows-package"
         ],
         "`ci.needs` must be exactly the parallel jobs of the workflow"
     );
@@ -345,11 +352,34 @@ fn windows_integration_job_is_gated_on_the_variable() {
         job.get("runs-on").and_then(Value::as_str),
         Some("windows-latest")
     );
+    let job_steps = steps(job);
+    let native_step = job_steps
+        .iter()
+        .find(|s| run_text(s).trim() == "bash scripts/test.sh --ci --only rust")
+        .expect("native runner step");
+    let env = native_step.get("env").unwrap();
+    assert_eq!(
+        env.get("MYPASS_WINDOWS_INTEGRATION_TESTS")
+            .and_then(Value::as_str),
+        Some("1")
+    );
+    assert_eq!(
+        env.get("RUST_TEST_THREADS").and_then(Value::as_str),
+        Some("1")
+    );
+    let runner = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/windows-integration.py"),
+    )
+    .unwrap();
+    assert!(runner.contains("\"--ignored\", \"windows_integration\""));
+    assert!(!runner.contains("--include-ignored"));
+    assert!(runner.contains("verify_execution(names, result.stdout)"));
     let runs: Vec<String> = steps(job).iter().map(|s| run_text(s)).collect();
     assert!(
         runs.iter()
-            .any(|r| r.trim() == "cargo test --workspace -- --ignored windows_integration"),
-        "missing the `cargo test --workspace -- --ignored windows_integration` step"
+            .any(|r| r.trim() == "bash scripts/test.sh --ci --only rust"),
+        "missing the isolated Windows integration test runner"
     );
 }
 
@@ -725,8 +755,10 @@ fn release_workflow_is_tag_only_minimal_and_publishes_last() {
             .collect::<Vec<_>>()
             .join("\n");
         if id.as_str() == Some("publish") {
-            assert!(runs.contains("--draft=false"));
-            assert!(runs.contains("check-assets"));
+            assert!(runs.contains("bash scripts/publish-release.sh"));
+            let gate = read("scripts/publish-release.sh");
+            assert!(gate.contains("check-assets"));
+            assert!(gate.contains("--draft=false"));
         } else {
             assert!(!runs.contains("--draft=false"));
         }
@@ -806,5 +838,127 @@ fn release_workflow_never_signs_ad_hoc_and_limits_write_permissions() {
         "'-r=designated => identifier \"com.mypass.chromehost\"",
     ] {
         assert!(script.contains(fragment), "packaging missing {fragment}");
+    }
+}
+
+#[test]
+fn windows_production_build_and_package_are_wired() {
+    let doc = workflow(".github/workflows/ci.yml");
+    let app = job(&doc, "windows-app");
+    assert_eq!(app["runs-on"].as_str(), Some("windows-latest"));
+    assert_eq!(needs_of(app), ["ui"]);
+    assert!(app.get("if").is_none());
+    let package = job(&doc, "windows-package");
+    assert_eq!(package["runs-on"].as_str(), Some("windows-latest"));
+    assert_eq!(needs_of(package), ["changes"]);
+    assert!(package["if"]
+        .as_str()
+        .unwrap()
+        .contains("needs.changes.outputs.package"));
+    for (value, command) in [(app, "build-windows.sh"), (package, "package-windows.sh")] {
+        let all = steps(value)
+            .iter()
+            .map(|s| run_text(s))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(all.contains(command));
+        assert!(!all.contains("codesign"));
+        for action in [
+            "Swatinem/rust-cache@",
+            "pnpm/action-setup@",
+            "actions/setup-node@",
+            "actions/setup-python@",
+        ] {
+            assert!(steps(value)
+                .iter()
+                .any(|s| s["uses"].as_str().is_some_and(|u| u.starts_with(action))));
+        }
+    }
+    let all = steps(package)
+        .iter()
+        .map(|s| run_text(s))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(all.contains("windows-host-smoke.py"));
+    assert!(all.contains("package-windows.test.sh"));
+    let upload = steps(package)
+        .into_iter()
+        .find(|s| {
+            s["uses"]
+                .as_str()
+                .is_some_and(|u| u.starts_with("actions/upload-artifact@"))
+        })
+        .unwrap();
+    assert_eq!(upload["with"]["retention-days"].as_i64(), Some(7));
+    assert_eq!(upload["with"]["if-no-files-found"].as_str(), Some("error"));
+}
+
+#[test]
+fn release_workflow_validates_windows_and_combined_publish() {
+    let doc = workflow(".github/workflows/release.yml");
+    assert_eq!(
+        doc["concurrency"]["cancel-in-progress"].as_bool(),
+        Some(false)
+    );
+    let windows = job(&doc, "release-windows");
+    assert_eq!(windows["runs-on"].as_str(), Some("windows-latest"));
+    assert_eq!(needs_of(windows), ["release-macos"]);
+    assert!(windows.get("if").is_none());
+    assert_eq!(
+        windows["env"]["PYTHONDONTWRITEBYTECODE"].as_str(),
+        Some("1")
+    );
+    let runs = steps(windows)
+        .iter()
+        .map(|s| run_text(s))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for required in [
+        "check-version.sh",
+        "cargo fmt --all -- --check",
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "bash scripts/test.sh --ci",
+        "check-host-deps.sh --target x86_64-pc-windows-msvc",
+        "package-windows.sh --release --version",
+        "--platform windows",
+        "windows-host-smoke.py",
+        "--json isDraft",
+        "gh release upload",
+        ".zip.sha256",
+    ] {
+        assert!(
+            runs.contains(required),
+            "missing Windows release validation: {required}"
+        );
+    }
+    assert!(
+        runs.find("bash scripts/test.sh --ci").unwrap() < runs.find("package-windows.sh").unwrap()
+    );
+    assert!(runs.find("--json isDraft").unwrap() < runs.find("gh release upload").unwrap());
+    assert!(!format!("{windows:?}").contains("secrets."));
+    let publish = job(&doc, "publish");
+    assert_eq!(needs_of(publish), ["release-macos", "release-windows"]);
+    assert!(publish.get("if").is_none()); // Default success() blocks failed/cancelled producers.
+    assert_eq!(
+        publish["env"]["MACOS_RESULT"].as_str(),
+        Some("${{ needs.release-macos.result }}")
+    );
+    assert_eq!(
+        publish["env"]["WINDOWS_RESULT"].as_str(),
+        Some("${{ needs.release-windows.result }}")
+    );
+    let gate = read("scripts/publish-release.sh");
+    assert!(gate.contains("\"$3\" == success && \"$4\" == success"));
+    assert!(gate.contains("--platform all"));
+    assert!(gate.find("check-assets").unwrap() < gate.find("--draft=false").unwrap());
+    for line in read(".github/workflows/release.yml")
+        .lines()
+        .filter(|l| l.contains("uses:"))
+    {
+        let (_, reference) = line.split_once('@').unwrap();
+        let (sha, tag) = reference.split_once(" # v").unwrap();
+        assert_eq!(sha.len(), 40);
+        assert!(sha.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(!tag.is_empty());
     }
 }

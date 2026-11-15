@@ -220,6 +220,43 @@ describe("launch at login", () => {
     await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
   });
 
+  it("Windows approval switch reflects persisted on intent", async () => {
+    await renderSettingsApp({ os: "windows" }, { prepare: (fake) => {
+      fake.state.loginItem = "requiresApproval";
+      fake.state.settings.launchAtLogin = true;
+    } });
+    const toggle = await screen.findByRole("switch", { name: "Launch at login" });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("Windows approval switch sends false when turning intent off", async () => {
+    const user = userEvent.setup();
+    const { fake } = await renderSettingsApp({ os: "windows" }, { prepare: (fake) => {
+      fake.state.loginItem = "requiresApproval";
+      fake.state.settings.launchAtLogin = true;
+    } });
+    const toggle = await screen.findByRole("switch", { name: "Launch at login" });
+    await user.click(toggle);
+    await waitFor(() => expect(patches(fake)).toEqual([{ launchAtLogin: false }]));
+    await waitFor(() => expect(fake.state.settings.launchAtLogin).toBe(false));
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("Windows approval switch sends true and reflects intent when turned on", async () => {
+    const user = userEvent.setup();
+    const { fake } = await renderSettingsApp({ os: "windows" }, { prepare: (fake) => {
+      fake.state.loginItem = "requiresApproval";
+      fake.state.settings.launchAtLogin = false;
+    } });
+    const toggle = await screen.findByRole("switch", { name: "Launch at login" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    await user.click(toggle);
+    await waitFor(() => expect(patches(fake)).toEqual([{ launchAtLogin: true }]));
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("true"));
+    expect(fake.state.settings.launchAtLogin).toBe(true);
+    expect(fake.state.loginItem).toBe("requiresApproval");
+  });
+
   it("login_item_error_message_is_shown_and_switch_reverts", async () => {
     const user = userEvent.setup();
     const { fake } = await renderSettingsApp({}, { prepare: (f) => (f.state.loginItemError = "Operation not permitted") });
@@ -260,3 +297,9 @@ describe("passkey proxy", () => {
     await waitFor(() => expect(toggle().getAttribute("aria-checked")).toBe("true"));
   });
 });
+
+ it("windows_login_approval_names_windows_startup_settings", async () => {
+   await renderSettingsApp({ os: "windows" }, { pane: "General", prepare: (fake) => { fake.state.loginItem = "requiresApproval"; } });
+   expect(await screen.findByText("Disabled in Windows Startup settings. Open Windows Settings > Apps > Startup and allow MyPass.")).toBeTruthy();
+   expect(screen.queryByText(/Open System Settings/)).toBeNull();
+ });

@@ -2824,6 +2824,8 @@ dependencies = [
  "arboard",
  "block2",
  "core-foundation",
+ "getrandom 0.4.3",
+ "hmac",
  "libc",
  "mypass-platform",
  "objc2",
@@ -2838,6 +2840,8 @@ dependencies = [
  "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
+ "uuid",
+ "windows",
  "zeroize",
 ]
 

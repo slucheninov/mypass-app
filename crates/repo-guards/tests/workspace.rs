@@ -301,6 +301,7 @@ const OWN_LINTS_MEMBER: &str = "mypass-platform";
 /// the Keychain access list of the bridge endpoint; ruling R1 of the stage 5 plan). Stage 6 adds `crates/mypass-platform/src/windows.rs` for the
 /// Win32 calls. Never a file outside `mypass-platform`.
 const UNSAFE_ALLOWED_FILES: &[&str] = &[
+    "crates/mypass-platform/src/windows.rs",
     "crates/mypass-platform/src/macos_peer_process.rs",
     "crates/mypass-platform/src/macos.rs",
     "crates/mypass-platform/src/macos_login_item.rs",
@@ -938,6 +939,20 @@ const FILE_MUTATIONS: &[(&str, &str, usize)] = &[
     // Update state atomic publication and temp cleanup (sync state uses write_atomic).
     ("crates/mypass-update/src/state.rs", "rename(&tmp,path)", 1),
     ("crates/mypass-update/src/state.rs", "remove_file(&tmp)", 1),
+    // DPAPI: only the armed create-new encrypted temp and a handle-validated secret item under
+    // pinned protected ancestors. Neither call can name a vault; MoveFileExW publishes ciphertext.
+    (
+        "crates/mypass-platform/src/windows.rs",
+        "remove_file(path)",
+        2,
+    ),
+    // Host lifecycle: a checked regular child of pinned protected host ancestors only.
+    // The portable core verifies exact manifest/receipt/temp/obsolete hash ownership first.
+    (
+        "crates/mypass-platform/src/windows.rs",
+        "remove_file(&path)",
+        1,
+    ),
     // File secret store: private temps and secret deletion, including the retired endpoint.
     (
         "crates/mypass-platform/src/file_store.rs",

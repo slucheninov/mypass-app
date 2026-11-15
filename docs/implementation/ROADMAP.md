@@ -33,8 +33,8 @@ Last updated: 2026-11-15
   custom dialog would let Cancel be the default.
 - [ ] Manual: confirm that Cmd+Q and logout/restart raise `ExitRequested` on macOS, and session end
   on Windows (checklist in `RUN.md`).
-- [ ] Tray panel position uses the panel window's scale factor; use the scale factor of the monitor
-  that holds the tray icon (mixed-DPI setups).
+- [ ] macOS tray panel position still uses the panel window's scale factor; use the scale factor
+  of the monitor that holds the tray icon (Windows now uses destination-monitor scale/work area).
 
 ## Stage 2b UI follow-ups
 
@@ -101,16 +101,17 @@ Last updated: 2026-11-15
 
 ## Stage 6 Windows
 
-- [ ] Windows bodies of every `mypass-platform` trait (DPAPI secret stores, lock and suspend events;
-  the clipboard history exclusion already ships through `arboard`).
-- [ ] The Browser pane reports a broken pairing list on Windows only because `UnsupportedSecretStore`
-  fails `PairingManager::new`; map `PlatformError::Unsupported` to a separate "not available on this
-  platform" state until the DPAPI store lands.
-- [ ] Native messaging host registration through the registry, Windows shell behaviour and zip
-  packaging.
-- [ ] Windows jobs in CI and the release workflow, and the Windows-only integration suite behind
-  `MYPASS_WINDOWS_INTEGRATION_TESTS`.
-- [ ] Manual checklist on the owner's Windows machine.
+- [ ] Manual: walk W1 to W17 in `RUN.md` on the owner's Windows machine using a vault copy,
+  including the Windows 10 22H2 / Windows 11 support floor. Desktop behavior is unverified;
+  passing Windows CI lint/test/app/package jobs do not establish desktop acceptance.
+- [ ] Execute the opted-in native Windows integration suite in an isolated disposable session;
+  `MYPASS_WINDOWS_INTEGRATION_TESTS` remains variable-gated and skipped by default.
+- [ ] Windows Hello device unlock and per-ceremony user verification (currently unavailable;
+  UV-required passkeys fail closed).
+- [ ] Windows Authenticode code signing and an installer (current distribution is an unsigned ZIP).
+- [ ] Native Windows ARM64 build and validation; x64 emulation is not an acceptance claim.
+- [ ] A snap-layout friendly native title bar (custom maximize controls have no snap flyout).
+- [ ] Add a documented Brave/Vivaldi/Opera key if the vendors publish one; fallback is unverified.
 
 ## Carried over from the Swift app
 

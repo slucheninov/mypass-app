@@ -5,6 +5,7 @@
 //! no I/O: the session's `UpdateService` owns those (scheduler, settings, state store, observers)
 //! and asks [`UpdatePolicy`] what to do. Every rule below is therefore tested without a scheduler.
 
+use crate::asset::{checksum_asset_for, select_asset, ReleasePlatform};
 use crate::feed::{ReleaseFeedError, ReleaseInfo};
 use crate::version::SemanticVersion;
 use std::time::Duration;
@@ -98,6 +99,8 @@ pub struct FinishInput<'a> {
     pub result: &'a Result<ReleaseInfo, ReleaseFeedError>,
     /// The running version.
     pub current: SemanticVersion,
+    /// The build target, or None when no artifact is published for it.
+    pub platform: Option<ReleasePlatform>,
     /// The status before the check began (restored by a failed scheduled check).
     pub previous: &'a UpdateStatus,
     /// Whether the check counts as manual, including an upgrade by a second caller.
@@ -156,14 +159,24 @@ impl UpdatePolicy {
     /// - A newer release sets `Available`; the banner is shown unless its version string equals
     ///   the dismissed one (equality, not order: a release newer than the dismissed one always
     ///   brings the banner back).
-    /// - Equal or older sets `UpToDate` and hides the banner.
+    /// - A missing target payload/checksum, unsupported target, or equal/older release sets
+    ///   `UpToDate` and hides the banner.
     /// - A failed manual check sets `Failed(kind)`; a failed scheduled check silently restores the
     ///   previous status. Neither touches the banner.
     ///
     /// The caller writes `last_run` after every attempt, failures included.
     pub fn finish(input: FinishInput<'_>) -> CheckOutcome {
         match input.result {
-            Ok(release) if release.version > input.current => {
+            Ok(release)
+                if release.version > input.current
+                    && input
+                        .platform
+                        .and_then(|platform| {
+                            let asset = select_asset(&release.assets, platform, &release.version)?;
+                            checksum_asset_for(asset, &release.assets)
+                        })
+                        .is_some() =>
+            {
                 let dismissed = input
                     .dismissed_version
                     .is_some_and(|d| d == release.version.to_string());
@@ -240,6 +253,14 @@ mod tests {
 
     fn release(version: &str) -> ReleaseInfo {
         ReleaseInfo {
+            assets: vec![
+                crate::ReleaseAsset {
+                    name: format!("MyPass-{version}-macos-arm64.dmg"),
+                },
+                crate::ReleaseAsset {
+                    name: "SHA256SUMS.txt".into(),
+                },
+            ],
             version: v(version),
             tag: format!("v{version}"),
             url: format!("https://github.com/slucheninov/mypass-app/releases/tag/v{version}"),
@@ -296,6 +317,7 @@ mod tests {
             let outcome = UpdatePolicy::finish(FinishInput {
                 result,
                 current: self.current.unwrap(),
+                platform: Some(ReleasePlatform::MacosArm64),
                 previous,
                 manual,
                 dismissed_version: self.dismissed.as_deref(),
@@ -450,6 +472,7 @@ mod tests {
         let outcome = UpdatePolicy::finish(FinishInput {
             result: &Err(ReleaseFeedError::Offline),
             current: v("0.7.0"),
+            platform: Some(ReleasePlatform::MacosArm64),
             previous: &previous,
             manual: true,
             dismissed_version: None,

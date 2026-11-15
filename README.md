@@ -21,14 +21,13 @@
 
 MyPass keeps your passwords, notes and one-time codes in a single encrypted file in the KeePass
 **KDBX4** format, so your vault also opens in KeePassXC and other KeePass-compatible apps. There is
-no lock-in. It is a native desktop app: macOS first, Windows right after. A Chromium browser
-extension (autofill, one-time codes, passkeys) follows.
+no lock-in. It is a desktop app for macOS and Windows x64 with a Chromium browser
+extension for autofill, one-time codes and passkeys.
 
 > [!NOTE]
-> MyPass is under development. The vault engine and the core logic (the Rust core) are done and
-> tested. The desktop app, the installers and the browser extension are not released yet, so there
-> is nothing to download yet and the Download badge stays empty until the first release. See
-> [`docs/implementation/ROADMAP.md`](docs/implementation/ROADMAP.md) for what is next.
+> MyPass is under development. The desktop app, extension and packaging are implemented;
+> release downloads depend on published version tags. Windows desktop checks remain owner work.
+> See [`docs/implementation/ROADMAP.md`](docs/implementation/ROADMAP.md) for open work.
 
 ## Features
 
@@ -43,23 +42,32 @@ extension (autofill, one-time codes, passkeys) follows.
 - 🔄 **Merge two copies of a vault.** If the same vault changed on two computers, the copies merge without losing data: entries are matched by identity, the newest change wins, history is kept and deletions are respected.
 - 🧼 **Careful with secrets.** Your vault is protected by a master password, and secrets are wiped from memory where possible and never printed in debug output.
 
-### Coming next
-
-- 🖥️ Desktop app for macOS, then Windows
-- 🧩 Browser extension with autofill, one-time codes and passkeys
-- 🔑 Unlock key stored in the operating system keychain or secret store
-
 ## Download
 
-Releases will be published at <https://github.com/slucheninov/mypass-app/releases/latest>, macOS
-first and Windows after. There are no files yet. This section will list the files when the first
-release is out.
+See the [release assets](https://github.com/slucheninov/mypass-app/releases/latest) for available
+versions: macOS arm64 DMG, Windows x64 ZIP and Chromium extension ZIP. Building locally does not
+publish a release.
 
 ## Install
 
-For now there is nothing to install. Installation steps will be added here with the first release.
-The expected flow is to open the disk image and drag the app to Applications on macOS, and to run
-the installer on Windows.
+On macOS 14+, download `MyPass-X.Y.Z-macos-arm64.dmg` from the
+[latest release](https://github.com/slucheninov/mypass-app/releases/latest), verify `SHA256SUMS.txt`
+and follow its `INSTALL.txt` to remove quarantine and drag MyPass to Applications.
+The Apple Development build is not notarized.
+
+On Windows 10 22H2 or Windows 11 x64, download `MyPass-X.Y.Z-windows-x64.zip` and its
+`.zip.sha256` from the [release assets](https://github.com/slucheninov/mypass-app/releases/latest).
+Compare `Get-FileHash -Algorithm SHA256` with the checksum, then Properties > Unblock the ZIP
+before extracting all files together. Run `MyPass.exe`; follow `INSTALL.txt` for SmartScreen's
+More info > Run anyway path and the Microsoft Evergreen WebView2 Runtime if missing. The ZIP
+is unsigned and portable; no administrator rights are needed. Keep `mypass-native-host.exe` and
+`extension/` beside the app. Windows uses master-password unlock; Windows Hello is deferred.
+
+Load `extension/` unpacked in Chrome or Edge and pair in Settings > Browser. Show extension folder
+can reveal a versioned writable copy. First launch registers the native messaging host for the
+current user. To remove integration use Settings > Browser > Remove browser integration; launching
+again registers it again. Quit before deleting the extracted app folder. Preserve vaults and
+backups; integration removal never deletes them. Recovery checks live in [`RUN.md`](RUN.md).
 
 ## Your data and privacy
 

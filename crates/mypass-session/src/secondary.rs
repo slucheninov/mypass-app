@@ -1368,26 +1368,66 @@ pub(crate) fn validate_folder(
     primary: &Path,
     file_name: &str,
 ) -> Result<PathBuf, SecondaryUnavailable> {
+    validate_folder_with_identity(folder, primary, file_name, mypass_platform::file_identity)
+}
+
+// Inject only the identity query; validation and error propagation stay identical in tests.
+fn validate_folder_with_identity(
+    folder: &str,
+    primary: &Path,
+    file_name: &str,
+    identity: impl Fn(&Path) -> std::io::Result<mypass_platform::FileIdentity>,
+) -> Result<PathBuf, SecondaryUnavailable> {
     let path = Path::new(folder);
     if folder.is_empty() || !path.is_absolute() {
         return Err(SecondaryUnavailable::InvalidFolder);
+    }
+    #[cfg(windows)]
+    {
+        mypass_platform::windows_paths::validate_path(folder)
+            .and_then(|()| mypass_platform::windows_paths::validate_component(file_name))
+            .map_err(|_| SecondaryUnavailable::InvalidFolder)?;
     }
     let meta = fs::metadata(path).map_err(folder_error)?;
     if !meta.is_dir() {
         return Err(SecondaryUnavailable::InvalidFolder);
     }
     let dir = fs::canonicalize(path).map_err(folder_error)?;
-    let primary = fs::canonicalize(primary).unwrap_or_else(|_| primary.to_path_buf());
-    if let Some(parent) = primary.parent() {
-        if dir == parent || same_node(&dir, parent) {
-            return Err(SecondaryUnavailable::InvalidFolder);
-        }
-    }
-    let target = dir.join(file_name);
-    if fs::canonicalize(&target).is_ok_and(|t| t == primary) || same_node(&target, &primary) {
+    let invalid = |_| SecondaryUnavailable::InvalidFolder;
+    let primary = fs::canonicalize(primary).map_err(invalid)?;
+    let primary_id = identity(&primary).map_err(identity_error)?;
+    let parent = primary
+        .parent()
+        .ok_or(SecondaryUnavailable::InvalidFolder)?;
+    if dir == parent
+        || identity(&dir).map_err(identity_error)? == identity(parent).map_err(identity_error)?
+    {
         return Err(SecondaryUnavailable::InvalidFolder);
     }
+    let target = dir.join(file_name);
+    // Only a genuinely absent directory entry is allowed to skip identity inspection.
+    // A dangling symlink, sharing violation or inaccessible existing target fails closed.
+    match fs::symlink_metadata(&target) {
+        Ok(_) => {
+            let canonical = fs::canonicalize(&target).map_err(invalid)?;
+            let target_id = identity(&canonical).map_err(identity_error)?;
+            if canonical == primary || target_id == primary_id {
+                return Err(SecondaryUnavailable::InvalidFolder);
+            }
+        }
+        Err(e) if e.kind() == ErrorKind::NotFound => {}
+        Err(_) => return Err(SecondaryUnavailable::InvalidFolder),
+    }
     Ok(dir)
+}
+
+/// Identity-unavailable volumes are unsupported for sync; access and race errors are invalid.
+fn identity_error(e: std::io::Error) -> SecondaryUnavailable {
+    if e.kind() == ErrorKind::Unsupported {
+        SecondaryUnavailable::UnsupportedFolder
+    } else {
+        SecondaryUnavailable::InvalidFolder
+    }
 }
 
 /// Only a path that does not exist is a missing folder (retried: an unmounted drive comes back);
@@ -1397,26 +1437,6 @@ fn folder_error(e: std::io::Error) -> SecondaryUnavailable {
         SecondaryUnavailable::FolderMissing
     } else {
         SecondaryUnavailable::InvalidFolder
-    }
-}
-
-/// Whether two existing paths are the same file-system node (catches a case-insensitive alias
-/// or a hard link that `canonicalize` leaves different).
-#[cfg(unix)]
-fn same_node(a: &Path, b: &Path) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    match (fs::metadata(a), fs::metadata(b)) {
-        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
-        _ => false,
-    }
-}
-
-/// Windows (stage 6): `canonicalize` already resolves aliases; compare case-insensitively.
-#[cfg(not(unix))]
-fn same_node(a: &Path, b: &Path) -> bool {
-    match (fs::canonicalize(a), fs::canonicalize(b)) {
-        (Ok(a), Ok(b)) => a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase(),
-        _ => false,
     }
 }
 

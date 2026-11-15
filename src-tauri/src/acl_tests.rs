@@ -82,6 +82,7 @@ const SETTINGS: &[&str] = &[
     "browser_revoke",
     "browser_show_extension_folder",
     "browser_status",
+    "browser_unregister_host",
     "device_unlock_configure",
     "device_unlock_status",
     "settings_get",
@@ -230,5 +231,18 @@ fn compiled_acl_resolves_specta_commands_only_for_their_window() {
         assert!(authority
             .resolve_access(&command, "unknown", "unknown", &tauri::ipc::Origin::Local)
             .is_none());
+    }
+}
+
+#[test]
+fn browser_unregister_host_is_settings_only() {
+    for label in ["main", "tray-panel", "settings"] {
+        let json = capability(label);
+        let granted = json["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p.as_str() == Some("allow-browser-unregister-host"));
+        assert_eq!(granted, label == "settings");
     }
 }

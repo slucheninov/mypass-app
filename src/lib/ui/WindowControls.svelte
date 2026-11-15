@@ -43,7 +43,7 @@
   <!-- Native traffic lights sit on the left; this spacer keeps toolbar content clear of them. -->
   <div class="inset" data-testid="titlebar-inset" style="width: 72px"></div>
 {:else}
-  <div class="bar" data-tauri-drag-region>
+  <div class="bar" class:windows={os === "windows"} data-tauri-drag-region>
     <button type="button" aria-label={t("Minimize")} title={t("Minimize")} onclick={() => run(() => getCurrentWindow().minimize())}>
       <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" focusable="false"><path d="M0 5h10" stroke="currentColor" fill="none" /></svg>
     </button>
@@ -84,6 +84,9 @@
     border: 0;
     background: transparent;
     color: var(--text);
+  }
+  .windows button {
+    height: 32px;
   }
   button:hover {
     background: var(--hover);

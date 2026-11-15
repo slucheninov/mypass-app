@@ -1,5 +1,6 @@
-//! Which store the bridge endpoint record lives in (stage 5, ruling R4): the Keychain item that
-//! trusts only the team-signed app and host, or the hardened 0600 file store.
+//! Windows always uses current-user DPAPI files, without a plaintext fallback.
+//! On macOS, the bridge endpoint lives in Keychain for team-signed binaries and the hardened
+//! 0600 file store for unsigned development binaries.
 //!
 //! The endpoint record (port and token of the loopback server) is written by the app and read by
 //! the native messaging host. In the file store any process of the same user can rewrite it; the
@@ -7,7 +8,7 @@
 //! app's and the host's, both pinned to the team `W645B93PPQ`. Never a path or a cdhash: the item
 //! keeps working across updates and refuses a binary that merely sits at the right path.
 //!
-//! The choice fails closed: a binary that satisfies its own team requirement always uses the
+//! The macOS choice fails closed: a binary that satisfies its own team requirement always uses the
 //! Keychain, never the file store. When its peer is missing or not team-signed, writing the record
 //! fails (the bridge does not start) instead of downgrading to a store any process can rewrite.
 //! Only an unsigned or ad-hoc signed development binary uses the file store, so development runs
@@ -15,8 +16,8 @@
 //! decision is pure ([`select_shared_store`]) and tested with a fake [`SignatureProbe`]; the macOS
 //! probe and the Keychain store live in `macos_keychain_acl.rs`.
 //!
-//! The app switch-over (writing the endpoint here, deleting the old file record) and locating the
-//! peer binary are the app's and the host's (batch H); this module only answers "which store".
+//! Windows encrypted publication replaces the exact legacy filename; no legacy plaintext is
+//! read or migrated. Only macOS Keychain publication removes a separate legacy file.
 
 use crate::{AppPaths, SecretStore};
 #[cfg(any(target_os = "macos", test))]
@@ -57,8 +58,48 @@ pub trait SignatureProbe {
 pub enum SharedStoreKind {
     /// The Keychain item trusting the team-signed app and host.
     Keychain,
+    /// Current-user DPAPI encrypted files on Windows; no plaintext fallback.
+    Dpapi,
     /// The hardened 0600 file store under `AppPaths::secrets_shared`.
     File,
+}
+
+impl SharedStoreKind {
+    pub fn diagnostic_name(self) -> &'static str {
+        match self {
+            Self::Keychain => "keychain",
+            Self::Dpapi => "dpapi",
+            Self::File => "developmentFile",
+        }
+    }
+    pub fn can_reinstall_host(self) -> bool {
+        matches!(self, Self::File | Self::Dpapi)
+    }
+}
+#[derive(Clone, Copy)]
+pub enum StorePlatform {
+    Macos,
+    Windows,
+    Other,
+}
+/// Injected platform policy: Windows never consults Apple signatures or chooses File.
+pub fn select_store_for(
+    platform: StorePlatform,
+    probe: &dyn SignatureProbe,
+    side: StoreSide,
+) -> SharedStoreKind {
+    match platform {
+        StorePlatform::Windows => SharedStoreKind::Dpapi,
+        StorePlatform::Macos => {
+            let (own, _) = side.requirements();
+            if probe.running_binary_satisfies(own) {
+                SharedStoreKind::Keychain
+            } else {
+                SharedStoreKind::File
+            }
+        }
+        StorePlatform::Other => SharedStoreKind::File,
+    }
 }
 
 /// Which binary is asking.
@@ -79,17 +120,19 @@ impl StoreSide {
     }
 }
 
-/// The one predicate both sides use: the Keychain whenever this binary is team-signed with its
+/// Both sides choose DPAPI unconditionally on Windows. On macOS, Keychain whenever team-signed with its
 /// expected identifier (fail closed: the peer is checked when the record is written, and a
 /// missing or foreign peer makes that write fail rather than choosing the file store); the file
 /// store only for an unsigned or ad-hoc signed development binary.
 pub fn select_shared_store(probe: &dyn SignatureProbe, side: StoreSide) -> SharedStoreKind {
-    let (own, _) = side.requirements();
-    if probe.running_binary_satisfies(own) {
-        SharedStoreKind::Keychain
+    let platform = if cfg!(windows) {
+        StorePlatform::Windows
+    } else if cfg!(target_os = "macos") {
+        StorePlatform::Macos
     } else {
-        SharedStoreKind::File
-    }
+        StorePlatform::Other
+    };
+    select_store_for(platform, probe, side)
 }
 
 /// The only host path accepted by the signed app: a sibling inside its own app bundle.
@@ -144,6 +187,12 @@ fn shared_store_for(
     {
         let _ = (side, peer);
     }
+    #[cfg(windows)]
+    return (
+        SharedStoreKind::Dpapi,
+        Arc::new(crate::DpapiSecretStore::shared(paths)),
+    );
+    #[cfg(not(windows))]
     (SharedStoreKind::File, Arc::new(crate::shared_store(paths)))
 }
 
@@ -208,6 +257,9 @@ pub fn running_store_kind(side: StoreSide) -> SharedStoreKind {
     #[cfg(not(target_os = "macos"))]
     {
         let _ = side;
+        #[cfg(windows)]
+        return SharedStoreKind::Dpapi;
+        #[cfg(not(windows))]
         SharedStoreKind::File
     }
 }
@@ -312,11 +364,21 @@ mod tests {
             (&host_swapped, App, Keychain),
         ];
         for (i, (probe, side, expected)) in cases.into_iter().enumerate() {
-            assert_eq!(select_shared_store(probe, side), expected, "case {i}");
+            assert_eq!(
+                select_store_for(StorePlatform::Macos, probe, side),
+                expected,
+                "case {i}"
+            );
         }
         // The app requirement never satisfies the host side and the other way round.
-        assert_eq!(select_shared_store(&only_host_signed, App), File);
-        assert_eq!(select_shared_store(&host_swapped, Host), File);
+        assert_eq!(
+            select_store_for(StorePlatform::Macos, &only_host_signed, App),
+            File
+        );
+        assert_eq!(
+            select_store_for(StorePlatform::Macos, &host_swapped, Host),
+            File
+        );
         assert!(!both_signed.binary_satisfies(&app(), HOST_REQUIREMENT));
     }
 

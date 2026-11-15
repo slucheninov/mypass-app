@@ -20,6 +20,7 @@ pub mod state;
 #[cfg(test)]
 mod testing;
 pub mod tray;
+pub mod windows_boot;
 pub mod wiring;
 
 use std::path::Path;
@@ -56,6 +57,7 @@ pub fn commands() -> Commands<tauri::Wry> {
         browser::browser_revoke,
         browser::browser_show_extension_folder,
         browser::browser_status,
+        browser::browser_unregister_host,
         device::device_unlock_status,
         device::device_unlock_configure,
         device::device_unlock_consume_extension_request,
@@ -181,6 +183,17 @@ pub fn run() -> tauri::Result<()> {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build());
+    let context = app_context();
+    #[cfg(windows)]
+    let context = {
+        let mut context = context;
+        let paths = mypass_platform::AppPaths::resolve()
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        for window in &mut context.config_mut().app.windows {
+            window.data_directory = Some(paths.data_dir.join("webview2"));
+        }
+        context
+    };
     let app = tauri_builder
         .invoke_handler(builder.invoke_handler())
         .on_window_event(shell_runtime::on_window_event)
@@ -190,7 +203,7 @@ pub fn run() -> tauri::Result<()> {
             shell_runtime::start(app);
             Ok(())
         })
-        .build(app_context())?;
+        .build(context)?;
     app.run(|app, event| shell_runtime::on_run_event(app, &event));
     Ok(())
 }
@@ -420,6 +433,7 @@ mod tests {
             "browser_revoke",
             "browser_show_extension_folder",
             "browser_status",
+            "browser_unregister_host",
         ] {
             assert!(
                 command_names().iter().any(|n| n == name),

@@ -4,6 +4,7 @@
   // `browser` store (refreshed on mount and on every `BridgeChangedEvent`); it never holds the
   // pairing code, which belongs to the main window's sheet.
   import { onMount } from "svelte";
+  import { platform } from "../../lib/platform.svelte";
   import { api } from "../../lib/api";
   import type { BrowserDiagnosticsDto, PairedBrowserDto_Serialize } from "../../lib/bindings";
   import { formatDate } from "../../lib/i18n/format";
@@ -18,6 +19,7 @@
 
   let helping = $state(false);
   let revoking = $state<PairedBrowserDto_Serialize | null>(null);
+  let removing = $state(false);
   let resetting = $state(false);
   let busy = $state(false);
 
@@ -105,6 +107,20 @@
     }
   }
 
+  async function removeIntegration() {
+    if (busy) return;
+    busy = true;
+    try {
+      const registrations = await api.browserUnregisterHost();
+      if (browser.status) browser.status = { ...browser.status, registrations };
+      removing = false;
+    } catch (e) {
+      toasts.reportError(e);
+    } finally {
+      busy = false;
+    }
+  }
+
   async function reset() {
     if (busy) return;
     busy = true;
@@ -181,6 +197,13 @@
 
   <h2>{t("Native host")}</h2>
   {#if status.endpointStore === "developmentFile"}<p>{t("Development file store")}</p>{/if}
+  {#if status.endpointStore === "dpapi"}<p>{t("Windows DPAPI store")}</p>{/if}
+  {#if platform.os === "windows"}
+    <p>{t("Chrome and Edge are supported. Chromium is registered when installed. Other Chromium browsers may use these registrations, but support is unverified.")}</p>
+  {/if}
+  {#each status.registrations.filter((r) => r.state === "error" || r.state === "stale") as failed (failed.id)}
+    <div class="notice" role="alert">{failed.display}: {failed.detail ?? registrationLabel(failed.state)}</div>
+  {/each}
   {#if status.registrations.length === 0}
     <p class="empty">{t("No supported browsers found")}</p>
   {:else}
@@ -193,11 +216,22 @@
       {/each}
     </ul>
   {/if}
+  {#if platform.os === "windows"}<p><Button variant="danger" disabled={busy} onclick={() => (removing = true)}>{t("Remove browser integration")}</Button></p>{/if}
   {#if status.canReinstallHost}<p><Button disabled={busy} onclick={() => void repair()}>{t("Repair")}</Button></p>{/if}
 {/if}
 
 {#if helping}
   <BrowserHelpSheet onclose={() => (helping = false)} />
+{/if}
+
+{#if removing}
+  <Modal open={true} title={t("Remove browser integration?")} onclose={() => (removing = false)}>
+    <p>{t("MyPass will register browser integration again on the next launch. Repair restores it now. To uninstall, remove integration, then quit MyPass and delete the extracted app.")}</p>
+    {#snippet footer()}
+      <Button onclick={() => (removing = false)}>{t("Cancel")}</Button>
+      <Button variant="danger" disabled={busy} onclick={() => void removeIntegration()}>{t("Remove")}</Button>
+    {/snippet}
+  </Modal>
 {/if}
 
 {#if revoking}

@@ -152,16 +152,26 @@ pub fn open_settings(app: &AppHandle, pane: Option<&str>) -> Result<(), ApiError
             }
             window
         }
-        None => WebviewWindowBuilder::new(
-            app,
-            SETTINGS_WINDOW,
-            WebviewUrl::App(settings_url(pane).into()),
-        )
-        .title("MyPass")
-        .inner_size(640.0, 520.0)
-        .visible(false)
-        .build()
-        .map_err(|e| super::internal(e.to_string()))?,
+        None => {
+            let builder = WebviewWindowBuilder::new(
+                app,
+                SETTINGS_WINDOW,
+                WebviewUrl::App(settings_url(pane).into()),
+            );
+            #[cfg(windows)]
+            let builder = builder.data_directory(
+                mypass_platform::AppPaths::resolve()
+                    .map_err(|e| super::internal(e.to_string()))?
+                    .data_dir
+                    .join("webview2"),
+            );
+            builder
+                .title("MyPass")
+                .inner_size(640.0, 520.0)
+                .visible(false)
+                .build()
+                .map_err(|e| super::internal(e.to_string()))?
+        }
     };
     window.show().map_err(|e| super::internal(e.to_string()))?;
     window

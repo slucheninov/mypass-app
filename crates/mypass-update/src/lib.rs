@@ -9,6 +9,7 @@
 //! The HTTP client is the `github` feature (default off), enabled by `src-tauri` alone, so no other
 //! crate and never `mypass-host` links it.
 
+mod asset;
 mod feed;
 mod policy;
 mod state;
@@ -17,6 +18,9 @@ mod version;
 #[cfg(feature = "github")]
 mod github;
 
+pub use asset::{
+    checksum_asset_for, current_release_platform, select_asset, ReleaseAsset, ReleasePlatform,
+};
 pub use feed::{
     parse_release_payload, validate_release_url, NoopFeed, ReleaseFeed, ReleaseFeedError,
     ReleaseInfo, REPOSITORY,

@@ -165,7 +165,27 @@ pub fn status(
         pairing_store_failed: store_failed,
         paired,
         pairing,
-        registrations: registrar.status().iter().map(registration_dto).collect(),
+        registrations: {
+            let mut rows = registrar.status();
+            if let Some(handle) = handle {
+                let report = handle
+                    .registration
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(report) = report.as_ref() {
+                    for failed in report
+                        .registrations
+                        .iter()
+                        .filter(|r| r.state == mypass_platform::RegistrationState::Error)
+                    {
+                        if let Some(row) = rows.iter_mut().find(|r| r.id == failed.id) {
+                            *row = failed.clone();
+                        }
+                    }
+                }
+            }
+            rows.iter().map(registration_dto).collect()
+        },
         endpoint_store: "developmentFile".into(),
         can_reinstall_host: true,
         host_path: host_path.map(|p| p.display().to_string()),
@@ -215,12 +235,55 @@ pub fn reinstall_host(
             message: "the host binary is not bundled with this build".to_owned(),
         });
     };
+    let mut suppressed = state.registration_gate();
+    let report = registrar.register(bundled).map_err(|e| {
+        state.record_registration(crate::bridge::registration_failure(
+            registrar,
+            e.to_string(),
+        ));
+        super::internal("host registration failed")
+    })?;
+    let rows = report.registrations.iter().map(registration_dto).collect();
+    *suppressed = false;
+    state.record_registration(report);
+    Ok(rows)
+}
+
+/// Removes only this installation's integration. Platform is injected for portable tests.
+pub fn unregister_host(
+    state: &BridgeState,
+    registrar: &dyn NativeHostRegistrar,
+    windows: bool,
+) -> Result<Vec<BrowserRegistrationDto>, ApiError> {
+    if !windows {
+        return Err(ApiError {
+            code: ErrorCode::InvalidInput,
+            message: "browser integration removal is Windows-only".into(),
+        });
+    }
+    let mut suppressed = state.registration_gate();
+    // Even partial removal must not race a queued startup registration.
+    *suppressed = true;
     let report = registrar
-        .register(bundled)
-        .map_err(|_| super::internal("host registration failed"))?;
+        .unregister()
+        .map_err(|_| super::internal("host removal failed"))?;
     let rows = report.registrations.iter().map(registration_dto).collect();
     state.record_registration(report);
     Ok(rows)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn browser_unregister_host(
+    app_state: State<'_, AppState>,
+    state: State<'_, BridgeState>,
+) -> Result<Vec<BrowserRegistrationDto>, ApiError> {
+    let registrar = app_state.0.platform().host_registrar.clone();
+    let bridge = state.inner().clone();
+    super::blocking(move || {
+        unregister_host(&bridge, registrar.as_ref(), cfg!(target_os = "windows"))
+    })
+    .await
 }
 
 fn host_of(url: &str) -> String {
@@ -323,15 +386,8 @@ pub async fn browser_status(
             registrar.as_ref(),
             host.as_deref(),
         );
-        report.endpoint_store =
-            if store_kind == mypass_platform::endpoint_store::SharedStoreKind::Keychain {
-                "keychain"
-            } else {
-                "developmentFile"
-            }
-            .into();
-        report.can_reinstall_host =
-            store_kind == mypass_platform::endpoint_store::SharedStoreKind::File;
+        report.endpoint_store = store_kind.diagnostic_name().into();
+        report.can_reinstall_host = store_kind.can_reinstall_host();
         Ok(report)
     })
     .await
@@ -540,6 +596,73 @@ mod tests {
         assert!(f.handle().pairing.list().is_empty());
         assert!(!f.handle().pairing.is_authorized(Some(&secret)));
         assert!(f.handle().diagnostics.get(id).is_none());
+    }
+
+    #[test]
+    fn browser_unregister_is_windows_only_and_requires_no_vault() {
+        let f = unstarted(false, Some(PathBuf::from("/h/mypass-host")));
+        let registrar = f.w.fake.host_registrar.as_ref();
+        assert_eq!(
+            unregister_host(&f.state, registrar, false)
+                .unwrap_err()
+                .code,
+            ErrorCode::InvalidInput
+        );
+        assert_eq!(registrar.unregister_calls(), 0);
+        let rows = unregister_host(&f.state, registrar, true).unwrap();
+        assert!(rows.iter().all(|r| r.state == "missing"));
+        f.state.start().unwrap();
+        f.handle().join_registration();
+        assert_eq!(
+            registrar.register_calls(),
+            0,
+            "removal suppresses a queued startup"
+        );
+        reinstall_host(&f.state, registrar, Some(Path::new("/h/mypass-host"))).unwrap();
+        assert_eq!(
+            registrar.register_calls(),
+            1,
+            "explicit repair restores immediately"
+        );
+    }
+
+    #[test]
+    fn browser_remove_after_startup_cannot_be_undone_by_worker() {
+        let f = unstarted(false, Some(PathBuf::from("/h/mypass-host")));
+        f.state.start().unwrap();
+        let registrar = f.w.fake.host_registrar.as_ref();
+        unregister_host(&f.state, registrar, true).unwrap();
+        f.handle().join_registration();
+        assert!(registrar
+            .status()
+            .iter()
+            .all(|r| r.state == mypass_platform::RegistrationState::Missing));
+        assert_eq!(registrar.unregister_calls(), 1);
+    }
+
+    #[test]
+    fn browser_status_retains_startup_failure_and_repair_returns_fresh_rows() {
+        let f = unstarted(false, Some(PathBuf::from("/h/mypass-host")));
+        let registrar = f.w.fake.host_registrar.as_ref();
+        registrar.fail_next(mypass_platform::PlatformError::Failed(
+            "registry unavailable".into(),
+        ));
+        f.state.start().unwrap();
+        f.handle().join_registration();
+        assert!(status_of(&f)
+            .registrations
+            .iter()
+            .all(|r| r.state == "error"
+                && r.detail
+                    .as_deref()
+                    .is_some_and(|s| s.contains("registry unavailable"))));
+        let fresh = reinstall_host(&f.state, registrar, Some(Path::new("/h/mypass-host"))).unwrap();
+        assert!(fresh.iter().any(|r| r.state == "ok"));
+        assert_eq!(registrar.register_calls(), 2);
+        assert!(status_of(&f)
+            .registrations
+            .iter()
+            .all(|r| r.state != "error"));
     }
 
     fn put_login(f: &crate::bridge::test_support::Fixture) -> String {

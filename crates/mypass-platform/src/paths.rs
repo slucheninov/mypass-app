@@ -187,6 +187,17 @@ impl AppPaths {
         )
     }
 
+    /// Final debug root shared with an isolated host subprocess (no appended product folder).
+    pub fn windows_data_root(root: &Path) -> Self {
+        Self::with_data(
+            root.to_path_buf(),
+            root.to_path_buf(),
+            root,
+            "mypass-host.exe",
+            Layout::Windows,
+        )
+    }
+
     fn with_data(
         config_dir: PathBuf,
         data_dir: PathBuf,
@@ -212,10 +223,8 @@ impl AppPaths {
     /// The paths of the running user.
     ///
     /// macOS: the home folder from `std::env::home_dir` (on Unix it falls back to the user
-    /// database when `HOME` is unset). Windows: `APPDATA` and `LOCALAPPDATA` from the environment
-    /// (stage 6 may switch to the known-folder API) and the profile from `std::env::home_dir`.
-    /// An unset, empty or relative value is an error, never a relative path. Other targets:
-    /// `Unsupported`. The `MYPASS_WINDOWS_DATA_ROOT` dev override is not handled here.
+    /// database when `HOME` is unset). Windows: verified shell known folders, or a validated
+    /// final debug root. Other targets return `Unsupported`.
     pub fn resolve() -> PlatformResult<Self> {
         #[cfg(target_os = "macos")]
         {
@@ -224,14 +233,7 @@ impl AppPaths {
         }
         #[cfg(windows)]
         {
-            let app_data =
-                required_root("APPDATA", std::env::var_os("APPDATA").map(PathBuf::from))?;
-            let local = required_root(
-                "LOCALAPPDATA",
-                std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
-            )?;
-            let home = required_root("user profile", std::env::home_dir())?;
-            Ok(Self::windows(&app_data, &local, &home))
+            crate::windows::resolve_windows()
         }
         #[cfg(not(any(target_os = "macos", windows)))]
         {
@@ -316,7 +318,7 @@ fn is_windows_reserved_name(id: &str) -> bool {
 }
 
 /// A root folder read from the environment: unset, empty or relative is an error.
-#[cfg(any(target_os = "macos", windows, test))]
+#[cfg(any(target_os = "macos", test))]
 fn required_root(name: &'static str, value: Option<PathBuf>) -> PlatformResult<PathBuf> {
     match value {
         Some(path) if path.is_absolute() => Ok(path),

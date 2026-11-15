@@ -46,6 +46,38 @@ const open = (over: Partial<BrowserStatus_Serialize> = {}) =>
 const panel = () => screen.getByRole("tabpanel");
 
 describe("Browser pane", () => {
+  it("browser_pane_windows_rows_and_remove_integration_button_only_on_windows", async () => {
+    const { platform } = await import("../../lib/platform.svelte");
+    await open({ endpointStore: "dpapi", registrations: [
+      { id: "chrome", display: "Google Chrome", state: "ok", manifestPath: null, detail: null },
+      { id: "edge", display: "Microsoft Edge", state: "error", manifestPath: null, detail: "registry access denied" },
+    ] });
+    platform.os = "windows";
+    expect(await screen.findByRole("button", { name: "Remove browser integration" })).toBeTruthy();
+    expect(within(panel()).getByRole("alert").textContent).toContain("Microsoft Edge: registry access denied");
+    platform.os = "macos";
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Remove browser integration" })).toBeNull());
+  });
+
+  it("browser_pane_remove_integration_confirms_first", async () => {
+    const { platform } = await import("../../lib/platform.svelte");
+    const { fake } = await open();
+    platform.os = "windows";
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Remove browser integration" }));
+    expect(calls(fake, "browserUnregisterHost")).toHaveLength(0);
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    expect(calls(fake, "browserUnregisterHost")).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "Remove browser integration" }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(calls(fake, "browserUnregisterHost")).toHaveLength(1));
+  });
+
+  it("browser_pane_help_text_names_chrome_and_edge_and_fallback_for_other_chromium_browsers", () => {
+    const key = "Chrome and Edge are supported. Chromium is registered when installed. Other Chromium browsers may use these registrations, but support is unverified.";
+    for (const catalog of [en, uk, ru]) expect((catalog as Record<string, string>)[key]).toBeTruthy();
+  });
+
   it("browser_pane_lists_paired_browsers_with_connected_date", async () => {
     await open();
     const row = (await within(panel()).findByText("Chrome (Work)")).closest("li") as HTMLElement;

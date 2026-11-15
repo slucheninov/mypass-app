@@ -47,7 +47,7 @@ describe("design tokens", () => {
 
   it("font_stack_starts_with_system_ui_fonts", () => {
     const m = /--font:\s*([^;]+);/.exec(css);
-    expect(m?.[1]).toBe('-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif');
+    expect(m?.[1]).toBe('-apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif');
   });
 
   it("has_one_visible_focus_rule_on_focus_visible", () => {
