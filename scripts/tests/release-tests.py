@@ -38,11 +38,12 @@ class Fixture(unittest.TestCase):
         bin_dir = self.root / 'stub-bin'
         bin_dir.mkdir()
         cargo = bin_dir / 'cargo'
-        cargo.write_text('#!/usr/bin/env bash\nexit "${CARGO_TEST_EXIT:-0}"\n')
+        cargo.write_text('#!/usr/bin/env bash\necho "$*" >> "$CARGO_TEST_LOG"\nexit "${CARGO_TEST_EXIT:-0}"\n')
         cargo.chmod(0o755)
-        (bin_dir / 'cargo.cmd').write_text('@exit /b %CARGO_TEST_EXIT%\n')
+        (bin_dir / 'cargo.cmd').write_text('@echo %*>>"%CARGO_TEST_LOG%"\n@exit /b %CARGO_TEST_EXIT%\n')
         self.env = dict(os.environ)
         self.env['CARGO_TEST_EXIT'] = '0'
+        self.env['CARGO_TEST_LOG'] = str(self.root / 'cargo.log')
         self.env['PATH'] = str(bin_dir) + os.pathsep + self.env['PATH']
         for key in ('MYPASS_SIGNING_IDENTITY', 'APPLE_SIGNING_IDENTITY'):
             self.env.pop(key, None)
@@ -65,16 +66,34 @@ class VersionTests(Fixture):
     def test_bump_updates_versions_and_lock_offline(self):
         self.run_script('bump-version.sh', self.next_version)
         self.run_script('check-version.sh', self.next_version)
+        self.assertEqual((self.root / 'cargo.log').read_text().splitlines(), ['update -w --offline'])
         lock = (self.root / 'Cargo.lock').read_text()
         self.assertIn(f'name = "mypass-app"\nversion = "{self.next_version}"', lock)
         for version in (self.next_version, self.version, 'bad', '1.2', '01.2.3'):
             self.run_script('bump-version.sh', version, ok=False)
+
+    def test_bump_uses_the_resolved_cargo_launcher(self):
+        spec = importlib.util.spec_from_file_location('release', ROOT / 'scripts/release.py')
+        release = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(release)
+        # Native Windows process lookup ignores cargo.cmd for a bare "cargo" command.
+        # Use an explicit launcher path (including spaces) so this also regresses on Unix.
+        launcher = self.root / 'stub-bin' / ('cargo.cmd' if os.name == 'nt' else 'cargo')
+        selected = launcher.with_name('selected cargo' + launcher.suffix)
+        launcher.rename(selected)
+        with patch.object(release, 'ROOT', self.root), patch.dict(os.environ, self.env, clear=True), \
+                patch.object(release.shutil, 'which', return_value=str(selected)) as resolve:
+            release.bump(self.next_version)
+            self.assertEqual(release.check_version(), self.next_version)
+        resolve.assert_called_once_with('cargo')
 
     def test_bump_rolls_back_when_cargo_fails(self):
         paths = ['src-tauri/Cargo.toml', 'Cargo.lock', 'package.json', 'extension/manifest.json']
         before = {p: (self.root / p).read_bytes() for p in paths}
         self.env['CARGO_TEST_EXIT'] = '1'
         self.run_script('bump-version.sh', self.next_version, ok=False)
+        self.assertEqual((self.root / 'cargo.log').read_text().splitlines(),
+                         ['update -w --offline', 'check -p mypass-app --offline'])
         self.assertEqual(before, {p: (self.root / p).read_bytes() for p in paths})
 
     def test_bump_atomic_when_a_file_is_unwritable(self):

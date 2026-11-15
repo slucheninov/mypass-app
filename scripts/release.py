@@ -90,9 +90,13 @@ def bump(new):
         for path, temp in temporary:
             os.replace(temp, path)
         # Resolve only workspace package versions, offline; any error restores every original.
-        refreshed = subprocess.run(['cargo', 'update', '-w', '--offline'], cwd=ROOT, check=False)
+        # Resolve PATH launchers explicitly: Windows CreateProcess skips cargo.cmd for
+        # a bare 'cargo', unlike Unix exec lookup (or a shell).
+        cargo = shutil.which('cargo')
+        require(cargo is not None, 'cargo is required on PATH')
+        refreshed = subprocess.run([cargo, 'update', '-w', '--offline'], cwd=ROOT, check=False)
         if refreshed.returncode:
-            subprocess.run(['cargo', 'check', '-p', 'mypass-app', '--offline'], cwd=ROOT, check=True)
+            subprocess.run([cargo, 'check', '-p', 'mypass-app', '--offline'], cwd=ROOT, check=True)
         check_version(new)
     except BaseException:
         for path, data in originals.items():
