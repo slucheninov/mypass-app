@@ -16,8 +16,7 @@ use mypass_platform::{shared_store, AppPaths};
 fn paths(root: &Path) -> AppPaths {
     #[cfg(windows)]
     {
-        let (a, l) = (root.join("AppData"), root.join("Local"));
-        AppPaths::windows(&a, &l, root)
+        AppPaths::windows_data_root(root)
     }
     #[cfg(not(windows))]
     {
@@ -28,6 +27,7 @@ fn paths(root: &Path) -> AppPaths {
 fn host(root: &Path) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_mypass-host"));
     c.env("HOME", root)
+        .env("MYPASS_WINDOWS_DATA_ROOT", root)
         .env("USERPROFILE", root)
         .env("APPDATA", root.join("AppData"))
         .env("LOCALAPPDATA", root.join("Local"))

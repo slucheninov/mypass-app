@@ -301,6 +301,7 @@ const OWN_LINTS_MEMBER: &str = "mypass-platform";
 /// the Keychain access list of the bridge endpoint; ruling R1 of the stage 5 plan). Stage 6 adds `crates/mypass-platform/src/windows.rs` for the
 /// Win32 calls. Never a file outside `mypass-platform`.
 const UNSAFE_ALLOWED_FILES: &[&str] = &[
+    "crates/mypass-platform/src/windows.rs",
     "crates/mypass-platform/src/macos_peer_process.rs",
     "crates/mypass-platform/src/macos.rs",
     "crates/mypass-platform/src/macos_login_item.rs",

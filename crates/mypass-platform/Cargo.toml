@@ -9,9 +9,9 @@ repository.workspace = true
 publish = false
 
 # The only member with its own lint tables (guard `workspace_lints_forbid_unsafe`): an exact copy
-# of `[workspace.lints]` except `unsafe_code = "deny"` instead of `forbid`, because the macOS glue
-# calls Objective-C, Carbon and Security. `deny` can be lifted per module; only the allow-listed
-# macOS glue files do so (guard `unsafe_only_in_allow_listed_modules`, list in AGENTS.md). Keep
+# of `[workspace.lints]` except `unsafe_code = "deny"` instead of `forbid`, because native glue
+# calls Objective-C, Carbon, Security and Win32. `deny` can be lifted per module; only the allow-listed
+# native glue files do so (guard `unsafe_only_in_allow_listed_modules`, list in AGENTS.md). Keep
 # these tables in sync with the workspace.
 [lints.rust]
 unsafe_code = "deny"

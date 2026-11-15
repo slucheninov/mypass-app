@@ -1,11 +1,10 @@
 //! End-to-end tests: the real `mypass-host` binary against a real in-process `LoopbackServer`, a
 //! real `BridgeService` and a real `VaultSession`.
 //!
-//! Isolation (no product-side override): the spawned host resolves its paths from `HOME` (macOS) or
-//! `APPDATA`, `LOCALAPPDATA` and `USERPROFILE` (Windows), all pointed into one temp dir, and the
-//! in-process server writes its endpoint through `AppPaths` rooted at the same dir, so both sides
-//! meet at the same `secrets_shared` file. Nothing here touches the real Keychain, the real home or
-//! any address but 127.0.0.1.
+//! Isolation: HOME on macOS and the validated debug-only final Windows data-root override
+//! point the real host and in-process server into the same temporary tree. Endpoint storage
+//! remains the existing file backend in this scaffold batch; the protected Windows adapter and
+//! gated native host cases land atomically in the next batch. No real profile is read here.
 // test-only support code
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
@@ -46,7 +45,7 @@ const WAIT: Duration = Duration::from_secs(30);
 fn paths(root: &Path) -> AppPaths {
     #[cfg(windows)]
     {
-        AppPaths::windows(&root.join("AppData"), &root.join("Local"), root)
+        AppPaths::windows_data_root(root)
     }
     #[cfg(not(windows))]
     {
@@ -238,6 +237,7 @@ impl Host {
     fn spawn(root: &Path) -> Self {
         let mut c = Command::new(env!("CARGO_BIN_EXE_mypass-host"));
         c.env("HOME", root)
+            .env("MYPASS_WINDOWS_DATA_ROOT", root)
             .env("USERPROFILE", root)
             .env("APPDATA", root.join("AppData"))
             .env("LOCALAPPDATA", root.join("Local"))

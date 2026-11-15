@@ -4,6 +4,11 @@
 //! [`current`] wires the real implementations of the running OS; [`testing`] (behind the
 //! `test-util` feature) holds the fakes every other crate's tests build on.
 
+pub mod dev_overrides;
+#[cfg(windows)]
+pub mod windows;
+pub mod windows_registry;
+
 mod clipboard;
 mod coordinated;
 mod device_unlock;
@@ -90,7 +95,9 @@ impl std::fmt::Debug for Platform {
 pub fn current(paths: &AppPaths) -> Platform {
     #[cfg(target_os = "macos")]
     return macos::platform(paths);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    return windows::platform(paths);
+    #[cfg(not(any(target_os = "macos", windows)))]
     return fallback::platform(paths);
 }
 

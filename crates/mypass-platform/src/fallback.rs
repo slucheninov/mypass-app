@@ -54,7 +54,7 @@ impl SecretStore for UnsupportedSecretStore {
     }
 }
 
-/// No device unlock on this platform yet (Windows stage 6); macOS has `macos_device_unlock.rs` and
+/// Windows intentionally supports master-password unlock only; macOS has `macos_device_unlock.rs` and
 /// keeps this stub only for the contract suite.
 #[derive(Debug, Default)]
 #[cfg(any(not(target_os = "macos"), test, feature = "test-util"))]

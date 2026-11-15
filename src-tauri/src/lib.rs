@@ -181,6 +181,17 @@ pub fn run() -> tauri::Result<()> {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build());
+    let context = app_context();
+    #[cfg(windows)]
+    let context = {
+        let mut context = context;
+        let paths = mypass_platform::AppPaths::resolve()
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        for window in &mut context.config_mut().app.windows {
+            window.data_directory = Some(paths.data_dir.join("webview2"));
+        }
+        context
+    };
     let app = tauri_builder
         .invoke_handler(builder.invoke_handler())
         .on_window_event(shell_runtime::on_window_event)
@@ -190,7 +201,7 @@ pub fn run() -> tauri::Result<()> {
             shell_runtime::start(app);
             Ok(())
         })
-        .build(app_context())?;
+        .build(context)?;
     app.run(|app, event| shell_runtime::on_run_event(app, &event));
     Ok(())
 }
