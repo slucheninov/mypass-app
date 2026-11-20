@@ -1117,8 +1117,13 @@ export type SecondaryStatus_Deserialize =
  *  and `unsupportedFolder`.
  */
 { state: "unavailable"; reason: SecondaryUnavailable } | 
-/**  The last sync failed; the remote and the primary are untouched. */
-{ state: "error"; code: SecondaryError };
+/**
+ *  The last sync failed; the remote and the primary are untouched, except when
+ *  `recovery_file` is set: then the previous vault survives only under that hidden file
+ *  name (a name, never a folder) next to the synced copy, and the user is told to look
+ *  for it. No listing shows such a file.
+ */
+{ state: "error"; code: SecondaryError; recoveryFile?: string | null };
 
 /**  What the Settings sync pane shows (the `SyncStatusChanged` event payload). */
 export type SecondaryStatus_Serialize = 
@@ -1136,8 +1141,13 @@ export type SecondaryStatus_Serialize =
  *  and `unsupportedFolder`.
  */
 { state: "unavailable"; reason: SecondaryUnavailable } | 
-/**  The last sync failed; the remote and the primary are untouched. */
-{ state: "error"; code: SecondaryError };
+/**
+ *  The last sync failed; the remote and the primary are untouched, except when
+ *  `recovery_file` is set: then the previous vault survives only under that hidden file
+ *  name (a name, never a folder) next to the synced copy, and the user is told to look
+ *  for it. No listing shows such a file.
+ */
+{ state: "error"; code: SecondaryError; recoveryFile?: string };
 
 /**  Why the secondary folder cannot be used right now (a localisable code). */
 export type SecondaryUnavailable = 

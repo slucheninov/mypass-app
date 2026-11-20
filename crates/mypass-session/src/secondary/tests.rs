@@ -491,6 +491,7 @@ fn wrong_password_remote_is_never_overwritten() {
     w.advance_ms(0);
     let wrong = SecondaryStatus::Error {
         code: SecondaryError::WrongPassword,
+        recovery_file: None,
     };
     assert_eq!(w.sync.status(), wrong);
     w.add("A");
@@ -560,7 +561,8 @@ fn remote_of_another_vault_is_refused_and_left_alone() {
     assert_eq!(
         w.sync.status(),
         SecondaryStatus::Error {
-            code: SecondaryError::DifferentVault
+            code: SecondaryError::DifferentVault,
+            recovery_file: None,
         }
     );
     assert_eq!(w.remote_bytes(), foreign);
@@ -575,7 +577,8 @@ fn not_a_vault_remote_is_never_overwritten() {
     assert_eq!(
         w.sync.status(),
         SecondaryStatus::Error {
-            code: SecondaryError::NotAVault
+            code: SecondaryError::NotAVault,
+            recovery_file: None,
         }
     );
     assert_eq!(w.remote_bytes(), b"not a vault at all");
@@ -768,7 +771,8 @@ fn status_serialises_with_a_state_tag() {
     );
     assert_eq!(
         json(SecondaryStatus::Error {
-            code: SecondaryError::WrongPassword
+            code: SecondaryError::WrongPassword,
+            recovery_file: None,
         }),
         serde_json::json!({"state": "error", "code": "wrongPassword"})
     );
@@ -991,7 +995,8 @@ fn watcher_start_failure_is_reported_and_retried_until_it_runs() {
     assert_eq!(
         w.sync.status(),
         SecondaryStatus::Error {
-            code: SecondaryError::WatchFailed
+            code: SecondaryError::WatchFailed,
+            recovery_file: None,
         }
     );
     let attempts = w.watch.attempts.load(Ordering::SeqCst);
@@ -1518,6 +1523,27 @@ fn a_lock_waits_for_a_publication_in_progress() {
 
 /// C2: a folder on a volume that cannot replace the copy safely shows `unsupportedFolder` and
 /// is not retried on the timer (the next folder change or unlock tries again).
+/// A vault that survives only under a hidden file name reaches the status as that name (a file
+/// name only), keeps the failure retryable, and serialises as `recoveryFile`.
+#[test]
+fn a_retained_vault_file_name_reaches_the_status() {
+    let status = failure_status(&SyncError::Storage(StorageError::VaultRetained {
+        name: ".vault.kdbx.1.2.3.aside".into(),
+    }));
+    assert_eq!(
+        status,
+        SecondaryStatus::Error {
+            code: SecondaryError::Io,
+            recovery_file: Some(".vault.kdbx.1.2.3.aside".into()),
+        }
+    );
+    assert!(is_transient(&status));
+    assert_eq!(
+        serde_json::to_value(&status).unwrap(),
+        serde_json::json!({"state": "error", "code": "io", "recoveryFile": ".vault.kdbx.1.2.3.aside"})
+    );
+}
+
 #[test]
 fn a_volume_without_a_safe_replacement_is_an_unsupported_folder() {
     let status = failure_status(&SyncError::Storage(StorageError::NoSafeReplace));
@@ -1821,7 +1847,8 @@ fn windows_integration_secondary_sharing_failure_preserves_remote_and_checkpoint
         SecondaryStatus::Unavailable {
             reason: SecondaryUnavailable::ReadOnly
         } | SecondaryStatus::Error {
-            code: SecondaryError::Io
+            code: SecondaryError::Io,
+            recovery_file: None,
         }
     ));
     assert_eq!(w.remote_bytes(), remote);

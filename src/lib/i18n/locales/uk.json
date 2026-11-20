@@ -842,6 +842,7 @@
   "Another app or device saved the vault at the same moment as MyPass. MyPass kept those versions next to your vault and never deletes them automatically. You can review them and remove them yourself in the vault folder.": "Інший застосунок чи пристрій зберіг сховище в той самий момент, що й MyPass. MyPass залишив ці версії поруч зі сховищем і ніколи не видаляє їх автоматично. Ви можете переглянути їх і видалити самостійно в папці сховища.",
   "Competing copies could not be checked in: %@": "Не вдалося перевірити конкурентні копії в: {0}",
   "Competing copies could not be checked.": "Не вдалося перевірити конкурентні копії.",
+  "The previous vault is kept as %@ next to the synced copy. Do not delete it.": "Попереднє сховище збережено як {0} поруч із синхронізованою копією. Не видаляйте його.",
   "Vault folder": "Папка сховища",
   "Sync folder": "Папка синхронізації",
   "Sync now": "Синхронізувати зараз",

@@ -169,7 +169,9 @@ impl VaultMigrationService {
                 .map_err(|_| MigrationError::TargetWriteFailed)?
             {
                 WriteOutcome::Written => {}
-                WriteOutcome::Conflict | WriteOutcome::Displaced(_) => {
+                WriteOutcome::Conflict
+                | WriteOutcome::Displaced(_)
+                | WriteOutcome::DisplacedKept { .. } => {
                     return Err(MigrationError::TargetWriteFailed)
                 }
             }

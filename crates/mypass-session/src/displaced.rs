@@ -174,4 +174,25 @@ mod tests {
         assert_eq!(status.count, 0);
         assert_eq!(status.unavailable, vec![DisplacedLocation::Secondary]);
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_secondary_symlink_is_unavailable_not_empty() {
+        // The configured secondary vault is a symlink whose target is gone (a failed install and
+        // restore left the vault under a retained name): Settings must say the location cannot
+        // be checked, never show "no copies".
+        let d = tempfile::tempdir().unwrap();
+        let primary = d.path().join("v.kdbx");
+        fs::write(&primary, b"vault").unwrap();
+        let real_dir = d.path().join("real");
+        let link_dir = d.path().join("link");
+        fs::create_dir_all(&real_dir).unwrap();
+        fs::create_dir_all(&link_dir).unwrap();
+        let link = link_dir.join("sync.kdbx");
+        std::os::unix::fs::symlink(real_dir.join("gone.kdbx"), &link).unwrap();
+        let all = targets(Some(primary), link.to_str());
+        let status = list(&all);
+        assert_eq!(status.count, 0);
+        assert_eq!(status.unavailable, vec![DisplacedLocation::Secondary]);
+    }
 }
