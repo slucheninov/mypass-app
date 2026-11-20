@@ -16,6 +16,7 @@ pub mod watcher;
 pub use backend::{FileIoBackend, StorageBackend, StorageError, WriteOutcome};
 pub use checkpoint::{
     FileCheckpointStore, InMemoryCheckpointStore, SyncCheckpoint, SyncCheckpointStore,
+    VerifiedKdfCost,
 };
 pub use engine::{
     MergedRemote, PendingCheckpoint, SyncEngine, SyncError, SyncMode, SyncResult, MAX_SYNC_ATTEMPTS,

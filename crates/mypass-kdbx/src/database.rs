@@ -452,6 +452,49 @@ mod tests {
     }
 
     #[test]
+    fn a_recorded_cost_raises_each_dimension_of_the_budget_independently() {
+        use crate::KdfCost;
+        let gib = 1024 * 1024 * 1024;
+        let argon2 = |memory_bytes, iterations| KdfParams::Argon2 {
+            salt: vec![0; 32],
+            version: 0x13,
+            variant: Argon2Variant::Id,
+            memory_bytes,
+            iterations,
+            parallelism: 2,
+        };
+        let lowered = KdfCost::of(&argon2(64 * 1024 * 1024, 3));
+        let recorded = KdfCost::of(&argon2(2 * gib, 3));
+        let both = lowered.max(recorded);
+        assert_eq!(both, recorded);
+        let limits = KdfLimits::remote_cost(both);
+        assert_eq!(limits.check(&argon2(2 * gib, 3)), Ok(()));
+        assert!(KdfLimits::remote_cost(lowered)
+            .check(&argon2(2 * gib, 3))
+            .is_err());
+        assert!(limits.check(&argon2(2 * gib + 1024, 3)).is_err());
+        // The other family keeps the default ceiling.
+        assert!(limits
+            .check(&KdfParams::AesKdf {
+                seed: vec![0; 32],
+                rounds: 300_000_001,
+            })
+            .is_err());
+        assert_eq!(
+            KdfLimits::remote_cost(KdfCost::default()),
+            KdfLimits::remote(None)
+        );
+        assert_eq!(
+            KdfLimits::remote(Some(&argon2(2 * gib, 3))),
+            KdfLimits::remote_cost(recorded)
+        );
+        // An exact ceiling below the defaults (what tests of automatic opens use).
+        let tight = KdfLimits::within(KdfCost::of(&argon2(8 * 1024 * 1024, 1)));
+        assert_eq!(tight.check(&argon2(8 * 1024 * 1024, 1)), Ok(()));
+        assert!(tight.check(&argon2(16 * 1024 * 1024, 1)).is_err());
+    }
+
+    #[test]
     fn remote_profile_opens_a_vault_with_the_app_defaults() {
         let db = Database::new("default KDF");
         let password = SecretString::from("pw");

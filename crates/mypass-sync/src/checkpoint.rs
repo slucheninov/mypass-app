@@ -31,6 +31,44 @@ pub struct SyncCheckpoint {
     /// stamp. This associates the stamp with its vault; it does not prove that a primary
     /// reloaded or replaced since publication still contains the secondary's content.
     pub vault_uuid: Option<String>,
+    /// The highest KDF cost that already authenticated with the user's key for this (vault,
+    /// remote) pair, carried from checkpoint to checkpoint. It raises the automatic KDF budget
+    /// of later syncs, so a vault whose KDF was lowered still syncs with the older, costlier
+    /// copy it verified before. Only a successful decryption records a cost: a hostile file
+    /// cannot ratchet it. Absent in checkpoints written before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_kdf: Option<VerifiedKdfCost>,
+}
+
+/// [`mypass_kdbx::KdfCost`] as stored in a checkpoint.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerifiedKdfCost {
+    /// Argon2 memory, in bytes.
+    pub argon2_memory: u64,
+    /// Argon2 memory times iterations, in bytes.
+    pub argon2_work: u64,
+    /// AES-KDF rounds.
+    pub aes_rounds: u64,
+}
+
+impl From<mypass_kdbx::KdfCost> for VerifiedKdfCost {
+    fn from(c: mypass_kdbx::KdfCost) -> Self {
+        Self {
+            argon2_memory: c.argon2_memory,
+            argon2_work: c.argon2_work,
+            aes_rounds: c.aes_rounds,
+        }
+    }
+}
+
+impl From<VerifiedKdfCost> for mypass_kdbx::KdfCost {
+    fn from(c: VerifiedKdfCost) -> Self {
+        Self {
+            argon2_memory: c.argon2_memory,
+            argon2_work: c.argon2_work,
+            aes_rounds: c.aes_rounds,
+        }
+    }
 }
 
 impl SyncCheckpoint {
@@ -41,6 +79,7 @@ impl SyncCheckpoint {
             modified_secs: modified.map(unix_secs),
             sha256_hex: sha256_hex(bytes),
             vault_uuid: None,
+            verified_kdf: None,
         }
     }
 
@@ -50,7 +89,21 @@ impl SyncCheckpoint {
         self
     }
 
-    /// Whether both describe the same content (length and hash; time and vault ignored).
+    /// Record the highest KDF cost verified with the user's key (see [`Self::verified_kdf`]).
+    pub fn with_verified_kdf(mut self, cost: mypass_kdbx::KdfCost) -> Self {
+        self.verified_kdf = Some(cost.into());
+        self
+    }
+
+    /// The recorded verified cost when this checkpoint was taken for `vault` (zero otherwise).
+    pub fn verified_kdf_for(&self, vault: &str) -> mypass_kdbx::KdfCost {
+        self.verified_kdf
+            .filter(|_| self.vault_uuid.as_deref() == Some(vault))
+            .map(Into::into)
+            .unwrap_or_default()
+    }
+
+    /// Whether both describe the same content (length and hash; time, vault and cost ignored).
     pub fn same_content(&self, other: &SyncCheckpoint) -> bool {
         self.len == other.len && self.sha256_hex == other.sha256_hex
     }
@@ -208,6 +261,39 @@ mod tests {
         // A save after damage works again.
         store.save(Some(&cp)).unwrap();
         assert_eq!(store.load().unwrap(), Some(cp));
+    }
+
+    #[test]
+    fn verified_kdf_round_trips_and_older_checkpoints_still_load() {
+        let d = tempfile::tempdir().unwrap();
+        let store = FileCheckpointStore::new(d.path().join("sync.json"));
+        let cost = mypass_kdbx::KdfCost {
+            argon2_memory: 2 << 30,
+            argon2_work: 6 << 30,
+            aes_rounds: 0,
+        };
+        let cp = SyncCheckpoint::of_bytes(b"remote", None)
+            .for_vault("v1")
+            .with_verified_kdf(cost);
+        store.save(Some(&cp)).unwrap();
+        let back = store.load().unwrap().unwrap();
+        assert_eq!(back, cp);
+        assert_eq!(back.verified_kdf_for("v1"), cost);
+        // Another vault's checkpoint never lends its cost.
+        assert_eq!(back.verified_kdf_for("v2"), mypass_kdbx::KdfCost::default());
+        assert!(back.same_content(&SyncCheckpoint::of_bytes(b"remote", None)));
+        // A checkpoint written before the field existed loads without a recorded cost.
+        let old = format!(
+            "{{\"len\":6,\"modified_secs\":null,\"sha256_hex\":\"{}\",\"vault_uuid\":\"v1\"}}",
+            sha256_hex(b"remote")
+        );
+        fs::write(store.path(), old).unwrap();
+        let back = store.load().unwrap().unwrap();
+        assert_eq!(back.verified_kdf, None);
+        assert_eq!(back.verified_kdf_for("v1"), mypass_kdbx::KdfCost::default());
+        // Without a recorded cost nothing new is serialised.
+        let json = serde_json::to_string(&SyncCheckpoint::of_bytes(b"x", None)).unwrap();
+        assert!(!json.contains("verified_kdf"), "{json}");
     }
 
     #[test]
