@@ -877,7 +877,7 @@ Used to build and test the frontend only; none of it is part of a MyPass artifac
 | `@tauri-apps/cli` | 2.12.4 | Apache-2.0 OR MIT |
 | `@testing-library/svelte` | 5.4.2 | MIT |
 | `@types/node` | 26.6.6 | MIT |
-| `jsdom` | 30.1.3 | MIT |
+| `jsdom` | 31.0.1 | MIT |
 | `svelte` | 5.57.3 | MIT |
 | `svelte-check` | 4.7.8 | MIT |
 | `typescript` | 5.9.3 | Apache-2.0 |
