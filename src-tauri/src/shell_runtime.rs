@@ -234,8 +234,9 @@ fn place_panel_windows(app: &AppHandle, panel: &tauri::WebviewWindow, tray: taur
 }
 
 /// macOS (and any non-Windows desktop): the panel goes under the icon in logical points. The
-/// monitor that holds the icon, not the panel window, supplies the scale factor, so a panel last
-/// shown on another display is not misplaced (`shell::tray_panel_origin` decides).
+/// monitor that holds the icon (found by the click point in global points), not the panel window,
+/// supplies the scale factor, so a panel last shown on another display is not misplaced
+/// (`shell::tray_panel_origin` decides).
 #[cfg(not(windows))]
 fn place_panel(app: &AppHandle, panel: &tauri::WebviewWindow, tray: tauri::Rect) {
     use crate::shell::{tray_panel_origin, MonitorFrame, TrayRect};
@@ -285,8 +286,17 @@ fn place_panel(app: &AppHandle, panel: &tauri::WebviewWindow, tray: tauri::Rect)
             })
         }
     };
+    // The click location in unscaled global points: tao reports the cursor in physical pixels of
+    // the PRIMARY monitor's scale, so dividing by that scale gives the global point. The cursor
+    // sits on the icon at click time, and the global point tells overlapping physical frames
+    // apart (the tray rectangle itself is in the scale of the icon's own screen, unknown here).
+    let click = app.cursor_position().ok().and_then(|cursor| {
+        let primary_scale = app.primary_monitor().ok().flatten()?.scale_factor();
+        (primary_scale > 0.0).then(|| (cursor.x / primary_scale, cursor.y / primary_scale))
+    });
     if let Some((x, y)) = tray_panel_origin(
         tray_rect,
+        click,
         &frames,
         primary,
         (panel_size.width, panel_size.height),
