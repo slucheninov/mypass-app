@@ -1,6 +1,8 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { DisplacedCopies } from "../../lib/bindings";
+import type { FakeBackend } from "../../test/fakeBackend";
 import { calls } from "../../test/mainApp";
 import { renderSettingsApp } from "../../test/settingsApp";
 
@@ -152,5 +154,52 @@ describe("backups", () => {
     await screen.findByRole("button", { name: "Show in Finder" });
     expect(screen.queryByText("Last backup failed", { exact: false })).toBeNull();
     expect(screen.queryAllByRole("listitem")).toEqual([]);
+  });
+});
+
+describe("competing copies", () => {
+  const COPIES: DisplacedCopies = {
+    count: 2,
+    copies: [
+      { location: "primary", path: "/v/.vault.kdbx.1.2.3.displaced", bytes: 2048 },
+      { location: "secondary", path: "/s/.vault.kdbx.4.5.6.displaced", bytes: null },
+    ],
+  };
+  const withCopies = (fake: FakeBackend) => void (fake.state.displaced = structuredClone(COPIES));
+
+  it("shows_nothing_without_competing_copies", async () => {
+    const { fake } = await open();
+    await screen.findByText("Test vault");
+    await waitFor(() => expect(calls(fake, "syncDisplacedStatus").length).toBeGreaterThan(0));
+    expect(screen.queryByTestId("displaced-copies")).toBeNull();
+  });
+
+  it("lists_the_copies_for_display_and_deletes_nothing_by_itself", async () => {
+    const { fake } = await open({}, withCopies);
+    const section = await screen.findByTestId("displaced-copies");
+    expect(within(section).getByText("Competing copies kept: 2")).toBeTruthy();
+    expect(within(section).getByText("/v/.vault.kdbx.1.2.3.displaced")).toBeTruthy();
+    expect(within(section).getByText("/s/.vault.kdbx.4.5.6.displaced")).toBeTruthy();
+    expect(within(section).getByText("Vault folder")).toBeTruthy();
+    expect(within(section).getByText("Sync folder")).toBeTruthy();
+    expect(within(section).getByText("2 KB")).toBeTruthy();
+    expect(calls(fake, "syncDisplacedDeleteAll")).toHaveLength(0);
+  });
+
+  it("delete_needs_a_confirmation_and_sends_no_path", async () => {
+    const user = userEvent.setup();
+    const { fake } = await open({}, withCopies);
+    const section = await screen.findByTestId("displaced-copies");
+    await user.click(within(section).getByRole("button", { name: "Delete competing copies…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete competing copies?" });
+    expect(calls(fake, "syncDisplacedDeleteAll")).toHaveLength(0);
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(calls(fake, "syncDisplacedDeleteAll")).toHaveLength(0);
+    expect(screen.getByTestId("displaced-copies")).toBeTruthy();
+    await user.click(within(section).getByRole("button", { name: "Delete competing copies…" }));
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(calls(fake, "syncDisplacedDeleteAll")).toHaveLength(1));
+    expect(calls(fake, "syncDisplacedDeleteAll")[0]?.args).toEqual({});
+    await waitFor(() => expect(screen.queryByTestId("displaced-copies")).toBeNull());
   });
 });

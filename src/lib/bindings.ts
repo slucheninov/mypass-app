@@ -100,6 +100,14 @@ export const commands = {
 	sidebarGet: () => typedError<Sidebar_Serialize, ApiError>(__TAURI_INVOKE("sidebar_get")),
 	syncConnectSecondary: (folderToken: string, strategy: MigrationStrategy) => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_connect_secondary", { folderToken, strategy })),
 	syncDisconnectSecondary: () => typedError<null, ApiError>(__TAURI_INVOKE("sync_disconnect_secondary")),
+	/**
+	 *  Deletes every kept competing copy next to the open vault and its secondary copy. Takes no
+	 *  path: the webview never names a file. The Settings pane calls it only after the user
+	 *  confirmed.
+	 */
+	syncDisplacedDeleteAll: () => typedError<DisplacedCopies, ApiError>(__TAURI_INVOKE("sync_displaced_delete_all")),
+	/**  The kept competing vault copies, for display. Lists, never deletes. */
+	syncDisplacedStatus: () => typedError<DisplacedCopies, ApiError>(__TAURI_INVOKE("sync_displaced_status")),
 	syncNow: () => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_now")),
 	syncStatus: () => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_status")),
 	vaultCreate: (path: string, password: string, name: string) => typedError<SessionStatus_Serialize, ApiError>(__TAURI_INVOKE("vault_create", { path, password, name })),
@@ -444,6 +452,27 @@ export type DeviceUnlockStatus_Serialize = {
 	 */
 	reason: OfferBlock | null,
 };
+
+/**  The kept competing copies of the open vault. */
+export type DisplacedCopies = {
+	count: number,
+	copies: DisplacedCopyInfo[],
+};
+
+/**  One kept competing copy. `path` is for display only. */
+export type DisplacedCopyInfo = {
+	location: DisplacedLocation,
+	path: string,
+	/**  Length in bytes. */
+	bytes: number | null,
+};
+
+/**  Which copy of the vault the displaced file sits next to. */
+export type DisplacedLocation = 
+/**  Next to the open vault file. */
+"primary" | 
+/**  Next to the copy in the secondary sync folder. */
+"secondary";
 
 /**  One saved version of an entry's notes, as the webview sees it. */
 export type DraftVersionDto = {

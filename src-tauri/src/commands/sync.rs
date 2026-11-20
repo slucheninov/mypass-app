@@ -3,7 +3,7 @@
 
 use super::blocking;
 use crate::state::AppState;
-use mypass_session::{ApiError, SecondaryStatus};
+use mypass_session::{ApiError, DisplacedCopies, SecondaryStatus};
 use tauri::State;
 
 #[tauri::command]
@@ -24,6 +24,28 @@ pub async fn sync_now(state: State<'_, AppState>) -> Result<SecondaryStatus, Api
 pub async fn sync_disconnect_secondary(state: State<'_, AppState>) -> Result<(), ApiError> {
     let core = state.0.clone();
     blocking(move || core.sync_disconnect_secondary()).await
+}
+
+/// The kept competing vault copies, for display. Lists, never deletes.
+#[tauri::command]
+#[specta::specta]
+pub async fn sync_displaced_status(
+    state: State<'_, AppState>,
+) -> Result<DisplacedCopies, ApiError> {
+    let core = state.0.clone();
+    blocking(move || core.sync_displaced_status()).await
+}
+
+/// Deletes every kept competing copy next to the open vault and its secondary copy. Takes no
+/// path: the webview never names a file. The Settings pane calls it only after the user
+/// confirmed.
+#[tauri::command]
+#[specta::specta]
+pub async fn sync_displaced_delete_all(
+    state: State<'_, AppState>,
+) -> Result<DisplacedCopies, ApiError> {
+    let core = state.0.clone();
+    blocking(move || core.sync_displaced_delete_all()).await
 }
 
 #[tauri::command]

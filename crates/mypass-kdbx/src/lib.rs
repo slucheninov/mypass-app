@@ -31,8 +31,8 @@ mod ops;
 
 mod file;
 pub use file::{
-    write_atomic, FileIo, FileMeta, FileStamp, OpenedFile, PlainFileIo, ReplaceOutcome,
-    SaveOutcome, VaultFile,
+    displaced_copies, remove_displaced_copies, write_atomic, DisplacedCopy, DisplacedRemoval,
+    FileIo, FileMeta, FileStamp, OpenedFile, PlainFileIo, ReplaceOutcome, SaveOutcome, VaultFile,
 };
 #[cfg(feature = "test-util")]
 pub mod test_util;

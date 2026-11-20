@@ -1170,6 +1170,41 @@ impl AppCore {
         self.secondary.sync_now()
     }
 
+    /// The competing vault copies kept next to the open vault and its secondary copy. Display
+    /// only; nothing is deleted. No vault open means none.
+    pub fn sync_displaced_status(&self) -> Result<crate::displaced::DisplacedCopies, ApiError> {
+        Ok(crate::displaced::list(&self.displaced_targets()))
+    }
+
+    /// Deletes every kept competing copy. Only an explicit user action calls this (the webview
+    /// supplies no path: the copies are found again by their generated names). Returns what is
+    /// left; `Io` when some copy could not be removed.
+    pub fn sync_displaced_delete_all(&self) -> Result<crate::displaced::DisplacedCopies, ApiError> {
+        let _gate = self
+            .migration_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let targets = self.displaced_targets();
+        if targets.is_empty() {
+            return Err(ApiError::new(ErrorCode::NoVault, "no vault is open"));
+        }
+        let failed = crate::displaced::delete_all(&targets);
+        if failed > 0 {
+            return Err(ApiError::new(
+                ErrorCode::Io,
+                "some competing copies could not be deleted",
+            ));
+        }
+        Ok(crate::displaced::list(&targets))
+    }
+
+    fn displaced_targets(&self) -> Vec<(crate::displaced::DisplacedLocation, PathBuf)> {
+        crate::displaced::targets(
+            self.session.vault_path(),
+            self.settings.get().secondary_folder.as_deref(),
+        )
+    }
+
     /// Stops syncing and forgets the folder; the copy in it is left as it is.
     pub fn sync_disconnect_secondary(&self) -> Result<(), ApiError> {
         let _gate = self
@@ -2573,6 +2608,54 @@ mod tests {
         assert_eq!(f.core.sync_status().unwrap(), SecondaryStatus::Off);
         assert_eq!(f.core.settings.get().secondary_folder, None);
         assert!(folder.join("v.kdbx").is_file(), "the copy is left in place");
+    }
+
+    fn put_displaced(dir: &Path, name: &str, tag: &str) -> PathBuf {
+        let path = dir.join(format!(".{name}.{tag}.displaced"));
+        std::fs::write(&path, b"competing").unwrap();
+        path
+    }
+
+    #[test]
+    fn displaced_copies_are_listed_and_deleted_only_on_the_explicit_command() {
+        let f = fx_open();
+        assert_eq!(
+            f.core.sync_displaced_status().unwrap(),
+            crate::displaced::DisplacedCopies::default()
+        );
+        let folder = f.dir.path().join("secondary");
+        std::fs::create_dir_all(&folder).unwrap();
+        f.core
+            .settings
+            .set_secondary_folder(Some(folder.to_string_lossy().into_owned()))
+            .unwrap();
+        let name = f.path.file_name().unwrap().to_string_lossy().into_owned();
+        let primary_copy = put_displaced(f.path.parent().unwrap(), &name, "1.2.3");
+        let secondary_copy = put_displaced(&folder, &name, "4.5.6");
+        let other = put_displaced(f.path.parent().unwrap(), "other.kdbx", "7.8.9");
+        // A sync, a save and a status read leave every copy alone.
+        f.login("A", "pw-a");
+        let _ = f.core.sync_now();
+        let status = f.core.sync_displaced_status().unwrap();
+        assert_eq!(status.count, 2);
+        assert_eq!(status.copies.len(), 2);
+        assert!(primary_copy.exists() && secondary_copy.exists());
+        // The explicit command removes exactly those, and reports what is left.
+        let left = f.core.sync_displaced_delete_all().unwrap();
+        assert_eq!(left.count, 0);
+        assert!(!primary_copy.exists() && !secondary_copy.exists());
+        assert!(other.exists(), "another vault's copy is not ours to delete");
+        assert!(f.path.exists() && folder.join(&name).exists());
+    }
+
+    #[test]
+    fn deleting_displaced_copies_without_a_vault_is_no_vault() {
+        let f = fx();
+        assert_eq!(f.core.sync_displaced_status().unwrap().count, 0);
+        assert_eq!(
+            f.core.sync_displaced_delete_all().unwrap_err().code,
+            ErrorCode::NoVault
+        );
     }
 
     #[test]
