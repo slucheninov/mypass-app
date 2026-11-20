@@ -1,0 +1,1059 @@
+{
+  "extName": {
+    "message": "MyPass"
+  },
+  "extDescription": {
+    "message": "Zugangsdaten aus MyPass automatisch ausfüllen und speichern"
+  },
+  "commandOpen": {
+    "message": "MyPass öffnen"
+  },
+  "commandLock": {
+    "message": "MyPass sperren"
+  },
+  "search": {
+    "message": "Suchen"
+  },
+  "close": {
+    "message": "Schließen"
+  },
+  "cancel": {
+    "message": "Abbrechen"
+  },
+  "save": {
+    "message": "Sichern"
+  },
+  "add": {
+    "message": "Hinzufügen"
+  },
+  "retry": {
+    "message": "Erneut versuchen"
+  },
+  "copy": {
+    "message": "Kopieren"
+  },
+  "copied": {
+    "message": "Kopiert"
+  },
+  "show": {
+    "message": "Anzeigen"
+  },
+  "hide": {
+    "message": "Ausblenden"
+  },
+  "remove": {
+    "message": "Entfernen"
+  },
+  "delete": {
+    "message": "Löschen"
+  },
+  "replace": {
+    "message": "Ersetzen"
+  },
+  "back": {
+    "message": "Zurück"
+  },
+  "done": {
+    "message": "Fertig"
+  },
+  "title": {
+    "message": "Titel"
+  },
+  "username": {
+    "message": "Benutzername"
+  },
+  "password": {
+    "message": "Passwort"
+  },
+  "loading": {
+    "message": "Wird geladen …"
+  },
+  "unlockMyPass": {
+    "message": "MyPass entsperren"
+  },
+  "openMyPass": {
+    "message": "MyPass öffnen"
+  },
+  "lockMyPass": {
+    "message": "MyPass sperren"
+  },
+  "myPassLocked": {
+    "message": "MyPass ist gesperrt"
+  },
+  "myPassLockedSentence": {
+    "message": "MyPass ist gesperrt."
+  },
+  "myPassUnavailable": {
+    "message": "MyPass ist nicht verfügbar."
+  },
+  "couldntReachMyPass": {
+    "message": "MyPass ist nicht erreichbar"
+  },
+  "couldntReachMyPassSentence": {
+    "message": "MyPass ist nicht erreichbar."
+  },
+  "unlockMyPassFirst": {
+    "message": "Entsperre zuerst MyPass"
+  },
+  "connectToMyPassFirst": {
+    "message": "Verbinde dich zuerst mit MyPass"
+  },
+  "connectMyPassFirstSentence": {
+    "message": "Verbinde zuerst MyPass."
+  },
+  "connectBrowserFirst": {
+    "message": "Verbinde diesen Browser zuerst mit MyPass."
+  },
+  "appUnavailableStatus": {
+    "message": "Verbindung zu MyPass nicht möglich. Stelle sicher, dass die App geöffnet ist, und klicke auf „Erneut versuchen“."
+  },
+  "hostUnavailableStatus": {
+    "message": "Der MyPass-Browser-Connector wurde nicht gefunden. Schließe die Browser-Einrichtung ab und klicke auf „Erneut versuchen“."
+  },
+  "appUnavailableOpenHelper": {
+    "message": "Öffne MyPass über „Programme“ oder das Dock. Entsperre bei Bedarf deinen Tresor und tippe auf „Erneut versuchen“."
+  },
+  "lockedHelper": {
+    "message": "Öffne MyPass und entsperre den Tresor"
+  },
+  "unlockUnreachable": {
+    "message": "MyPass ist nicht erreichbar. Öffne die App und versuche es erneut."
+  },
+  "emptyListTitle": {
+    "message": "Keine gespeicherten Zugangsdaten für diese Website"
+  },
+  "listHeader": {
+    "message": "Wähle einen Eintrag zum Ausfüllen:"
+  },
+  "noFavorites": {
+    "message": "Keine Favoriten"
+  },
+  "noItems": {
+    "message": "Keine Einträge"
+  },
+  "noMatches": {
+    "message": "Keine Treffer"
+  },
+  "categoryThisSite": {
+    "message": "Diese Website"
+  },
+  "categoryFavorites": {
+    "message": "Favoriten"
+  },
+  "categoryAll": {
+    "message": "Alle"
+  },
+  "categoryLogins": {
+    "message": "Zugangsdaten"
+  },
+  "categoryPasskeys": {
+    "message": "Passkeys"
+  },
+  "categoryCodes": {
+    "message": "Codes"
+  },
+  "categoryCards": {
+    "message": "Karten"
+  },
+  "categoryAddresses": {
+    "message": "Adressen"
+  },
+  "categoryNotes": {
+    "message": "Notizen"
+  },
+  "passkeysOff": {
+    "message": "Passkeys sind ausgeschaltet. Aktiviere sie in den MyPass-Einstellungen."
+  },
+  "passkeysBlocked": {
+    "message": "Ein anderer Anbieter blockiert möglicherweise Passkeys. Öffne die MyPass-Einstellungen für Hilfe."
+  },
+  "browserPasswordSaving": {
+    "message": "Passwortspeicherung des Browsers"
+  },
+  "alsoEnabled": {
+    "message": "Ebenfalls aktiviert: $P1$. Prüfe das in den MyPass-Einstellungen.",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "pairingPanelTitle": {
+    "message": "Browser-Erweiterung verbinden"
+  },
+  "waitingForUnlock": {
+    "message": "Warte darauf, dass du MyPass entsperrst …"
+  },
+  "passkeyBadge": {
+    "message": "Passkey"
+  },
+  "totpCircleLabel": {
+    "message": "Bestätigungscode anzeigen oder kopieren"
+  },
+  "openedInMyPass": {
+    "message": "In MyPass geöffnet"
+  },
+  "passkeyUnknownOriginLower": {
+    "message": "unbekannter Ursprung"
+  },
+  "passkeyNewEntryFor": {
+    "message": "Neuer Eintrag für $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "passkeySignInAs": {
+    "message": "Als $P1$ anmelden?",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "passkeyReplaceIn": {
+    "message": "Passkey in $P1$ ersetzen?",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "passkeySaveTo": {
+    "message": "Passkey in $P1$ sichern?",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "iconFor": {
+    "message": "Symbol für $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "iconForUntitled": {
+    "message": "Symbol für Eintrag ohne Titel"
+  },
+  "addressNoForm": {
+    "message": "Auf dieser Seite gibt es kein unterstütztes Adressformular. Öffne ein Formular mit Standardfeldern für die Adress-Autovervollständigung. Das Ausfüllen von Adressen ist nur auf der Hauptseite möglich."
+  },
+  "addressPageChanged": {
+    "message": "Die Seite oder der ausgewählte Tab hat sich geändert. Kehre zum Adressformular zurück und wähle die Adresse erneut aus."
+  },
+  "addressFormChanged": {
+    "message": "Das Adressformular hat sich geändert. Prüfe die bereits ausgefüllten Felder und wähle die Adresse erneut aus."
+  },
+  "addressNoValues": {
+    "message": "Keine gespeicherten Adresswerte passen zu den Feldern dieses Formulars. Bearbeite diese Adresse in MyPass."
+  },
+  "addressFillFailed": {
+    "message": "Die Adresse konnte nicht ausgefüllt werden. Prüfe, ob MyPass entsperrt ist, und wähle die Adresse erneut aus."
+  },
+  "addressChecking": {
+    "message": "Adressformulare werden geprüft …"
+  },
+  "addressBack": {
+    "message": "Zurück zu den Adressen"
+  },
+  "addressNotFilled": {
+    "message": "Adresse nicht ausgefüllt"
+  },
+  "addressFillHeader": {
+    "message": "Adresse ausfüllen"
+  },
+  "addressSendTo": {
+    "message": "„$P1$“ an $P2$ senden. Wähle das Formular zum Ausfüllen:",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      },
+      "p2": {
+        "content": "$2"
+      }
+    }
+  },
+  "addressFillOption": {
+    "message": "$P1$ ausfüllen ($P2$ Felder)",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      },
+      "p2": {
+        "content": "$2"
+      }
+    }
+  },
+  "addressFormShipping": {
+    "message": "Lieferadressformular $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "addressFormBilling": {
+    "message": "Rechnungsadressformular $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "addressFormGeneric": {
+    "message": "Adressformular $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "addressFilling": {
+    "message": "Adresse wird ausgefüllt …"
+  },
+  "addressFilled": {
+    "message": "$P1$ Felder ausgefüllt. Prüfe das Formular, bevor du es absendest.",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "addressFillAria": {
+    "message": "Adresse ausfüllen: $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "addressSuggestionsOff": {
+    "message": "Adressvorschläge sind ausgeschaltet"
+  },
+  "addressTurnOn": {
+    "message": "Aktiviere „Adressen anzeigen“ unter „Automatisch ausfüllen und sichern“ und wähle die Adresse dann erneut aus."
+  },
+  "pairingStartFailed": {
+    "message": "Die Kopplung konnte nicht gestartet werden. Läuft MyPass und ist es entsperrt?"
+  },
+  "pairingInvalidCode": {
+    "message": "Ungültiger Code. Tippe auf „Verbinden“, um es erneut zu versuchen."
+  },
+  "pairingCompleteFailed": {
+    "message": "Die Kopplung konnte nicht abgeschlossen werden. Läuft MyPass und ist es entsperrt?"
+  },
+  "openSiteHint": {
+    "message": "Wähle einen Eintrag, um seine Website zu öffnen."
+  },
+  "noAddressesHint": {
+    "message": "Keine Adressen. Füge in MyPass über „Hinzufügen“ > „Adresse“ eine hinzu."
+  },
+  "newLogin": {
+    "message": "Neue Zugangsdaten"
+  },
+  "newCard": {
+    "message": "Neue Karte"
+  },
+  "newNote": {
+    "message": "Neue Notiz"
+  },
+  "totpInvalid": {
+    "message": "Gib eine gültige Authenticator-URL oder einen geheimen Schlüssel ein"
+  },
+  "passkeyFailureGet": {
+    "message": "Der Browser konnte die Anmeldung nicht abschließen. Brich die Anfrage der Website ab und versuche es erneut."
+  },
+  "passkeyFailureCreate": {
+    "message": "Der Browser konnte das Sichern dieses Passkeys nicht abschließen. Brich die Anfrage der Website ab und versuche es erneut. Möglicherweise existiert bereits ein lokaler Passkey; prüfe die Website, bevor du ihn ersetzt."
+  },
+  "detailEntry": {
+    "message": "Eintrag"
+  },
+  "detailAccount": {
+    "message": "Konto"
+  },
+  "detailWebsite": {
+    "message": "Website"
+  },
+  "detailOrigin": {
+    "message": "Ursprung"
+  },
+  "notProvided": {
+    "message": "Nicht angegeben"
+  },
+  "unknownWebsite": {
+    "message": "Unbekannte Website"
+  },
+  "unknownOrigin": {
+    "message": "Unbekannter Ursprung"
+  },
+  "passkeyNewEntryNote": {
+    "message": "Es wird ein neuer Eintrag angelegt."
+  },
+  "passkeyCompleting": {
+    "message": "Passkey-Anfrage wird abgeschlossen"
+  },
+  "passkeyPreparing": {
+    "message": "Passkey-Anfrage wird vorbereitet"
+  },
+  "passkeyWaitingBrowser": {
+    "message": "Warte, bis der Browser fertig ist. Lass die Website geöffnet."
+  },
+  "passkeyWaitingMyPass": {
+    "message": "Warte auf MyPass. Du wirst um Bestätigung gebeten, bevor ein Passkey gesichert oder verwendet wird."
+  },
+  "identifierOfferText": {
+    "message": "$P1$ ist für diese Website nicht gesichert. Füge es einem vorhandenen Eintrag hinzu oder lege einen neuen an.",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "addToItem": {
+    "message": "Zu „$P1$“ hinzufügen",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "addToUntitledItem": {
+    "message": "Zu Eintrag hinzufügen"
+  },
+  "newItem": {
+    "message": "Neuer Eintrag"
+  },
+  "identifierAddFailed": {
+    "message": "Das konnte dem Eintrag nicht hinzugefügt werden. Öffne MyPass und versuche es erneut."
+  },
+  "noPageDomain": {
+    "message": "Die Domain dieser Seite konnte nicht ermittelt werden"
+  },
+  "lockFailed": {
+    "message": "MyPass konnte nicht gesperrt werden. Öffne die App und versuche es erneut."
+  },
+  "more": {
+    "message": "Mehr"
+  },
+  "passwordGenerator": {
+    "message": "Passwortgenerator"
+  },
+  "addItem": {
+    "message": "Eintrag hinzufügen"
+  },
+  "connect": {
+    "message": "Verbinden"
+  },
+  "submit": {
+    "message": "Absenden"
+  },
+  "pairingCodeHint": {
+    "message": "Gib den in MyPass angezeigten Code ein"
+  },
+  "passkeyFailureTitle": {
+    "message": "Passkey-Anfrage wurde nicht abgeschlossen"
+  },
+  "passkeySaveTitle": {
+    "message": "Passkey sichern"
+  },
+  "passkeyReplaceTitle": {
+    "message": "Passkey ersetzen?"
+  },
+  "passkeyReplaceHelper": {
+    "message": "Dieser Eintrag hat bereits einen Passkey. Beim Ersetzen wird der Passkey entfernt, den diese Website derzeit verwendet. Manche Websites (etwa Google) aktivieren einen neuen Passkey erst mit Verzögerung, die Anmeldung kann bis dahin fehlschlagen. Der bisherige Passkey bleibt im Verlauf des Eintrags erhalten."
+  },
+  "passkeyUseTitle": {
+    "message": "Passkey verwenden"
+  },
+  "approve": {
+    "message": "Bestätigen"
+  },
+  "chooseEntry": {
+    "message": "Eintrag auswählen"
+  },
+  "newPasswordFieldHint": {
+    "message": "Diese Seite hat ein Feld für ein neues Passwort"
+  },
+  "generatePassword": {
+    "message": "Passwort generieren"
+  },
+  "totpPasteHint": {
+    "message": "otpauth://-URL oder geheimen Schlüssel einfügen"
+  },
+  "help": {
+    "message": "Hilfe"
+  },
+  "helpBack": {
+    "message": "‹ Hilfe"
+  },
+  "helpText": {
+    "message": "MyPass bewahrt den Tresor auf diesem Mac auf. Entsperre, koppele diesen Browser und ändere Tresor-Einstellungen in der App. Dieses Menü betrifft nur die Erweiterung in diesem Browserprofil."
+  },
+  "settingsSections": {
+    "message": "Einstellungsbereiche"
+  },
+  "sectionGeneral": {
+    "message": "Allgemein"
+  },
+  "sectionSecurity": {
+    "message": "Sicherheit"
+  },
+  "sectionAutofill": {
+    "message": "Automatisch ausfüllen und sichern"
+  },
+  "sectionNotifications": {
+    "message": "Mitteilungen"
+  },
+  "sectionAppearance": {
+    "message": "Darstellung und Tastenkürzel"
+  },
+  "generalHelper": {
+    "message": "Prüfe diesen Browser auf andere Passwortmanager oder öffne die Einstellungen der MyPass-App."
+  },
+  "checkThisBrowser": {
+    "message": "Diesen Browser prüfen"
+  },
+  "myPassSettings": {
+    "message": "MyPass-Einstellungen"
+  },
+  "securityHelper": {
+    "message": "Prüfe die Sicherheitseinstellungen in der MyPass-App."
+  },
+  "phishingPrevention": {
+    "message": "Phishing-Schutz"
+  },
+  "warnPasteTitle": {
+    "message": "Warnen beim Einfügen auf einer unbekannten Website"
+  },
+  "warnPasteHelper": {
+    "message": "Eine Warnung anzeigen, wenn ein gesichertes Passwort auf einer Website eingefügt wird, die nicht zu diesem Eintrag gehört."
+  },
+  "warnCopyTitle": {
+    "message": "Warnen beim Kopieren auf einer unbekannten Website"
+  },
+  "warnCopyHelper": {
+    "message": "Eine Warnung anzeigen, wenn gesicherte Zugangsdaten oder ein gesichertes Passwort auf einer Website kopiert werden, die nicht zu diesem Eintrag gehört."
+  },
+  "autofillHelper": {
+    "message": "Diese Einstellungen gelten nur für diesen Browser. Passkeys folgen dem Schalter in der MyPass-App."
+  },
+  "offerSaveLoginTitle": {
+    "message": "Anbieten, neue Zugangsdaten zu sichern"
+  },
+  "offerSaveLoginHelper": {
+    "message": "Nach dem Absenden eines Formulars auf einer Website ohne gesicherten Eintrag anbieten, die Zugangsdaten zu sichern."
+  },
+  "offerSaveTotpTitle": {
+    "message": "Anbieten, einen 2FA-Code zu sichern"
+  },
+  "offerSaveTotpHelper": {
+    "message": "Anbieten, einen Code zu sichern, wenn eine Website einen Einrichtungsschlüssel anzeigt."
+  },
+  "showFieldIconTitle": {
+    "message": "MyPass-Symbol in Feldern anzeigen"
+  },
+  "showFieldIconHelper": {
+    "message": "Das Symbol in Feldern für Benutzername, Passwort und Einmalcode anzeigen."
+  },
+  "autoSubmitTitle": {
+    "message": "Nach dem Ausfüllen anmelden"
+  },
+  "autoSubmitHelper": {
+    "message": "Nach dem Ausfüllen von Zugangsdaten durch MyPass die Anmeldeschaltfläche des Formulars anklicken. Ein generiertes Passwort wird nicht abgesendet."
+  },
+  "passkeyOfferTitle": {
+    "message": "Anmeldung mit Passkey anbieten"
+  },
+  "passkeyOfferHelper": {
+    "message": "Verwendet den Passkey-Schalter in der MyPass-App. Entsperre MyPass, um ihn zu ändern."
+  },
+  "suggestions": {
+    "message": "Vorschläge"
+  },
+  "showLoginsTitle": {
+    "message": "Zugangsdaten anzeigen"
+  },
+  "showLoginsHelper": {
+    "message": "Gesicherte Zugangsdaten im Menü eines Feldes einblenden."
+  },
+  "showCardsTitle": {
+    "message": "Karten anzeigen"
+  },
+  "showCardsHelper": {
+    "message": "Gesicherte Karten im Menü eines Feldes einblenden."
+  },
+  "showAddressesTitle": {
+    "message": "Adressen anzeigen"
+  },
+  "showAddressesHelper": {
+    "message": "Gesicherte Adressen einblenden, wenn du ein Formular über das Popup ausfüllst."
+  },
+  "notificationsHelper": {
+    "message": "Diese Mitteilungen gelten nur für diesen Browser."
+  },
+  "notifyPasskeyTitle": {
+    "message": "Mitteilen, wenn ein Passkey bestätigt werden muss"
+  },
+  "notifyPasskeyHelper": {
+    "message": "Eine Systemmitteilung anzeigen, wenn Chrome im Hintergrund läuft und eine Website MyPass bittet, einen Passkey zu bestätigen."
+  },
+  "notifyUnlockedTitle": {
+    "message": "Mitteilen, wenn MyPass entsperrt wird"
+  },
+  "notifyUnlockedHelper": {
+    "message": "Eine Systemmitteilung anzeigen, wenn der Tresor von gesperrt zu entsperrt wechselt."
+  },
+  "appearanceHelper": {
+    "message": "Darstellung und Tastenkürzel gelten nur für diesen Browser."
+  },
+  "theme": {
+    "message": "Erscheinungsbild"
+  },
+  "themeSystem": {
+    "message": "Wie System"
+  },
+  "themeLight": {
+    "message": "Hell"
+  },
+  "themeDark": {
+    "message": "Dunkel"
+  },
+  "shortcuts": {
+    "message": "Tastenkürzel"
+  },
+  "shortcutNotSet": {
+    "message": "Nicht festgelegt"
+  },
+  "shortcutsHelper": {
+    "message": "Tastenkürzel ändern:"
+  },
+  "chromeShortcutsPage": {
+    "message": "Chrome-Seite für Tastenkürzel"
+  },
+  "pageNotFound": {
+    "message": "Seite nicht gefunden."
+  },
+  "openSettingsPairing": {
+    "message": "Verbinde diesen Browser zuerst mit MyPass und öffne dann die Einstellungen."
+  },
+  "openSettingsFailed": {
+    "message": "Die Einstellungen konnten nicht geöffnet werden. Öffne MyPass und wähle dann „Einstellungen“ → „Browser“."
+  },
+  "openAppFailed": {
+    "message": "MyPass konnte nicht geöffnet werden. Öffne die App und versuche es erneut."
+  },
+  "passkeyChangeLocked": {
+    "message": "Entsperre MyPass und ändere dann die Passkey-Einstellung."
+  },
+  "passkeyChangeFailed": {
+    "message": "Die Passkey-Einstellung konnte nicht geändert werden. Öffne MyPass und versuche es erneut."
+  },
+  "browserCheckTitle": {
+    "message": "Diesen Browser prüfen"
+  },
+  "browserCheckIntro": {
+    "message": "Prüfe dieses Profil auf andere Passwortmanager und sende die Ergebnisse an die MyPass-Einstellungen."
+  },
+  "browserCheckPermissionNote": {
+    "message": "Chrome fragt, ob MyPass die Datenschutzeinstellungen des Browsers und deine installierten Erweiterungen lesen darf. Diese Prüfung ändert keine Einstellungen und deaktiviert keine Erweiterungen."
+  },
+  "allowAndCheck": {
+    "message": "Erlauben und prüfen"
+  },
+  "checkAgain": {
+    "message": "Erneut prüfen"
+  },
+  "openMyPassSettings": {
+    "message": "MyPass-Einstellungen öffnen"
+  },
+  "permissionNotRequested": {
+    "message": "Die Berechtigung wurde noch nicht angefragt."
+  },
+  "otherManagerExtensions": {
+    "message": "Erweiterungen anderer Manager"
+  },
+  "browserCheckLimits": {
+    "message": "Damit lassen sich Passkeys des Google Passwortmanagers, die automatische Ausfüllung und macOS-Anbieter nicht prüfen. Nutze die Hilfe unter MyPass → Einstellungen → Browser, um sie getrennt zu prüfen."
+  },
+  "browserPasswordSettings": {
+    "message": "Passwort-Einstellungen des Browsers"
+  },
+  "browserExtensions": {
+    "message": "Browser-Erweiterungen"
+  },
+  "checkPermissionsUnreadable": {
+    "message": "Die Browser-Berechtigungen konnten nicht gelesen werden. Wiederhole die Prüfung."
+  },
+  "checkPermissionDenied": {
+    "message": "Die Berechtigung wurde nicht erteilt. Wähle „Erlauben und prüfen“, um es erneut zu versuchen."
+  },
+  "checkResultsSent": {
+    "message": "Ergebnisse an MyPass → Einstellungen → Browser gesendet."
+  },
+  "checkResultsLocal": {
+    "message": "Die Ergebnisse stehen unten. Öffne MyPass und verbinde es, prüfe dann erneut, um sie an die App zu senden."
+  },
+  "passwordSavingOn": {
+    "message": "Ein — kann doppelte Speicherabfragen auslösen"
+  },
+  "passwordSavingOff": {
+    "message": "Aus — Passkeys und automatisches Ausfüllen müssen weiterhin manuell geprüft werden"
+  },
+  "couldNotBeRead": {
+    "message": "Konnte nicht gelesen werden"
+  },
+  "couldNotBeChecked": {
+    "message": "Konnte nicht geprüft werden"
+  },
+  "noCompetingExtensions": {
+    "message": "Keine bekannten konkurrierenden Erweiterungen erkannt"
+  },
+  "settingsOpenFailed": {
+    "message": "Die Einstellungen konnten nicht geöffnet werden. Öffne MyPass und verbinde diesen Browser, wähle dann „Einstellungen“ → „Browser“."
+  },
+  "matchHelpRegistrableDomain": {
+    "message": "Passt auf example.com und jede Subdomain, etwa login.example.com."
+  },
+  "matchHelpHost": {
+    "message": "Passt nur auf genau diesen Hostnamen und Port. Eine andere Subdomain passt nicht."
+  },
+  "matchHelpStartsWith": {
+    "message": "Passt auf jede Seite derselben Website wie diese Adresse – Schema und Host müssen identisch sein, daher passt eine ähnlich aussehende Domain wie example.com.attacker.com nie, auch wenn sie mit demselben Text beginnt. Innerhalb derselben Website kann das trotzdem mehr treffen als beabsichtigt: example.com/app passt auch auf example.com/app-legacy, da beide gleich beginnen."
+  },
+  "matchHelpExact": {
+    "message": "Passt nur auf genau diese Seitenadresse, einschließlich Pfad und Abfrage."
+  },
+  "matchHelpNever": {
+    "message": "Blendet diesen Eintrag nur in der Browser-Erweiterung aus – in MyPass bleibt er vollständig sichtbar und nutzbar."
+  },
+  "couldNotSave": {
+    "message": "Das Sichern ist fehlgeschlagen."
+  },
+  "titleRequired": {
+    "message": "Ein Titel ist erforderlich."
+  },
+  "newEntryTitle": {
+    "message": "Neuer Eintrag"
+  },
+  "newCardTitle": {
+    "message": "Neue Karte"
+  },
+  "newNoteTitle": {
+    "message": "Neue Notiz"
+  },
+  "untitled": {
+    "message": "(ohne Titel)"
+  },
+  "addToFavorites": {
+    "message": "Zu Favoriten hinzufügen"
+  },
+  "removeFromFavorites": {
+    "message": "Aus Favoriten entfernen"
+  },
+  "showPassword": {
+    "message": "Passwort anzeigen"
+  },
+  "hidePassword": {
+    "message": "Passwort ausblenden"
+  },
+  "showCardNumber": {
+    "message": "Kartennummer anzeigen"
+  },
+  "hideCardNumber": {
+    "message": "Kartennummer ausblenden"
+  },
+  "showCvv": {
+    "message": "CVV anzeigen"
+  },
+  "hideCvv": {
+    "message": "CVV ausblenden"
+  },
+  "generate": {
+    "message": "Generieren"
+  },
+  "urlPlaceholder": {
+    "message": "URL"
+  },
+  "match": {
+    "message": "Abgleich"
+  },
+  "matchRegistrableDomain": {
+    "message": "Registrierbare Domain (empfohlen)"
+  },
+  "matchHost": {
+    "message": "Genauer Host"
+  },
+  "matchStartsWith": {
+    "message": "Beginnt mit"
+  },
+  "matchExact": {
+    "message": "Genaue Adresse"
+  },
+  "matchNever": {
+    "message": "Nie (in der Erweiterung ausblenden)"
+  },
+  "notes": {
+    "message": "Notizen"
+  },
+  "addOneTimePassword": {
+    "message": "+ Einmalcode hinzufügen"
+  },
+  "otpPlaceholder": {
+    "message": "otpauth:// oder geheimer Schlüssel"
+  },
+  "cardNumber": {
+    "message": "Kartennummer"
+  },
+  "cardholderName": {
+    "message": "Name des Karteninhabers"
+  },
+  "cardExpiry": {
+    "message": "Ablaufdatum (MM/JJ)"
+  },
+  "bold": {
+    "message": "Fett"
+  },
+  "italic": {
+    "message": "Kursiv"
+  },
+  "code": {
+    "message": "Code"
+  },
+  "note": {
+    "message": "Notiz"
+  },
+  "typeLabel": {
+    "message": "Typ"
+  },
+  "typeSmart": {
+    "message": "Intelligentes Passwort"
+  },
+  "typeRandom": {
+    "message": "Zufälliges Passwort"
+  },
+  "typeMemorable": {
+    "message": "Einprägsames Passwort"
+  },
+  "typePin": {
+    "message": "PIN"
+  },
+  "characters": {
+    "message": "Zeichen"
+  },
+  "digits": {
+    "message": "Ziffern"
+  },
+  "symbols": {
+    "message": "Sonderzeichen"
+  },
+  "words": {
+    "message": "Wörter"
+  },
+  "separator": {
+    "message": "Trennzeichen"
+  },
+  "separatorHyphen": {
+    "message": "Bindestriche"
+  },
+  "separatorSpace": {
+    "message": "Leerzeichen"
+  },
+  "separatorPeriod": {
+    "message": "Punkte"
+  },
+  "separatorComma": {
+    "message": "Kommas"
+  },
+  "separatorUnderscore": {
+    "message": "Unterstriche"
+  },
+  "capitalize": {
+    "message": "Großschreiben"
+  },
+  "fullWords": {
+    "message": "Ganze Wörter"
+  },
+  "useByDefault": {
+    "message": "Standardmäßig für Vorschläge verwenden"
+  },
+  "passwordGeneratorHistory": {
+    "message": "Verlauf des Passwortgenerators"
+  },
+  "generatorHistory": {
+    "message": "Generatorverlauf"
+  },
+  "searchHistory": {
+    "message": "Verlauf durchsuchen"
+  },
+  "regenerate": {
+    "message": "Neu generieren"
+  },
+  "autofill": {
+    "message": "Ausfüllen"
+  },
+  "usePassword": {
+    "message": "Passwort verwenden"
+  },
+  "openSiteToFill": {
+    "message": "Öffne eine Website, um dieses Passwort einzutragen."
+  },
+  "couldNotGeneratePassword": {
+    "message": "Es konnte kein Passwort generiert werden."
+  },
+  "smartHint": {
+    "message": "MyPass schlägt ein Passwort vor, das zu dieser Website passt."
+  },
+  "noMatchingPasswords": {
+    "message": "Keine passenden Passwörter."
+  },
+  "noGeneratedPasswords": {
+    "message": "Noch keine generierten Passwörter."
+  },
+  "passwordActions": {
+    "message": "Passwortaktionen"
+  },
+  "unlockForHistory": {
+    "message": "Entsperre MyPass, um den Passwortverlauf zu sehen."
+  },
+  "promptNothingToConfirm": {
+    "message": "Nichts zu bestätigen. Diese Aufforderung ist möglicherweise abgelaufen; löse sie auf der Seite erneut aus."
+  },
+  "promptOfferSaveLogin": {
+    "message": "Anbieten, Passwörter zu sichern"
+  },
+  "promptOfferSaveTotp": {
+    "message": "Anbieten, 2FA-Codes zu sichern"
+  },
+  "promptShowFieldIcon": {
+    "message": "MyPass-Symbol in Feldern anzeigen"
+  },
+  "promptShowLogins": {
+    "message": "Zugangsdaten vorschlagen"
+  },
+  "promptShowCards": {
+    "message": "Karten vorschlagen"
+  },
+  "promptShowAddresses": {
+    "message": "Adressen vorschlagen"
+  },
+  "promptAutoSubmit": {
+    "message": "Nach dem Ausfüllen von Zugangsdaten absenden"
+  },
+  "promptLocked": {
+    "message": "MyPass ist gesperrt. Entsperre es und versuche es erneut."
+  },
+  "promptNotPaired": {
+    "message": "Dieser Browser ist noch nicht mit MyPass verbunden. Klicke auf die MyPass-Schaltfläche in der Symbolleiste, um ihn zu verbinden, und versuche es dann erneut."
+  },
+  "promptExpired": {
+    "message": "Diese Aufforderung ist abgelaufen. Löse die Aktion auf der Seite erneut aus."
+  },
+  "promptPageChanged": {
+    "message": "Die Seite hat sich geändert, daher wurde nichts gesichert."
+  },
+  "promptAutofillSettings": {
+    "message": "MyPass-Einstellungen für das Ausfüllen"
+  },
+  "promptSavePassword": {
+    "message": "Passwort sichern?"
+  },
+  "promptAdd2fa": {
+    "message": "2FA-Code hinzufügen?"
+  },
+  "promptSite": {
+    "message": "Website"
+  },
+  "promptNone": {
+    "message": "(keiner)"
+  },
+  "promptNoSavedLogin": {
+    "message": "Für diese Website gibt es keine gesicherten Zugangsdaten. Es wird ein neuer Eintrag angelegt."
+  },
+  "promptAddToOnly": {
+    "message": "Zu „$P1$“ hinzufügen.",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "promptAddToOnlyWithUser": {
+    "message": "Zu „$P1$“ ($P2$) hinzufügen.",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      },
+      "p2": {
+        "content": "$2"
+      }
+    }
+  },
+  "promptChooseAccount": {
+    "message": "Wähle das Konto, dem es hinzugefügt werden soll:"
+  },
+  "tryAgain": {
+    "message": "Erneut versuchen"
+  },
+  "notNow": {
+    "message": "Jetzt nicht"
+  },
+  "dismiss": {
+    "message": "Verwerfen"
+  },
+  "fillFromMyPass": {
+    "message": "Mit MyPass ausfüllen"
+  },
+  "panelEmpty": {
+    "message": "Keine Einträge für diese Website"
+  },
+  "panelPairingRequired": {
+    "message": "Koppeln, um MyPass hier zu verwenden"
+  },
+  "panelUnavailable": {
+    "message": "MyPass läuft nicht"
+  },
+  "securityWarningPassword": {
+    "message": "Diese Website ist bei diesem MyPass-Passwort nicht hinterlegt."
+  },
+  "securityWarningLogin": {
+    "message": "Diese Website ist bei diesen MyPass-Zugangsdaten nicht hinterlegt."
+  },
+  "notifyUnlocked": {
+    "message": "MyPass ist entsperrt."
+  },
+  "notifyPasskeyConfirm": {
+    "message": "Passkey-Bestätigung erforderlich. Öffne die MyPass-Erweiterung, um fortzufahren."
+  },
+  "promptGone": {
+    "message": "Diese Aufforderung ist nicht mehr verfügbar."
+  },
+  "promptPageChangedRetry": {
+    "message": "Diese Seite hat sich geändert. Versuche es erneut."
+  },
+  "promptBadChoice": {
+    "message": "Wähle eines der aufgeführten Konten."
+  },
+  "promptChoiceRequired": {
+    "message": "Wähle ein Konto aus."
+  },
+  "passkeyFailureNoticeCreate": {
+    "message": "Der Browser konnte die Passkey-Registrierung nicht abschließen. Möglicherweise ist bereits ein Passkey in MyPass gesichert. Brich die Anfrage der Website ab und versuche es erneut; prüfe die Website, bevor du den lokalen Schlüssel ersetzt."
+  },
+  "passkeyFailureNoticeGet": {
+    "message": "Der Browser konnte die Anmeldung per Passkey nicht abschließen. Brich die Anfrage der Website ab und versuche es erneut."
+  },
+  "addressUnlockAgain": {
+    "message": "Entsperre MyPass und wähle die Adresse dann erneut aus."
+  },
+  "addressConnectAgain": {
+    "message": "Verbinde diesen Browser mit MyPass und versuche es dann erneut."
+  },
+  "cvv": {
+    "message": "CVV"
+  }
+}

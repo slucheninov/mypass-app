@@ -89,6 +89,7 @@ pub enum Language {
     En,
     Uk,
     Ru,
+    De,
 }
 
 /// How long a device unlock (Touch ID / account password) stays allowed after a master-password
@@ -589,7 +590,8 @@ fn checked_shortcut(value: String, field: &'static str) -> Result<String, Settin
     if value.trim().is_empty() {
         return Ok(String::new());
     }
-    shortcut::canonical(&value).map_err(|_| SettingsError::InvalidValue(field))
+    shortcut::canonical_for(&value, shortcut::HOST_IS_MACOS)
+        .map_err(|_| SettingsError::InvalidValue(field))
 }
 
 fn apply_patch(s: &mut Settings, p: SettingsPatch) -> Result<(), SettingsError> {
@@ -727,6 +729,7 @@ mod tests {
             "everySave"
         );
         assert_eq!(serde_json::to_value(Language::Uk).unwrap(), "uk");
+        assert_eq!(serde_json::to_value(Language::De).unwrap(), "de");
         assert_eq!(
             serde_json::to_value(UnlockWithDeviceWindow::TwentyFourHours).unwrap(),
             "twentyFourHours"
@@ -1103,6 +1106,31 @@ mod tests {
             }),
             Err(SettingsError::InvalidValue("shortcutLock"))
         );
+        // A combination the system owns is refused by the backend too, not only by the recorder.
+        assert_eq!(
+            store.update(SettingsPatch {
+                shortcut_lock: Some("cmd+Q".into()),
+                ..SettingsPatch::default()
+            }),
+            Err(SettingsError::InvalidValue("shortcutLock"))
+        );
+        assert_eq!(
+            store.update(SettingsPatch {
+                shortcut_show: Some("Ctrl+Tab".into()),
+                ..SettingsPatch::default()
+            }),
+            Err(SettingsError::InvalidValue("shortcutShow"))
+        );
+        // The platform's reading counts: on macOS `Super` is Cmd, so `Super+Q` is Cmd+Q.
+        if cfg!(target_os = "macos") {
+            assert_eq!(
+                store.update(SettingsPatch {
+                    shortcut_lock: Some("Super+Q".into()),
+                    ..SettingsPatch::default()
+                }),
+                Err(SettingsError::InvalidValue("shortcutLock"))
+            );
+        }
         // Empty means "no shortcut" and is accepted.
         let s = store
             .update(SettingsPatch {

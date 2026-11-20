@@ -70,7 +70,8 @@ mod tests {
                 "ru-RU",
                 "MyPass \u{442}\u{440}\u{435}\u{431}\u{443}\u{435}\u{442}\u{441}\u{44f}",
             ),
-            ("de-DE", "MyPass needs"),
+            ("de-DE", "MyPass ben\u{f6}tigt"),
+            ("fr-FR", "MyPass needs"),
             ("", "MyPass needs"),
         ] {
             let language = crate::i18n::language_for_locale(locale);

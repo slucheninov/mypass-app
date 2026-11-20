@@ -47,7 +47,8 @@
       "files": {
         "Resources/en.lproj/InfoPlist.strings": "resources/macos/en.lproj/InfoPlist.strings",
         "Resources/uk.lproj/InfoPlist.strings": "resources/macos/uk.lproj/InfoPlist.strings",
-        "Resources/ru.lproj/InfoPlist.strings": "resources/macos/ru.lproj/InfoPlist.strings"
+        "Resources/ru.lproj/InfoPlist.strings": "resources/macos/ru.lproj/InfoPlist.strings",
+        "Resources/de.lproj/InfoPlist.strings": "resources/macos/de.lproj/InfoPlist.strings"
       }
     }
   }

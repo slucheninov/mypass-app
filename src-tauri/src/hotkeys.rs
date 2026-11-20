@@ -28,21 +28,40 @@ impl HotkeyAction {
     }
 }
 
-/// The hotkeys the settings ask for, as `(action, canonical accelerator)`, Lock first. An empty
-/// shortcut means "none" and is left out; a legacy spelling is canonicalised; a string that does
-/// not parse is kept as stored, so registering it fails and is reported as a conflict.
-pub fn hotkey_plan(settings: &Settings) -> Vec<(HotkeyAction, String)> {
-    [
+/// What the settings ask for, split by what may reach the registrar.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct HotkeyPlan {
+    /// `(action, canonical accelerator)`, Lock first: parsed, not reserved on this platform.
+    pub register: Vec<(HotkeyAction, String)>,
+    /// `(action, shortcut as stored)`: a combination the system owns (Cmd+Q, Alt+F4 ...) or text
+    /// MyPass cannot parse. These are never handed to the plugin (its parser is more lenient and
+    /// would register `Cmd+KeyQ` as Cmd+Q); they are reported as conflicts instead, so the user
+    /// sees that the shortcut shown in Settings does nothing.
+    pub refused: Vec<(HotkeyAction, String)>,
+}
+
+/// The hotkeys the settings ask for on a macOS (`macos`) or other host. An empty shortcut means
+/// "none" and is left out; a legacy spelling is canonicalised.
+pub fn plan_hotkeys(settings: &Settings, macos: bool) -> HotkeyPlan {
+    let mut plan = HotkeyPlan::default();
+    for (action, raw) in [
         (HotkeyAction::Lock, &settings.shortcut_lock),
         (HotkeyAction::Show, &settings.shortcut_show),
-    ]
-    .into_iter()
-    .filter(|(_, raw)| !raw.trim().is_empty())
-    .map(|(action, raw)| {
-        let accelerator = shortcut::canonical(raw).unwrap_or_else(|_| raw.clone());
-        (action, accelerator)
-    })
-    .collect()
+    ] {
+        if raw.trim().is_empty() {
+            continue;
+        }
+        match shortcut::canonical_for(raw, macos) {
+            Ok(accelerator) => plan.register.push((action, accelerator)),
+            Err(_) => plan.refused.push((action, raw.clone())),
+        }
+    }
+    plan
+}
+
+/// [`plan_hotkeys`] for this host, the registrable part only.
+pub fn hotkey_plan(settings: &Settings) -> Vec<(HotkeyAction, String)> {
+    plan_hotkeys(settings, shortcut::HOST_IS_MACOS).register
 }
 
 /// The canonical accelerator written for the plugin on `os`: `CommandOrControl` is spelled out as
@@ -80,7 +99,14 @@ pub fn register_with(
 ) -> Vec<ShortcutConflictEvent> {
     registry.unregister_all();
     let mut conflicts = Vec::new();
-    for (action, accelerator) in hotkey_plan(settings) {
+    let plan = plan_hotkeys(settings, os == "macos");
+    for (action, shortcut) in plan.refused {
+        conflicts.push(ShortcutConflictEvent {
+            kind: action.kind(),
+            shortcut,
+        });
+    }
+    for (action, accelerator) in plan.register {
         let rendered = render_for_plugin(&accelerator, os);
         if registry.register(action, &rendered).is_err() {
             conflicts.push(ShortcutConflictEvent {
@@ -233,11 +259,59 @@ mod tests {
                 (HotkeyAction::Show, "CommandOrControl+Alt+M".to_owned()),
             ]
         );
-        // An unparsable string is kept as stored so the registration reports it.
+    }
+
+    #[test]
+    fn a_reserved_or_unparsable_shortcut_is_refused_not_registered() {
+        for macos in [true, false] {
+            let plan = plan_hotkeys(&settings("cmd+Q", "Ctrl+Alt+M"), macos);
+            assert_eq!(
+                plan.register,
+                [(HotkeyAction::Show, "CommandOrControl+Alt+M".to_owned())]
+            );
+            assert_eq!(plan.refused, [(HotkeyAction::Lock, "cmd+Q".to_owned())]);
+            // The plugin's parser is more lenient than ours (`KeyQ` is Q): the raw text never reaches it.
+            let plan = plan_hotkeys(&settings("Hyper+L", "Cmd+KeyQ"), macos);
+            assert!(plan.register.is_empty());
+            assert_eq!(
+                plan.refused,
+                [
+                    (HotkeyAction::Lock, "Hyper+L".to_owned()),
+                    (HotkeyAction::Show, "Cmd+KeyQ".to_owned())
+                ]
+            );
+        }
+        // `Super` is Cmd for the plugin on macOS, the Windows key elsewhere.
+        assert!(plan_hotkeys(&settings("Super+Q", ""), true)
+            .register
+            .is_empty());
         assert_eq!(
-            hotkey_plan(&settings("Hyper+L", "")),
-            [(HotkeyAction::Lock, "Hyper+L".to_owned())]
+            plan_hotkeys(&settings("Super+Q", ""), false).register,
+            [(HotkeyAction::Lock, "Super+Q".to_owned())]
         );
+    }
+
+    #[test]
+    fn refused_shortcuts_reach_no_registrar_and_surface_as_conflicts() {
+        for (os, stored) in [
+            ("macos", "Super+Q"),
+            ("macos", "Cmd+KeyQ"),
+            ("windows", "Alt+F4"),
+        ] {
+            let registry = FakeRegistry::default();
+            let conflicts = register_with(&registry, &settings(stored, "Ctrl+Alt+M"), os);
+            assert_eq!(
+                conflicts,
+                [ShortcutConflictEvent {
+                    kind: ShortcutKind::Lock,
+                    shortcut: stored.into()
+                }],
+                "{stored}"
+            );
+            let log = registry.log.borrow();
+            assert_eq!(log.len(), 2, "{log:?}");
+            assert!(log[1].starts_with("register Show "), "{log:?}");
+        }
     }
 
     #[test]
@@ -283,15 +357,20 @@ mod tests {
     fn register_unregisters_first_and_registers_the_rendered_plan() {
         let registry = FakeRegistry::default();
         let conflicts = register_with(&registry, &settings("", "x"), "macos");
-        // `x` does not parse, so it is kept as stored and rendered unchanged; the fake accepts it.
-        assert!(conflicts.is_empty());
+        // `x` does not parse: it is reported, never handed to the plugin.
+        assert_eq!(
+            conflicts,
+            [ShortcutConflictEvent {
+                kind: ShortcutKind::Show,
+                shortcut: "x".into()
+            }]
+        );
         let conflicts = register_with(&registry, &Settings::default(), "windows");
         assert!(conflicts.is_empty());
         assert_eq!(
             *registry.log.borrow(),
             [
                 "unregister_all",
-                "register Show x",
                 "unregister_all",
                 "register Lock Ctrl+Shift+L"
             ]

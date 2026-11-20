@@ -9,6 +9,7 @@ import { emit } from "@tauri-apps/api/event";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type {
   ApiError,
+  HistoryReveal,
   DeviceUnlockStatus_Serialize,
   UpdateStatus_Serialize,
   AttachmentMeta,
@@ -22,6 +23,7 @@ import type {
   DraftVersionDto,
   events,
   FieldRef,
+  DisplacedCopies,
   FoundVaultFileDto,
   GeneratorHistoryItem,
   GroupNode_Serialize,
@@ -59,6 +61,9 @@ import {
 type Commands = typeof commands;
 export type CommandName = keyof Commands;
 export type EventName = keyof typeof events;
+
+/** Canonical shortcuts the backend refuses on every platform (a subset of its reserved list). */
+const RESERVED_SHORTCUTS = new Set(["CommandOrControl+Q", "CommandOrControl+W", "CommandOrControl+Tab"]);
 
 /** The success payload of a generated command (a `Result` is unwrapped; `shortcutConflictsTake` has none). */
 export type OkData<K extends CommandName> =
@@ -175,6 +180,8 @@ export interface FakeState {
   touched: string[];
   /** What `sync_status` answers; `sync_now` and `sync_disconnect_secondary` edit it. */
   sync: SecondaryStatus_Serialize;
+  /** What `sync_displaced_status` answers (read-only: there is no delete command). */
+  displaced: DisplacedCopies;
 }
 
 export interface FakeBackend {
@@ -197,6 +204,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     browser: {
       listening: true,
       pairingStoreFailed: false,
+      startFailure: null,
       paired: [],
       pairing: null,
       registrations: [],
@@ -241,6 +249,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     touched: [],
     shortcutConflicts: [],
     sync: { state: "off" },
+    displaced: { count: 0, copies: [], unavailable: [] },
   };
   /** Like the Rust grant: set by a successful preview, spent by the next commit. */
   let csvRemembered: CsvPreview | null = null;
@@ -275,7 +284,10 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     const bin = list.findIndex((g) => g.isRecycleBin);
     list.splice(bin === -1 ? list.length : bin, 0, node);
   };
+  /** The group each bin entry was deleted from (`PreviousParentGroup`), by entry id. */
+  const origins = new Map<string, string>();
   const sendToBin = (entry: FixtureEntry) => {
+    origins.set(entry.summary.id, entry.summary.groupId);
     entry.summary.groupId = BIN_GROUP_ID;
     entry.model.groupId = BIN_GROUP_ID;
     entry.summary.inRecycleBin = true;
@@ -318,6 +330,45 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
   let groupSeq = 0;
   let generatedSeq = 0;
   let historySeq = 0;
+  let revisionSeq = 0;
+  /** Like `editing::revealable_fields`: the changed fields whose old value the version still holds. */
+  const revealableOf = (model: EntryEditModel_Serialize, keys: string[]): HistoryReveal[] => {
+    const out: HistoryReveal[] = [];
+    for (const key of keys) {
+      let field: FieldRef | null = null;
+      switch (key) {
+        case "UserName":
+          field = { kind: "username" };
+          break;
+        case "Password":
+          field = { kind: "password" };
+          break;
+        case "URL":
+          field = model.urls.length > 0 ? { kind: "url" } : null;
+          break;
+        case "Notes":
+        case "MyPass.NotesBody":
+          field = { kind: "notesBody" };
+          break;
+        case "MyPass.CardNumber":
+          field = model.card ? { kind: "cardNumber" } : null;
+          break;
+        case "MyPass.CVV":
+          field = model.card ? { kind: "cardCvv" } : null;
+          break;
+        case "Title":
+        case "otp":
+        case "Attachments":
+          break;
+        default:
+          if (!key.startsWith("MyPass.") && !key.startsWith("KPEX_") && model.customFields.some((f) => f.key === key)) {
+            field = { kind: "custom", key };
+          }
+      }
+      if (field && !out.some((r) => JSON.stringify(r.field) === JSON.stringify(field))) out.push({ key, field });
+    }
+    return out;
+  };
   /** The host a rules lookup keys on: what the user typed or pasted, reduced to its lower-case host. */
   const canonicalHost = (raw: string) =>
     raw.trim().toLowerCase().replace(/^[a-z][a-z0-9+.-]*:\/\//, "").replace(/[/?#].*$/, "").replace(/^www\./, "");
@@ -498,21 +549,26 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       const found = findEntry(id);
       return [...found.history].reverse().map((v, index) => {
         const newer = found.history[found.history.length - index] ?? { model: found.model };
+        const changedFields = v.changedFields ?? changedKeys(v.model, newer.model);
+        v.revision ??= `rev-${++revisionSeq}`;
         return {
           index,
+          revision: v.revision,
           modified: v.modified,
           title: v.model.title,
-          changedFields: v.changedFields ?? changedKeys(v.model, newer.model),
+          changedFields,
+          revealable: revealableOf(v.model, changedFields),
         };
       });
     },
     // Like `editing::restore_history`: the current state is snapshotted first (the restore is
     // undoable), then the version's content replaces it; the group and the favourite stay.
-    entryHistoryRestore: ({ id, index }) => {
+    // The version is named by its `revision` (never an index, which shifts): a stale one is `notFound`.
+    entryHistoryRestore: ({ id, revision }) => {
       requireUnlocked();
       const found = findEntry(id);
-      const old = found.history[found.history.length - 1 - index];
-      if (!Number.isInteger(index) || index < 0 || !old) throw apiError("notFound");
+      const old = found.history.find((v) => v.revision === revision);
+      if (!old) throw apiError("notFound");
       found.history.push({ modified: found.modified, model: structuredClone(found.model) });
       found.model = {
         ...structuredClone(old.model),
@@ -564,7 +620,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       return {
         id: null,
         entryType,
-        groupId: groupId ?? PERSONAL_GROUP_ID,
+        groupId: groupId ?? (locate(PERSONAL_GROUP_ID) ? PERSONAL_GROUP_ID : ROOT_GROUP_ID),
         title: "",
         favorite: false,
         username: "",
@@ -581,6 +637,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         passkey: null,
         removePasskey: false,
         passkeyRef: null,
+        restore: false,
       };
     },
     // Like `queries::passkey_details`: the metadata plus the public credential id, never the key.
@@ -606,21 +663,34 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         .slice(0, limit)
         .map((e) => structuredClone(e.summary));
     },
-    // Like `editing::restore_entry`: only a bin entry, into `groupId` (the root when null; the real
-    // backend does not remember the group an entry came from either).
+    // Like `editing::restore_entry`: only a bin entry, into `groupId`, or (null) back into the group
+    // it was deleted from while that group is still live, the root otherwise.
     entryRestore: ({ id, groupId }) => {
       requireUnlocked();
       const found = findEntry(id);
       if (!found.summary.inRecycleBin) throw apiError("invalidInput");
-      const target = groupId ?? ROOT_GROUP_ID;
+      const origin = origins.get(id);
+      const live = origin !== undefined && (origin === ROOT_GROUP_ID || locate(origin) !== null);
+      const target = groupId ?? (live ? origin : ROOT_GROUP_ID);
       if (target !== ROOT_GROUP_ID && (!locate(target) || locate(target)?.node.isRecycleBin)) {
         throw apiError(locate(target) ? "invalidInput" : "notFound");
       }
+      origins.delete(id);
       found.summary.groupId = target;
       found.model.groupId = target;
       found.summary.inRecycleBin = false;
       changed();
       return null;
+    },
+    // Like `editing::reveal_history`: one value of the version named by `revision` (never an
+    // index, which shifts), never a one-time code; `entryHistory` itself carries no values.
+    entryHistoryReveal: ({ id, revision, field }) => {
+      requireUnlocked();
+      const found = findEntry(id);
+      const version = found.history.find((v) => v.revision === revision);
+      if (!version) throw apiError("notFound");
+      if (field.kind === "totp") throw apiError("invalidInput");
+      return secretOf({ ...found, model: version.model }, field);
     },
     entryReveal: ({ id, field }) => {
       requireUnlocked();
@@ -636,9 +706,22 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         state.saveFailure = null;
         throw apiError(code);
       }
-      let attachments: AttachmentMeta[] = structuredClone(model.attachments);
+      // Like `save_entry`: a group that is gone is `notFound`; the bin or a group below it is
+      // `invalidInput`; an entry in the bin is saved only with the explicit `restore`.
+      if (model.groupId !== ROOT_GROUP_ID) {
+        const target = locate(model.groupId);
+        if (!target) throw apiError("notFound");
+        const bin = state.groups.find((g) => g.isRecycleBin);
+        const deleted = bin !== undefined && (bin.id === model.groupId || locate(model.groupId, bin.children) !== null);
+        if (deleted) throw apiError("invalidInput");
+      }
+      if (model.id && findEntry(model.id).summary.inRecycleBin && !model.restore) throw apiError("invalidInput");
+      // Like `apply_attachment_ops`: a new entry starts with none, and removing a file the entry
+      // does not hold is `notFound`.
+      let attachments: AttachmentMeta[] = model.id === null ? [] : structuredClone(model.attachments);
       for (const op of model.attachmentOps) {
         if (op.kind === "remove") {
+          if (!attachments.some((a) => a.name === op.name)) throw apiError("notFound");
           attachments = attachments.filter((a) => a.name !== op.name);
           continue;
         }
@@ -666,6 +749,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         passkey,
         removePasskey: false,
         passkeyRef,
+        restore: false,
       };
       if (found) {
         found.passkey = passkey;
@@ -727,6 +811,12 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         requireUnlocked();
         recordHistory(value, recordUrl);
       }
+      return null;
+    },
+    // "Use" fills the form and only records the history (nothing is copied).
+    generatorUse: ({ value, recordUrl }) => {
+      requireUnlocked();
+      recordHistory(value, recordUrl ?? "");
       return null;
     },
     // Mirrors `resolve_options`: the length is clamped to the site bounds, forced classes switch on,
@@ -883,6 +973,11 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         state.settingsFailure = null;
         throw apiError(code);
       }
+      // Like the backend's `canonical_for`: a combination the system owns is refused, whatever the
+      // recorder let through (the settings window checks only as a convenience).
+      for (const value of [patch.shortcutLock, patch.shortcutShow]) {
+        if (typeof value === "string" && RESERVED_SHORTCUTS.has(value)) throw apiError("invalidInput");
+      }
       if (typeof patch.launchAtLogin === "boolean") {
         if (state.loginItemError !== null) {
           const message = state.loginItemError;
@@ -947,6 +1042,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     updateDismiss: () => { state.update.banner = null; publish("updateChanged", structuredClone(state.update)); return null; },
     updateOpenRelease: () => null,
     syncStatus: () => structuredClone(state.sync),
+    syncDisplacedStatus: () => structuredClone(state.displaced),
     // Like Rust: forgets the folder (the copy in it stays) and reports `off`.
     syncDisconnectSecondary: () => {
       state.settings.secondaryFolder = null;

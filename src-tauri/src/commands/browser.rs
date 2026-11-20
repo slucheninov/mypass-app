@@ -6,7 +6,7 @@
 //! failure is never described to the webview: [`pairing_api_error`] maps every `PairingError` to
 //! the same `Internal` error.
 
-use crate::bridge::{BridgeHandle, BridgeState};
+use crate::bridge::{BridgeHandle, BridgeState, StartFailure};
 use crate::state::AppState;
 use mypass_bridge::pairing::{PairingChallenge, PairingError};
 use mypass_bridge::protocol::BrowserDiagnosticsReport;
@@ -79,6 +79,31 @@ pub struct BrowserRegistrationDto {
     pub detail: Option<String>,
 }
 
+/// Why the bridge is not running when the pairing list is not the cause. A fixed reason only: no
+/// path, no store error text.
+#[derive(Serialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum BrowserStartFailure {
+    /// The endpoint record cannot be stored (for example a `secrets/shared` folder with group or
+    /// other permission bits).
+    EndpointStoreUnusable,
+    /// The loopback listener could not be created.
+    ListenerUnavailable,
+    /// A worker thread could not be started.
+    WorkerUnavailable,
+}
+
+impl BrowserStartFailure {
+    fn of(failure: StartFailure) -> Option<Self> {
+        match failure {
+            StartFailure::PairingStore => None,
+            StartFailure::EndpointStore => Some(Self::EndpointStoreUnusable),
+            StartFailure::Listener => Some(Self::ListenerUnavailable),
+            StartFailure::Worker => Some(Self::WorkerUnavailable),
+        }
+    }
+}
+
 /// Everything the Browser pane shows.
 #[derive(Serialize, specta::Type, Clone, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -88,6 +113,8 @@ pub struct BrowserStatus {
     /// The stored list of paired browsers could not be read, so the bridge did not start; the pane
     /// offers `browser_reset_pairings`.
     pub pairing_store_failed: bool,
+    /// The machine-readable reason the bridge is not running, other than the pairing list.
+    pub start_failure: Option<BrowserStartFailure>,
     pub paired: Vec<PairedBrowserDto>,
     pub pairing: Option<PairingChallengeDto>,
     pub registrations: Vec<BrowserRegistrationDto>,
@@ -139,7 +166,7 @@ fn diagnostics_dto(report: &BrowserDiagnosticsReport, received_at: i64) -> Brows
 /// The pane's state. Reads the registration rows from disk, so callers run it on the blocking pool.
 pub fn status(
     handle: Option<&BridgeHandle>,
-    store_failed: bool,
+    failure: Option<StartFailure>,
     registrar: &dyn NativeHostRegistrar,
     host_path: Option<&Path>,
 ) -> BrowserStatus {
@@ -162,7 +189,8 @@ pub fn status(
     });
     BrowserStatus {
         listening: handle.is_some(),
-        pairing_store_failed: store_failed,
+        pairing_store_failed: failure == Some(StartFailure::PairingStore),
+        start_failure: failure.and_then(BrowserStartFailure::of),
         paired,
         pairing,
         registrations: {
@@ -374,15 +402,11 @@ pub async fn browser_status(
 ) -> Result<BrowserStatus, ApiError> {
     let registrar = app_state.0.platform().host_registrar.clone();
     let store_kind = state.store_kind();
-    let (handle, failed, host) = (
-        state.handle(),
-        state.pairing_store_failed(),
-        state.bundled_host(),
-    );
+    let (handle, failure, host) = (state.handle(), state.start_failure(), state.bundled_host());
     super::blocking(move || {
         let mut report = status(
             handle.as_deref(),
-            failed,
+            failure,
             registrar.as_ref(),
             host.as_deref(),
         );
@@ -482,7 +506,7 @@ mod tests {
     fn status_of(f: &crate::bridge::test_support::Fixture) -> BrowserStatus {
         status(
             f.state.handle().as_deref(),
-            f.state.pairing_store_failed(),
+            f.state.start_failure(),
             f.w.core.platform().host_registrar.as_ref(),
             None,
         )
@@ -596,6 +620,139 @@ mod tests {
         assert!(f.handle().pairing.list().is_empty());
         assert!(!f.handle().pairing.is_authorized(Some(&secret)));
         assert!(f.handle().diagnostics.get(id).is_none());
+    }
+
+    fn failing_state(
+        f: &crate::bridge::test_support::Fixture,
+        error: fn() -> crate::bridge::BridgeStartError,
+    ) -> BridgeState {
+        BridgeState::new(
+            Box::new(move |_| Err(error())),
+            Arc::clone(&f.w.core.platform().secrets),
+            None,
+            f.events.clone(),
+        )
+    }
+
+    #[test]
+    fn an_unusable_endpoint_store_is_reported_as_a_fixed_reason() {
+        use crate::bridge::BridgeStartError;
+        use mypass_bridge::server::ServerError;
+        let f = unstarted(false, None);
+        let state = failing_state(&f, || {
+            BridgeStartError::Server(ServerError::Endpoint(
+                "/Users/me/secrets/shared is group readable".into(),
+            ))
+        });
+        assert!(state.start().is_err());
+        let report = status(
+            None,
+            state.start_failure(),
+            f.w.core.platform().host_registrar.as_ref(),
+            None,
+        );
+        assert!(!report.listening);
+        assert!(!report.pairing_store_failed);
+        assert_eq!(
+            report.start_failure,
+            Some(BrowserStartFailure::EndpointStoreUnusable)
+        );
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains("\"startFailure\":\"endpointStoreUnusable\""));
+        assert!(
+            !json.contains("/Users/me"),
+            "no store detail reaches the webview"
+        );
+    }
+
+    #[test]
+    fn a_start_worker_that_cannot_be_spawned_is_recorded_published_and_reported() {
+        let f = unstarted(false, None);
+        let before = f.events.count("bridge_changed");
+        // The production entry point with a spawner that refuses, like a failed thread spawn.
+        f.state
+            .start_in_background(|_job| Err(std::io::Error::other("no threads")));
+        assert_eq!(
+            f.state.start_failure(),
+            Some(crate::bridge::StartFailure::Worker)
+        );
+        assert_eq!(f.events.count("bridge_changed"), before + 1, "published");
+        let report = status(
+            None,
+            f.state.start_failure(),
+            f.w.core.platform().host_registrar.as_ref(),
+            None,
+        );
+        assert_eq!(
+            report.start_failure,
+            Some(BrowserStartFailure::WorkerUnavailable)
+        );
+        assert!(!report.listening);
+    }
+
+    #[test]
+    fn a_start_worker_that_runs_starts_the_bridge_and_publishes_once() {
+        let f = unstarted(false, None);
+        let before = f.events.count("bridge_changed");
+        f.state.start_in_background(|job| {
+            job();
+            Ok(())
+        });
+        assert!(f.state.start_failure().is_none());
+        assert!(f.state.handle().is_some());
+        assert!(f.events.count("bridge_changed") > before);
+    }
+
+    #[test]
+    fn the_other_start_failures_have_their_own_reasons() {
+        use crate::bridge::BridgeStartError;
+        use mypass_bridge::server::ServerError;
+        let f = unstarted(false, None);
+        type Case = (fn() -> BridgeStartError, Option<BrowserStartFailure>, bool);
+        let cases: [Case; 5] = [
+            (
+                || BridgeStartError::Server(ServerError::Bind("in use".into())),
+                Some(BrowserStartFailure::ListenerUnavailable),
+                false,
+            ),
+            (
+                || BridgeStartError::Thread("no threads".into()),
+                Some(BrowserStartFailure::WorkerUnavailable),
+                false,
+            ),
+            (
+                // The accept thread of the server could not be spawned: not a listener failure.
+                || BridgeStartError::Server(ServerError::Worker("no threads".into())),
+                Some(BrowserStartFailure::WorkerUnavailable),
+                false,
+            ),
+            (
+                || BridgeStartError::LegacyEndpoint,
+                Some(BrowserStartFailure::EndpointStoreUnusable),
+                false,
+            ),
+            (
+                || BridgeStartError::PairingStore(PairingError::Corrupt),
+                None,
+                true,
+            ),
+        ];
+        for (error, reason, pairing) in cases {
+            let state = failing_state(&f, error);
+            assert!(state.start().is_err());
+            let report = status(
+                None,
+                state.start_failure(),
+                f.w.core.platform().host_registrar.as_ref(),
+                None,
+            );
+            assert_eq!(report.start_failure, reason);
+            assert_eq!(report.pairing_store_failed, pairing);
+        }
+        // A bridge that runs reports no failure.
+        let running = fixture(true);
+        assert_eq!(running.state.start_failure(), None);
+        assert_eq!(status_of(&running).start_failure, None);
     }
 
     #[test]

@@ -260,7 +260,7 @@ impl BridgeUi for TauriBridgeUi {
 }
 
 /// Why the bridge did not start. The messages are for the developer; the webview only learns
-/// `listening: false` and `pairingStoreFailed`.
+/// `listening: false`, `pairingStoreFailed` and the coarse `startFailure` reason.
 #[derive(Debug, thiserror::Error)]
 pub enum BridgeStartError {
     #[error("the paired browser list is unreadable: {0}")]
@@ -269,6 +269,36 @@ pub enum BridgeStartError {
     Server(ServerError),
     #[error("a worker thread could not be started: {0}")]
     Thread(String),
+    #[error("the legacy endpoint record could not be removed")]
+    LegacyEndpoint,
+}
+
+/// Why the bridge is not running, as far as the Browser pane distinguishes it. Carries no detail:
+/// the underlying error text can name paths, so it never leaves the process.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StartFailure {
+    /// The stored list of paired browsers could not be read.
+    PairingStore,
+    /// The endpoint record could not be published or the old one not removed (for example a
+    /// `secrets/shared` folder with group or other permission bits).
+    EndpointStore,
+    /// The loopback listener could not be created.
+    Listener,
+    /// A worker thread could not be started.
+    Worker,
+}
+
+impl BridgeStartError {
+    pub fn failure(&self) -> StartFailure {
+        match self {
+            Self::PairingStore(_) => StartFailure::PairingStore,
+            Self::Server(ServerError::Endpoint(_)) | Self::LegacyEndpoint => {
+                StartFailure::EndpointStore
+            }
+            Self::Server(ServerError::Bind(_)) => StartFailure::Listener,
+            Self::Server(ServerError::Worker(_)) | Self::Thread(_) => StartFailure::Worker,
+        }
+    }
 }
 
 /// A running bridge.
@@ -423,9 +453,7 @@ fn start_bridge_with_kind(
             .is_err()
     {
         server.shutdown();
-        return Err(BridgeStartError::Thread(
-            "could not remove legacy endpoint".into(),
-        ));
+        return Err(BridgeStartError::LegacyEndpoint);
     }
 
     let registration = Arc::new(Mutex::new(None));
@@ -485,7 +513,8 @@ type Starter = dyn Fn(Arc<Mutex<bool>>) -> Result<BridgeHandle, BridgeStartError
 
 struct StateInner {
     slot: Mutex<Option<Arc<BridgeHandle>>>,
-    store_failed: AtomicBool,
+    /// Why the last start failed; `None` while running or before the first start.
+    failure: Mutex<Option<StartFailure>>,
     store_kind: mypass_platform::endpoint_store::SharedStoreKind,
     /// Set by the final quit: nothing starts after it, so a start that was still queued cannot
     /// publish an endpoint record the exiting process never clears.
@@ -530,7 +559,7 @@ impl BridgeState {
     ) -> Self {
         Self(Arc::new(StateInner {
             slot: Mutex::new(None),
-            store_failed: AtomicBool::new(false),
+            failure: Mutex::new(None),
             store_kind,
             quit: AtomicBool::new(false),
             starter,
@@ -553,15 +582,34 @@ impl BridgeState {
         }
         match (self.0.starter)(Arc::clone(&self.0.registration_gate)) {
             Ok(handle) => {
-                self.0.store_failed.store(false, Ordering::SeqCst);
+                *lock(&self.0.failure) = None;
                 *slot = Some(Arc::new(handle));
                 Ok(())
             }
             Err(e) => {
-                let failed = matches!(e, BridgeStartError::PairingStore(_));
-                self.0.store_failed.store(failed, Ordering::SeqCst);
+                *lock(&self.0.failure) = Some(e.failure());
                 Err(e)
             }
+        }
+    }
+
+    /// Starts the bridge on a worker made by `spawn` (which runs the given job on a new thread)
+    /// and tells the webview when it is done. When no worker can be started, the failure is
+    /// recorded as a worker failure and published, so the Browser pane says why the bridge is down.
+    pub fn start_in_background(
+        &self,
+        spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<()>,
+    ) {
+        let state = self.clone();
+        let job: Box<dyn FnOnce() + Send> = Box::new(move || {
+            let _ = state.start();
+            state.0.events.bridge_changed();
+        });
+        if spawn(job).is_err() {
+            if lock(&self.0.slot).is_none() {
+                *lock(&self.0.failure) = Some(StartFailure::Worker);
+            }
+            self.0.events.bridge_changed();
         }
     }
 
@@ -570,7 +618,12 @@ impl BridgeState {
     }
 
     pub fn pairing_store_failed(&self) -> bool {
-        self.0.store_failed.load(Ordering::SeqCst)
+        self.start_failure() == Some(StartFailure::PairingStore)
+    }
+
+    /// Why the last start failed, `None` while the bridge runs.
+    pub fn start_failure(&self) -> Option<StartFailure> {
+        *lock(&self.0.failure)
     }
 
     pub fn bundled_host(&self) -> Option<PathBuf> {
@@ -597,13 +650,14 @@ impl BridgeState {
     pub fn reset_pairings(&self) -> Result<(), PairingError> {
         let mut slot = lock(&self.0.slot);
         if let Some(handle) = slot.as_ref() {
-            for browser in handle.pairing.list() {
-                handle.pairing.revoke(browser.id)?;
+            // One atomic store deletion: an error never leaves a partial reset (an unreadable
+            // store after it revokes every browser in memory, see `clear_all`).
+            for browser in handle.pairing.clear_all()? {
                 handle.diagnostics.remove(browser.id);
             }
             return Ok(());
         }
-        PairedBrowserStore::new(Arc::clone(&self.0.secrets)).save(&[])?;
+        PairedBrowserStore::new(Arc::clone(&self.0.secrets)).clear()?;
         let _ = self.start_locked(&mut slot);
         drop(slot);
         self.0.events.bridge_changed();
@@ -1304,6 +1358,19 @@ mod tests {
         );
         assert!(!f.state.pairing_store_failed());
         assert!(f.handle().pairing.list().is_empty());
+    }
+
+    #[test]
+    fn reset_on_a_running_bridge_forgets_every_browser_in_one_step() {
+        let f = fixture(true);
+        let first = pair(&f);
+        let second = pair(&f);
+        assert_eq!(f.handle().pairing.list().len(), 2);
+        f.state.reset_pairings().unwrap();
+        let pairing = &f.handle().pairing;
+        assert!(pairing.list().is_empty());
+        assert!(!pairing.is_authorized(Some(&first)));
+        assert!(!pairing.is_authorized(Some(&second)));
     }
 
     #[test]

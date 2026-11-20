@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { calls } from "../../test/mainApp";
 import { renderSettingsApp } from "../../test/settingsApp";
+import { applyPatch } from "./apply";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -12,7 +13,7 @@ const patches = (fake: Parameters<typeof calls>[0]) => calls(fake, "settingsUpda
 const stepper = (name: string) => screen.getByRole("spinbutton", { name }) as HTMLInputElement;
 
 describe("language", () => {
-  it("offers System, English, Ukrainian and Russian", async () => {
+  it("offers System, English, Ukrainian, Russian and German", async () => {
     await renderSettingsApp();
     const select = screen.getByRole("combobox", { name: "Language" });
     expect(within(select).getAllByRole("option").map((o) => (o as HTMLOptionElement).value)).toEqual([
@@ -20,12 +21,14 @@ describe("language", () => {
       "en",
       "uk",
       "ru",
+      "de",
     ]);
     expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual([
       "System",
       "English",
       "Ukrainian",
       "Russian",
+      "German",
     ]);
   });
 });
@@ -160,6 +163,15 @@ describe("hotkeys", () => {
     await fireEvent.keyDown(recorder, { code: "KeyK", key: "k", metaKey: true, altKey: true });
     await waitFor(() => expect(within(showRow()).queryByText("That shortcut is reserved by the system")).toBeNull());
     expect(patches(fake)).toEqual([{ shortcutShow: "CommandOrControl+Alt+K" }]);
+  });
+
+  it("a_shortcut_the_backend_refuses_shows_the_settings_error_and_changes_nothing", async () => {
+    // The recorder's own check is only a convenience: the backend is the authority.
+    const { fake } = await renderSettingsApp();
+    const before = fake.state.settings.shortcutShow;
+    const error = await applyPatch({ shortcutShow: "CommandOrControl+Q" });
+    expect(error).not.toBeNull();
+    expect(fake.state.settings.shortcutShow).toBe(before);
   });
 
   it("hotkey_clear_sends_empty_string", async () => {

@@ -222,7 +222,6 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `gdkx11-sys` | 0.18.2 | MIT |
 | `generic-array` | 0.14.7 | MIT |
 | `gethostname` | 1.1.0 | Apache-2.0 |
-| `getrandom` | 0.2.17 | MIT OR Apache-2.0 |
 | `getrandom` | 0.3.4 | MIT OR Apache-2.0 |
 | `getrandom` | 0.4.3 | MIT OR Apache-2.0 |
 | `gio` | 0.18.4 | MIT |
@@ -372,7 +371,6 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `poly1305` | 0.9.1 | Apache-2.0 OR MIT |
 | `potential_utf` | 0.1.6 | Unicode-3.0 |
 | `powerfmt` | 0.2.1 | MIT OR Apache-2.0 |
-| `ppv-lite86` | 0.2.21 | MIT OR Apache-2.0 |
 | `precomputed-hash` | 0.1.1 | MIT |
 | `primefield` | 0.14.0 | Apache-2.0 OR MIT |
 | `primeorder` | 0.14.0 | Apache-2.0 OR MIT |
@@ -386,10 +384,8 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `quote` | 1.0.47 | MIT OR Apache-2.0 |
 | `r-efi` | 5.3.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later |
 | `r-efi` | 6.0.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later |
-| `rand` | 0.8.8 | MIT OR Apache-2.0 |
-| `rand_chacha` | 0.3.1 | MIT OR Apache-2.0 |
+| `rand` | 0.10.3 | MIT OR Apache-2.0 |
 | `rand_core` | 0.10.1 | MIT OR Apache-2.0 |
-| `rand_core` | 0.6.4 | MIT OR Apache-2.0 |
 | `raw-window-handle` | 0.6.2 | MIT OR Apache-2.0 OR Zlib |
 | `redox_syscall` | 0.5.18 | MIT |
 | `redox_users` | 0.5.3 | MIT |
@@ -593,8 +589,6 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `zbus_macros` | 5.19.0 | MIT |
 | `zbus_names` | 4.3.5 | MIT |
 | `zcheapstr` | 1.2.0 | MIT |
-| `zerocopy` | 0.8.63 | BSD-2-Clause OR Apache-2.0 OR MIT |
-| `zerocopy-derive` | 0.8.63 | BSD-2-Clause OR Apache-2.0 OR MIT |
 | `zerofrom` | 0.1.8 | Unicode-3.0 |
 | `zerofrom-derive` | 0.1.8 | Unicode-3.0 |
 | `zeroize` | 1.9.1 | Apache-2.0 OR MIT |
@@ -651,7 +645,6 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `portable-atomic-util` | 0.2.8 | Apache-2.0 OR MIT |
 | `proptest` | 1.12.0 | MIT OR Apache-2.0 |
 | `quick-error` | 1.2.3 | MIT/Apache-2.0 |
-| `rand` | 0.10.3 | MIT OR Apache-2.0 |
 | `rand_xorshift` | 0.5.0 | MIT OR Apache-2.0 |
 | `ref-cast` | 1.0.27 | MIT OR Apache-2.0 |
 | `ref-cast-impl` | 1.0.27 | MIT OR Apache-2.0 |
@@ -684,6 +677,8 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `vswhom-sys` | 0.1.3 | MIT |
 | `wait-timeout` | 0.2.1 | MIT/Apache-2.0 |
 | `winreg` | 0.56.0 | MIT |
+| `zerocopy` | 0.8.63 | BSD-2-Clause OR Apache-2.0 OR MIT |
+| `zerocopy-derive` | 0.8.63 | BSD-2-Clause OR Apache-2.0 OR MIT |
 | `zeroize_derive` | 1.5.0 | Apache-2.0 OR MIT |
 | `zlib-rs` | 0.6.8 | Zlib |
 

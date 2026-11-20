@@ -6,7 +6,8 @@ const manifestPath = path.join(__dirname, '..', 'manifest.json');
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 
 assert.strictEqual(manifest.manifest_version, 3, 'manifest_version must be 3');
-assert.strictEqual(manifest.name, 'MyPass');
+assert.strictEqual(manifest.name, '__MSG_extName__');
+assert.strictEqual(manifest.default_locale, 'en');
 assert.strictEqual(
   manifest.key,
   'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3g4jQjrf7R0zDFOQTwQGRpzY/Zl1iOChwlpfDJav6F6e5GiRJPy7S9/cC8yFvhJZsVLs49hQgLg+HqL206KziXRnSTFT1+SbxFzIGqwGjW1Q9u0koXFEzpE82kPQlxG6zeFqtjm35cPfhkCu6oqGFtImLBzP9JR2s4n5IMEQabVvKH2KxsKF84RK7+3MkBLJ/0bluRxXv+VpeG20QN6rQr/VTmC0B5YoIChLdM0ObWhBjzJl8VA64VCAYcaPfLVQ4ZSkLdrIFfNIi5Sc8/8Mtil8wJCON+W/ilWZnYakMvV5Y83fafu8lTHCeuNzbxGAObJFWeIoeaILkoiD1PCuRQIDAQAB',
@@ -33,13 +34,14 @@ assert.strictEqual(manifest.background.service_worker, 'background-loader.js');
 const loaderSource = fs.readFileSync(path.join(__dirname, '..', 'background-loader.js'), 'utf8');
 const loaderCode = loaderSource.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').trim();
 assert.ok(
-  loaderCode.startsWith("importScripts('shared/url-match.js')"),
-  'url-match.js must be importScripts first, before background.js does any other work'
+  loaderCode.startsWith("importScripts('shared/i18n.js')"),
+  'i18n.js must be importScripts first, before background.js does any other work'
 );
 assert.ok(
-  loaderCode.indexOf("importScripts('shared/url-match.js')") < loaderCode.indexOf("importScripts('shared/password-generator.js')")
+  loaderCode.indexOf("importScripts('shared/i18n.js')") < loaderCode.indexOf("importScripts('shared/url-match.js')")
+    && loaderCode.indexOf("importScripts('shared/url-match.js')") < loaderCode.indexOf("importScripts('shared/password-generator.js')")
     && loaderCode.indexOf("importScripts('shared/password-generator.js')") < loaderCode.indexOf("importScripts('background.js')"),
-  'url-match.js and password-generator.js must exist before background.js runs'
+  'i18n.js, url-match.js and password-generator.js must exist before background.js runs'
 );
 const backgroundSource = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
 assert.ok(
@@ -58,6 +60,7 @@ assert.ok(!qrEntry.all_frames, 'the QR decoder must NOT be injected into subfram
 assert.deepStrictEqual(
   mainEntry.js,
   [
+    'shared/i18n.js',
     'shared/entry-visuals.js',
     'shared/url-match.js',
     'shared/bridge-status.js',

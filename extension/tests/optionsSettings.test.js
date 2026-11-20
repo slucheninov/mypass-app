@@ -46,10 +46,11 @@ const sandbox = {
     documentElement: { setAttribute() {} }
   }
 };
+require('./chromeI18nShim.js').install(chrome);
 sandbox.window = sandbox;
 sandbox.addEventListener = () => {};
 vm.createContext(sandbox);
-for (const file of ['shared/autofill-settings.js', 'shared/notification-settings.js', 'shared/security-watch.js',
+for (const file of ['shared/i18n.js', 'shared/autofill-settings.js', 'shared/notification-settings.js', 'shared/security-watch.js',
   'shared/appearance-settings.js', 'shared/theme.js', 'app/router.js', 'app/app.js']) {
   vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8') + '\n', sandbox, { filename: file });
 }

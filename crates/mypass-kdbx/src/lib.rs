@@ -23,7 +23,7 @@ mod database;
 mod model;
 pub use database::{Database, SaveSettings};
 pub use format::kdf::{Argon2Variant, KdfParams};
-pub use format::limits::{MAX_GROUP_DEPTH, MAX_VAULT_FILE_BYTES};
+pub use format::limits::{KdfLimits, MAX_GROUP_DEPTH, MAX_VAULT_FILE_BYTES};
 pub use format::outer_header::{Cipher, Compression};
 pub use model::*;
 
@@ -31,8 +31,8 @@ mod ops;
 
 mod file;
 pub use file::{
-    write_atomic, FileIo, FileMeta, FileStamp, OpenedFile, PlainFileIo, ReplaceOutcome,
-    SaveOutcome, VaultFile,
+    displaced_copies, write_atomic, DisplacedCopy, DisplacedCopyKind, FileIo, FileMeta, FileStamp,
+    OpenedFile, PlainFileIo, ReplaceOutcome, SaveOutcome, VaultFile,
 };
 #[cfg(feature = "test-util")]
 pub mod test_util;

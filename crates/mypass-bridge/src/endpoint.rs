@@ -16,7 +16,7 @@ use std::sync::Arc;
 use base64::{prelude::BASE64_STANDARD as B64, Engine};
 use hmac::{Hmac, KeyInit, Mac};
 use mypass_platform::SecretStore;
-use rand::RngCore;
+use rand::{rand_core::UnwrapErr, rngs::SysRng, Rng};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
@@ -124,8 +124,8 @@ pub fn new_nonce() -> String {
 
 fn random_b64<const N: usize>() -> String {
     let mut bytes = Zeroizing::new([0u8; N]);
-    // `OsRng` panics if the OS entropy source fails, the same contract as the generator.
-    rand::rngs::OsRng.fill_bytes(&mut *bytes);
+    // `UnwrapErr(SysRng)` panics if the OS entropy source fails, the same contract as the generator.
+    UnwrapErr(SysRng).fill_bytes(&mut *bytes);
     B64.encode(bytes.as_slice())
 }
 

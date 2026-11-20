@@ -190,6 +190,9 @@ fn cyrillic_allowed(rel: &str) -> bool {
                 | "extension/tests/formDetection.test.js"
                 | "extension/tests/inlineIcon.test.js"
                 | "extension/tests/pageIdentifier.test.js"
+                // The extension's chrome.i18n catalogs (en and de stay Cyrillic-free).
+                | "extension/_locales/uk/messages.json"
+                | "extension/_locales/ru/messages.json"
                 | "src/lib/i18n/locales/uk.json"
                 | "src/lib/i18n/locales/ru.json"
                 | "src-tauri/resources/macos/uk.lproj/InfoPlist.strings"
@@ -216,9 +219,18 @@ fn cyrillic_allowlist_covers_only_the_translation_files() {
     ] {
         assert!(cyrillic_allowed(f), "{f}");
     }
+    assert!(cyrillic_allowed("extension/_locales/uk/messages.json"));
+    assert!(cyrillic_allowed("extension/_locales/ru/messages.json"));
+    assert!(!cyrillic_allowed("extension/_locales/en/messages.json"));
+    assert!(!cyrillic_allowed("extension/_locales/de/messages.json"));
     assert!(!cyrillic_allowed("extension/background.js"));
     assert!(!cyrillic_allowed("extension/content.js"));
     assert!(!cyrillic_allowed("src/lib/i18n/locales/en.json"));
+    // German has no Cyrillic: its catalog and InfoPlist.strings stay under the plain-text rule.
+    assert!(!cyrillic_allowed("src/lib/i18n/locales/de.json"));
+    assert!(!cyrillic_allowed(
+        "src-tauri/resources/macos/de.lproj/InfoPlist.strings"
+    ));
     assert!(!cyrillic_allowed("src/lib/i18n/index.ts"));
     assert!(!cyrillic_allowed("scripts/convert-xcstrings.test.mjs"));
     assert!(!cyrillic_allowed(

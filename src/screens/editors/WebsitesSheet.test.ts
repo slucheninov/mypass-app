@@ -26,6 +26,7 @@ function model(urls: string[], mode = "registrable-domain"): EntryEditModel_Seri
     passkey: null,
     removePasskey: false,
     passkeyRef: null,
+    restore: false,
   };
 }
 

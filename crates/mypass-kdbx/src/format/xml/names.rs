@@ -26,6 +26,7 @@ elements!(MetaElement {
 });
 elements!(GroupElement {
     Uuid => "UUID",
+    PreviousParentGroup => "PreviousParentGroup",
     Name => "Name",
     IconID => "IconID",
     Times => "Times",
@@ -36,6 +37,7 @@ elements!(GroupElement {
 });
 elements!(EntryElement {
     Uuid => "UUID",
+    PreviousParentGroup => "PreviousParentGroup",
     IconID => "IconID",
     String => "String",
     StringArray => "StringArray",

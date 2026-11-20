@@ -166,7 +166,12 @@ def verify_zip(path, ver, extension=None):
             p = Path(name)
             require(not p.is_absolute() and '..' not in p.parts and '\\' not in name, 'extension zip unsafe path')
             require('tests' not in p.parts and p.name not in ('package.json', '.DS_Store') and not name.endswith('.test.js'), f'extension zip development file: {name}')
-        require(json.loads(archive.read('manifest.json'))['version'] == ver, 'extension zip version mismatch')
+        manifest = json.loads(archive.read('manifest.json'))
+        require(manifest['version'] == ver, 'extension zip version mismatch')
+        # The manifest's __MSG_*__ strings resolve against the default locale, so a ZIP without
+        # that catalog installs with a broken name and description.
+        require(f"_locales/{manifest.get('default_locale')}/messages.json" in names,
+                'extension zip missing the default locale catalog')
         if extension:
             files = {}
             for p in sorted(extension.rglob('*')):
@@ -192,12 +197,12 @@ def requirement(identifier):
 
 def verify_bundle(app, host_source, zip_path, allow_unsigned):
     info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
-    for key, value in {'CFBundleIdentifier': APP_ID, 'LSMinimumSystemVersion': '14.0', 'CFBundleDevelopmentRegion': 'en', 'CFBundleLocalizations': ['en', 'uk', 'ru']}.items():
+    for key, value in {'CFBundleIdentifier': APP_ID, 'LSMinimumSystemVersion': '14.0', 'CFBundleDevelopmentRegion': 'en', 'CFBundleLocalizations': ['en', 'uk', 'ru', 'de']}.items():
         require(info.get(key) == value, f'Info.plist {key}: expected {value}')
     resources = app / 'Contents/Resources'
-    for lang in ('en', 'uk', 'ru'):
+    for lang in ('en', 'uk', 'ru', 'de'):
         require((resources / f'{lang}.lproj/InfoPlist.strings').stat().st_size > 0, f'{lang}: empty InfoPlist.strings')
-    require({p.name for p in resources.glob('*.lproj')} == {'en.lproj', 'uk.lproj', 'ru.lproj'}, 'unexpected bundle localizations')
+    require({p.name for p in resources.glob('*.lproj')} == {'en.lproj', 'uk.lproj', 'ru.lproj', 'de.lproj'}, 'unexpected bundle localizations')
     require((resources / 'LICENSE').is_file() and (resources / 'THIRD_PARTY_NOTICES.md').is_file(), 'missing bundled notices')
     verify_zip(zip_path, info['CFBundleShortVersionString'], resources / 'extension')
     host = app / 'Contents/MacOS/mypass-native-host'

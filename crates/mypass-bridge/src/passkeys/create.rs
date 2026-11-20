@@ -154,7 +154,7 @@ struct Written {
 }
 
 /// How to undo the confirm write after a failed flush. The undo runs only while the live entry
-/// still equals `after`.
+/// still equals `after`. Both snapshots own zeroizing field values, including private keys.
 struct Undo {
     /// The entry exactly as the write left it.
     after: Entry,

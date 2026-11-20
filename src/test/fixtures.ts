@@ -51,6 +51,8 @@ export interface HistoryVersion {
   model: EntryEditModel_Serialize;
   /** Overrides the computed difference to the next newer version (KDBX field keys). */
   changedFields?: string[];
+  /** The opaque stable name of this version, given by the fake backend on first listing. */
+  revision?: string;
 }
 
 /** An earlier version of a fixture entry: the entry with these values, saved at `modified`. */
@@ -158,6 +160,7 @@ export function makeEntry(spec: EntrySpec): FixtureEntry {
       passkey: spec.passkey ?? null,
       removePasskey: false,
       passkeyRef: spec.passkey ? `passkey-ref-${spec.id}` : null,
+      restore: false,
     },
   };
   const versions: HistorySpec[] =

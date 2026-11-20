@@ -55,7 +55,12 @@ export const commands = {
 	entryEmptyBin: () => typedError<number, ApiError>(__TAURI_INVOKE("entry_empty_bin")),
 	entryGet: (id: string) => typedError<EntryDetailDto_Serialize, ApiError>(__TAURI_INVOKE("entry_get", { id })),
 	entryHistory: (id: string) => typedError<HistoryItem[], ApiError>(__TAURI_INVOKE("entry_history", { id })),
-	entryHistoryRestore: (id: string, index: number) => typedError<null, ApiError>(__TAURI_INVOKE("entry_history_restore", { id, index })),
+	entryHistoryRestore: (id: string, revision: string) => typedError<null, ApiError>(__TAURI_INVOKE("entry_history_restore", { id, revision })),
+	/**
+	 *  Reveal command: one plain value of an earlier version of the entry, after the user's explicit
+	 *  click. `entry_history` never carries values.
+	 */
+	entryHistoryReveal: (id: string, revision: string, field: FieldRef) => typedError<string, ApiError>(__TAURI_INVOKE("entry_history_reveal", { id, revision, field })),
 	entryList: (query: EntryQuery) => typedError<EntrySummary[], ApiError>(__TAURI_INVOKE("entry_list", { query })),
 	entryMove: (id: string, groupId: string) => typedError<null, ApiError>(__TAURI_INVOKE("entry_move", { id, groupId })),
 	entryNewModel: (entryType: EntryTypeDto, groupId: string | null) => typedError<EntryEditModel_Serialize, ApiError>(__TAURI_INVOKE("entry_new_model", { entryType, groupId })),
@@ -74,6 +79,11 @@ export const commands = {
 	entryTotp: (id: string) => typedError<TotpDto, ApiError>(__TAURI_INVOKE("entry_totp", { id })),
 	entryTouch: (id: string) => typedError<null, ApiError>(__TAURI_INVOKE("entry_touch", { id })),
 	generatorCopy: (value: string, recordUrl: string | null) => typedError<null, ApiError>(__TAURI_INVOKE("generator_copy", { value, recordUrl })),
+	/**
+	 *  Records a password the form took with "Use" in the generator history (the website is
+	 *  optional); nothing is copied.
+	 */
+	generatorUse: (value: string, recordUrl: string | null) => typedError<null, ApiError>(__TAURI_INVOKE("generator_use", { value, recordUrl })),
 	generatorGenerate: (req: GenerateRequest_Deserialize) => typedError<GeneratedPassword_Serialize, ApiError>(__TAURI_INVOKE("generator_generate", { req })),
 	generatorHistoryCopy: (id: string) => typedError<null, ApiError>(__TAURI_INVOKE("generator_history_copy", { id })),
 	generatorHistoryDelete: (id: string) => typedError<null, ApiError>(__TAURI_INVOKE("generator_history_delete", { id })),
@@ -100,6 +110,8 @@ export const commands = {
 	sidebarGet: () => typedError<Sidebar_Serialize, ApiError>(__TAURI_INVOKE("sidebar_get")),
 	syncConnectSecondary: (folderToken: string, strategy: MigrationStrategy) => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_connect_secondary", { folderToken, strategy })),
 	syncDisconnectSecondary: () => typedError<null, ApiError>(__TAURI_INVOKE("sync_disconnect_secondary")),
+	/**  The kept vault copies, for display. Read-only: MyPass never deletes them. */
+	syncDisplacedStatus: () => typedError<DisplacedCopies, ApiError>(__TAURI_INVOKE("sync_displaced_status")),
 	syncNow: () => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_now")),
 	syncStatus: () => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_status")),
 	vaultCreate: (path: string, password: string, name: string) => typedError<SessionStatus_Serialize, ApiError>(__TAURI_INVOKE("vault_create", { path, password, name })),
@@ -279,6 +291,21 @@ export type BrowserRegistrationDto_Serialize = {
 	detail: string | null,
 };
 
+/**
+ *  Why the bridge is not running when the pairing list is not the cause. A fixed reason only: no
+ *  path, no store error text.
+ */
+export type BrowserStartFailure = 
+/**
+ *  The endpoint record cannot be stored (for example a `secrets/shared` folder with group or
+ *  other permission bits).
+ */
+"endpointStoreUnusable" | 
+/**  The loopback listener could not be created. */
+"listenerUnavailable" | 
+/**  A worker thread could not be started. */
+"workerUnavailable";
+
 /**  Everything the Browser pane shows. */
 export type BrowserStatus = BrowserStatus_Serialize | BrowserStatus_Deserialize;
 
@@ -291,6 +318,8 @@ export type BrowserStatus_Deserialize = {
 	 *  offers `browser_reset_pairings`.
 	 */
 	pairingStoreFailed: boolean,
+	/**  The machine-readable reason the bridge is not running, other than the pairing list. */
+	startFailure?: BrowserStartFailure | null,
 	paired: PairedBrowserDto_Deserialize[],
 	pairing?: PairingChallengeDto | null,
 	registrations: BrowserRegistrationDto_Deserialize[],
@@ -309,6 +338,8 @@ export type BrowserStatus_Serialize = {
 	 *  offers `browser_reset_pairings`.
 	 */
 	pairingStoreFailed: boolean,
+	/**  The machine-readable reason the bridge is not running, other than the pairing list. */
+	startFailure: BrowserStartFailure | null,
 	paired: PairedBrowserDto_Serialize[],
 	pairing: PairingChallengeDto | null,
 	registrations: BrowserRegistrationDto_Serialize[],
@@ -426,6 +457,30 @@ export type DeviceUnlockStatus_Serialize = {
 	reason: OfferBlock | null,
 };
 
+/**  The retained copies of the open vault. */
+export type DisplacedCopies = {
+	count: number,
+	copies: DisplacedCopyInfo[],
+	/**  Locations whose folder could not be read: their copies are unknown, not absent. */
+	unavailable: DisplacedLocation[],
+};
+
+/**  One retained copy. `name` is the file name only, for display. */
+export type DisplacedCopyInfo = {
+	location: DisplacedLocation,
+	kind: RetainedCopyKind,
+	name: string,
+	/**  Length in bytes. */
+	bytes: number | null,
+};
+
+/**  Which copy of the vault the displaced file sits next to. */
+export type DisplacedLocation = 
+/**  Next to the open vault file. */
+"primary" | 
+/**  Next to the copy in the secondary sync folder. */
+"secondary";
+
 /**  One saved version of an entry's notes, as the webview sees it. */
 export type DraftVersionDto = {
 	id: string,
@@ -536,6 +591,11 @@ export type EntryEditModel_Deserialize = {
 	 *  passkey stored after the editor opened (a browser replace) is never removed unseen.
 	 */
 	passkeyRef?: string | null,
+	/**
+	 *  The user explicitly chose to bring this deleted entry back: when it sits in the recycle
+	 *  bin, a save is refused unless this is set, and then it moves the entry to `group_id`.
+	 */
+	restore?: boolean,
 };
 
 /**
@@ -576,6 +636,11 @@ export type EntryEditModel_Serialize = {
 	 *  passkey stored after the editor opened (a browser replace) is never removed unseen.
 	 */
 	passkeyRef: string | null,
+	/**
+	 *  The user explicitly chose to bring this deleted entry back: when it sits in the recycle
+	 *  bin, a save is refused unless this is set, and then it moves the entry to `group_id`.
+	 */
+	restore: boolean,
 };
 
 export type EntryQuery = {
@@ -603,9 +668,15 @@ export type EntrySummary = {
 export type EntryTypeDto = "login" | "address" | "card" | "notes" | "files";
 
 /**  The stable error code the UI localises. Serialised in camelCase. */
-export type ErrorCode = "locked" | "noVault" | "wrongPassword" | "alreadyExists" | "notFound" | "invalidInput" | "limitExceeded" | "corrupt" | "unsupported" | "changedOnDisk" | "io" | 
+export type ErrorCode = "locked" | "noVault" | "wrongPassword" | "alreadyExists" | "notFound" | "invalidInput" | "limitExceeded" | "syncKdfLimitExceeded" | "corrupt" | "unsupported" | "changedOnDisk" | "io" | 
 /**  The vault is in iCloud Drive and did not download in time, try again later. */
-"downloading" | "quitting" | "generatorNoClass" | "generatorUnsatisfiable" | "cancelled" | "lockout" | "invalidated" | "notEnrolledOnDevice" | "deviceUnlockUnavailable" | "migrationLocked" | "migrationTargetUnreadable" | "migrationTargetNotAVault" | "migrationTargetPasswordMismatch" | "migrationTargetWriteFailed" | "migrationSourceInvalid" | "migrationSameFile" | "migrationValidationFailed" | "internal";
+"downloading" | "quitting" | "generatorNoClass" | "generatorUnsatisfiable" | 
+/**  The CSV has no `title`, `username` or `password` column (`message` names the column). */
+"csvMissingColumn" | 
+/**  The CSV is not valid UTF-8 text. */
+"csvNotUtf8" | 
+/**  The CSV file has no content. */
+"csvEmpty" | "cancelled" | "lockout" | "invalidated" | "notEnrolledOnDevice" | "deviceUnlockUnavailable" | "migrationLocked" | "migrationTargetUnreadable" | "migrationTargetNotAVault" | "migrationTargetPasswordMismatch" | "migrationTargetWriteFailed" | "migrationSourceInvalid" | "migrationSameFile" | "migrationValidationFailed" | "internal";
 
 /**  A single field to reveal or copy. `Totp` resolves to the current code. */
 export type FieldRef = { kind: "username" } | { kind: "password" } | { kind: "url" } | { kind: "notesBody" } | { kind: "cardNumber" } | { kind: "cardCvv" } | { kind: "totp" } | { kind: "custom"; key: string };
@@ -743,11 +814,36 @@ export type GroupNode_Serialize = {
  *  newer version (or the current entry) changed relative to this one.
  */
 export type HistoryItem = {
+	/**
+	 *  The position in the list, for restoring. It shifts whenever a version is added or dropped,
+	 *  so a value is revealed by `revision`, never by this.
+	 */
 	index: number,
+	/**
+	 *  An opaque, stable name of this exact version (the same one across reloads while the version
+	 *  exists, a different one for a different version even with equal title and date). It is
+	 *  derived with a per-run secret, so it reveals nothing about the values it covers.
+	 */
+	revision: string,
 	/**  Unix milliseconds. */
 	modified: number | null,
 	title: string,
 	changedFields: string[],
+	/**
+	 *  The changed fields whose old value this version still holds and that can be revealed, in
+	 *  the order of `changed_fields`. Reserved values (the code, passkey material, attachment
+	 *  bytes, the app's own bookkeeping) are never listed.
+	 */
+	revealable: HistoryReveal[],
+};
+
+/**
+ *  One revealable field of a history version: `key` is the changed-field name from
+ *  `HistoryItem::changed_fields`, `field` what to pass to `entry_history_reveal`.
+ */
+export type HistoryReveal = {
+	key: string,
+	field: FieldRef,
 };
 
 /**  Auto-lock after this much inactivity. */
@@ -759,7 +855,7 @@ export type ImportResult = {
 	skipped: number,
 };
 
-export type Language = "system" | "en" | "uk" | "ru";
+export type Language = "system" | "en" | "uk" | "ru" | "de";
 
 export type LocationChangeRequest = {
 	folderToken: string,
@@ -969,6 +1065,9 @@ export type RecentVaultDto = {
 /**  How often the master password is required again regardless of device unlock (stage 5). */
 export type RequireAccountPasswordWindow = "oneDay" | "sevenDays" | "fourteenDays" | "thirtyDays" | "ninetyDays" | "never";
 
+/**  How the replacement named the copy. */
+export type RetainedCopyKind = "displaced" | "aside";
+
 /**
  *  The site rules that applied, as the generator panel shows them. Class names are `lowercase`,
  *  `uppercase`, `digits` and `symbols`.
@@ -1018,12 +1117,14 @@ export type SaveStatus = SaveStatus_Serialize | SaveStatus_Deserialize;
 export type SaveStatus_Deserialize = {
 	state: SaveState,
 	message?: string | null,
+	errorCode?: ErrorCode | null,
 };
 
 /**  Save state plus the last failure message (no secret content, file-system wording only). */
 export type SaveStatus_Serialize = {
 	state: SaveState,
 	message: string | null,
+	errorCode?: ErrorCode,
 };
 
 export type Scope = { kind: "category"; category: Category } | { kind: "group"; groupId: string };
@@ -1036,6 +1137,8 @@ export type SecondaryError =
 "notAVault" | 
 /**  A vault format this app does not read. */
 "unsupported" | 
+/**  The copy's KDF cost exceeds the sync budget. */
+"syncKdfLimitExceeded" | 
 /**  The copy is damaged. */
 "corrupt" | 
 /**  The file is a different vault (another root group). */
@@ -1065,16 +1168,16 @@ export type SecondaryStatus_Deserialize =
  *  Configured and not running; `last_sync` is the time of the last success for this vault
  *  and folder in this run of the app, in unix milliseconds.
  */
-{ state: "idle"; lastSync?: number | null } | 
+{ state: "idle"; lastSync?: number | null; recoveryFile?: string | null } | 
 /**  A sync is running. */
-{ state: "syncing" } | 
+{ state: "syncing"; recoveryFile?: string | null } | 
 /**
  *  The folder cannot be used; retried every [`SECONDARY_RETRY`] except for `invalidFolder`
  *  and `unsupportedFolder`.
  */
-{ state: "unavailable"; reason: SecondaryUnavailable } | 
-/**  The last sync failed; the remote and the primary are untouched. */
-{ state: "error"; code: SecondaryError };
+{ state: "unavailable"; reason: SecondaryUnavailable; recoveryFile?: string | null } | 
+/**  The last sync failed. `recovery_file` names a retained file from this or an earlier run. */
+{ state: "error"; code: SecondaryError; recoveryFile?: string | null };
 
 /**  What the Settings sync pane shows (the `SyncStatusChanged` event payload). */
 export type SecondaryStatus_Serialize = 
@@ -1084,16 +1187,16 @@ export type SecondaryStatus_Serialize =
  *  Configured and not running; `last_sync` is the time of the last success for this vault
  *  and folder in this run of the app, in unix milliseconds.
  */
-{ state: "idle"; lastSync: number | null } | 
+{ state: "idle"; lastSync: number | null; recoveryFile?: string } | 
 /**  A sync is running. */
-{ state: "syncing" } | 
+{ state: "syncing"; recoveryFile?: string } | 
 /**
  *  The folder cannot be used; retried every [`SECONDARY_RETRY`] except for `invalidFolder`
  *  and `unsupportedFolder`.
  */
-{ state: "unavailable"; reason: SecondaryUnavailable } | 
-/**  The last sync failed; the remote and the primary are untouched. */
-{ state: "error"; code: SecondaryError };
+{ state: "unavailable"; reason: SecondaryUnavailable; recoveryFile?: string } | 
+/**  The last sync failed. `recovery_file` names a retained file from this or an earlier run. */
+{ state: "error"; code: SecondaryError; recoveryFile?: string };
 
 /**  Why the secondary folder cannot be used right now (a localisable code). */
 export type SecondaryUnavailable = 

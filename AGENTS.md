@@ -31,7 +31,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `src-tauri` (package `mypass-app`, lib `mypass_app_lib`) | implemented | The Tauri 2 app shell: the typed commands and events (`tauri-specta`), capabilities, native file dialogs, plugins, tray, global hotkeys, single instance, quit flow, native-side i18n; a workspace member listed explicitly |
 | `mypass-bridge` | implemented | Browser bridge protocol, codec, endpoint, relay and loopback server (`server` feature, off for the host); the passkey service (`passkeys`) |
 | `mypass-host` | implemented | Native messaging host binary; never links the session, core or KDBX crates |
-| `extension/` | implemented | The Chromium extension (Manifest V3 JavaScript, vendored `vendor/jsQR.js`), with its 41 Node suites in `extension/tests/`, run by `scripts/test-extension.sh` |
+| `extension/` | implemented | The Chromium extension (Manifest V3 JavaScript, vendored `vendor/jsQR.js`), with its 42 Node suites in `extension/tests/`, run by `scripts/test-extension.sh`; its text lives in `extension/_locales/{en,uk,ru,de}/messages.json` (`chrome.i18n`, read through `shared/i18n.js`, `en` is the default locale), pinned by `tests/locales.test.js` |
 
 ## Repo layout
 
@@ -53,7 +53,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `.github/workflows/release.yml` | Tag-driven macOS signed DMG and Windows unsigned ZIP: full tests, temporary Apple certificate import/cleanup, exact five draft assets verified, publish last |
 | `scripts/build-windows.sh`, `scripts/package-windows.sh` | Production x64 MSVC app/sidecar build, deterministic unsigned ZIP and sibling checksum |
 | `scripts/test-extension.sh` | Runs every `extension/tests/*.test.js` suite in its own node process (`--list` prints them); part of the `js` part |
-| `scripts/convert-xcstrings.mjs` | One-time converter of the old app's String Catalogs; its output (`src/lib/i18n/locales/{en,uk,ru}.json`, `src-tauri/resources/macos/*.lproj/InfoPlist.strings`) is then the hand-edited source of truth |
+| `scripts/convert-xcstrings.mjs` | One-time converter of the old app's String Catalogs; its output (`src/lib/i18n/locales/{en,uk,ru}.json`, `src-tauri/resources/macos/{en,uk,ru}.lproj/InfoPlist.strings`) is then the hand-edited source of truth; `de.json` and `de.lproj` were written by hand and never went through it |
 | `.github/` | Workflows (`ci.yml`, `codeql.yml`), Dependabot config, issue forms, pull request template |
 | `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts), the Stage 2b UI walk-through and the Stage 3 browser bridge checklist (M1 to M14) and the Stage 4 passkey checklist (P1 to P13), Stage 5 checks (S1 to S21), cutover (C1 to C10) and Stage 6 Windows checks (W1 to W17) |
 | `docs/implementation/ROADMAP.md` | The only tracked document under `docs/`: unfinished work |
@@ -64,7 +64,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 Stage 1 (the Rust core: KDBX4 engine, TOTP, generator, Public Suffix List, matcher, merge, atomic
 vault file) is implemented.
 Stage 2a (the app backend behind the glass: `mypass-platform` macOS bodies, `mypass-session`, the Tauri shell with commands, events, capabilities, tray, hotkeys, single instance and the quit flow) is implemented; its open follow-ups are in `docs/implementation/ROADMAP.md`.
-Stage 2b (the Svelte UI: unlock, create and open, the three-pane shell, editors, history and bin, generator, settings window, CSV import, tray panel, themes, uk/ru/en) has landed; its manual checks live in `RUN.md`.
+Stage 2b (the Svelte UI: unlock, create and open, the three-pane shell, editors, history and bin, generator, settings window, CSV import, tray panel, themes, uk/ru/en/de) has landed; its manual checks live in `RUN.md`.
 Stage 3 (the browser bridge: `mypass-bridge`, the `mypass-host` native messaging host, the Settings Browser pane with pairing and save proposals, and the extension moved into `extension/` with its suites in CI) is implemented apart from the owner's manual checks, which live in `RUN.md`.
 Stage 4 (passkeys: the WebAuthn create and get ceremonies in `mypass_core::passkey`, the bridge `PasskeyService`, the app commands and toggle, and the passkey UI) is implemented apart from the owner's manual checks, which live in `RUN.md`.
 Stage 5 (iCloud primary storage and relocation, secondary-folder sync, device unlock, per-ceremony passkey presence, launch at login, update checks, signed arm64 packaging and release tooling) is implemented apart from the owner's manual checks in `RUN.md`.
@@ -183,7 +183,15 @@ change is done.
   AES-256-CBC, gzip and a ChaCha20 inner stream.
 - **Hostile input.** Limits are named constants in `format/limits.rs` (Argon2 memory, iterations,
   parallelism, salt length, AES-KDF rounds, block length, decompressed size, XML nesting). Parsers
-  return `Err` and never panic.
+  return `Err` and never panic. User-initiated open, create, unlock and backup validation use the
+  standard local KDF limits, including for iCloud files and the migration source. Automatic
+  reloads after an external change or save race, secondary sync, iCloud conflict versions and
+  migration destination validation use an additional budget. Each budget dimension is the
+  larger of the default ceiling and the already authenticated vault's cost for that dimension.
+  The default ceilings are 1 GiB Argon2 memory, 4 GiB of memory times iterations, and 300 million
+  AES-KDF rounds. Argon2 lane limits are those of the local format. During an explicit iCloud
+  open or unlock, the selected main file establishes the budget for conflict versions. After a
+  backup restore, readback uses the validated backup's cost as its baseline.
 - **Merge.** Two-way merge keyed by UUID.
 - **Domain matching.** Always through the Public Suffix List; never suffix heuristics. Credentials
   are offered only on `https` pages: a target whose parsed scheme is not `https` never matches (no
@@ -223,10 +231,12 @@ change is done.
   `Ok` (rollback by construction). Saving (`mypass_session::saving`) is a debounced autosave
   (1 s) that writes outside the session lock, one write at a time (an in-flight flag plus a
   condvar orders autosave, `flush` and `lock`, and its one finish path re-arms the autosave while
-  the session is dirty); a file changed on disk is reloaded and adopted wholesale by a clean
-  session (nothing written) or two-way merged into a dirty one, which is then written, never
-  overwritten blindly (the remote's save settings are always kept, the remote's metadata unless
-  it was edited locally); `flush` is `Ok` only when every edit is on disk. `lock` saves first and keeps the encrypted bytes when that
+  the session is dirty). A changed file within the automatic KDF budget is authenticated and
+  adopted wholesale by a clean session (nothing written) or two-way merged into a dirty session
+  and then written. The remote save settings are kept, along with remote metadata unless edited
+  locally. An over-budget replacement produces a dedicated error and leaves the live contents
+  and any pending edits intact. On explicit unlock, reconciliation uses the local-open limits.
+  `flush` is `Ok` only when every edit is on disk. `lock` saves first and keeps the encrypted bytes when that
   save fails: a timer writes them over an unchanged file, otherwise the next unlock merges them,
   and switching vaults first writes them as an `unsaved-*` copy into the backup folder (the
   path when the password was changed elsewhere); observers run after the session lock is released;
@@ -317,6 +327,19 @@ change is done.
   worker because it blocks on a dialog: `ExitRequested` is always prevented and a confirmed exit
   calls `exit` again through `ExitGate`. The effect runner is called off the main thread under the
   settings gate and never takes it.
+- **Languages.** The app ships `en`, `uk`, `ru` and `de`: the UI catalogs `src/lib/i18n/locales/<lang>.json`
+  (one flat key-to-ICU-message map per language, the same key set and placeholders in every file, every key
+  referenced from a `t("literal")` call in `src/` or listed as native-side in `src/i18n.audit.test.ts`), the
+  macOS `src-tauri/resources/macos/<lang>.lproj/InfoPlist.strings` bundled through `tauri.macos.conf.json`
+  and `CFBundleLocalizations` (`src-tauri/Info.plist`, verified by `scripts/release.py`), and the
+  `mypass_session::settings::Language` setting (`system` or one language, typed into `bindings.ts`). The
+  fallback chain is the chosen language, then English, then the key itself, in the webview (`t`) and in the
+  native shell (`src-tauri/src/i18n.rs`, which embeds the same JSON catalogs). `system` maps the first
+  system locale by its primary subtag (`uk*`, `ru*`, `de*` such as de-DE, de-AT, de-CH; anything else is
+  English) in both `resolveSystemLanguage` and `i18n::language_for_locale`. A new language means all of those
+  places plus the guards. A catalog key nothing references is deleted from every catalog
+  (`every_catalog_key_is_referenced`), so the key set only holds live strings. The extension keeps its own
+  catalogs.
 - **UI.** The Svelte UI talks only through the generated `src/lib/bindings.ts`; tests run on a fake backend
   (`src/test/fakeBackend.ts`) that is type-checked against those bindings. Secrets held by stores are
   cleared on close, save and lock, and the single `{@html}` site renders sanitised markdown. The main
@@ -535,8 +558,9 @@ English for code, comments, commit messages, docs, plans and specs. Cyrillic app
 as `\u{..}` escapes, in `*.xcstrings` and in the root `RUN.md` (the Ukrainian manual checklist,
 never translated). Literal Cyrillic is also allowed in the extension files `extension/shared/{form-detection,page-identifier}.js` and `extension/tests/{formDetection,inlineIcon,pageIdentifier}.test.js` (localized keyword lists and their tests; the extension is vendored as copied), and in the translation files
 `src/lib/i18n/locales/{uk,ru}.json` and `src-tauri/resources/macos/{uk,ru}.lproj/InfoPlist.strings`
-(exactly these four of the translation files; the English files stay Cyrillic-free, and the Node tests read their expectations
-from the catalogs), in `crates/mypass-kdbx/tests/unicode.rs`,
+(exactly these four of the translation files; the English and German files stay Cyrillic-free, and the Node tests read their expectations
+from the catalogs), in the extension's `chrome.i18n` catalogs `extension/_locales/{uk,ru}/messages.json` (the `en` and `de`
+catalogs stay Cyrillic-free), in `crates/mypass-kdbx/tests/unicode.rs`,
 vendored upstream data under `crates/mypass-core/resources/`, and opaque binary fixtures
 `crates/mypass-kdbx/tests/fixtures/*.kdbx` (fixture README and generator files follow the text rules).
 Pinned by `cyrillic_only_in_allowed_files`.
@@ -546,9 +570,9 @@ Pinned by `cyrillic_only_in_allowed_files`.
 Conventional Commits with a lowercase imperative subject and no trailing period, for example
 `feat(kdbx): read the outer header`. Scopes: `core`, `kdbx`, `ci`, `docs`, `repo`, `ui`, `i18n` (later stages add
 `bridge`, `platform`, `host`, `app`, `extension`). No AI-attribution footers and no co-author
-trailers on commits or pull request text. A dependency version bump is its own `chore(deps)` commit. Dependabot covers cargo and GitHub
-Actions only: the npm pins in `package.json` are bumped by hand, and the `@tauri-apps/*` packages
-move together with the Rust `tauri` family (the CLI rejects mismatched minors).
+trailers on commits or pull request text. A dependency version bump is its own `chore(deps)` commit. Dependabot covers cargo, npm and GitHub
+Actions: npm minor and patch bumps arrive as one grouped pull request and each major as its own, but the `@tauri-apps/*`
+packages are ignored there and bumped by hand together with the Rust `tauri` family (the CLI rejects mismatched minors).
 
 ## Rust rules
 

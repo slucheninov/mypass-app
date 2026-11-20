@@ -2,7 +2,7 @@
 <html data-theme="system">
 <head>
   <meta charset="utf-8">
-  <title>Password generator</title>
+  <title data-i18n="passwordGenerator"></title>
   <link rel="stylesheet" href="shared/ui.css">
   <style>
     html, body { height: 100%; margin: 0; }
@@ -325,99 +325,100 @@
 <body>
   <section id="generator-view">
     <header>
-      <h1>Password generator</h1>
-      <button id="close-btn" class="icon-close" type="button" aria-label="Close">×</button>
+      <h1 data-i18n="passwordGenerator"></h1>
+      <button id="close-btn" class="icon-close" type="button" data-i18n-aria-label="close">×</button>
     </header>
     <main>
       <div class="actions">
-        <button id="copy-btn" class="btn-copy" type="button">Copy</button>
-        <button id="regenerate-btn" class="regen" type="button" aria-label="Regenerate">↻</button>
-        <button id="autofill-btn" class="btn-fill" type="button">Autofill</button>
+        <button id="copy-btn" class="btn-copy" type="button" data-i18n="copy"></button>
+        <button id="regenerate-btn" class="regen" type="button" data-i18n-aria-label="regenerate">↻</button>
+        <button id="autofill-btn" class="btn-fill" type="button" data-i18n="autofill"></button>
       </div>
-      <div id="password-display" class="password-box" role="textbox" aria-readonly="true" aria-label="Password"></div>
+      <div id="password-display" class="password-box" role="textbox" aria-readonly="true" data-i18n-aria-label="password"></div>
       <div class="strength" aria-hidden="true"><div id="strength-fill"></div></div>
       <p id="generator-error" class="generator-error" hidden></p>
       <div class="option-row">
-        <span class="option-label">Type</span>
+        <span class="option-label" data-i18n="typeLabel"></span>
         <div class="type-wrap">
-          <button id="type-btn" type="button" aria-haspopup="listbox">Smart password</button>
+          <button id="type-btn" type="button" aria-haspopup="listbox" data-i18n="typeSmart"></button>
           <div id="type-menu" hidden>
-            <button class="type-option selected" type="button" data-type="smart">Smart password</button>
-            <button class="type-option" type="button" data-type="random">Random password</button>
-            <button class="type-option" type="button" data-type="memorable">Memorable password</button>
-            <button class="type-option" type="button" data-type="pin">PIN</button>
+            <button class="type-option selected" type="button" data-type="smart" data-i18n="typeSmart"></button>
+            <button class="type-option" type="button" data-type="random" data-i18n="typeRandom"></button>
+            <button class="type-option" type="button" data-type="memorable" data-i18n="typeMemorable"></button>
+            <button class="type-option" type="button" data-type="pin" data-i18n="typePin"></button>
           </div>
         </div>
       </div>
       <p id="smart-hint" class="hint" hidden></p>
       <div id="random-options" hidden>
         <div class="option-row slider-row">
-          <label for="random-length">Characters</label>
+          <label for="random-length" data-i18n="characters"></label>
           <input id="random-length" type="range" min="8" max="64" value="20">
-          <input id="random-length-number" type="number" min="8" max="64" value="20" aria-label="Characters">
+          <input id="random-length-number" type="number" min="8" max="64" value="20" data-i18n-aria-label="characters">
         </div>
         <div class="option-row">
-          <span>Digits</span>
+          <span data-i18n="digits"></span>
           <label class="switch"><input id="random-digits" type="checkbox" checked><span class="track"></span></label>
         </div>
         <div class="option-row">
-          <span>Symbols</span>
+          <span data-i18n="symbols"></span>
           <label class="switch"><input id="random-symbols" type="checkbox" checked><span class="track"></span></label>
         </div>
       </div>
       <div id="memorable-options" hidden>
         <div class="option-row slider-row">
-          <label for="memorable-words">Words</label>
+          <label for="memorable-words" data-i18n="words"></label>
           <input id="memorable-words" type="range" min="3" max="10" value="4">
-          <input id="memorable-words-number" type="number" min="3" max="10" value="4" aria-label="Words">
+          <input id="memorable-words-number" type="number" min="3" max="10" value="4" data-i18n-aria-label="words">
         </div>
         <div class="option-row">
-          <label for="memorable-separator">Separator</label>
+          <label for="memorable-separator" data-i18n="separator"></label>
           <select id="memorable-separator">
-            <option value="hyphen">Hyphens</option>
-            <option value="space">Spaces</option>
-            <option value="period">Periods</option>
-            <option value="comma">Commas</option>
-            <option value="underscore">Underscores</option>
+            <option value="hyphen" data-i18n="separatorHyphen"></option>
+            <option value="space" data-i18n="separatorSpace"></option>
+            <option value="period" data-i18n="separatorPeriod"></option>
+            <option value="comma" data-i18n="separatorComma"></option>
+            <option value="underscore" data-i18n="separatorUnderscore"></option>
           </select>
         </div>
         <div class="option-row">
-          <span>Capitalize</span>
+          <span data-i18n="capitalize"></span>
           <label class="switch"><input id="memorable-capitalize" type="checkbox"><span class="track"></span></label>
         </div>
         <div class="option-row">
-          <span>Full words</span>
+          <span data-i18n="fullWords"></span>
           <label class="switch"><input id="memorable-full-words" type="checkbox" checked><span class="track"></span></label>
         </div>
       </div>
       <div id="pin-options" hidden>
         <div class="option-row slider-row">
-          <label for="pin-length">Digits</label>
+          <label for="pin-length" data-i18n="digits"></label>
           <input id="pin-length" type="range" min="3" max="12" value="4">
-          <input id="pin-length-number" type="number" min="3" max="12" value="4" aria-label="Digits">
+          <input id="pin-length-number" type="number" min="3" max="12" value="4" data-i18n-aria-label="digits">
         </div>
       </div>
       <div class="option-row">
-        <span>Use by default for suggestions</span>
+        <span data-i18n="useByDefault"></span>
         <label class="switch"><input id="use-default" type="checkbox"><span class="track"></span></label>
       </div>
       <button id="history-link" class="history-link" type="button">
         <span aria-hidden="true">◷</span>
-        Password generator history
+        <span data-i18n="passwordGeneratorHistory"></span>
         <span class="chevron" aria-hidden="true">›</span>
       </button>
     </main>
   </section>
   <section id="history-view" hidden>
     <header>
-      <button id="history-back" class="back-btn" type="button" aria-label="Back">←</button>
-      <h1>Generator history</h1>
+      <button id="history-back" class="back-btn" type="button" data-i18n-aria-label="back">←</button>
+      <h1 data-i18n="generatorHistory"></h1>
     </header>
     <main>
-      <input id="history-search" type="search" placeholder="Search history" autocomplete="off">
+      <input id="history-search" type="search" autocomplete="off" data-i18n-placeholder="searchHistory">
       <div id="history-list"></div>
     </main>
   </section>
+  <script src="shared/i18n.js"></script>
   <script src="shared/appearance-settings.js"></script>
   <script src="shared/theme.js"></script>
   <script src="shared/password-generator.js"></script>

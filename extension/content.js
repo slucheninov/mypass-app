@@ -36,6 +36,7 @@
         securityWatch: require('./shared/security-watch.js'),
         autofillSettings: require('./shared/autofill-settings.js'),
         placement: require('./shared/placement.js'),
+        i18n: require('./shared/i18n.js'),
       }
     : {
         urlMatch: mypassUrlMatch,
@@ -48,10 +49,12 @@
         securityWatch: mypassSecurityWatch,
         autofillSettings: mypassAutofillSettings,
         placement: mypassPlacement,
+        i18n: mypassI18n,
       };
   const hostnameMatches = shared.urlMatch.hostnameMatches;
   const fillTargetMatches = shared.urlMatch.fillTargetMatches;
   const securityWatch = shared.securityWatch;
+  const i18n = shared.i18n;
   const classifyGetCredentialsResponse = shared.bridgeStatus.classifyGetCredentialsResponse;
   const isBase32Secret = shared.base32.isBase32Secret;
   const {
@@ -570,8 +573,8 @@
     const { host, shadow } = buildShadowHost(doc, 'data-mypass-inline-icon', ICON_HOST_STYLE);
     const button = doc.createElement('button');
     button.setAttribute('type', 'button');
-    button.setAttribute('aria-label', 'Fill from MyPass');
-    button.setAttribute('title', 'Fill from MyPass');
+    button.setAttribute('aria-label', i18n.t('fillFromMyPass'));
+    button.setAttribute('title', i18n.t('fillFromMyPass'));
     // The accessible name stays "Fill from MyPass"; these only say a list opens and whether it
     // currently is (togglePanel/closePanel keep aria-expanded in step).
     button.setAttribute('aria-haspopup', 'true');
@@ -821,10 +824,11 @@
   }
 
   const PANEL_MESSAGES = {
-    empty: 'No entries for this site',
-    locked: 'MyPass is locked',
-    pairingRequired: 'Pair MyPass to use it here',
-    unavailable: 'MyPass is not running',
+    // Getters, so the text is looked up when a panel opens and not when the script loads.
+    get empty() { return i18n.t('panelEmpty'); },
+    get locked() { return i18n.t('myPassLocked'); },
+    get pairingRequired() { return i18n.t('panelPairingRequired'); },
+    get unavailable() { return i18n.t('panelUnavailable'); },
   };
 
   // Countdown ring geometry for the row's TOTP indicator. Deliberately smaller than the
@@ -937,7 +941,7 @@
         unlockButton = doc.createElement('button');
         unlockButton.setAttribute('type', 'button');
         unlockButton.setAttribute('class', 'unlock');
-        unlockButton.textContent = 'Unlock MyPass';
+        unlockButton.textContent = i18n.t('unlockMyPass');
         unlockButton.addEventListener('click', (event) => callbacks.onUnlock(event));
         root.appendChild(unlockButton);
       }
@@ -953,7 +957,7 @@
     const row = doc.createElement('button');
     row.setAttribute('type', 'button');
     row.setAttribute('class', 'row generate-password-row');
-    row.textContent = 'Generate password';
+    row.textContent = i18n.t('generatePassword');
     row.addEventListener('click', onClick);
     return row;
   }
@@ -964,7 +968,7 @@
     const row = doc.createElement('button');
     row.setAttribute('type', 'button');
     row.setAttribute('class', 'row settings-row');
-    row.textContent = 'MyPass settings';
+    row.textContent = i18n.t('myPassSettings');
     row.addEventListener('click', (event) => onClick(event));
     return row;
   }
@@ -1627,9 +1631,7 @@
     // comparison. The page only sees the warning, never the stored secret.
     let securityWarningEl = null;
     function showSecurityWarning(action) {
-      const message = action === 'paste'
-        ? 'This site is not saved with this MyPass password.'
-        : 'This site is not saved with this MyPass login.';
+      const message = i18n.t(action === 'paste' ? 'securityWarningPassword' : 'securityWarningLogin');
       if (securityWarningEl && securityWarningEl.isConnected) {
         securityWarningEl.firstChild.textContent = message;
         return;
@@ -1646,7 +1648,7 @@
       text.style.cssText = 'flex:1;';
       const closeButton = document.createElement('button');
       closeButton.type = 'button';
-      closeButton.textContent = 'Dismiss';
+      closeButton.textContent = i18n.t('dismiss');
       closeButton.style.cssText = 'cursor:pointer;border:0;background:#9a3412;color:#fff;border-radius:6px;padding:4px 8px;';
       closeButton.addEventListener('click', trustedClickHandler(() => {
         banner.remove();

@@ -4,6 +4,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
+use zeroize::Zeroizing;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Timestamp(pub i64);
 impl Timestamp {
@@ -35,8 +36,23 @@ impl Timestamp {
 #[derive(Clone, PartialEq)]
 pub struct Field {
     pub key: String,
-    pub value: String,
+    // Wipe every value. The public KDBX protection flag can change independently.
+    value: Zeroizing<String>,
     pub protected: bool,
+}
+
+impl Field {
+    pub fn new(key: &str, value: &str, protected: bool) -> Self {
+        Self {
+            key: key.into(),
+            value: Zeroizing::new(value.into()),
+            protected,
+        }
+    }
+
+    pub fn value(&self) -> &str {
+        self.value.as_str()
+    }
 }
 #[derive(Clone, PartialEq)]
 pub struct StringArray {
@@ -62,6 +78,9 @@ pub struct RawXml(pub String);
 #[derive(Clone, PartialEq)]
 pub struct Entry {
     pub uuid: Uuid,
+    /// KDBX 4.1 `PreviousParentGroup`: the group the entry was in before it moved into the recycle
+    /// bin. Location metadata, not content: edits never snapshot it and `content_eq` ignores it.
+    pub previous_parent: Option<Uuid>,
     pub icon_id: u32,
     pub fields: Vec<Field>,
     pub string_arrays: Vec<StringArray>,
@@ -81,6 +100,7 @@ impl Entry {
     pub fn new(now: Timestamp) -> Self {
         Self {
             uuid: Uuid::new_v4(),
+            previous_parent: None,
             icon_id: 0,
             fields: vec![],
             string_arrays: vec![],
@@ -98,21 +118,14 @@ impl Entry {
         }
     }
     pub fn field(&self, key: &str) -> Option<&str> {
-        self.fields
-            .iter()
-            .find(|f| f.key == key)
-            .map(|f| f.value.as_str())
+        self.fields.iter().find(|f| f.key == key).map(Field::value)
     }
     pub fn set_field(&mut self, key: &str, value: &str, protected: bool) {
         if let Some(f) = self.fields.iter_mut().find(|f| f.key == key) {
-            f.value = value.into();
+            f.value = Zeroizing::new(value.into());
             f.protected = protected;
         } else {
-            self.fields.push(Field {
-                key: key.into(),
-                value: value.into(),
-                protected,
-            });
+            self.fields.push(Field::new(key, value, protected));
         }
     }
     pub fn remove_field(&mut self, key: &str) {
@@ -136,6 +149,9 @@ impl Entry {
 #[derive(Clone, PartialEq)]
 pub struct Group {
     pub uuid: Uuid,
+    /// KDBX 4.1 `PreviousParentGroup`: the group this group was in before it moved into the
+    /// recycle bin.
+    pub previous_parent: Option<Uuid>,
     pub name: String,
     pub icon_id: u32,
     pub created: Timestamp,
@@ -153,6 +169,7 @@ impl Group {
     pub fn new(name: &str, now: Timestamp) -> Self {
         Self {
             uuid: Uuid::new_v4(),
+            previous_parent: None,
             name: name.into(),
             icon_id: 0,
             created: now,
@@ -349,6 +366,29 @@ mod tests {
             dropped_protected_unknown: 0,
         }
     }
+    #[test]
+    fn protected_fields_in_clones_and_history_own_zeroizing_values() {
+        fn assert_zeroizing(_: &zeroize::Zeroizing<String>) {}
+
+        let mut entry = Entry::new(Timestamp(0));
+        entry.set_field("Password", "old-sentinel", true);
+        entry.history.push(entry.clone());
+        entry.set_field("Password", "new-sentinel", true);
+        let clone = entry.clone();
+        entry.remove_field("Password");
+
+        assert_eq!(entry.field("Password"), None);
+        assert_eq!(clone.field("Password"), Some("new-sentinel"));
+        assert_eq!(clone.history[0].field("Password"), Some("old-sentinel"));
+        assert_zeroizing(&clone.fields[0].value);
+        assert_zeroizing(&clone.history[0].fields[0].value);
+        let debug = format!(
+            "{clone:?} {:?} {:?}",
+            clone.fields[0], clone.history[0].fields[0]
+        );
+        assert!(!debug.contains("-sentinel"));
+    }
+
     #[test]
     fn debug_output_contains_no_secret() {
         let db = make_db();

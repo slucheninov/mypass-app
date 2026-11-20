@@ -219,7 +219,9 @@ fn journey_history_and_restore() {
     assert_eq!(history[0].index, 0, "newest first");
     assert!(history[0].changed_fields.contains(&"Password".to_owned()));
     // Index 1 is the oldest version: the first password.
-    w.core.entry_history_restore(&id, 1).unwrap();
+    w.core
+        .entry_history_restore(&id, &history[1].revision)
+        .unwrap();
     assert_eq!(
         w.core.entry_reveal(&id, FieldRef::Password).unwrap(),
         "first"

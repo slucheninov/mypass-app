@@ -27,7 +27,7 @@ mod tests {
         let en = startup_error_text(Language::En);
         assert!(en.0.contains("MyPass"));
         assert!(!en.1.is_empty());
-        for lang in [Language::Uk, Language::Ru] {
+        for lang in [Language::Uk, Language::Ru, Language::De] {
             let text = startup_error_text(lang);
             assert_ne!(text.0, en.0);
             assert_ne!(text.1, en.1);

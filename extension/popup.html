@@ -2,7 +2,7 @@
 <html data-theme="system">
 <head>
   <meta charset="utf-8">
-  <title>MyPass</title>
+  <title data-i18n="extName"></title>
   <link rel="stylesheet" href="shared/ui.css">
   <link rel="stylesheet" href="shared/prompt-card.css">
   <style>
@@ -549,15 +549,15 @@
   <div id="panel-shell">
     <div id="browser-chrome" hidden>
       <div class="browser-tools">
-        <button id="popup-menu-btn" type="button" class="icon-btn" aria-label="More" title="More" aria-expanded="false" aria-controls="popup-menu">
+        <button id="popup-menu-btn" type="button" class="icon-btn" aria-expanded="false" aria-controls="popup-menu" data-i18n-title="more" data-i18n-aria-label="more">
           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
             <circle cx="5.5" cy="12" r="1.8" fill="currentColor"></circle>
             <circle cx="12" cy="12" r="1.8" fill="currentColor"></circle>
             <circle cx="18.5" cy="12" r="1.8" fill="currentColor"></circle>
           </svg>
         </button>
-        <input id="vault-search" type="search" placeholder="Search" autocomplete="off">
-        <button id="open-generator-btn" type="button" class="icon-btn" aria-label="Password generator">
+        <input id="vault-search" type="search" autocomplete="off" data-i18n-placeholder="search">
+        <button id="open-generator-btn" type="button" class="icon-btn" data-i18n-aria-label="passwordGenerator">
           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
             <rect x="3" y="3" width="18" height="18" rx="4" fill="none" stroke="currentColor" stroke-width="1.8"></rect>
             <circle cx="8.2" cy="8.2" r="1.3" fill="currentColor"></circle>
@@ -567,11 +567,11 @@
             <circle cx="15.8" cy="15.8" r="1.3" fill="currentColor"></circle>
           </svg>
         </button>
-        <button id="add-entry-btn" type="button" class="icon-btn" aria-label="Add item">+</button>
+        <button id="add-entry-btn" type="button" class="icon-btn" data-i18n-aria-label="addItem">+</button>
         <div id="add-entry-menu" hidden></div>
       </div>
       <div id="category-wrap" class="category-wrap">
-        <button id="category-btn" type="button">Favorites</button>
+        <button id="category-btn" type="button" data-i18n="categoryFavorites"></button>
         <div id="category-menu" hidden></div>
       </div>
     </div>
@@ -581,7 +581,7 @@
       <h1 class="panel-title" id="locked-title"></h1>
       <p class="panel-helper" id="locked-helper"></p>
       <div id="locked-actions">
-        <button id="locked-unlock-btn" type="button" class="btn-primary">Unlock MyPass</button>
+        <button id="locked-unlock-btn" type="button" class="btn-primary" data-i18n="unlockMyPass"></button>
       </div>
     </section>
 
@@ -589,8 +589,8 @@
       <img class="brand-key" src="icons/icon128.png" width="32" height="32" alt="">
       <p class="panel-helper" id="app-unavailable-status"></p>
       <div id="app-unavailable-actions">
-        <button id="retry-btn" type="button" class="btn-primary">Retry</button>
-        <button id="open-mypass-btn" type="button" class="btn-secondary">Open MyPass</button>
+        <button id="retry-btn" type="button" class="btn-primary" data-i18n="retry"></button>
+        <button id="open-mypass-btn" type="button" class="btn-secondary" data-i18n="openMyPass"></button>
         <p id="open-mypass-helper" hidden></p>
       </div>
     </section>
@@ -611,11 +611,11 @@
 
     <section id="pairing-panel" hidden>
       <h1 class="panel-title" id="pairing-title"></h1>
-      <button id="connect-btn" type="button" class="btn-primary">Connect</button>
+      <button id="connect-btn" type="button" class="btn-primary" data-i18n="connect"></button>
       <div id="code-entry" hidden>
-        <p id="code-hint">Enter the code shown in MyPass</p>
+        <p id="code-hint" data-i18n="pairingCodeHint"></p>
         <input id="code-input" type="text" inputmode="numeric" maxlength="7" pattern="[0-9]{6}" />
-        <button id="submit-code-btn" type="button" class="btn-primary">Submit</button>
+        <button id="submit-code-btn" type="button" class="btn-primary" data-i18n="submit"></button>
       </div>
       <p id="pairing-error" hidden></p>
     </section>
@@ -624,15 +624,15 @@
          ceremony actually came from. That pairing is the phishing-resistance
          requirement from the design's Global Constraints, not decorative copy. -->
     <section id="passkey-failure-panel" hidden>
-      <h1 class="panel-title">Passkey request did not finish</h1>
+      <h1 class="panel-title" data-i18n="passkeyFailureTitle"></h1>
       <p id="passkey-failure-message" class="panel-helper" role="alert"></p>
-      <button id="passkey-failure-close-btn" type="button" class="btn-secondary">Close</button>
+      <button id="passkey-failure-close-btn" type="button" class="btn-secondary" data-i18n="close"></button>
     </section>
 
     <section id="passkey-checking-panel" hidden>
-      <h1 id="passkey-checking-title" class="panel-title">Preparing passkey request</h1>
-      <p id="passkey-checking-message" class="panel-helper">Waiting for MyPass. You will be asked to approve before a passkey is saved or used.</p>
-      <button id="passkey-checking-cancel-btn" type="button" class="btn-secondary">Cancel</button>
+      <h1 id="passkey-checking-title" class="panel-title" data-i18n="passkeyPreparing"></h1>
+      <p id="passkey-checking-message" class="panel-helper" data-i18n="passkeyWaitingMyPass"></p>
+      <button id="passkey-checking-cancel-btn" type="button" class="btn-secondary" data-i18n="cancel"></button>
     </section>
 
     <section id="prompt-panel" hidden>
@@ -640,47 +640,47 @@
     </section>
 
     <section id="passkey-save-panel" hidden>
-      <h1 class="panel-title">Save passkey</h1>
+      <h1 class="panel-title" data-i18n="passkeySaveTitle"></h1>
       <p class="panel-helper passkey-summary" id="passkey-save-summary"></p>
       <dl class="passkey-fields" id="passkey-save-detail"></dl>
-      <button id="passkey-save-btn" type="button" class="btn-primary">Save</button>
-      <button id="passkey-cancel-btn" type="button" class="btn-secondary">Cancel</button>
+      <button id="passkey-save-btn" type="button" class="btn-primary" data-i18n="save"></button>
+      <button id="passkey-cancel-btn" type="button" class="btn-secondary" data-i18n="cancel"></button>
     </section>
 
     <section id="passkey-replace-panel" hidden>
-      <h1 class="panel-title">Replace passkey?</h1>
+      <h1 class="panel-title" data-i18n="passkeyReplaceTitle"></h1>
       <p class="panel-helper passkey-summary" id="passkey-replace-summary"></p>
       <dl class="passkey-fields" id="passkey-replace-detail"></dl>
-      <p class="panel-helper">This entry already has a passkey. Replacing removes the passkey this site currently uses. Some sites (such as Google) activate a new passkey only after a delay, so sign-in may fail until then. The previous passkey is kept in the entry's history.</p>
-      <button id="passkey-replace-btn" type="button" class="btn-primary">Replace</button>
-      <button id="passkey-replace-cancel-btn" type="button" class="btn-secondary">Cancel</button>
+      <p class="panel-helper" data-i18n="passkeyReplaceHelper"></p>
+      <button id="passkey-replace-btn" type="button" class="btn-primary" data-i18n="replace"></button>
+      <button id="passkey-replace-cancel-btn" type="button" class="btn-secondary" data-i18n="cancel"></button>
     </section>
 
     <section id="passkey-use-panel" hidden>
-      <h1 class="panel-title">Use passkey</h1>
+      <h1 class="panel-title" data-i18n="passkeyUseTitle"></h1>
       <p class="panel-helper passkey-summary" id="passkey-use-summary"></p>
       <dl class="passkey-fields" id="passkey-use-detail"></dl>
-      <button id="passkey-approve-btn" type="button" class="btn-primary">Approve</button>
-      <button id="passkey-use-cancel-btn" type="button" class="btn-secondary">Cancel</button>
+      <button id="passkey-approve-btn" type="button" class="btn-primary" data-i18n="approve"></button>
+      <button id="passkey-use-cancel-btn" type="button" class="btn-secondary" data-i18n="cancel"></button>
     </section>
 
     <section id="passkey-picker-panel" hidden>
-      <h1 class="panel-title">Choose an entry</h1>
+      <h1 class="panel-title" data-i18n="chooseEntry"></h1>
       <p class="panel-helper passkey-summary" id="passkey-picker-summary"></p>
       <ul id="passkey-picker-list"></ul>
-      <button id="passkey-picker-cancel-btn" type="button" class="btn-secondary">Cancel</button>
+      <button id="passkey-picker-cancel-btn" type="button" class="btn-secondary" data-i18n="cancel"></button>
     </section>
 
     <div id="generate-password-section" hidden>
-      <p id="generate-password-hint">This page has a new-password field</p>
-      <button id="generate-password-btn" type="button" class="btn-primary">Generate password</button>
+      <p id="generate-password-hint" data-i18n="newPasswordFieldHint"></p>
+      <button id="generate-password-btn" type="button" class="btn-primary" data-i18n="generatePassword"></button>
       <p id="generate-password-error" hidden></p>
     </div>
 
     <div id="add-totp-section" hidden>
-      <p id="add-totp-hint">Paste otpauth:// URL or secret key</p>
-      <input id="totp-paste-input" type="text" placeholder="Paste otpauth:// URL or secret key" />
-      <button id="add-totp-btn" type="button" class="btn-primary">Add</button>
+      <p id="add-totp-hint" data-i18n="totpPasteHint"></p>
+      <input id="totp-paste-input" type="text"  data-i18n-placeholder="totpPasteHint"/>
+      <button id="add-totp-btn" type="button" class="btn-primary" data-i18n="add"></button>
       <p id="add-totp-error" hidden></p>
     </div>
 
@@ -690,16 +690,17 @@
     </aside>
     <div id="popup-menu" hidden>
       <div id="popup-menu-root">
-        <button id="lock-vault-btn" type="button" class="popup-menu-row"><span class="popup-menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5zm3 8H9V7a3 3 0 0 1 6 0v3z"/></svg></span>Lock MyPass</button>
-        <button id="popup-menu-help-btn" type="button" class="popup-menu-row popup-menu-drill"><span class="popup-menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm.1 15.4a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5zM14.2 8.3c0 1.1-.55 1.75-1.6 2.4-.65.42-.9.75-.9 1.3v.4h-1.7v-.55c0-1.1.5-1.75 1.55-2.4.6-.4 1-.75 1-1.25 0-.65-.52-1.1-1.25-1.1-.8 0-1.32.48-1.42 1.2l-1.68-.3c.25-1.7 1.6-2.7 3.2-2.7 1.9 0 3.2 1.2 3.2 3z"/></svg></span>Help</button>
+        <button id="lock-vault-btn" type="button" class="popup-menu-row"><span class="popup-menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5zm3 8H9V7a3 3 0 0 1 6 0v3z"/></svg></span><span data-i18n="lockMyPass"></span></button>
+        <button id="popup-menu-help-btn" type="button" class="popup-menu-row popup-menu-drill"><span class="popup-menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm.1 15.4a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5zM14.2 8.3c0 1.1-.55 1.75-1.6 2.4-.65.42-.9.75-.9 1.3v.4h-1.7v-.55c0-1.1.5-1.75 1.55-2.4.6-.4 1-.75 1-1.25 0-.65-.52-1.1-1.25-1.1-.8 0-1.32.48-1.42 1.2l-1.68-.3c.25-1.7 1.6-2.7 3.2-2.7 1.9 0 3.2 1.2 3.2 3z"/></svg></span><span data-i18n="help"></span></button>
         <p id="lock-vault-error" class="panel-helper" role="status" hidden></p>
       </div>
       <div id="popup-menu-help" hidden>
-        <button id="popup-menu-help-back" type="button" class="popup-menu-back">‹ Help</button>
-        <p class="panel-helper">MyPass keeps the vault on this Mac. Unlock, pair this browser, and change vault settings in the app. This menu only covers the extension in this browser profile.</p>
+        <button id="popup-menu-help-back" type="button" class="popup-menu-back" data-i18n="helpBack"></button>
+        <p class="panel-helper" data-i18n="helpText"></p>
       </div>
     </div>
   </div>
+  <script src="shared/i18n.js"></script>
   <script src="shared/entry-visuals.js"></script>
   <script src="shared/bridge-status.js"></script>
   <script src="shared/base32.js"></script>

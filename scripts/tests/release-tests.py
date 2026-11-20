@@ -134,6 +134,8 @@ class PackageTests(Fixture):
         with zipfile.ZipFile(path) as archive:
             names = archive.namelist()
             self.assertIn('manifest.json', names)
+            for language in ('en', 'uk', 'ru', 'de'):
+                self.assertIn(f'_locales/{language}/messages.json', names)
             self.assertTrue(all('tests' not in Path(n).parts and not n.endswith('.test.js') and Path(n).name not in ('package.json', '.DS_Store') for n in names))
         stage = self.root / 'stage'
         self.run_script('package-extension.sh', '--out', out, '--stage-dir', stage)
@@ -193,9 +195,9 @@ class VerifyTests(Fixture):
         self.resources.mkdir(parents=True)
         info = {'CFBundleIdentifier': 'com.mypass.app', 'CFBundleShortVersionString': self.version,
                 'LSMinimumSystemVersion': '14.0', 'CFBundleDevelopmentRegion': 'en',
-                'CFBundleLocalizations': ['en', 'uk', 'ru']}
+                'CFBundleLocalizations': ['en', 'uk', 'ru', 'de']}
         (self.app / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
-        for lang in ('en', 'uk', 'ru'):
+        for lang in ('en', 'uk', 'ru', 'de'):
             path = self.resources / f'{lang}.lproj/InfoPlist.strings'
             path.parent.mkdir(); path.write_text('strings')
         for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):
@@ -252,6 +254,14 @@ class VerifyTests(Fixture):
     def test_verifier_rejects_bundled_development_files(self):
         (self.resources / 'extension/package.json').write_text('{}')
         with self.assertRaisesRegex(ValueError, 'bundled extension development file'): self.verify()
+
+    def test_verifier_rejects_zip_without_the_default_locale_catalog(self):
+        stripped = self.root / 'out/stripped.zip'
+        with zipfile.ZipFile(self.zip) as source, zipfile.ZipFile(stripped, 'w') as target:
+            for item in source.infolist():
+                if not item.filename.startswith('_locales/en/'): target.writestr(item, source.read(item.filename))
+        with self.assertRaisesRegex(ValueError, 'default locale catalog'):
+            self.release.verify_zip(stripped, self.version)
 
     def test_verifier_rejects_missing_localization_and_zip_development_files(self):
         with zipfile.ZipFile(self.zip, 'a') as archive: archive.writestr('tests/bad.test.js', 'bad')

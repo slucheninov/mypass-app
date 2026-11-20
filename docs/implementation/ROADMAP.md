@@ -4,7 +4,7 @@
 its tests pass, or, for manual-only items, once the manual check has actually been walked. History
 lives in `git log`, not here.
 
-Last updated: 2026-11-15
+Last updated: 2026-11-20
 
 ---
 
@@ -14,17 +14,9 @@ Last updated: 2026-11-15
   directory fsync. On Unix the atomic save treats a directory-sync `Unsupported` or `InvalidInput`
   error as success by design; any other directory-sync error is reported after the replacement has
   committed, and the caller must reload. Only real mounts can show which error they return.
-- [ ] Migrate `rand` to 0.10 (generator API, `rand_core` unification). The public `generate` takes
-  `R: CryptoRng + RngCore` and `generate_os` uses `rand::rngs::OsRng`; 0.10 moves
-  `RngCore`, `OsRng` and `rand::Error`, and the lockfile still carries `rand_core` 0.6 next to 0.10,
-  so check that the RustCrypto crates agree on one trait set first. Update the generator tests
-  (`BoundaryRng`) and `THIRD_PARTY_NOTICES.md` in the same change.
-- [ ] Zeroize protected field values in entry clones and history, not only when `Entry::set_field`
-  replaces or removes one. Today every such `String` is freed without a wipe, so a passkey private
-  key PEM (or password) can linger in freed memory: the old value `set_field` replaces, history
-  copies, and the full `Entry` clones the passkey confirm keeps for its undo
-  (`mypass-bridge/src/passkeys/create.rs`, `Undo.after` with the new key and, on Replace,
-  `Undo.before` with the old one), alive from the write until the confirm answers.
+- [ ] Wipe UI-facing secret copies in `crates/mypass-session/src/editing.rs`, secret DTO values in
+  `queries.rs`, and protected attachment buffers. These copies still use plain `String` or
+  `Vec` allocations that are freed without wiping.
 
 ## Stage 2a follow-ups
 
@@ -33,38 +25,19 @@ Last updated: 2026-11-15
   custom dialog would let Cancel be the default.
 - [ ] Manual: confirm that Cmd+Q and logout/restart raise `ExitRequested` on macOS, and session end
   on Windows (checklist in `RUN.md`).
-- [ ] macOS tray panel position still uses the panel window's scale factor; use the scale factor
-  of the monitor that holds the tray icon (Windows now uses destination-monitor scale/work area).
 
 ## Stage 2b UI follow-ups
 
 - [ ] Manual: walk the Stage 2b checklist in `RUN.md` on a copy of the owner's vault (unlock, shell,
   editors, history and bin, generator, settings, CSV import, tray panel, quit flow, themes, languages).
-- [ ] Restore from the bin to the original group: the UI restores to the root today because the backend
-  keeps no origin; use the KDBX 4.1 `PreviousParentGroup` in `mypass-session`.
-- [ ] Empty Deleted or deleting a parent group while one of its entries is open in the editor: define
-  and test what the editor does (close, or keep and refuse to save).
-- [ ] History values are not revealable: add a backend command for per-version reveal, then the UI.
-- [ ] Generator Use is not recorded in the generator history (only Copy is).
-- [ ] Reserved hotkeys are refused in the UI only; move the check into the backend hotkey parser.
-- [ ] CSV import error causes are matched by their English message; add separate error codes
-  (`csvMissingColumn`, `csvNotUtf8`, `csvEmpty`) instead.
-- [ ] Prune unused legacy catalog keys (418 at the time of writing) once stage 3 has ported its screens.
-- [ ] npm dependencies are bumped by hand (exact pins); add an npm ecosystem with grouping to
-  Dependabot, with the same cooldown as cargo.
 
 ## Stage 3 extension bridge
 
 - [ ] Manual: walk the Stage 3 checklist in `RUN.md` (registration, pairing, endpoint file, autofill,
   save flows, lock behaviour, crash and quit, other browsers, old-app guard) on a copy of the owner's
   vault and record the results in the PR.
-- [ ] `PairingManager`: add one atomic "clear all" (a single save plus the cache). `reset_pairings` on a
-  running bridge revokes one browser at a time, so an error midway leaves a partial reset.
 - [ ] Before any `connectNative` use: host handshake lazily on the first frame, reconnect with a fresh
   handshake, never resend a frame already written.
-- [ ] A failed `LoopbackServer::start` (for example a `secrets/shared` folder with group or other
-  bits) shows `listening: false` with no reason and no action in the Browser pane; surface an
-  "endpoint store unusable" state.
 
 ## Stage 4 passkeys
 
@@ -84,10 +57,28 @@ Last updated: 2026-11-15
   team W645B93PPQ without notarization and require INSTALL.txt's quarantine-removal steps.
 - [ ] Safe secondary-folder sync on FAT/exFAT: volumes without atomic exchange or hard links
   currently fail closed with unavailable/unsupportedFolder; never overwrite a competing vault.
-- [ ] Surface retained `.displaced` copies in sync status and provide an explicit cleanup UI.
+- [ ] Explicit, race-free cleanup UI for retained `.displaced` copies (needs exact vault and copy
+  identity persisted at write time, in-flight files named separately, and confirmation bound to the
+  displayed ids and session). The surfacing itself is done: the Vault pane lists the copies read-only.
   These competing vault copies are deliberately never auto-deleted.
-- [ ] Tighter KDF limits for remote/secondary opens: hostile-input limits exist, but expensive
-  KDF work on an untrusted remote file can still consume substantial CPU/memory.
+- [ ] Replacing a vault on the move-aside path (Windows and volumes without an atomic exchange)
+  renames the current file to a working `.aside` name with a rename that replaces. If another
+  program has put its own file under that exact name first, that file is overwritten. This
+  predates stage 7. Fix it with a rename that never replaces (or a private reserved name) and
+  fail closed where the volume cannot do that; test the collision with distinct bytes.
+- [ ] Working-name leftovers under the hidden temp name after an atomic exchange are not listed.
+  Temp names can also hold an uninstalled candidate. Identify retained exchange copies separately
+  before listing them.
+- [ ] If a user lowers the KDF settings of a vault, secondary sync refuses the older, costlier
+  secondary copy (`SyncKdfLimitExceeded`) until the file is replaced by hand. Consider recording
+  the highest verified cost per secondary.
+- [ ] The Vault pane's list of competing copies does not refresh while it stays open if a copy is
+  kept by a save of the primary vault only. It refreshes when the pane opens, when the vault
+  changes and when a sync finishes. Refresh it on a primary-only save too.
+- [ ] macOS tray panel position: the click point is read when the click event is handled, not when
+  it happened. If the pointer moves off the icon in between, the panel can open at the pointer's
+  new spot (still on a real screen). Capture the point at event time if the tray API gives it,
+  and check on a mixed-DPI, multi-monitor setup by hand.
 - [ ] Upgrade device-unlock storage to `SecAccessControl(biometryCurrentSet)` with a data-protection
   Keychain and provisioning profile; current ordinary Keychain + LocalAuthentication handling
   checks biometric domain state for Touch ID-only enrolments.
@@ -115,8 +106,6 @@ Last updated: 2026-11-15
 
 ## Carried over from the Swift app
 
-- [ ] German localisation for the app, and extension `_locales` for any language (the extension copy
-  is English only).
 - [ ] Passkey AAGUID registry: the upstream registry PR (`passkey-authenticator-aaguids`, which needs a
   vector icon) submitted and merged.
 - [ ] Google shows "MyPass" for newly created passkeys. Manual check; depends on Google ingesting

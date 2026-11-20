@@ -100,7 +100,7 @@ use crate::session::{
 };
 use mypass_core::merge::merge;
 use mypass_kdbx::{
-    Database, FileIo, KdbxError, KdfParams, Meta, SaveOutcome, SaveSettings, VaultFile,
+    Database, FileIo, KdbxError, KdfLimits, KdfParams, Meta, SaveOutcome, SaveSettings, VaultFile,
 };
 use secrecy::SecretString;
 use std::io::ErrorKind;
@@ -491,10 +491,15 @@ impl VaultSession {
             }
             match file.save(&w.db, &w.password) {
                 Ok(SaveOutcome::Saved) => WriteResult::Saved(w.gen),
-                Ok(SaveOutcome::ChangedOnDisk) => match file.reload(&w.password) {
-                    Ok(remote) => WriteResult::Remote(Box::new(remote)),
-                    Err(e) => WriteResult::Failed(e.into()),
-                },
+                Ok(SaveOutcome::ChangedOnDisk) => {
+                    match file.reload_with_limits(
+                        &w.password,
+                        KdfLimits::remote(Some(&w.db.settings.kdf)),
+                    ) {
+                        Ok(remote) => WriteResult::Remote(Box::new(remote)),
+                        Err(e) => WriteResult::Failed(e.into()),
+                    }
+                }
                 Err(e) => WriteResult::Failed(e.into()),
             }
         });
@@ -563,7 +568,7 @@ impl VaultSession {
                         SessionError::WrongPassword => wrong_password_message(),
                         other => other.to_string(),
                     };
-                    out.save(inner.set_save(SaveStatus::failed(message)));
+                    out.save(inner.set_save(SaveStatus::failed(e, message)));
                     if inner.db.is_some() {
                         self.schedule_job(&mut inner, PENDING_RETRY, false);
                     }
@@ -771,7 +776,7 @@ impl VaultSession {
                     Err(SessionError::ChangedOnDisk)
                 }
                 Err(e) => {
-                    out.save(inner.set_save(SaveStatus::failed(e.to_string())));
+                    out.save(inner.set_save(SaveStatus::failed(&e, e.to_string())));
                     self.schedule_job(&mut inner, PENDING_RETRY, true);
                     Err(e)
                 }
@@ -873,15 +878,15 @@ impl VaultSession {
     pub fn restore_from_backup(&self, backup: &[u8]) -> Result<(), SessionError> {
         self.check_not_quitting()?;
         let password = self.with_db_and_password(|_, p| p.clone())?;
-        match Database::open(backup, &password) {
-            Ok(_) => {}
+        let backup_kdf = match Database::open(backup, &password) {
+            Ok(db) => db.settings.kdf,
             Err(KdbxError::WrongPassword) => {
                 return Err(SessionError::InvalidInput(
                     "backup does not open with the current master password".into(),
                 ))
             }
             Err(e) => return Err(e.into()),
-        }
+        };
         self.flush()?;
         let (mut guard, vault_id) = {
             let mut inner = self.wait_idle(lock(&self.0.inner));
@@ -918,7 +923,7 @@ impl VaultSession {
             }
             file.io().write_atomic(file.path(), backup)?;
             written.store(true, std::sync::atomic::Ordering::SeqCst);
-            file.reload(&password)
+            file.reload_with_limits(&password, KdfLimits::remote(Some(&backup_kdf)))
         });
         let mut out = Outbox::default();
         let r = {
@@ -949,11 +954,12 @@ impl VaultSession {
     /// the rules). A reload that fails with `WrongPassword` (the password was changed elsewhere)
     /// is returned as such and leaves the session untouched.
     pub fn check_external_change(&self) -> Result<ExternalChange, SessionError> {
-        let (mut guard, password, conflicts) = {
+        let (mut guard, password, conflicts, limits) = {
             let mut inner = self.wait_idle(lock(&self.0.inner));
             let Some(password) = inner.password.clone() else {
                 return Err(inner.not_unlocked());
             };
+            let limits = KdfLimits::remote(inner.db.as_ref().map(|db| &db.settings.kdf));
             let Some(file) = inner.file.take() else {
                 return Err(inner.not_unlocked());
             };
@@ -962,15 +968,16 @@ impl VaultSession {
                 InFlight::begin(self, &mut inner, file, Slot::File),
                 password,
                 conflicts,
+                limits,
             )
         };
         let result = guard.run(|file| {
             // iCloud conflict versions and offline edits are merged into the file first, so the
             // check below sees (and applies) the merge, never a single side of it.
-            Self::merge_conflicts_before_read(conflicts.as_ref(), file.path(), &password);
+            Self::merge_conflicts_before_read(conflicts.as_ref(), file.path(), &password, limits);
             match file.has_changed_on_disk() {
                 Ok(false) => Ok(None),
-                Ok(true) => file.reload(&password).map(Some),
+                Ok(true) => file.reload_with_limits(&password, limits).map(Some),
                 Err(e) => Err(e),
             }
         });
@@ -1397,6 +1404,40 @@ mod tests {
     fn check_external_change_reports_none_when_unchanged() {
         let f = setup();
         assert_eq!(f.session.check_external_change(), Ok(ExternalChange::None));
+    }
+
+    #[test]
+    fn external_kdf_above_remote_limit_is_neither_adopted_nor_overwritten() {
+        let f = setup();
+        let before = mypass_kdbx::test_util::vault_header_only(&KdfParams::Argon2 {
+            variant: mypass_kdbx::Argon2Variant::Id,
+            salt: vec![0; 32],
+            memory_bytes: 1024 * 1024,
+            iterations: 4097,
+            parallelism: 16,
+            version: 0x13,
+        });
+        std::fs::write(&f.path, &before).unwrap();
+        assert!(matches!(
+            f.session.check_external_change(),
+            Err(SessionError::SyncKdfLimitExceeded)
+        ));
+        assert_eq!(f.titles(), v(&["first"]));
+        f.add("local only").unwrap();
+        assert!(matches!(
+            f.session.flush(),
+            Err(SessionError::SyncKdfLimitExceeded)
+        ));
+        assert_eq!(
+            f.session.status().save.error_code,
+            Some(crate::app_core::ErrorCode::SyncKdfLimitExceeded)
+        );
+        assert_eq!(f.titles(), v(&["first", "local only"]));
+        assert_eq!(std::fs::read(&f.path).unwrap(), before);
+
+        f.session.lock(LockReason::Manual);
+        assert!(f.has_pending_bytes());
+        assert_eq!(std::fs::read(&f.path).unwrap(), before);
     }
 
     #[test]

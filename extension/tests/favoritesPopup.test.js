@@ -253,9 +253,9 @@ assert.ok(!html.includes('Use MyPass for Chrome passkeys'));
 assert.ok(!html.includes('id="settings-panel"') && !html.includes('id="passkey-proxy-toggle"'));
 assert.ok(!html.includes('id="passkey-settings-footer"'));
 assert.ok(!html.includes('Watchtower') && !html.includes('favicon'));
-assert.ok(html.includes('Lock MyPass'));
+assert.ok(html.includes('data-i18n="lockMyPass"'));
 assert.ok(!html.includes('>Settings</button>'), 'the gear menu has no Settings row; settings live on the options page');
-assert.ok(html.includes('>Help</button>'));
+assert.ok(html.includes('data-i18n="help"'));
 const searchAt = html.indexOf('id="vault-search"');
 const gearAt = html.indexOf('id="popup-menu-btn"');
 const generatorAt = html.indexOf('id="open-generator-btn"');
@@ -263,9 +263,9 @@ assert.ok(gearAt !== -1 && gearAt < searchAt && searchAt < generatorAt, 'the men
 assert.ok(html.includes('id="vault-search"'));
 assert.ok(html.includes('id="open-generator-btn"'));
 assert.ok(html.includes('id="add-entry-btn"'));
-assert.ok(html.includes('aria-label="Password generator"'));
-assert.ok(html.includes('aria-label="More"') && html.includes('title="More"'), 'the menu button is a neutral More button');
-assert.ok(!html.includes('aria-label="MyPass menu"'), 'the old gear label is gone');
+assert.ok(html.includes('data-i18n-aria-label="passwordGenerator"'));
+assert.ok(html.includes('data-i18n-aria-label="more"') && html.includes('data-i18n-title="more"'), 'the menu button is a neutral More button');
+assert.ok(!html.includes('MyPass menu'), 'the old gear label is gone');
 const moreBtn = html.slice(gearAt, html.indexOf('</button>', gearAt));
 assert.ok(moreBtn.includes('<circle') && !moreBtn.includes('M19.14 12.94'), 'More icon is dots, not the gear path');
 

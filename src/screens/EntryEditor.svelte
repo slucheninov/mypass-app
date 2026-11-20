@@ -5,16 +5,33 @@
   // and vault switch. Dirtiness is a comparison with a snapshot taken when the editor opened; the
   // snapshot is dropped with the component. Errors follow R15: `invalidInput` is one inline
   // message, `limitExceeded` goes to the Files form, everything else is a toast.
+  //
+  // The editor of an existing entry follows the vault underneath it (Empty Deleted, deleting a
+  // parent group, a sync). One rule: unsaved edits are never discarded by a change in the vault,
+  // and nothing is written into a place the user did not choose.
+  //   1. The entry is gone (`entryGet` answers `notFound`, e.g. Empty Deleted purged it). A clean
+  //      editor closes at once with a notice. A dirty one stays open with its draft and says so:
+  //      Save then creates a new item from the draft (the purged one cannot be saved into), and
+  //      Cancel asks before discarding, like any dirty editor.
+  //   2. The entry is in the recycle bin (deleted alone or with its group): the editor stays open
+  //      and Save becomes "Restore and save", the user's explicit choice to bring the entry back to
+  //      the group shown (also the original group, also the root of a vault with no other group).
+  //      The backend refuses a save of a deleted entry without that choice, and checks it inside
+  //      the saving transaction, so a delete that lands after the last look cannot be undone silently.
+  //   3. The group chosen in the editor was deleted or purged: Save is refused (nothing is sent)
+  //      until the user picks a live group. The backend refuses a save into a removed group too.
+  import { events } from "../lib/bindings";
   import { onDestroy, onMount, tick, untrack } from "svelte";
   import { api, ApiFailure, errorMessage } from "../lib/api";
   import type { AddressDto, EntryEditModel_Serialize, EntryTypeDto } from "../lib/bindings";
-  import { findGroup } from "../lib/group-tree";
+  import { findGroup, isLiveGroup } from "../lib/group-tree";
   import { t } from "../lib/i18n/index.svelte";
   import { lockGuard } from "../lib/lock-guard";
   import { entries } from "../lib/stores/entries.svelte";
   import { navigation } from "../lib/stores/navigation.svelte";
   import { session } from "../lib/stores/session.svelte";
   import { toasts } from "../lib/stores/toasts.svelte";
+  import { quietly } from "../lib/unlisten";
   import Button from "../lib/ui/Button.svelte";
   import FieldRow from "../lib/ui/FieldRow.svelte";
   import Modal from "../lib/ui/Modal.svelte";
@@ -80,15 +97,83 @@
   };
   const heading = $derived(model.id === null ? headings[model.entryType]() : t("Edit"));
 
+  // Unknown until the sidebar has loaded; then a group that is not live was removed under the editor.
+  const groupRemoved = $derived(
+    entries.sidebar !== null && !isLiveGroup(entries.sidebar.groups, entries.sidebar.rootGroupId, model.groupId),
+  );
   const groupName = $derived(
     model.groupId === entries.sidebar?.rootGroupId
       ? t("Vault")
-      : (findGroup(entries.sidebar?.groups ?? [], model.groupId)?.name ?? ""),
+      : groupRemoved
+        ? t("Deleted")
+        : (findGroup(entries.sidebar?.groups ?? [], model.groupId)?.name ?? ""),
   );
+  /** The entry being edited is in the recycle bin (deleted under the editor). */
+  let entryInBin = $state(false);
+  /** The entry was purged under a dirty editor: Save creates a new item from the draft. */
+  let entryGone = $state(false);
+  const blocked = $derived(
+    groupRemoved ? t("The group of this item was deleted. Choose another group to save it.") : null,
+  );
+  const notice = $derived(
+    entryGone
+      ? t("This item was permanently deleted. Saving creates a new item with your changes; its attachments and passkey are not carried over.")
+      : entryInBin
+        ? t("This item is in Deleted. Saving restores it to the selected group.")
+        : null,
+  );
+
+  /** Saving a purged entry's draft creates a new item: nothing of the old one exists any more, so
+   *  its attachments and passkey are dropped from the form (queued removals would name files the new
+   *  item never had and fail the save). Files picked for adding stay. */
+  function forgetPurgedItem() {
+    model.attachments = [];
+    model.attachmentOps = model.attachmentOps.filter((op) => op.kind === "add");
+    model.passkey = null;
+    model.removePasskey = false;
+    model.passkeyRef = null;
+  }
+
+  /** Asks the backend whether the entry is still there and where it is (rule above, both halves). */
+  async function follow() {
+    const id = model.id;
+    if (id === null || saving || entryGone) return;
+    const unchanged = lockGuard();
+    try {
+      const detail = await api.entryGet(id);
+      if (!unchanged() || model.id !== id) return;
+      entryInBin = detail.inRecycleBin;
+    } catch (e) {
+      if (!unchanged() || model.id !== id) return;
+      if (e instanceof ApiFailure && e.code === "notFound") {
+        if (isDirty()) {
+          // The draft may be the only copy of what was typed: keep it (rule above, half 1).
+          entryGone = true;
+          entryInBin = false;
+          forgetPurgedItem();
+        } else {
+          toasts.push("info", t("This item was deleted, so its editor was closed."));
+          close();
+        }
+      }
+      // Any other failure keeps the editor as it is: the next change asks again.
+    }
+  }
 
   onMount(() => {
     if (model.id === null) titleInput?.focus();
     navigation.editorDirty = isDirty;
+    let off: (() => unknown) | null = null;
+    let gone = false;
+    if (model.id !== null) {
+      void events.vaultChanged
+        .listen(() => void follow())
+        .then((unlisten) => (gone ? quietly(unlisten) : (off = unlisten)));
+    }
+    return () => {
+      gone = true;
+      if (off) quietly(off);
+    };
   });
   // The backend's quit flow asks before it discards unsaved changes: report every change of the
   // dirty state (the snapshot inside `isDirty` tracks the whole model).
@@ -144,6 +229,11 @@
   async function save() {
     if (saving) return;
     titleError = formError = filesError = null;
+    if (blocked) {
+      // The alert is already on screen (it follows `blocked`); Save only moves focus to it.
+      void focusError();
+      return;
+    }
     const payload = $state.snapshot(model);
     payload.title = payload.title.trim();
     payload.urls = payload.urls.map((u) => u.trim()).filter((u) => u !== "");
@@ -154,7 +244,11 @@
       titleInput?.focus();
       return;
     }
+    // The explicit choices of the rule above: a deleted entry is restored, a purged one is recreated.
+    payload.restore = entryInBin && !entryGone;
+    if (entryGone) payload.id = null;
     saving = true;
+    let resync = false;
     const unchanged = lockGuard();
     try {
       const id = await api.entrySave(payload);
@@ -162,7 +256,7 @@
       // A draft write still in flight must land before the clear below, never after it.
       await notes?.settle();
       if (!unchanged()) return;
-      const previous = payload.id;
+      const previous = model.id;
       navigation.select(id);
       close();
       // The saved note supersedes its drafts (R30); a failure here is invisible and harmless.
@@ -176,9 +270,12 @@
         formError = errorMessage(e);
         void focusError();
       } else toasts.reportError(e);
+      // The vault changed under the save (a delete, a purge): look again, so the editor shows why.
+      resync = e instanceof ApiFailure && (e.code === "notFound" || e.code === "invalidInput");
     } finally {
       saving = false;
     }
+    if (resync) void follow();
   }
 
   // Mod+Enter saves, Escape cancels. A dialog of the editor (websites, group picker, discard) owns
@@ -209,7 +306,9 @@
     <h2 id="editor-title">{heading}</h2>
     <div class="actions">
       <Button disabled={saving} onclick={cancel}>{t("Cancel")}</Button>
-      <Button variant="primary" disabled={saving} onclick={() => void save()}>{t("Save")}</Button>
+      <Button variant="primary" disabled={saving} onclick={() => void save()}>
+        {entryInBin && !entryGone ? t("Restore and save") : t("Save")}
+      </Button>
     </div>
   </header>
 
@@ -221,6 +320,8 @@
     </div>
   {/if}
 
+  {#if blocked}<p class="form-error" role="alert" tabindex="-1">{blocked}</p>{/if}
+  {#if notice}<p class="notice" role="status" data-testid="editor-notice">{notice}</p>{/if}
   {#if formError}<p class="form-error" role="alert" tabindex="-1">{formError}</p>{/if}
 
   <div class="body">
@@ -304,6 +405,15 @@
     gap: 12px;
     margin: 0 0 12px;
     padding: 6px 10px;
+    border: var(--sep);
+    border-radius: var(--radius);
+    background: var(--list-bg);
+    color: var(--text-2);
+    font-size: 13px;
+  }
+  .notice {
+    margin: 0 0 12px;
+    padding: 8px 10px;
     border: var(--sep);
     border-radius: var(--radius);
     background: var(--list-bg);

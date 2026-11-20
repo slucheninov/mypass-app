@@ -279,7 +279,10 @@ impl World {
     fn idle_synced(&self) -> bool {
         matches!(
             self.sync.status(),
-            SecondaryStatus::Idle { last_sync: Some(_) }
+            SecondaryStatus::Idle {
+                last_sync: Some(_),
+                ..
+            }
         )
     }
 
@@ -294,13 +297,20 @@ impl World {
 #[test]
 fn arming_on_unlock_uploads_the_initial_copy_and_watches_the_folder() {
     let w = world();
-    assert_eq!(w.sync.status(), SecondaryStatus::Idle { last_sync: None });
+    assert_eq!(
+        w.sync.status(),
+        SecondaryStatus::Idle {
+            last_sync: None,
+            recovery_file: None
+        }
+    );
     w.open();
     assert!(w.remote().is_file());
     assert_eq!(
         w.sync.status(),
         SecondaryStatus::Idle {
-            last_sync: Some(1_700_000_000_000.0)
+            last_sync: Some(1_700_000_000_000.0),
+            recovery_file: None,
         },
         "unix milliseconds of the injected clock"
     );
@@ -360,6 +370,7 @@ fn secondary_failure_never_blocks_primary_save() {
     w.advance(2);
     let missing = SecondaryStatus::Unavailable {
         reason: SecondaryUnavailable::FolderMissing,
+        recovery_file: None,
     };
     assert_eq!(w.sync.status(), missing);
     assert!(w.statuses.lock().unwrap().contains(&missing));
@@ -491,6 +502,7 @@ fn wrong_password_remote_is_never_overwritten() {
     w.advance_ms(0);
     let wrong = SecondaryStatus::Error {
         code: SecondaryError::WrongPassword,
+        recovery_file: None,
     };
     assert_eq!(w.sync.status(), wrong);
     w.add("A");
@@ -560,7 +572,8 @@ fn remote_of_another_vault_is_refused_and_left_alone() {
     assert_eq!(
         w.sync.status(),
         SecondaryStatus::Error {
-            code: SecondaryError::DifferentVault
+            code: SecondaryError::DifferentVault,
+            recovery_file: None,
         }
     );
     assert_eq!(w.remote_bytes(), foreign);
@@ -575,7 +588,8 @@ fn not_a_vault_remote_is_never_overwritten() {
     assert_eq!(
         w.sync.status(),
         SecondaryStatus::Error {
-            code: SecondaryError::NotAVault
+            code: SecondaryError::NotAVault,
+            recovery_file: None,
         }
     );
     assert_eq!(w.remote_bytes(), b"not a vault at all");
@@ -593,7 +607,8 @@ fn read_only_secondary_dir_reports_read_only() {
     assert_eq!(
         status,
         SecondaryStatus::Unavailable {
-            reason: SecondaryUnavailable::ReadOnly
+            reason: SecondaryUnavailable::ReadOnly,
+            recovery_file: None,
         }
     );
     assert!(!w.remote().exists());
@@ -637,6 +652,7 @@ fn invalid_folders_are_unavailable_and_never_written() {
     let w = world();
     let invalid = SecondaryStatus::Unavailable {
         reason: SecondaryUnavailable::InvalidFolder,
+        recovery_file: None,
     };
     w.open();
     let vaults = w.primary.parent().unwrap().to_path_buf();
@@ -675,7 +691,8 @@ fn a_symlink_to_the_primary_folder_is_invalid() {
     assert_eq!(
         w.sync.status(),
         SecondaryStatus::Unavailable {
-            reason: SecondaryUnavailable::InvalidFolder
+            reason: SecondaryUnavailable::InvalidFolder,
+            recovery_file: None,
         }
     );
 }
@@ -701,7 +718,10 @@ fn sync_now_pushes_and_pulls() {
     let status = w.sync.sync_now().unwrap();
     assert!(matches!(
         status,
-        SecondaryStatus::Idle { last_sync: Some(_) }
+        SecondaryStatus::Idle {
+            last_sync: Some(_),
+            ..
+        }
     ));
     assert_eq!(w.live_titles(), v(&["A", "B"]));
     assert_eq!(w.remote_titles(), v(&["A", "B"]));
@@ -756,19 +776,22 @@ fn status_serialises_with_a_state_tag() {
     );
     assert_eq!(
         json(SecondaryStatus::Idle {
-            last_sync: Some(5.0)
+            last_sync: Some(5.0),
+            recovery_file: None,
         }),
         serde_json::json!({"state": "idle", "lastSync": 5.0})
     );
     assert_eq!(
         json(SecondaryStatus::Unavailable {
-            reason: SecondaryUnavailable::FolderMissing
+            reason: SecondaryUnavailable::FolderMissing,
+            recovery_file: None,
         }),
         serde_json::json!({"state": "unavailable", "reason": "folderMissing"})
     );
     assert_eq!(
         json(SecondaryStatus::Error {
-            code: SecondaryError::WrongPassword
+            code: SecondaryError::WrongPassword,
+            recovery_file: None,
         }),
         serde_json::json!({"state": "error", "code": "wrongPassword"})
     );
@@ -991,7 +1014,8 @@ fn watcher_start_failure_is_reported_and_retried_until_it_runs() {
     assert_eq!(
         w.sync.status(),
         SecondaryStatus::Error {
-            code: SecondaryError::WatchFailed
+            code: SecondaryError::WatchFailed,
+            recovery_file: None,
         }
     );
     let attempts = w.watch.attempts.load(Ordering::SeqCst);
@@ -1518,13 +1542,142 @@ fn a_lock_waits_for_a_publication_in_progress() {
 
 /// C2: a folder on a volume that cannot replace the copy safely shows `unsupportedFolder` and
 /// is not retried on the timer (the next folder change or unlock tries again).
+/// A vault that survives only under a hidden file name reaches the status as that name (a file
+/// name only), keeps the failure retryable, and serialises as `recoveryFile`.
+#[test]
+fn a_retained_vault_file_name_reaches_the_status() {
+    let status = failure_status(&SyncError::Storage(StorageError::VaultRetained {
+        path: ".vault.kdbx.1.2.3.aside".into(),
+    }));
+    assert_eq!(
+        status,
+        SecondaryStatus::Error {
+            code: SecondaryError::Io,
+            recovery_file: Some(".vault.kdbx.1.2.3.aside".into()),
+        }
+    );
+    assert!(is_transient(&status));
+    assert_eq!(
+        serde_json::to_value(&status).unwrap(),
+        serde_json::json!({"state": "error", "code": "io", "recoveryFile": ".vault.kdbx.1.2.3.aside"})
+    );
+}
+
+#[test]
+fn a_successful_retry_keeps_the_stranded_vault_visible_until_it_is_removed() {
+    let w = world();
+    w.open();
+    w.foreign_add("stranded edit");
+    w.add("local edit");
+    w.session.flush().unwrap();
+    // Exercise the retry timer specifically, without the earlier save-triggered push.
+    lock(&w.sync.0.state).jobs.cancel(Slot::Push);
+    let io = Arc::new(FailingFileIo::new(Arc::new(PlainFileIo)));
+    io.strand_next_replace();
+    *lock(&w.sync.probe().io) = Some(io);
+
+    let failed = w.sync.sync_now().unwrap();
+    let SecondaryStatus::Error {
+        code: SecondaryError::Io,
+        recovery_file: Some(name),
+    } = failed
+    else {
+        panic!("expected a retained vault, got {failed:?}");
+    };
+    assert!(name.ends_with(".aside"));
+    let kept = w.folder.join(&name);
+    assert!(kept.is_file());
+    assert!(!w.remote().exists());
+
+    w.advance(SECONDARY_RETRY.as_secs());
+    assert!(w.idle_synced());
+    assert_eq!(w.remote_titles(), ["local edit"]);
+    assert_eq!(
+        serde_json::to_value(w.sync.status()).unwrap()["recoveryFile"],
+        name
+    );
+
+    let settings_listing = || {
+        crate::displaced::list(&crate::displaced::targets(
+            Some(w.primary.clone()),
+            w.folder.to_str(),
+        ))
+    };
+    let listed = settings_listing();
+    assert_eq!(listed.count, 1);
+    assert_eq!(listed.copies[0].name, name);
+    assert_eq!(
+        listed.copies[0].kind,
+        crate::displaced::RetainedCopyKind::Aside
+    );
+    assert_eq!(
+        listed.copies[0].location,
+        crate::displaced::DisplacedLocation::Secondary
+    );
+    assert!(w.statuses.lock().unwrap().iter().any(|status| matches!(
+        status,
+        SecondaryStatus::Idle { last_sync: Some(_), recovery_file: Some(file) } if file == &name
+    )));
+    let db = Database::open(&fs::read(&kept).unwrap(), &pw()).unwrap();
+    assert_eq!(titles(&db), ["stranded edit"]);
+
+    let unavailable = w.tmp.path().join("unmounted");
+    fs::rename(&w.folder, &unavailable).unwrap();
+    assert_eq!(
+        serde_json::to_value(w.sync.status()).unwrap()["recoveryFile"],
+        name
+    );
+    fs::rename(unavailable, &w.folder).unwrap();
+
+    let other = w.tmp.path().join("other");
+    w.settings
+        .set_secondary_folder(Some(other.to_str().unwrap().into()))
+        .unwrap();
+    w.sync.rearm();
+    assert!(serde_json::to_value(w.sync.status())
+        .unwrap()
+        .get("recoveryFile")
+        .is_none());
+    w.settings
+        .set_secondary_folder(Some(w.folder.to_str().unwrap().into()))
+        .unwrap();
+    w.sync.rearm();
+    assert_eq!(
+        serde_json::to_value(w.sync.status()).unwrap()["recoveryFile"],
+        name
+    );
+
+    fs::remove_file(&kept).unwrap();
+    assert!(serde_json::to_value(w.sync.status())
+        .unwrap()
+        .get("recoveryFile")
+        .is_none());
+    assert_eq!(settings_listing().count, 0);
+}
+
+#[test]
+fn a_kdf_limit_error_keeps_the_recovery_file_in_status() {
+    let status = failure_status(&SyncError::SyncKdfLimitExceeded {
+        recovery_file: Some(".vault.kdbx.1.2.3.aside".into()),
+    });
+    assert_eq!(
+        serde_json::to_value(&status).unwrap(),
+        serde_json::json!({
+            "state": "error",
+            "code": "syncKdfLimitExceeded",
+            "recoveryFile": ".vault.kdbx.1.2.3.aside",
+        })
+    );
+}
+
 #[test]
 fn a_volume_without_a_safe_replacement_is_an_unsupported_folder() {
     let status = failure_status(&SyncError::Storage(StorageError::NoSafeReplace));
     assert_eq!(
         status,
         SecondaryStatus::Unavailable {
-            reason: SecondaryUnavailable::UnsupportedFolder
+            reason: SecondaryUnavailable::UnsupportedFolder,
+            recovery_file: None,
         }
     );
     assert!(!is_transient(&status));
@@ -1819,9 +1972,11 @@ fn windows_integration_secondary_sharing_failure_preserves_remote_and_checkpoint
     assert!(matches!(
         w.sync.sync_now().unwrap(),
         SecondaryStatus::Unavailable {
-            reason: SecondaryUnavailable::ReadOnly
+            reason: SecondaryUnavailable::ReadOnly,
+            recovery_file: None,
         } | SecondaryStatus::Error {
-            code: SecondaryError::Io
+            code: SecondaryError::Io,
+            recovery_file: None,
         }
     ));
     assert_eq!(w.remote_bytes(), remote);

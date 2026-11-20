@@ -3,14 +3,18 @@
 // so this window does not offer a group picker and the app stores the entry
 // in the vault root.
 
+const i18n = typeof require === 'function'
+  ? require('./shared/i18n.js')
+  : window.mypassI18n;
+
 const INSERT_PASSWORD_KEY = 'insertGeneratedPassword';
 
 const MATCH_HELP = {
-  'registrable-domain': 'Matches example.com and any subdomain, such as login.example.com.',
-  host: 'Matches only this exact hostname and port. A different subdomain will not match.',
-  'starts-with': 'Matches any page on the same site as this address — the scheme and host must be identical, so a lookalike domain such as example.com.attacker.com will never match even though it starts with the same text. Within that same site, this can still match more than intended: example.com/app also matches example.com/app-legacy, since both begin the same way.',
-  exact: 'Matches only this exact page address, including its path and query.',
-  never: 'Hides this entry from the browser extension only — it stays fully visible and usable inside MyPass.'
+  'registrable-domain': i18n.t('matchHelpRegistrableDomain'),
+  host: i18n.t('matchHelpHost'),
+  'starts-with': i18n.t('matchHelpStartsWith'),
+  exact: i18n.t('matchHelpExact'),
+  never: i18n.t('matchHelpNever')
 };
 
 function digitsOnly(raw) {
@@ -39,14 +43,15 @@ function wrapMarkdown(value, start, end, prefix, suffix) {
 }
 
 function describeCreateError(response) {
-  if (!response) return 'Could not save.';
-  if (response.type === 'locked') return 'MyPass is locked.';
-  if (response.type === 'pairingRequired') return 'Connect MyPass first.';
-  if (response.message === 'title required') return 'Title is required.';
-  return response.message || 'Could not save.';
+  if (!response) return i18n.t('couldNotSave');
+  if (response.type === 'locked') return i18n.t('myPassLockedSentence');
+  if (response.type === 'pairingRequired') return i18n.t('connectMyPassFirstSentence');
+  if (response.message === 'title required') return i18n.t('titleRequired');
+  return response.message || i18n.t('couldNotSave');
 }
 
 if (typeof document !== 'undefined') {
+  i18n.apply(document);
   const params = new URLSearchParams(location.search);
   const requested = params.get('type');
   const entryType = requested === 'Card' || requested === 'Notes' ? requested : 'Login';
@@ -74,7 +79,7 @@ if (typeof document !== 'undefined') {
   const cardExpiry = document.getElementById('card-expiry');
   const notesBody = document.getElementById('notes-body');
 
-  const titles = { Login: 'New Entry', Card: 'New Card', Notes: 'New Note' };
+  const titles = { Login: i18n.t('newEntryTitle'), Card: i18n.t('newCardTitle'), Notes: i18n.t('newNoteTitle') };
   navTitle.textContent = titles[entryType];
   document.title = titles[entryType];
   document.body.classList.toggle('is-notes', entryType === 'Notes');
@@ -96,7 +101,7 @@ if (typeof document !== 'undefined') {
 
   function paintHero() {
     const typed = titleValue().trim();
-    const shown = typed || '(untitled)';
+    const shown = typed || i18n.t('untitled');
     heroTitle.textContent = shown;
     heroLetter.textContent = letterFromTitle(shown);
     heroIcon.style.background = colorForTitle(shown);
@@ -110,7 +115,7 @@ if (typeof document !== 'undefined') {
   function paintFavorite() {
     favoriteBtn.textContent = favorite ? '★' : '☆';
     favoriteBtn.setAttribute('aria-pressed', favorite ? 'true' : 'false');
-    favoriteBtn.setAttribute('aria-label', favorite ? 'Remove from Favorites' : 'Add to Favorites');
+    favoriteBtn.setAttribute('aria-label', i18n.t(favorite ? 'removeFromFavorites' : 'addToFavorites'));
   }
 
   function paintMatchHelp() {
@@ -139,7 +144,7 @@ if (typeof document !== 'undefined') {
     button.addEventListener('click', () => {
       const revealed = field.type === 'text';
       field.type = revealed ? 'password' : 'text';
-      button.textContent = revealed ? 'Show' : 'Hide';
+      button.textContent = i18n.t(revealed ? 'show' : 'hide');
       button.setAttribute('aria-label', revealed ? showLabel : hideLabel);
     });
   }
@@ -204,13 +209,13 @@ if (typeof document !== 'undefined') {
   });
   document.getElementById('login-generate').addEventListener('click', openGeneratorForInsert);
   bindReveal(
-    document.getElementById('login-password-reveal'), loginPassword, 'Show password', 'Hide password'
+    document.getElementById('login-password-reveal'), loginPassword, i18n.t('showPassword'), i18n.t('hidePassword')
   );
   bindReveal(
-    document.getElementById('card-number-reveal'), cardNumber, 'Show card number', 'Hide card number'
+    document.getElementById('card-number-reveal'), cardNumber, i18n.t('showCardNumber'), i18n.t('hideCardNumber')
   );
   bindReveal(
-    document.getElementById('card-cvv-reveal'), document.getElementById('card-cvv'), 'Show CVV', 'Hide CVV'
+    document.getElementById('card-cvv-reveal'), document.getElementById('card-cvv'), i18n.t('showCvv'), i18n.t('hideCvv')
   );
   cardNumber.addEventListener('input', () => {
     cardNumber.value = formatCardNumber(cardNumber.value);

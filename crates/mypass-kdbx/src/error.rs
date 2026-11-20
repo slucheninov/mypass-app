@@ -27,10 +27,20 @@ pub enum KdbxError {
     /// KDF parameters that are missing, malformed or outside the accepted limits.
     #[error("invalid KDF parameters: {0}")]
     InvalidKdfParameters(String),
+    /// An otherwise valid parameter exceeds the tighter limits for a remote open.
+    #[error("remote KDF limit exceeded: {0}")]
+    RemoteKdfLimitExceeded(&'static str),
     /// A file-system failure, flattened so the error stays `Clone + Eq`.
     #[error("i/o error ({kind:?}): {message}")]
     Io {
         kind: std::io::ErrorKind,
+        message: String,
+    },
+    /// A replacement failed, with a previous vault file retained at `path`.
+    #[error("i/o error ({kind:?}): {message}; the previous vault is kept as {}", .path.file_name().unwrap_or_default().to_string_lossy())]
+    VaultRetained {
+        kind: std::io::ErrorKind,
+        path: std::path::PathBuf,
         message: String,
     },
     /// The caller asked for something the data model forbids.

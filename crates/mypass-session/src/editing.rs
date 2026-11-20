@@ -15,7 +15,7 @@
 
 use crate::dto::{
     timestamp_ms, AddressDto, AttachmentMeta, AttachmentOp, CardEdit, CustomFieldEdit,
-    EntryEditModel, EntryTypeDto, FieldRef, HistoryItem,
+    EntryEditModel, EntryTypeDto, FieldRef, HistoryItem, HistoryReveal,
 };
 use crate::fields::{
     bin_id, require_not_history, EntryFields, ADDRESS_FIELDS, ADDRESS_LABELS, ADDRESS_PREFIX,
@@ -117,6 +117,7 @@ pub fn new_model(entry_type: EntryTypeDto, group_id: Uuid) -> EntryEditModel {
         passkey: None,
         remove_passkey: false,
         passkey_ref: None,
+        restore: false,
     }
 }
 
@@ -210,7 +211,7 @@ pub fn edit_model(db: &Database, id: Uuid) -> Result<EntryEditModel, SessionErro
                 .filter(|f| !Entry::is_reserved_key(&f.key) && seen.insert(f.key.as_str()))
                 .map(|f| CustomFieldEdit {
                     key: f.key.clone(),
-                    value: f.value.clone(),
+                    value: f.value().to_owned(),
                     protected: f.protected,
                 })
                 .collect()
@@ -228,6 +229,7 @@ pub fn edit_model(db: &Database, id: Uuid) -> Result<EntryEditModel, SessionErro
         passkey: passkey_meta(entry),
         remove_passkey: false,
         passkey_ref: passkey_fingerprint(entry),
+        restore: false,
     })
 }
 
@@ -244,7 +246,7 @@ enum ResolvedOp {
 /// `create_empty` is set; an unchanged value is not touched at all.
 pub(crate) fn put(entry: &mut Entry, key: &str, value: &str, protected: bool, create_empty: bool) {
     match entry.fields.iter().find(|f| f.key == key) {
-        Some(f) if f.value == value => {}
+        Some(f) if f.value() == value => {}
         Some(f) => {
             let keep = f.protected;
             entry.set_field(key, value, keep);
@@ -442,7 +444,7 @@ fn apply(
             .fields
             .iter()
             .find(|f| f.key == field.key)
-            .is_some_and(|f| f.value == field.value && f.protected == field.protected);
+            .is_some_and(|f| f.value() == field.value && f.protected == field.protected);
         if !same {
             entry.set_field(&field.key, &field.value, field.protected);
         }
@@ -503,6 +505,15 @@ fn apply(
 
 /// Creates the entry (`model.id` is `None`) or saves the edit. Attachment files are read before
 /// the vault is touched. Returns the entry id.
+///
+/// Both rules below are checked inside the same transaction that writes, so a delete that lands
+/// between the editor's last look and the save cannot be overwritten or undone silently:
+/// - the destination group must be live: one that is gone answers `NotFound`, the recycle bin or
+///   anything below it answers `InvalidInput`, and nothing is written (the editor keeps its draft
+///   and asks for another group, see `EntryEditor.svelte`);
+/// - an entry that sits in the recycle bin is saved only with `model.restore`, the user's explicit
+///   choice to bring it back to the destination group; otherwise `InvalidInput`, nothing written.
+///   This covers the entry that was deleted alone and the one deleted with its group.
 pub fn save_entry(session: &VaultSession, model: EntryEditModel) -> Result<Uuid, SessionError> {
     let id = model.id.as_deref().map(parse_id).transpose()?;
     let group = parse_id(&model.group_id)?;
@@ -510,6 +521,16 @@ pub fn save_entry(session: &VaultSession, model: EntryEditModel) -> Result<Uuid,
     let ops = resolve_ops(&model.attachment_ops)?;
     session.mutate_tracked(|db, now| {
         require_not_history(db, group)?;
+        if db.is_bin_or_below(group) {
+            return Err(SessionError::InvalidInput("the group was deleted".into()));
+        }
+        if let Some(id) = id {
+            if db.is_in_recycle_bin(id) && !model.restore {
+                return Err(SessionError::InvalidInput(
+                    "the item was deleted; restore it explicitly".into(),
+                ));
+            }
+        }
         match id {
             None => {
                 let mut entry = Entry::new(now);
@@ -564,6 +585,16 @@ pub fn reveal_at(
     unix_secs: u64,
 ) -> Result<String, SessionError> {
     let entry = find_entry(db, id)?;
+    match field {
+        FieldRef::Totp => totp_now(db, id, unix_secs)
+            .map(|t| t.code)
+            .ok_or(SessionError::NotFound),
+        other => plain_value(entry, other),
+    }
+}
+
+/// The stored value of every field kind except `Totp` (a code is computed from the live entry).
+fn plain_value(entry: &Entry, field: &FieldRef) -> Result<String, SessionError> {
     let plain = |key: &str| Ok(field_or_empty(entry, key));
     match field {
         FieldRef::Username => plain("UserName"),
@@ -572,9 +603,9 @@ pub fn reveal_at(
         FieldRef::NotesBody => plain(notes_key(entry.entry_type())),
         FieldRef::CardNumber => plain(CARD_NUMBER),
         FieldRef::CardCvv => plain(CARD_CVV),
-        FieldRef::Totp => totp_now(db, id, unix_secs)
-            .map(|t| t.code)
-            .ok_or(SessionError::NotFound),
+        FieldRef::Totp => Err(SessionError::InvalidInput(
+            "a one-time code is computed from the current entry only".into(),
+        )),
         FieldRef::Custom { key } => {
             if Entry::is_reserved_key(key) {
                 return Err(SessionError::InvalidInput(format!(
@@ -587,6 +618,22 @@ pub fn reveal_at(
                 .ok_or(SessionError::NotFound)
         }
     }
+}
+
+/// One plain value of an earlier version of an entry, named by the `revision` that [`history`]
+/// listed (never by position: a sync can add a version between the listing and the click, and a
+/// position would then name another password). A version that is gone is `NotFound`. This is the
+/// only way a history value leaves the backend: [`history`] itself carries titles and field
+/// names, never values. `Totp` is refused.
+pub fn reveal_history(
+    db: &Database,
+    id: Uuid,
+    revision: &str,
+    field: &FieldRef,
+) -> Result<String, SessionError> {
+    let entry = find_entry(db, id)?;
+    let version = history_revision(entry, revision).ok_or(SessionError::NotFound)?;
+    plain_value(version, field)
 }
 
 // ---- entry operations ----
@@ -631,17 +678,42 @@ pub fn delete_entry(session: &VaultSession, id: Uuid) -> Result<(), SessionError
     })
 }
 
-/// Moves an entry out of the recycle bin into `group`.
-pub fn restore_entry(session: &VaultSession, id: Uuid, group: Uuid) -> Result<(), SessionError> {
+/// Moves an entry out of the recycle bin into `group`, or, with `None`, back to the group it was
+/// deleted from (the KDBX 4.1 `PreviousParentGroup`), falling back to the root when that group no
+/// longer exists or is itself in the bin.
+pub fn restore_entry(
+    session: &VaultSession,
+    id: Uuid,
+    group: Option<Uuid>,
+) -> Result<(), SessionError> {
     session.mutate(|db, now| {
         find_entry(db, id)?;
-        require_not_history(db, group)?;
         if !db.is_in_recycle_bin(id) {
             return Err(SessionError::InvalidInput(
                 "entry is not in the recycle bin".into(),
             ));
         }
+        let group = group.unwrap_or_else(|| db.restore_target_of_entry(id));
+        require_not_history(db, group)?;
         db.restore_entry(id, group, now)?;
+        Ok(())
+    })
+}
+
+/// Moves a deleted group out of the recycle bin into `parent`, or, with `None`, back under the
+/// group it was deleted from (root fallback as for [`restore_entry`]).
+pub fn restore_group(
+    session: &VaultSession,
+    id: Uuid,
+    parent: Option<Uuid>,
+) -> Result<(), SessionError> {
+    session.mutate(|db, now| {
+        if db.find_group(id).is_none() {
+            return Err(SessionError::NotFound);
+        }
+        let parent = parent.unwrap_or_else(|| db.restore_target_of_group(id));
+        require_not_history(db, parent)?;
+        db.restore_group(id, parent, now)?;
         Ok(())
     })
 }
@@ -713,7 +785,7 @@ fn changed_fields(older: &Entry, newer: &Entry) -> Vec<String> {
         let same = newer
             .fields
             .iter()
-            .any(|n| n.key == f.key && n.value == f.value && n.protected == f.protected);
+            .any(|n| n.key == f.key && n.value() == f.value() && n.protected == f.protected);
         if !same {
             push(&f.key);
         }
@@ -746,25 +818,119 @@ pub fn history(db: &Database, id: Uuid) -> Result<Vec<HistoryItem>, SessionError
         .enumerate()
         .map(|(index, (pos, old))| {
             let newer = versions.get(pos.saturating_add(1)).unwrap_or(entry);
+            let changed = changed_fields(old, newer);
             HistoryItem {
                 index: count_u32(index),
+                revision: revision_of(old),
                 modified: timestamp_ms(old.modified),
                 title: old.title().to_owned(),
-                changed_fields: changed_fields(old, newer),
+                revealable: revealable_fields(old, &changed),
+                changed_fields: changed,
             }
         })
         .collect())
 }
 
-/// Restores version `index` (newest first, as listed by [`history`]). The current state is
-/// snapshotted into history first, so the restore is itself undoable.
-pub fn restore_history(session: &VaultSession, id: Uuid, index: usize) -> Result<(), SessionError> {
+/// A per-run secret that keeps revision names from revealing (or letting anyone test guesses
+/// against) the values they cover.
+fn revision_salt() -> &'static [u8; 32] {
+    static SALT: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
+    SALT.get_or_init(|| {
+        let mut salt = [0u8; 32];
+        let (a, b) = salt.split_at_mut(16);
+        a.copy_from_slice(Uuid::new_v4().as_bytes());
+        b.copy_from_slice(Uuid::new_v4().as_bytes());
+        salt
+    })
+}
+
+/// The opaque name of one history version: a salted digest of its date and the
+/// content restored by [`restore_history`]. Frame each field and include collection
+/// counts so an item cannot be mistaken for a member of a neighbouring collection.
+fn revision_of(version: &Entry) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    hash.update(revision_salt());
+    let mut part = |bytes: &[u8]| {
+        hash.update((bytes.len() as u64).to_be_bytes());
+        hash.update(bytes);
+    };
+    part(&version.modified.0.to_be_bytes());
+    part(&(version.fields.len() as u64).to_be_bytes());
+    for field in &version.fields {
+        part(field.key.as_bytes());
+        part(field.value().as_bytes());
+        part(&[u8::from(field.protected)]);
+    }
+    part(&(version.string_arrays.len() as u64).to_be_bytes());
+    for array in &version.string_arrays {
+        part(array.key.as_bytes());
+        part(&(array.values.len() as u64).to_be_bytes());
+        for value in &array.values {
+            part(value.as_bytes());
+        }
+    }
+    part(&(version.attachments.len() as u64).to_be_bytes());
+    for attachment in &version.attachments {
+        part(attachment.name.as_bytes());
+        part(&attachment.data);
+        part(&[u8::from(attachment.protected)]);
+    }
+    hash.finalize()
+        .iter()
+        .take(16)
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// The version of an entry's history with this revision name.
+fn history_revision<'a>(entry: &'a Entry, revision: &str) -> Option<&'a Entry> {
+    entry.history.iter().find(|v| revision_of(v) == revision)
+}
+
+/// What can be revealed of `version` among the fields that `changed` names: only a field the
+/// version actually holds, only a kind [`plain_value`] serves (never the code, passkey material or
+/// the app's reserved keys), once per kind.
+fn revealable_fields(version: &Entry, changed: &[String]) -> Vec<HistoryReveal> {
+    let mut out: Vec<HistoryReveal> = Vec::new();
+    for key in changed {
+        let field = match key.as_str() {
+            "UserName" => version.field("UserName").map(|_| FieldRef::Username),
+            "Password" => version.field("Password").map(|_| FieldRef::Password),
+            "URL" => (!version.urls().is_empty()).then_some(FieldRef::Url),
+            "Notes" | NOTES_BODY => version
+                .field(notes_key(version.entry_type()))
+                .map(|_| FieldRef::NotesBody),
+            CARD_NUMBER => version.field(CARD_NUMBER).map(|_| FieldRef::CardNumber),
+            CARD_CVV => version.field(CARD_CVV).map(|_| FieldRef::CardCvv),
+            other if Entry::is_reserved_key(other) => None,
+            other => version.field(other).map(|_| FieldRef::Custom {
+                key: other.to_owned(),
+            }),
+        };
+        if let Some(field) = field {
+            if !out.iter().any(|r| r.field == field) {
+                out.push(HistoryReveal {
+                    key: key.clone(),
+                    field,
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Restores the version named by `revision` (as listed by [`history`]), never by its position,
+/// which shifts when a sync adds or trims a version: a stale name answers `NotFound` and changes
+/// nothing. The current state is snapshotted into history first, so the restore is itself undoable.
+pub fn restore_history(
+    session: &VaultSession,
+    id: Uuid,
+    revision: &str,
+) -> Result<(), SessionError> {
     session.mutate(|db, now| {
         let entry = find_entry(db, id)?;
-        let old = index
-            .checked_add(1)
-            .and_then(|n| entry.history.len().checked_sub(n))
-            .and_then(|pos| entry.history.get(pos))
+        let old = history_revision(entry, revision)
             .cloned()
             .ok_or(SessionError::NotFound)?;
         db.update_entry(id, now, |entry| {
@@ -1216,7 +1382,7 @@ mod tests {
         e.fields
             .iter()
             .filter(|f| f.key.starts_with(PASSKEY_PREFIX))
-            .map(|f| (f.key.clone(), f.value.clone(), f.protected))
+            .map(|f| (f.key.clone(), f.value().to_owned(), f.protected))
             .collect()
     }
 
@@ -1794,11 +1960,11 @@ mod tests {
         let id = f.create(|m| m.title = "x".into());
         delete_entry(&f.session, id).unwrap();
         assert!(f.db(|d| d.is_in_recycle_bin(id)));
-        restore_entry(&f.session, id, f.root).unwrap();
+        restore_entry(&f.session, id, Some(f.root)).unwrap();
         assert!(!f.db(|d| d.is_in_recycle_bin(id)));
         assert_eq!(f.db(|d| d.parent_of_entry(id)), Some(f.root));
         assert_eq!(
-            restore_entry(&f.session, id, f.root),
+            restore_entry(&f.session, id, Some(f.root)),
             Err(SessionError::InvalidInput(
                 "entry is not in the recycle bin".into()
             ))
@@ -1991,6 +2157,213 @@ mod tests {
         assert_eq!(items.iter().map(|i| i.index).collect::<Vec<_>>(), [0, 1, 2]);
     }
 
+    fn revision(f: &Fx, id: Uuid, index: usize) -> String {
+        f.db(|d| history(d, id)).unwrap()[index].revision.clone()
+    }
+
+    #[test]
+    fn reveal_history_returns_the_value_of_that_version_only() {
+        let f = fx();
+        let id = f.create(|m| {
+            m.title = "A".into();
+            m.username = "old-user".into();
+            m.password = "p1".into();
+        });
+        f.edit(id, |m| m.password = "p2".into());
+        f.edit(id, |m| {
+            m.password = "p3".into();
+            m.username = "new-user".into();
+        });
+        // Newest first: index 0 is the state before the last edit, index 1 the original.
+        let newest = revision(&f, id, 0);
+        let oldest = revision(&f, id, 1);
+        assert_ne!(newest, oldest);
+        let reveal = |rev: &str, field: FieldRef| f.db(|d| reveal_history(d, id, rev, &field));
+        assert_eq!(reveal(&newest, FieldRef::Password), Ok("p2".into()));
+        assert_eq!(reveal(&oldest, FieldRef::Password), Ok("p1".into()));
+        assert_eq!(reveal(&oldest, FieldRef::Username), Ok("old-user".into()));
+        // The live value is untouched and still comes from `reveal`.
+        assert_eq!(
+            f.db(|d| reveal_at(d, id, &FieldRef::Password, 0)),
+            Ok("p3".into())
+        );
+        assert_eq!(
+            reveal("no-such-revision", FieldRef::Password),
+            Err(SessionError::NotFound)
+        );
+        assert_eq!(
+            f.db(|d| reveal_history(d, Uuid::new_v4(), &newest, &FieldRef::Password)),
+            Err(SessionError::NotFound)
+        );
+    }
+
+    #[test]
+    fn a_revision_names_the_same_version_after_one_is_prepended() {
+        let f = fx();
+        let id = f.create(|m| {
+            m.title = "Same".into();
+            m.password = "first".into();
+        });
+        // Same title every time: only the password tells the versions apart.
+        f.edit(id, |m| m.password = "second".into());
+        f.edit(id, |m| m.password = "third".into());
+        let listed = f.db(|d| history(d, id)).unwrap();
+        assert_eq!(listed[0].title, listed[1].title);
+        assert_ne!(listed[0].revision, listed[1].revision);
+        let second = listed[0].revision.clone();
+        // A sync or edit lands a newer version between the listing and the click: the old index
+        // 0 now names another version, the revision still names the one the user looked at.
+        f.edit(id, |m| m.password = "fourth".into());
+        let now = f.db(|d| history(d, id)).unwrap();
+        assert_ne!(now[0].revision, second);
+        assert_eq!(now[1].revision, second);
+        assert_eq!(
+            f.db(|d| reveal_history(d, id, &second, &FieldRef::Password)),
+            Ok("second".into())
+        );
+        // A version that was trimmed away answers NotFound instead of another password.
+        f.session
+            .mutate(|db, _| {
+                if let Some(entry) = db.find_entry_mut(id) {
+                    entry
+                        .history
+                        .retain(|v| v.field("Password") != Some("second"));
+                }
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            f.db(|d| reveal_history(d, id, &second, &FieldRef::Password)),
+            Err(SessionError::NotFound)
+        );
+    }
+
+    #[test]
+    fn identical_versions_share_a_revision_and_the_name_is_not_a_digest_of_the_value() {
+        let f = fx();
+        let id = f.create(|m| m.password = "hunter2".into());
+        f.edit(id, |m| m.password = "next".into());
+        let rev = revision(&f, id, 0);
+        assert_eq!(rev.len(), 32);
+        // Salted: guessing the password and hashing it does not reproduce the revision.
+        use sha2::{Digest, Sha256};
+        let guess: String = Sha256::digest(b"hunter2")
+            .iter()
+            .take(16)
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_ne!(rev, guess);
+        // Stable for the same version across listings.
+        assert_eq!(revision(&f, id, 0), rev);
+    }
+
+    #[test]
+    fn reveal_history_refuses_a_code_and_reserved_custom_keys() {
+        let f = fx();
+        let id = f.create(|m| m.title = "A".into());
+        f.edit(id, |m| m.title = "B".into());
+        let rev = revision(&f, id, 0);
+        let refused = |field: FieldRef| {
+            matches!(
+                f.db(|d| reveal_history(d, id, &rev, &field)),
+                Err(SessionError::InvalidInput(_))
+            )
+        };
+        assert!(refused(FieldRef::Totp));
+        assert!(refused(FieldRef::Custom {
+            key: "Password".into()
+        }));
+    }
+
+    #[test]
+    fn history_lists_exactly_the_fields_a_version_can_reveal() {
+        let f = fx();
+        let id = f.create(|m| {
+            m.title = "A".into();
+            m.password = "p1".into();
+            m.custom_fields = vec![CustomFieldEdit {
+                key: "MyPass.Project".into(),
+                value: "alpha".into(),
+                protected: false,
+            }];
+        });
+        f.session
+            .mutate(|db, _| {
+                crate::testing::add_test_passkey(db.find_entry_mut(id).unwrap(), true);
+                Ok(())
+            })
+            .unwrap();
+        // The newest snapshot holds the password, the project and a passkey; the edit changes
+        // the password and project, adds a field the snapshot never had and removes the passkey.
+        f.edit(id, |m| {
+            m.password = "p2".into();
+            m.custom_fields = vec![
+                CustomFieldEdit {
+                    key: "MyPass.Project".into(),
+                    value: "beta".into(),
+                    protected: false,
+                },
+                CustomFieldEdit {
+                    key: "Brand new".into(),
+                    value: "v".into(),
+                    protected: false,
+                },
+            ];
+            m.remove_passkey = true;
+        });
+        let items = f.db(|d| history(d, id)).unwrap();
+        let newest = &items[0];
+        assert!(newest.changed_fields.iter().any(|k| k == "Brand new"));
+        assert!(newest
+            .changed_fields
+            .iter()
+            .any(|k| k.starts_with("KPEX_PASSKEY")));
+        let keys: Vec<&str> = newest.revealable.iter().map(|r| r.key.as_str()).collect();
+        // The old snapshot held the password and the project; it never held "Brand new", and
+        // passkey material is never offered.
+        assert_eq!(keys.len(), 2, "{keys:?}");
+        assert!(newest.revealable.iter().any(|r| r.field
+            == FieldRef::Custom {
+                key: "MyPass.Project".into()
+            }));
+        assert!(newest
+            .revealable
+            .iter()
+            .any(|r| r.field == FieldRef::Password));
+        assert!(!newest.revealable.iter().any(|r| r.key == "Brand new"));
+        assert!(!newest
+            .revealable
+            .iter()
+            .any(|r| r.key.starts_with("KPEX_PASSKEY")));
+        // Every descriptor is accepted by the reveal command, with the value of that snapshot.
+        for r in &newest.revealable {
+            assert!(f
+                .db(|d| reveal_history(d, id, &newest.revision, &r.field))
+                .is_ok());
+        }
+        assert_eq!(
+            f.db(|d| reveal_history(
+                d,
+                id,
+                &newest.revision,
+                &FieldRef::Custom {
+                    key: "MyPass.Project".into()
+                }
+            )),
+            Ok("alpha".into())
+        );
+    }
+
+    #[test]
+    fn history_listing_never_carries_values() {
+        let f = fx();
+        let id = f.create(|m| m.password = "very-secret-old".into());
+        f.edit(id, |m| m.password = "very-secret-new".into());
+        let items = f.db(|d| history(d, id)).unwrap();
+        let wire = format!("{items:?}");
+        assert!(!wire.contains("very-secret"));
+    }
+
     #[test]
     fn history_of_missing_entry_is_not_found() {
         let f = fx();
@@ -2009,7 +2382,7 @@ mod tests {
         });
         f.edit(id, |m| m.password = "new".into());
         assert_eq!(f.entry(id).history.len(), 1);
-        restore_history(&f.session, id, 0).unwrap();
+        restore_history(&f.session, id, &revision(&f, id, 0)).unwrap();
         let e = f.entry(id);
         assert_eq!(e.field("Password"), Some("old"));
         assert_eq!(e.history.len(), 2);
@@ -2019,9 +2392,50 @@ mod tests {
             Some("new")
         );
         assert_eq!(
-            restore_history(&f.session, id, 9),
+            restore_history(&f.session, id, "no-such-revision"),
             Err(SessionError::NotFound)
         );
+    }
+
+    #[test]
+    fn restore_history_restores_the_listed_version_after_one_is_prepended() {
+        let f = fx();
+        let id = f.create(|m| m.password = "first".into());
+        f.edit(id, |m| m.password = "second".into());
+        f.edit(id, |m| m.password = "third".into());
+        // The user looked at the oldest version (index 1: "first").
+        let shown = revision(&f, id, 1);
+        // A sync lands a newer version before the click: index 1 now names another version.
+        f.edit(id, |m| m.password = "fourth".into());
+        restore_history(&f.session, id, &shown).unwrap();
+        assert_eq!(f.entry(id).field("Password"), Some("first"));
+    }
+
+    #[test]
+    fn restore_history_with_a_trimmed_revision_changes_nothing() {
+        let f = fx();
+        let id = f.create(|m| m.password = "first".into());
+        f.edit(id, |m| m.password = "second".into());
+        f.edit(id, |m| m.password = "third".into());
+        let shown = revision(&f, id, 1);
+        f.session
+            .mutate(|db, _| {
+                if let Some(entry) = db.find_entry_mut(id) {
+                    entry
+                        .history
+                        .retain(|v| v.field("Password") != Some("first"));
+                }
+                Ok(())
+            })
+            .unwrap();
+        let before = f.entry(id);
+        assert_eq!(
+            restore_history(&f.session, id, &shown),
+            Err(SessionError::NotFound)
+        );
+        let after = f.entry(id);
+        assert_eq!(after.field("Password"), before.field("Password"));
+        assert_eq!(after.history.len(), before.history.len());
     }
 
     #[test]
@@ -2040,8 +2454,46 @@ mod tests {
             }];
         });
         assert!(f.entry(id).attachments.is_empty());
-        restore_history(&f.session, id, 0).unwrap();
+        restore_history(&f.session, id, &revision(&f, id, 0)).unwrap();
         assert_eq!(f.entry(id).attachments.len(), 1);
+    }
+
+    #[test]
+    fn restore_history_distinguishes_same_second_attachments() {
+        let f = fx();
+        let id = f.create(|m| m.title = "A".into());
+        f.session
+            .mutate(|db, _| {
+                let entry = db.find_entry_mut(id).unwrap();
+                for (data, protected) in [(b"one", false), (b"two", false), (b"two", true)] {
+                    let mut version = entry.clone();
+                    version.history.clear();
+                    version.attachments = vec![Attachment {
+                        name: "a.txt".into(),
+                        data: data.to_vec(),
+                        protected,
+                    }];
+                    entry.history.push(version);
+                }
+                Ok(())
+            })
+            .unwrap();
+
+        let revisions = [
+            revision(&f, id, 2),
+            revision(&f, id, 1),
+            revision(&f, id, 0),
+        ];
+        for (revision, (data, protected)) in
+            revisions
+                .iter()
+                .zip([(b"one", false), (b"two", false), (b"two", true)])
+        {
+            restore_history(&f.session, id, revision).unwrap();
+            let restored = f.entry(id);
+            assert_eq!(restored.attachments[0].data, data);
+            assert_eq!(restored.attachments[0].protected, protected);
+        }
     }
 
     #[test]
@@ -2314,11 +2766,208 @@ mod tests {
                 invalid(create_group(&f.session, target, "sub", None));
                 invalid(move_group(&f.session, other, target));
                 delete_entry(&f.session, id).unwrap();
-                invalid(restore_entry(&f.session, id, target));
-                restore_entry(&f.session, id, f.root).unwrap();
+                invalid(restore_entry(&f.session, id, Some(target)));
+                restore_entry(&f.session, id, Some(f.root)).unwrap();
             }
             assert_eq!(f.db(|d| d.parent_of_entry(id)), Some(f.root));
         }
+    }
+
+    #[test]
+    fn saving_into_a_removed_group_is_refused_and_changes_nothing() {
+        let f = fx();
+        let work = create_group(&f.session, f.root, "work", None).unwrap();
+        let id = f.create(|m| m.title = "x".into());
+        // Gone for good: NotFound, for an edit and for a new entry alike.
+        let gone = create_group(&f.session, f.root, "gone", None).unwrap();
+        f.session
+            .mutate(|db, now| {
+                db.purge_group(gone, now)?;
+                Ok(())
+            })
+            .unwrap();
+        let before = f.db(Clone::clone);
+        let mut edit = f.model(id);
+        edit.title = "changed".into();
+        edit.group_id = gone.simple().to_string();
+        assert_eq!(save_entry(&f.session, edit), Err(SessionError::NotFound));
+        let mut new = new_model(EntryTypeDto::Login, f.root);
+        new.title = "new".into();
+        new.group_id = gone.simple().to_string();
+        assert_eq!(save_entry(&f.session, new), Err(SessionError::NotFound));
+        assert!(f.db(|d| *d == before));
+        // Deleted (in the bin): InvalidInput.
+        delete_group(&f.session, work).unwrap();
+        let before = f.db(Clone::clone);
+        let mut edit = f.model(id);
+        edit.title = "changed".into();
+        edit.group_id = work.simple().to_string();
+        assert!(matches!(
+            save_entry(&f.session, edit),
+            Err(SessionError::InvalidInput(_))
+        ));
+        let mut new = new_model(EntryTypeDto::Login, f.root);
+        new.title = "new".into();
+        new.group_id = work.simple().to_string();
+        assert!(matches!(
+            save_entry(&f.session, new),
+            Err(SessionError::InvalidInput(_))
+        ));
+        assert!(f.db(|d| *d == before));
+        assert_eq!(f.db(|d| d.parent_of_entry(id)), Some(f.root));
+    }
+
+    #[test]
+    fn an_entry_deleted_with_its_group_needs_an_explicit_restore_to_be_saved() {
+        let f = fx();
+        let work = create_group(&f.session, f.root, "work", None).unwrap();
+        let id = f.create(|m| {
+            m.title = "x".into();
+            m.group_id = work.simple().to_string();
+        });
+        // The editor looked while the group was live; the group is deleted before the save lands.
+        let mut stale = f.model(id);
+        stale.title = "kept".into();
+        delete_group(&f.session, work).unwrap();
+        let before = f.db(Clone::clone);
+        assert!(matches!(
+            save_entry(&f.session, stale.clone()),
+            Err(SessionError::InvalidInput(_))
+        ));
+        assert!(f.db(|d| *d == before), "a refused save writes nothing");
+        // Even with the explicit choice, the destination must be live.
+        stale.restore = true;
+        assert!(matches!(
+            save_entry(&f.session, stale.clone()),
+            Err(SessionError::InvalidInput(_))
+        ));
+        assert!(f.db(|d| *d == before));
+        // Explicit restore into a live group saves the edit and brings the entry back.
+        stale.group_id = f.root.simple().to_string();
+        save_entry(&f.session, stale).unwrap();
+        assert_eq!(f.db(|d| d.parent_of_entry(id)), Some(f.root));
+        assert_eq!(
+            f.db(|d| d.find_entry(id).map(|e| e.title().to_owned())),
+            Some("kept".into())
+        );
+    }
+
+    #[test]
+    fn a_save_never_silently_undoes_the_deletion_of_the_entry_alone() {
+        let f = fx();
+        let id = f.create(|m| m.title = "x".into());
+        let mut stale = f.model(id);
+        stale.title = "edited".into();
+        delete_entry(&f.session, id).unwrap();
+        let before = f.db(Clone::clone);
+        // The old destination is still live, yet the save is refused without the explicit choice.
+        assert!(matches!(
+            save_entry(&f.session, stale.clone()),
+            Err(SessionError::InvalidInput(_))
+        ));
+        assert!(f.db(|d| *d == before));
+        assert!(f.db(|d| d.is_in_recycle_bin(id)));
+        // The explicit restore to the original (root) group works, also in a root-only vault.
+        stale.restore = true;
+        save_entry(&f.session, stale).unwrap();
+        assert_eq!(f.db(|d| d.parent_of_entry(id)), Some(f.root));
+        assert!(!f.db(|d| d.is_in_recycle_bin(id)));
+    }
+
+    #[test]
+    fn saving_into_the_recycle_bin_itself_is_refused() {
+        let f = fx();
+        let id = f.create(|m| m.title = "x".into());
+        delete_entry(&f.session, id).unwrap();
+        let bin = f.db(|d| d.meta.recycle_bin_uuid).unwrap();
+        let mut m = f.model(id);
+        m.group_id = bin.simple().to_string();
+        m.restore = true;
+        assert!(matches!(
+            save_entry(&f.session, m),
+            Err(SessionError::InvalidInput(_))
+        ));
+        assert!(f.db(|d| d.is_in_recycle_bin(id)));
+    }
+
+    #[test]
+    fn restore_without_a_target_returns_to_the_original_group() {
+        let f = fx();
+        let work = create_group(&f.session, f.root, "work", None).unwrap();
+        let id = f.create(|m| {
+            m.title = "x".into();
+            m.group_id = work.simple().to_string();
+        });
+        delete_entry(&f.session, id).unwrap();
+        assert_eq!(
+            f.db(|d| d.parent_of_entry(id)),
+            f.db(|d| d.meta.recycle_bin_uuid)
+        );
+        restore_entry(&f.session, id, None).unwrap();
+        assert_eq!(f.db(|d| d.parent_of_entry(id)), Some(work));
+    }
+
+    #[test]
+    fn restore_without_a_target_falls_back_to_the_root() {
+        let f = fx();
+        let work = create_group(&f.session, f.root, "work", None).unwrap();
+        let id = f.create(|m| {
+            m.title = "x".into();
+            m.group_id = work.simple().to_string();
+        });
+        delete_entry(&f.session, id).unwrap();
+        // Emptying the bin cannot take the entry, but deleting its group for good can.
+        f.session
+            .mutate(|db, now| {
+                db.purge_group(work, now)?;
+                Ok(())
+            })
+            .unwrap();
+        restore_entry(&f.session, id, None).unwrap();
+        assert_eq!(f.db(|d| d.parent_of_entry(id)), Some(f.root));
+    }
+
+    #[test]
+    fn restore_without_a_target_skips_an_original_group_that_is_in_the_bin() {
+        let f = fx();
+        let work = create_group(&f.session, f.root, "work", None).unwrap();
+        let id = f.create(|m| {
+            m.title = "x".into();
+            m.group_id = work.simple().to_string();
+        });
+        delete_entry(&f.session, id).unwrap();
+        delete_group(&f.session, work).unwrap();
+        restore_entry(&f.session, id, None).unwrap();
+        assert_eq!(f.db(|d| d.parent_of_entry(id)), Some(f.root));
+    }
+
+    #[test]
+    fn restore_group_returns_to_the_original_parent_or_the_root() {
+        let f = fx();
+        let parent = create_group(&f.session, f.root, "parent", None).unwrap();
+        let child = create_group(&f.session, parent, "child", None).unwrap();
+        let loner = create_group(&f.session, parent, "loner", None).unwrap();
+        delete_group(&f.session, child).unwrap();
+        delete_group(&f.session, loner).unwrap();
+        restore_group(&f.session, child, None).unwrap();
+        assert!(f.db(|d| d
+            .find_group(parent)
+            .is_some_and(|p| p.groups.iter().any(|g| g.uuid == child))));
+        // Its parent is purged for good: the root takes it.
+        f.session
+            .mutate(|db, now| {
+                db.purge_group(parent, now)?;
+                Ok(())
+            })
+            .unwrap();
+        restore_group(&f.session, loner, None).unwrap();
+        assert!(f.db(|d| d.root.groups.iter().any(|g| g.uuid == loner)));
+        // A group that is not in the bin is refused.
+        assert!(restore_group(&f.session, loner, None).is_err());
+        assert_eq!(
+            restore_group(&f.session, Uuid::new_v4(), None),
+            Err(SessionError::NotFound)
+        );
     }
 
     #[test]
@@ -2438,16 +3087,10 @@ mod tests {
     #[test]
     fn duplicate_custom_keys_from_another_client_stay_saveable() {
         let mut e = titled("Dup");
-        e.fields.push(mypass_kdbx::Field {
-            key: "dup".into(),
-            value: "first".into(),
-            protected: false,
-        });
-        e.fields.push(mypass_kdbx::Field {
-            key: "dup".into(),
-            value: "second".into(),
-            protected: false,
-        });
+        e.fields
+            .push(mypass_kdbx::Field::new("dup", "first", false));
+        e.fields
+            .push(mypass_kdbx::Field::new("dup", "second", false));
         let (db, id) = db_with(e);
         let f = fx_with(db);
         f.session.flush().unwrap();
@@ -2466,7 +3109,7 @@ mod tests {
             .fields
             .iter()
             .filter(|x| x.key == "dup")
-            .map(|x| x.value.as_str())
+            .map(|x| x.value())
             .collect();
         assert_eq!(dups, ["first"]);
         // Editing the value to what the extra held is a real edit of the first one.

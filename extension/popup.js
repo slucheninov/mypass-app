@@ -1,36 +1,39 @@
+// Every user-visible string comes from shared/i18n.js (the `_locales` catalogs). Same global-scope
+// rule as the shared bags below: loaded as a classic script in popup.html, so no destructuring.
+const i18n = typeof require === 'function'
+  ? require('./shared/i18n.js')
+  : window.mypassI18n;
+
 const PAIRING_STARTED_AT_KEY = 'pairingStartedAt';
 const PAIRING_CHALLENGE_TTL_MS = 120_000;
 
-const APP_UNAVAILABLE_STATUS_TEXT =
-  'Cannot connect to MyPass. Make sure the app is open, then click Retry.';
-const HOST_UNAVAILABLE_STATUS_TEXT =
-  'The MyPass browser connector was not found. Complete browser setup, then click Retry.';
-const APP_UNAVAILABLE_OPEN_HELPER_TEXT =
-  'Open MyPass from Applications or the Dock. Unlock your vault if needed, then tap Retry.';
+const APP_UNAVAILABLE_STATUS_TEXT = i18n.t('appUnavailableStatus');
+const HOST_UNAVAILABLE_STATUS_TEXT = i18n.t('hostUnavailableStatus');
+const APP_UNAVAILABLE_OPEN_HELPER_TEXT = i18n.t('appUnavailableOpenHelper');
 
 function shouldShowAppUnavailableActions(kind) {
   return kind === 'error';
 }
 
-const LOCKED_TITLE_TEXT = 'MyPass is locked';
-const LOCKED_HELPER_TEXT = 'Open MyPass and unlock the vault';
-const UNLOCK_UNREACHABLE_TEXT = 'Could not reach MyPass. Open the app and try again.';
-const EMPTY_LIST_TITLE_TEXT = 'No saved logins for this site';
-const LIST_HEADER_TEXT = 'Select an entry to autofill:';
-const FAVORITES_HEADER_TEXT = 'Favorites';
-const NO_FAVORITES_TEXT = 'No favorites';
-const NO_ITEMS_TEXT = 'No items';
-const NO_SEARCH_RESULTS_TEXT = 'No matches';
+const LOCKED_TITLE_TEXT = i18n.t('myPassLocked');
+const LOCKED_HELPER_TEXT = i18n.t('lockedHelper');
+const UNLOCK_UNREACHABLE_TEXT = i18n.t('unlockUnreachable');
+const EMPTY_LIST_TITLE_TEXT = i18n.t('emptyListTitle');
+const LIST_HEADER_TEXT = i18n.t('listHeader');
+const FAVORITES_HEADER_TEXT = i18n.t('categoryFavorites');
+const NO_FAVORITES_TEXT = i18n.t('noFavorites');
+const NO_ITEMS_TEXT = i18n.t('noItems');
+const NO_SEARCH_RESULTS_TEXT = i18n.t('noMatches');
 const BROWSER_CATEGORIES = [
-  { id: 'thisSite', title: 'This site' },
-  { id: 'favorites', title: 'Favorites' },
-  { id: 'all', title: 'All' },
-  { id: 'logins', title: 'Logins' },
-  { id: 'passkeys', title: 'Passkeys' },
-  { id: 'codes', title: 'Codes' },
-  { id: 'cards', title: 'Cards' },
-  { id: 'addresses', title: 'Addresses' },
-  { id: 'notes', title: 'Notes' }
+  { id: 'thisSite', title: i18n.t('categoryThisSite') },
+  { id: 'favorites', title: i18n.t('categoryFavorites') },
+  { id: 'all', title: i18n.t('categoryAll') },
+  { id: 'logins', title: i18n.t('categoryLogins') },
+  { id: 'passkeys', title: i18n.t('categoryPasskeys') },
+  { id: 'codes', title: i18n.t('categoryCodes') },
+  { id: 'cards', title: i18n.t('categoryCards') },
+  { id: 'addresses', title: i18n.t('categoryAddresses') },
+  { id: 'notes', title: i18n.t('categoryNotes') }
 ];
 
 function passkeyProxyStatusText(status, context, matchedCredentials) {
@@ -38,11 +41,11 @@ function passkeyProxyStatusText(status, context, matchedCredentials) {
     && (!context || context.kind !== 'site' || !passkeySiteHints.hasSiteHint(context.url, matchedCredentials))) return '';
   const messages = {
     active: '',
-    disabled: 'Passkeys are off. Enable them in MyPass settings.',
+    disabled: i18n.t('passkeysOff'),
     locked: '', // The locked panel already explains how to unlock.
     unpaired: '', // Pairing has its own panel.
     unavailable: '', // Connection errors have their own panel.
-    'attachment-error': 'Another provider may be blocking passkeys. Open MyPass settings for help.'
+    'attachment-error': i18n.t('passkeysBlocked')
   };
   return messages[status && status.proxyState] || '';
 }
@@ -50,8 +53,8 @@ function passkeyProxyStatusText(status, context, matchedCredentials) {
 function browserManagerDiagnosticsText(result) {
   if (!result) return '';
   const names = (result.extensions || []).map((item) => item.name);
-  if (result.passwordSavingEnabled === true) names.unshift('Browser password saving');
-  return names.length ? 'Also enabled: ' + names.join(', ') + '. Review in MyPass settings.' : '';
+  if (result.passwordSavingEnabled === true) names.unshift(i18n.t('browserPasswordSaving'));
+  return names.length ? i18n.t('alsoEnabled', names.join(', ')) : '';
 }
 
 function categoryTitle(categoryId) {
@@ -71,8 +74,8 @@ function isSiteUrl(url) {
     return false;
   }
 }
-const PAIRING_PANEL_TITLE_TEXT = 'Connect browser extension';
-const UNLOCK_BUTTON_LABEL = 'Unlock MyPass';
+const PAIRING_PANEL_TITLE_TEXT = i18n.t('pairingPanelTitle');
+const UNLOCK_BUTTON_LABEL = i18n.t('unlockMyPass');
 // Must match PAIRING_STORAGE_KEY in background.js — asserted by unlockButton.test.js.
 const POPUP_PAIRING_STORAGE_KEY = 'pairingSecret';
 // The popup was expected to close when MyPass takes focus, so no waiting state was
@@ -94,7 +97,7 @@ function stopLockedPolling() {
   lockedPollHandle = null;
 }
 const UNLOCK_POLL_MAX_ATTEMPTS = 75; // 800 ms x 75 = 60 s of real unlocking time
-const WAITING_FOR_UNLOCK_TEXT = 'Waiting for you to unlock MyPass\u2026';
+const WAITING_FOR_UNLOCK_TEXT = i18n.t('waitingForUnlock');
 
 function shouldShowUnlockButton(pairingSecret) {
   return typeof pairingSecret === 'string' && pairingSecret.length > 0;
@@ -280,7 +283,7 @@ function shouldShowTotpCircle(hasTotp) {
 function buildPasskeyBadgeElement() {
   const badge = document.createElement('span');
   badge.className = 'passkey-badge';
-  badge.textContent = 'Passkey';
+  badge.textContent = i18n.t('passkeyBadge');
   return badge;
 }
 
@@ -316,7 +319,7 @@ function createTotpCircleController(circleEl, requestTotp, options = {}) {
 
   function showCopiedFlash() {
     active = true;
-    textEl.textContent = 'Copied';
+    textEl.textContent = i18n.t('copied');
     circleEl.classList.add('copied');
     circleEl.classList.remove('revealed');
     clearHideTimer();
@@ -401,7 +404,7 @@ function buildTotpCircleElement(credential, url) {
   const circle = document.createElement('div');
   circle.className = 'totp-circle';
   circle.setAttribute('role', 'button');
-  circle.setAttribute('aria-label', 'Reveal or copy verification code');
+  circle.setAttribute('aria-label', i18n.t('totpCircleLabel'));
 
   const requestTotp = () => new Promise((resolve, reject) => {
     chrome.runtime.sendMessage({ type: 'getTotp', id: credential.id, url }, (response) => {
@@ -456,11 +459,11 @@ function isBase32PasteSecret(candidate) {
 // branches so a proposeSaveTotp round-trip's actual outcome is reported instead of
 // always claiming success.
 function describeSaveProposalOutcome(response) {
-  if (response && response.type === 'saveProposalAccepted') return 'Opened in MyPass';
-  if (response && response.type === 'locked') return 'Unlock MyPass first';
-  if (response && response.type === 'pairingRequired') return 'Connect to MyPass first';
+  if (response && response.type === 'saveProposalAccepted') return i18n.t('openedInMyPass');
+  if (response && response.type === 'locked') return i18n.t('unlockMyPassFirst');
+  if (response && response.type === 'pairingRequired') return i18n.t('connectToMyPassFirst');
   if (response && response.message) return response.message;
-  return "Couldn't reach MyPass";
+  return i18n.t('couldntReachMyPass');
 }
 
 // Assigned once the DOM is wired up below: renderTotpPicker needs `listEl` and
@@ -494,7 +497,7 @@ const LAST_PASSKEY_FAILURE_KEY = 'lastPasskeyFailure';
 /// is what a phishing attempt looks like, so the user has to be able to see both.
 function passkeyCeremonySummary(pending) {
   if (!pending) return '';
-  const origin = pending.originUrl || 'unknown origin';
+  const origin = pending.originUrl || i18n.t('passkeyUnknownOriginLower');
   return `${pending.rpId} — ${origin}`;
 }
 
@@ -527,16 +530,29 @@ function passkeyTargetSummary(pending, overrideMatch) {
   const matches = pending.matches || [];
   const match = overrideMatch || (matches.length === 1 ? matches[0] : null);
   if (!match) {
-    return { headline: `New entry for ${pending.rpId}`, detail };
+    return { headline: i18n.t('passkeyNewEntryFor', pending.rpId), detail };
   }
   const who = match.username ? `"${match.title}" (${match.username})` : `"${match.title}"`;
   const headline = pending.kind === 'get'
-    ? `Sign in as ${who}?`
-    : (match.hasPasskey ? `Replace passkey in ${who}?` : `Save passkey to ${who}?`);
+    ? i18n.t('passkeySignInAs', who)
+    : (match.hasPasskey ? i18n.t('passkeyReplaceIn', who) : i18n.t('passkeySaveTo', who));
   return { headline, detail };
 }
 
+// The localised name of an address form the content script reported: a shipping or billing
+// purpose plus its position on the page. A report without them (an older content script) falls
+// back to its opaque label.
+function addressFormName(form) {
+  if (form && Number.isInteger(form.number)) {
+    const key = form.purpose === 'shipping' ? 'addressFormShipping'
+      : form.purpose === 'billing' ? 'addressFormBilling' : 'addressFormGeneric';
+    return i18n.t(key, String(form.number));
+  }
+  return String((form && form.label) || '').toLowerCase();
+}
+
 if (typeof document !== 'undefined') {
+  i18n.apply(document);
   const lockedPanel = document.getElementById('locked-panel');
   const lockedTitleEl = document.getElementById('locked-title');
   const lockedHelperEl = document.getElementById('locked-helper');
@@ -798,7 +814,7 @@ if (typeof document !== 'undefined') {
     avatar.setAttribute('role', 'img');
     avatar.setAttribute(
       'aria-label',
-      title.trim() ? `Icon for ${title}` : 'Icon for untitled entry'
+      title.trim() ? i18n.t('iconFor', title) : i18n.t('iconForUntitled')
     );
     const letter = document.createElement('span');
     letter.className = 'letter-avatar-letter';
@@ -824,21 +840,21 @@ if (typeof document !== 'undefined') {
   }
 
   function addressFillError(response) {
-    if (response && response.type === 'locked') return 'Unlock MyPass, then select the address again.';
-    if (response && response.type === 'pairingRequired') return 'Connect this browser to MyPass, then try again.';
+    if (response && response.type === 'locked') return i18n.t('addressUnlockAgain');
+    if (response && response.type === 'pairingRequired') return i18n.t('addressConnectAgain');
     const messages = {
-      address_no_form: 'No supported address form on this page. Open a form with standard address autocomplete fields. Address filling is available in the main page only.',
-      address_page_changed: 'The page or selected tab changed. Return to the address form and select the address again.',
-      address_form_changed: 'The address form changed. Review any fields already filled, then select the address again.',
-      address_no_values: 'No saved address values match the fields in this form. Edit this address in MyPass.',
+      address_no_form: i18n.t('addressNoForm'),
+      address_page_changed: i18n.t('addressPageChanged'),
+      address_form_changed: i18n.t('addressFormChanged'),
+      address_no_values: i18n.t('addressNoValues'),
     };
-    return messages[response && response.code] || 'Could not fill the address. Check that MyPass is unlocked, then select the address again.';
+    return messages[response && response.code] || i18n.t('addressFillFailed');
   }
 
   function beginAddressFill(credential) {
     const requestId = ++browseRequestId;
     listEl.innerHTML = '';
-    listHeaderEl.textContent = 'Checking address forms…';
+    listHeaderEl.textContent = i18n.t('addressChecking');
     const chooser = document.createElement('li');
     chooser.className = 'address-fill-chooser';
     listEl.appendChild(chooser);
@@ -852,16 +868,16 @@ if (typeof document !== 'undefined') {
         const back = document.createElement('button');
         back.type = 'button';
         back.className = 'btn-secondary address-fill-back';
-        back.textContent = 'Back to addresses';
+        back.textContent = i18n.t('addressBack');
         back.addEventListener('click', () => selectCategory('addresses'));
         if (runtimeError || !response || response.type !== 'addressForms') {
-          listHeaderEl.textContent = 'Address not filled';
+          listHeaderEl.textContent = i18n.t('addressNotFilled');
           messageEl.textContent = addressFillError(response);
           chooser.appendChild(back);
           return;
         }
-        listHeaderEl.textContent = 'Fill address';
-        messageEl.textContent = 'Send “' + credential.title + '” to ' + new URL(response.url).host + '. Choose the form to fill:';
+        listHeaderEl.textContent = i18n.t('addressFillHeader');
+        messageEl.textContent = i18n.t('addressSendTo', [credential.title, new URL(response.url).host]);
         const focused = response.forms.filter((form) => form.focused);
         const forms = focused.length === 1 ? focused : response.forms;
         const buttons = [];
@@ -869,17 +885,17 @@ if (typeof document !== 'undefined') {
           const button = document.createElement('button');
           button.type = 'button';
           button.className = 'btn-secondary address-fill-option';
-          button.textContent = 'Fill ' + form.label.toLowerCase() + ' (' + form.fields + ' fields)';
+          button.textContent = i18n.t('addressFillOption', [addressFormName(form), form.fields]);
           button.addEventListener('click', (event) => {
             if (!event.isTrusted) return;
             buttons.forEach((item) => { item.disabled = true; });
-            messageEl.textContent = 'Filling address…';
+            messageEl.textContent = i18n.t('addressFilling');
             chrome.runtime.sendMessage({ type: 'fillAddress', token: response.token,
               groupId: form.id, id: credential.id }, (result) => {
               const failed = chrome.runtime.lastError;
               if (requestId !== browseRequestId) return;
               if (!failed && result && result.type === 'addressFilled') {
-                messageEl.textContent = 'Filled ' + result.filled + ' fields. Review the form before submitting.';
+                messageEl.textContent = i18n.t('addressFilled', result.filled);
               } else {
                 messageEl.textContent = addressFillError(result);
               }
@@ -908,12 +924,12 @@ if (typeof document !== 'undefined') {
         fillFromPage();
         return;
       }
-      listHeaderEl.textContent = 'Address suggestions are off';
-      messageEl.textContent = 'Turn on Show addresses in Autofill and save, then select the address again.';
+      listHeaderEl.textContent = i18n.t('addressSuggestionsOff');
+      messageEl.textContent = i18n.t('addressTurnOn');
       const back = document.createElement('button');
       back.type = 'button';
       back.className = 'btn-secondary address-fill-back';
-      back.textContent = 'Back to addresses';
+      back.textContent = i18n.t('addressBack');
       back.addEventListener('click', () => selectCategory('addresses'));
       chooser.appendChild(back);
     });
@@ -948,7 +964,7 @@ if (typeof document !== 'undefined') {
       if (credential.entryType === 'Address') {
         item.tabIndex = 0;
         item.setAttribute('role', 'button');
-        item.setAttribute('aria-label', 'Fill address: ' + credential.title);
+        item.setAttribute('aria-label', i18n.t('addressFillAria', credential.title));
         item.addEventListener('keydown', (event) => {
           if (event.isTrusted && (event.key === 'Enter' || event.key === ' ')) {
             event.preventDefault();
@@ -996,10 +1012,10 @@ if (typeof document !== 'undefined') {
         return;
       }
       if (startResp && startResp.type === 'locked') {
-        setPairingError('MyPass is locked.');
+        setPairingError(i18n.t('myPassLockedSentence'));
         return;
       }
-      setPairingError('Could not start pairing. Is MyPass running and unlocked?');
+      setPairingError(i18n.t('pairingStartFailed'));
     });
   }
 
@@ -1016,11 +1032,11 @@ if (typeof document !== 'undefined') {
       }
       if (completeResp && completeResp.type === 'error' && completeResp.message === 'invalid_code') {
         clearPairingStartedAt(() => {
-          setPairingError('Invalid code. Tap Connect to try again.');
+          setPairingError(i18n.t('pairingInvalidCode'));
         });
         return;
       }
-      setPairingError('Could not complete pairing. Is MyPass running and unlocked?');
+      setPairingError(i18n.t('pairingCompleteFailed'));
     });
   }
 
@@ -1111,7 +1127,7 @@ if (typeof document !== 'undefined') {
     if (kind === 'credentialList') {
       const browsing = popupContext.kind !== 'site';
       listHeaderEl.textContent = browsing ? categoryTitle(popupContext.category) : LIST_HEADER_TEXT;
-      if (popupContext.kind === 'search') listHeaderEl.textContent = 'Search';
+      if (popupContext.kind === 'search') listHeaderEl.textContent = i18n.t('search');
       emptyTitleEl.textContent = emptyTitleForContext();
       if (response.credentials.length === 0) {
         showPanel('empty');
@@ -1127,7 +1143,7 @@ if (typeof document !== 'undefined') {
       const hint = document.getElementById('site-passkey-hint');
       if (hint) {
         hint.hidden = !passkeyOnly && (browsing || !response.credentials.some((entry) => entry.hasPasskey));
-        hint.textContent = passkeyOnly ? 'Select an entry to open its website.' : '';
+        hint.textContent = passkeyOnly ? i18n.t('openSiteHint') : '';
         if (!passkeyOnly) hint.hidden = true;
       }
     }
@@ -1185,7 +1201,7 @@ if (typeof document !== 'undefined') {
     if (popupContext.kind === 'search') return NO_SEARCH_RESULTS_TEXT;
     if (popupContext.kind === 'site') return EMPTY_LIST_TITLE_TEXT;
     if (popupContext.category === 'favorites') return NO_FAVORITES_TEXT;
-    if (popupContext.category === 'addresses') return 'No addresses. Add one in MyPass using Add > Address.';
+    if (popupContext.category === 'addresses') return i18n.t('noAddressesHint');
     return NO_ITEMS_TEXT;
   }
 
@@ -1273,9 +1289,9 @@ if (typeof document !== 'undefined') {
       Notes: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M6 3.2h8.2L19.8 9v11.2a.8.8 0 0 1-.8.8H6a.8.8 0 0 1-.8-.8V4a.8.8 0 0 1 .8-.8z"/><path d="M14 3.6V9h5.2" fill="none" stroke="#fff" stroke-width="1.4"/><path d="M8 13.2h8M8 16.6h5.5" fill="none" stroke="#fff" stroke-width="1.4" stroke-linecap="round"/></svg>'
     };
     [
-      { type: 'Login', title: 'New login', iconClass: 'add-entry-icon-login' },
-      { type: 'Card', title: 'New card', iconClass: 'add-entry-icon-card' },
-      { type: 'Notes', title: 'New note', iconClass: 'add-entry-icon-note' }
+      { type: 'Login', title: i18n.t('newLogin'), iconClass: 'add-entry-icon-login' },
+      { type: 'Card', title: i18n.t('newCard'), iconClass: 'add-entry-icon-card' },
+      { type: 'Notes', title: i18n.t('newNote'), iconClass: 'add-entry-icon-note' }
     ].forEach((choice) => {
       const button = document.createElement('button');
       button.type = 'button';
@@ -1366,7 +1382,7 @@ if (typeof document !== 'undefined') {
     const raw = totpPasteInput.value;
     const validation = validateTotpPasteInput(raw);
     if (!validation.valid) {
-      addTotpErrorEl.textContent = 'Enter a valid authenticator URL or secret key';
+      addTotpErrorEl.textContent = i18n.t('totpInvalid');
       addTotpErrorEl.hidden = false;
       return;
     }
@@ -1379,17 +1395,17 @@ if (typeof document !== 'undefined') {
       // matches", since routeTotpCandidate's zero-match branch sends the proposal anyway).
       const kind = bridgeStatus.classifyGetCredentialsResponse(response);
       if (kind === 'locked') {
-        addTotpErrorEl.textContent = 'Unlock MyPass first';
+        addTotpErrorEl.textContent = i18n.t('unlockMyPassFirst');
         addTotpErrorEl.hidden = false;
         return;
       }
       if (kind === 'pairingRequired') {
-        addTotpErrorEl.textContent = 'Connect to MyPass first';
+        addTotpErrorEl.textContent = i18n.t('connectToMyPassFirst');
         addTotpErrorEl.hidden = false;
         return;
       }
       if (kind !== 'credentialList') {
-        addTotpErrorEl.textContent = "Couldn't reach MyPass";
+        addTotpErrorEl.textContent = i18n.t('couldntReachMyPass');
         addTotpErrorEl.hidden = false;
         return;
       }
@@ -1408,9 +1424,7 @@ if (typeof document !== 'undefined') {
   function showPasskeyFailure(failure) {
     visiblePasskeyFailure = failure;
     pendingPasskeyOwnsPopup = true;
-    const message = failure.kind === 'get'
-      ? 'The browser could not finish signing in. Cancel the website request and try again.'
-      : 'The browser could not finish saving this passkey. Cancel the website request and try again. A local passkey may already exist; check the website before replacing it.';
+    const message = i18n.t(failure.kind === 'get' ? 'passkeyFailureGet' : 'passkeyFailureCreate');
     document.getElementById('passkey-failure-message').textContent = message;
     document.getElementById('passkey-failure-close-btn').onclick = () => window.close();
     showPanel('passkey-failure');
@@ -1491,14 +1505,14 @@ if (typeof document !== 'undefined') {
   function renderPasskeyDetails(prefix, pending, overrideMatch) {
     const matches = pending.matches || [];
     const match = overrideMatch || (matches.length === 1 ? matches[0] : null);
-    document.getElementById(prefix + '-summary').textContent = match ? '' : 'A new entry will be created.';
+    document.getElementById(prefix + '-summary').textContent = match ? '' : i18n.t('passkeyNewEntryNote');
     const details = document.getElementById(prefix + '-detail');
     details.innerHTML = '';
     const rows = [
-      ['Entry', match ? match.title : pending.rpId],
-      ['Account', match && match.username ? match.username : (pending.userName || 'Not provided')],
-      ['Website', pending.rpId || 'Unknown website'],
-      ['Origin', pending.originUrl || 'Unknown origin']
+      [i18n.t('detailEntry'), match ? match.title : pending.rpId],
+      [i18n.t('detailAccount'), match && match.username ? match.username : (pending.userName || i18n.t('notProvided'))],
+      [i18n.t('detailWebsite'), pending.rpId || i18n.t('unknownWebsite')],
+      [i18n.t('detailOrigin'), pending.originUrl || i18n.t('unknownOrigin')]
     ];
     for (const [label, value] of rows) {
       const term = document.createElement('dt');
@@ -1526,8 +1540,8 @@ if (typeof document !== 'undefined') {
   renderPasskeyCeremonyPanel = function (pending) {
     if (pending) activePasskeyRequestId = pending.requestId;
     if (pending && (pending.phase === 'checking' || pending.phase === 'completing')) {
-      document.getElementById('passkey-checking-title').textContent = pending.phase === 'completing' ? 'Completing passkey request' : 'Preparing passkey request';
-      document.getElementById('passkey-checking-message').textContent = pending.phase === 'completing' ? 'Waiting for the browser to finish. Keep the website open.' : 'Waiting for MyPass. You will be asked to approve before a passkey is saved or used.';
+      document.getElementById('passkey-checking-title').textContent = i18n.t(pending.phase === 'completing' ? 'passkeyCompleting' : 'passkeyPreparing');
+      document.getElementById('passkey-checking-message').textContent = i18n.t(pending.phase === 'completing' ? 'passkeyWaitingBrowser' : 'passkeyWaitingMyPass');
       document.getElementById('passkey-checking-cancel-btn').onclick = () => sendPasskeyCancel(pending.requestId);
       showPanel('passkey-checking');
       return true;
@@ -1633,14 +1647,13 @@ if (typeof document !== 'undefined') {
   function paintIdentifierOffer(offer) {
     if (!identifierOfferEl || !offer) { hideIdentifierOffer(); return; }
     identifierOfferEl.hidden = false;
-    identifierOfferTextEl.textContent = offer.value
-      + ' is not saved for this site. Add it to an existing item, or create a new one.';
+    identifierOfferTextEl.textContent = i18n.t('identifierOfferText', offer.value);
     identifierOfferActionsEl.innerHTML = '';
     matchedSiteCredentials.forEach((credential) => {
       const add = document.createElement('button');
       add.type = 'button';
       add.className = 'btn-secondary';
-      add.textContent = 'Add to ' + (credential.title || 'item');
+      add.textContent = credential.title ? i18n.t('addToItem', credential.title) : i18n.t('addToUntitledItem');
       add.addEventListener('click', (event) => {
         if (!event.isTrusted) return;
         addEntryIdentifier(credential, offer);
@@ -1650,7 +1663,7 @@ if (typeof document !== 'undefined') {
     const create = document.createElement('button');
     create.type = 'button';
     create.className = 'btn-primary';
-    create.textContent = 'New item';
+    create.textContent = i18n.t('newItem');
     create.addEventListener('click', (event) => {
       if (!event.isTrusted) return;
       const params = new URLSearchParams({ type: 'Login', username: offer.value });
@@ -1690,7 +1703,7 @@ if (typeof document !== 'undefined') {
       }
       identifierOfferTextEl.textContent = (result && result.message)
         ? result.message
-        : 'Could not add this to the item. Open MyPass and try again.';
+        : i18n.t('identifierAddFailed');
       buttons.forEach((button) => { button.disabled = false; });
     });
   }
@@ -1755,7 +1768,7 @@ if (typeof document !== 'undefined') {
     try {
       domain = new URL(activeTabUrl).hostname;
     } catch (e) {
-      generatePasswordErrorEl.textContent = "Couldn't determine this page's domain";
+      generatePasswordErrorEl.textContent = i18n.t('noPageDomain');
       generatePasswordErrorEl.hidden = false;
       return;
     }
@@ -1816,8 +1829,8 @@ if (typeof document !== 'undefined') {
       }
       el.hidden = false;
       el.textContent = result && result.type === 'pairingRequired'
-        ? 'Connect this browser to MyPass first.'
-        : 'Could not lock MyPass. Open the app and try again.';
+        ? i18n.t('connectBrowserFirst')
+        : i18n.t('lockFailed');
     });
   });
 
@@ -1908,7 +1921,7 @@ if (typeof document !== 'undefined') {
   // `if (tookOver) return;` line).
   function resumeOrdinaryPopup() {
     releasePrompt();
-    emptyTitleEl.textContent = 'Loading…';
+    emptyTitleEl.textContent = i18n.t('loading');
     showPanel('empty');
     initPasskeySettingsToggle();
     if (ordinaryPopupInitialized) {

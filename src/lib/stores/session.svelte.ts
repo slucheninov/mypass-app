@@ -1,5 +1,5 @@
-import type { SessionState, SessionStatus_Serialize } from "../bindings";
-import { api } from "../api";
+import type { ErrorCode, SessionState, SessionStatus_Serialize } from "../bindings";
+import { api, ApiFailure, errorMessage } from "../api";
 import { events } from "../bindings";
 import { t } from "../i18n/index.svelte";
 import { toasts } from "./toasts.svelte";
@@ -32,7 +32,7 @@ class SessionStore {
   /** Bumped by every event, so a slower `vault_status` answer never overwrites a newer event. */
   #seq = 0;
   #subscribed: Promise<void> | null = null;
-  #saveToast: number | null = null;
+  #saveToast: { id: number; code: ErrorCode | null } | null = null;
   /** Whether a failing save raises the sticky toast. Only the main window shows it: the tray panel
    *  and the settings window would repeat the same message (`startStores({ saveToast })`). */
   saveToasts = true;
@@ -125,7 +125,7 @@ class SessionStore {
     this.#subscribed = null;
     for (const off of this.#unlisten.splice(0)) off();
     this.#listeners.clear();
-    if (this.#saveToast !== null) toasts.dismiss(this.#saveToast);
+    if (this.#saveToast !== null) toasts.dismiss(this.#saveToast.id);
     this.#saveToast = null;
     this.saveToasts = true;
     this.status = { ...INITIAL };
@@ -165,14 +165,18 @@ class SessionStore {
   /** One sticky toast while saving keeps failing; the backend text goes into the details only. */
   #syncSaveToast(save: SessionStatus_Serialize["save"]): void {
     if (save.state === "failed") {
-      if (this.saveToasts && this.#saveToast === null) {
-        this.#saveToast = toasts.push("error", t("Saving failed. MyPass will retry."), {
+      const code = save.errorCode ?? null;
+      if (this.saveToasts && (this.#saveToast === null || this.#saveToast.code !== code)) {
+        if (this.#saveToast !== null) toasts.dismiss(this.#saveToast.id);
+        const text = code ? errorMessage(new ApiFailure(code)) : t("Saving failed. MyPass will retry.");
+        const id = toasts.push("error", text, {
           sticky: true,
-          ...(save.message ? { detail: save.message } : {}),
+          ...(!code && save.message ? { detail: save.message } : {}),
         });
+        this.#saveToast = { id, code };
       }
     } else if (this.#saveToast !== null) {
-      toasts.dismiss(this.#saveToast);
+      toasts.dismiss(this.#saveToast.id);
       this.#saveToast = null;
     }
   }

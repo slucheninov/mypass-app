@@ -48,7 +48,7 @@ fn already_present(entry: &Entry, needle: &str) -> bool {
             .fields
             .iter()
             .filter(|f| !Entry::is_reserved_key(&f.key))
-            .any(|f| normalize(&f.value) == needle)
+            .any(|f| normalize(f.value()) == needle)
 }
 
 /// How many fields of the family `base`, `base 2`, `base 3`, ... the entry holds.
@@ -171,7 +171,7 @@ mod tests {
         e.fields
             .iter()
             .filter(|f| !Entry::is_reserved_key(&f.key))
-            .map(|f| (f.key.clone(), f.value.clone(), f.protected))
+            .map(|f| (f.key.clone(), f.value().to_owned(), f.protected))
             .collect()
     }
 

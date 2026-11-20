@@ -122,6 +122,7 @@ assert.ok(![...contentGroup.values()].includes('content.js'), 'content.js must n
 // background-loader.js importScripts the shared helpers and then background.js
 // into one worker global, so their top-level names must not overlap.
 assertDisjoint('service worker', [
+  'shared/i18n.js',
   'shared/url-match.js',
   'shared/password-generator.js',
   'shared/security-watch.js',

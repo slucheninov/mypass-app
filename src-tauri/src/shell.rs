@@ -356,6 +356,99 @@ pub fn panel_position(
     (x, y)
 }
 
+/// A monitor as the runtime reports it: physical origin and size, and its own scale factor.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MonitorFrame {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    pub scale: f64,
+}
+
+impl MonitorFrame {
+    /// The monitor in logical points (physical divided by its own scale), the space a macOS
+    /// window is positioned in.
+    fn logical(&self) -> PanelRect {
+        let scale = if self.scale > 0.0 { self.scale } else { 1.0 };
+        PanelRect {
+            x: self.x / scale,
+            y: self.y / scale,
+            w: self.w / scale,
+            h: self.h / scale,
+        }
+    }
+
+    fn scale(&self) -> f64 {
+        if self.scale > 0.0 {
+            self.scale
+        } else {
+            1.0
+        }
+    }
+}
+
+/// The tray icon rectangle exactly as the tray event delivered it, with its unit.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TrayRect {
+    Physical(PanelRect),
+    Logical(PanelRect),
+}
+
+fn contains(frame: PanelRect, px: f64, py: f64) -> bool {
+    px >= frame.x && px < frame.x + frame.w && py >= frame.y && py < frame.y + frame.h
+}
+
+fn scaled(rect: PanelRect, factor: f64) -> PanelRect {
+    PanelRect {
+        x: rect.x * factor,
+        y: rect.y * factor,
+        w: rect.w * factor,
+        h: rect.h * factor,
+    }
+}
+
+/// Top-left of the tray panel in logical points (the unit macOS positions windows in).
+///
+/// The tray icon lives on exactly one monitor, and that monitor's scale factor (never the panel
+/// window's, which belongs to wherever the panel was last shown) converts the icon between
+/// physical pixels and logical points. The monitor is found in global logical points, where the
+/// monitors never overlap: by `click`, the click location in unscaled global points (the caller
+/// derives it from the cursor, which sits on the icon at click time), or, for an icon that is
+/// already logical, by the icon's own center. A physical icon rectangle is never matched against
+/// the physical monitor frames: tao places each monitor at its logical origin times that monitor's
+/// own scale, so those frames overlap on mixed-DPI desktops and the first match would be wrong.
+/// With no way to tell, `fallback` (the primary monitor's index) is used with its scale; `None`
+/// only when there is no monitor at all. `panel` is the panel size in logical points.
+pub fn tray_panel_origin(
+    tray: TrayRect,
+    click: Option<(f64, f64)>,
+    monitors: &[MonitorFrame],
+    fallback: Option<usize>,
+    panel: (f64, f64),
+) -> Option<(f64, f64)> {
+    let point = click.or(match tray {
+        TrayRect::Logical(r) => Some((r.x + r.w / 2.0, r.y + r.h / 2.0)),
+        TrayRect::Physical(_) => None,
+    });
+    let holder = point.and_then(|(x, y)| monitors.iter().position(|m| contains(m.logical(), x, y)));
+    let index = holder
+        .or(fallback)
+        .filter(|i| *i < monitors.len())
+        .or(if monitors.is_empty() { None } else { Some(0) })?;
+    let monitor = monitors.get(index)?;
+    let logical_tray = match tray {
+        TrayRect::Physical(r) => scaled(r, 1.0 / monitor.scale()),
+        TrayRect::Logical(r) => r,
+    };
+    Some(panel_position(
+        logical_tray,
+        monitor.logical(),
+        panel.0,
+        panel.1,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -634,6 +727,153 @@ mod tests {
             420.0,
         );
         assert_eq!(pos.0, 8.0);
+    }
+
+    fn frame(x: f64, y: f64, w: f64, h: f64, scale: f64) -> MonitorFrame {
+        MonitorFrame { x, y, w, h, scale }
+    }
+
+    /// A retina laptop (scale 2, 1440x900 points) with a 1920x1080 scale-1 monitor to its right,
+    /// the way tao reports them: the origin is the logical origin times the monitor's own scale.
+    fn mixed_monitors() -> [MonitorFrame; 2] {
+        [
+            frame(0.0, 0.0, 2880.0, 1800.0, 2.0),
+            frame(1440.0, 0.0, 1920.0, 1080.0, 1.0),
+        ]
+    }
+
+    const PANEL: (f64, f64) = (320.0, 420.0);
+
+    /// Both orders the OS can list the monitors in; the answer must not depend on it.
+    fn both_orders() -> [Vec<MonitorFrame>; 2] {
+        let [retina, neighbour] = mixed_monitors();
+        [vec![retina, neighbour], vec![neighbour, retina]]
+    }
+
+    #[test]
+    fn tray_panel_uses_the_scale_of_the_monitor_holding_a_logical_icon() {
+        // The icon sits on the scale-1 monitor (logical x 2000); the panel window last lived on
+        // the scale-2 one. The icon is already logical, and its monitor decides the frame.
+        for monitors in both_orders() {
+            let origin = tray_panel_origin(
+                TrayRect::Logical(rect(2000.0, 0.0, 24.0, 24.0)),
+                None,
+                &monitors,
+                Some(0),
+                PANEL,
+            )
+            .unwrap();
+            assert_eq!(origin, (1852.0, 32.0));
+        }
+    }
+
+    #[test]
+    fn tray_panel_overlapping_physical_frames_are_told_apart_by_the_click_point() {
+        // The physical frames overlap (2x primary at physical x 0..2880, 1x neighbour at
+        // 1440..3360), so a physical icon at x 2000 is in both. The click location in global
+        // points settles it, whichever order the monitors are listed in.
+        for monitors in both_orders() {
+            // Icon on the 1x neighbour: physical x 2000 is logical 2000, the click is at 2012.
+            let neighbour = tray_panel_origin(
+                TrayRect::Physical(rect(2000.0, 0.0, 24.0, 24.0)),
+                Some((2012.0, 12.0)),
+                &monitors,
+                Some(0),
+                PANEL,
+            )
+            .unwrap();
+            assert_eq!(neighbour, (1852.0, 32.0), "neighbour, {monitors:?}");
+            // Icon on the 2x primary: physical x 2000 is logical 1000, the click is at 1012.
+            let primary = tray_panel_origin(
+                TrayRect::Physical(rect(2000.0, 0.0, 48.0, 48.0)),
+                Some((1012.0, 12.0)),
+                &monitors,
+                Some(1),
+                PANEL,
+            )
+            .unwrap();
+            assert_eq!(primary, (852.0, 32.0), "primary, {monitors:?}");
+        }
+    }
+
+    #[test]
+    fn tray_panel_clamps_inside_the_holding_monitor_not_the_whole_desktop() {
+        // An icon at the far right of the scale-2 monitor stays inside that monitor's 1440 points.
+        for monitors in both_orders() {
+            let (x, _) = tray_panel_origin(
+                TrayRect::Physical(rect(2820.0, 0.0, 48.0, 48.0)),
+                Some((1430.0, 12.0)),
+                &monitors,
+                Some(0),
+                PANEL,
+            )
+            .unwrap();
+            assert_eq!(x, 1440.0 - 320.0 - 8.0);
+        }
+    }
+
+    #[test]
+    fn tray_panel_without_a_click_point_uses_the_primary_monitor_and_its_scale() {
+        // No click location and a physical icon: never guess from the overlapping frames.
+        for monitors in both_orders() {
+            let primary = monitors.iter().position(|m| m.scale == 2.0);
+            let origin = tray_panel_origin(
+                TrayRect::Physical(rect(2000.0, 0.0, 48.0, 48.0)),
+                None,
+                &monitors,
+                primary,
+                PANEL,
+            )
+            .unwrap();
+            assert_eq!(origin, (852.0, 32.0), "{monitors:?}");
+        }
+    }
+
+    #[test]
+    fn tray_panel_falls_back_to_the_primary_monitor_for_a_click_outside_every_monitor() {
+        let origin = tray_panel_origin(
+            TrayRect::Physical(rect(5000.0, 0.0, 48.0, 48.0)),
+            Some((9000.0, 0.0)),
+            &mixed_monitors(),
+            Some(0),
+            PANEL,
+        )
+        .unwrap();
+        // Converted with the primary monitor's scale 2, then clamped into its 1440 points.
+        assert_eq!(origin, (1112.0, 32.0));
+        // An out-of-range fallback index uses the first monitor.
+        assert!(tray_panel_origin(
+            TrayRect::Logical(rect(9999.0, 0.0, 24.0, 24.0)),
+            None,
+            &mixed_monitors(),
+            Some(7),
+            PANEL,
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn tray_panel_has_no_origin_without_monitors_and_survives_a_zero_scale() {
+        assert_eq!(
+            tray_panel_origin(
+                TrayRect::Logical(rect(0.0, 0.0, 24.0, 24.0)),
+                None,
+                &[],
+                None,
+                PANEL
+            ),
+            None
+        );
+        let broken = [frame(0.0, 0.0, 1440.0, 900.0, 0.0)];
+        let origin = tray_panel_origin(
+            TrayRect::Physical(rect(1000.0, 0.0, 24.0, 24.0)),
+            Some((1012.0, 12.0)),
+            &broken,
+            None,
+            PANEL,
+        )
+        .unwrap();
+        assert_eq!(origin, (852.0, 32.0));
     }
 
     #[test]

@@ -24,7 +24,7 @@ use crate::{
     watcher::EchoFilter,
 };
 use mypass_core::merge::merge;
-use mypass_kdbx::{Database, KdbxError, KdfParams, SaveSettings};
+use mypass_kdbx::{Database, KdbxError, KdfLimits, KdfParams, SaveSettings};
 use secrecy::SecretString;
 use sha2::{Digest, Sha256};
 use std::{
@@ -38,7 +38,7 @@ pub const MAX_SYNC_ATTEMPTS: usize = 3;
 
 /// Why a sync failed. In every case the remote was left as it was, except where a write had
 /// already committed (`Storage` after a write, `RemoteChangedDuringSync` after a write that was
-/// replaced again, `ConcurrentCopyKept`, or `Cancelled` after a write). A subsequent sync
+/// replaced again, a displaced copy kept for recovery, or `Cancelled` after a write). A subsequent sync
 /// reconciles the remote content.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SyncError {
@@ -51,9 +51,15 @@ pub enum SyncError {
     /// The remote file is not a KDBX vault; it is never overwritten.
     #[error("the remote file is not a KDBX vault")]
     RemoteNotAVault,
-    /// The remote vault uses a format this engine does not read (KDBX 3, an unknown feature).
+    /// The remote vault uses an unsupported format or feature.
     #[error("the remote vault is unsupported: {0}")]
     RemoteUnsupported(String),
+    /// A copy exceeds the automatic-open budget. An already displaced copy is kept.
+    #[error("vault KDF cost above the sync limit")]
+    SyncKdfLimitExceeded {
+        /// The retained working copy's path, when one exists.
+        recovery_file: Option<std::path::PathBuf>,
+    },
     /// The remote vault is damaged.
     #[error("the remote vault is damaged: {0}")]
     RemoteCorrupt(String),
@@ -196,11 +202,15 @@ fn remote_open_error(e: KdbxError) -> SyncError {
         KdbxError::WrongPassword => SyncError::RemotePasswordMismatch,
         KdbxError::NotKdbx => SyncError::RemoteNotAVault,
         e @ KdbxError::UnsupportedVersion { .. } => SyncError::RemoteUnsupported(e.to_string()),
+        KdbxError::RemoteKdfLimitExceeded(_) => SyncError::SyncKdfLimitExceeded {
+            recovery_file: None,
+        },
         KdbxError::Unsupported(m) => SyncError::RemoteUnsupported(m),
         KdbxError::Corrupt(m) | KdbxError::InvalidKdfParameters(m) => SyncError::RemoteCorrupt(m),
-        e @ (KdbxError::Io { .. } | KdbxError::Random | KdbxError::InvalidOperation(_)) => {
-            SyncError::RemoteCorrupt(e.to_string())
-        }
+        e @ (KdbxError::Io { .. }
+        | KdbxError::VaultRetained { .. }
+        | KdbxError::Random
+        | KdbxError::InvalidOperation(_)) => SyncError::RemoteCorrupt(e.to_string()),
     }
 }
 
@@ -364,7 +374,11 @@ impl SyncEngine {
         if !still_current() {
             return Err(SyncError::Cancelled);
         }
-        let (remote_db, needs_rekey) = match Database::open(&remote_bytes, password) {
+        let (remote_db, needs_rekey) = match Database::open_with_limits(
+            &remote_bytes,
+            password,
+            KdfLimits::remote(Some(&local.settings.kdf)),
+        ) {
             Ok(db) => (db, false),
             Err(KdbxError::WrongPassword) => {
                 // Only exact, previously verified ciphertext can use the retained content.
@@ -454,16 +468,34 @@ impl SyncEngine {
         }
         match self.remote.write_if(write.expected, write.bytes)? {
             WriteOutcome::Conflict => Ok(Attempt::Raced),
-            WriteOutcome::Displaced(theirs) => {
+            outcome @ (WriteOutcome::Displaced(_) | WriteOutcome::DisplacedKept { .. }) => {
+                let (theirs, hidden) = match outcome {
+                    WriteOutcome::DisplacedKept { bytes, path } => (bytes, Some(path)),
+                    WriteOutcome::Displaced(bytes) => (bytes, None),
+                    _ => return Err(SyncError::Cancelled),
+                };
+                let kept = |path| SyncError::Storage(StorageError::VaultRetained { path });
                 if !still_current() {
-                    return Err(SyncError::Cancelled);
+                    return Err(hidden.map_or(SyncError::Cancelled, kept));
                 }
+                // Carry the working path when the displaced copy cannot be merged.
+                let kept_or_displaced =
+                    |path: Option<_>| path.map_or(SyncError::ConcurrentCopyKept, kept);
                 // Our bytes are on the remote, but they displaced a version another writer
                 // committed in the last instant: merge it back on the next attempt.
-                let theirs =
-                    Database::open(&theirs, password).map_err(|_| SyncError::ConcurrentCopyKept)?;
+                let theirs = Database::open_with_limits(
+                    &theirs,
+                    password,
+                    KdfLimits::remote(Some(&local.settings.kdf)),
+                )
+                .map_err(|e| match e {
+                    KdbxError::RemoteKdfLimitExceeded(_) => SyncError::SyncKdfLimitExceeded {
+                        recovery_file: hidden.clone(),
+                    },
+                    _ => kept_or_displaced(hidden.clone()),
+                })?;
                 if theirs.root.uuid != local.root.uuid {
-                    return Err(SyncError::ConcurrentCopyKept);
+                    return Err(kept_or_displaced(hidden));
                 }
                 Ok(Attempt::Rebase(Box::new(merge(write.content, &theirs))))
             }

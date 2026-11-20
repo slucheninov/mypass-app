@@ -298,7 +298,7 @@ mod tests {
         assert_eq!(create(&f, &n), Response::EntryCreated);
         let e = created(&f, "Shop");
         let pw = e.fields.iter().find(|x| x.key == "Password").unwrap();
-        assert_eq!((pw.value.as_str(), pw.protected), ("s3cret", true));
+        assert_eq!((pw.value(), pw.protected), ("s3cret", true));
         assert_eq!(e.field("Notes"), Some("line one\nline two"));
         assert_eq!(e.entry_type(), mypass_core::entry_ext::EntryType::Login);
     }

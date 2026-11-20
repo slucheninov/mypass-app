@@ -3,6 +3,7 @@
   // to keep, how often, the list with Restore (confirmed first) and a button that reveals the folder.
   // The reveal label is the one place the UI names the file manager.
   import LocationChangeSheet from "../../screens/LocationChangeSheet.svelte";
+  import DisplacedCopiesSection from "../../screens/DisplacedCopiesSection.svelte";
   import SecondaryFolderSection from "../../screens/SecondaryFolderSection.svelte";
   import StorageBanner from "../../screens/StorageBanner.svelte";
   import { sync } from "../../lib/stores/sync.svelte";
@@ -141,6 +142,7 @@
 <Button disabled={choosing || session.status.state !== "unlocked"} onclick={() => void choose(false)}>{t("Move to a local folder…")}</Button>
 {#if target}<LocationChangeSheet {target} {requestedIcloud} onclose={() => target = null} />{/if}
 <SecondaryFolderSection />
+<DisplacedCopiesSection />
 <h2>{t("Backups")}</h2>
 {#if settings.value}
   <Row label={t("Keep")}>

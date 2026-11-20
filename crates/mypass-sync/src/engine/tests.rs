@@ -74,6 +74,8 @@ struct Probe {
     after_write: Hook,
     /// Reported as the displaced version of the next write that lands.
     displace_next: Mutex<Option<Vec<u8>>>,
+    /// Like `displace_next`, but the copy survives only under this hidden file name.
+    displace_hidden_next: Mutex<Option<(Vec<u8>, PathBuf)>>,
 }
 impl Probe {
     fn writes(&self) -> usize {
@@ -111,6 +113,9 @@ impl StorageBackend for Probe {
             if let Some(theirs) = self.displace_next.lock().unwrap().take() {
                 return Ok(WriteOutcome::Displaced(theirs));
             }
+            if let Some((bytes, path)) = self.displace_hidden_next.lock().unwrap().take() {
+                return Ok(WriteOutcome::DisplacedKept { bytes, path });
+            }
         }
         Ok(outcome)
     }
@@ -137,6 +142,7 @@ impl Fx {
             on_write: no_hook(),
             after_write: no_hook(),
             displace_next: Mutex::new(None),
+            displace_hidden_next: Mutex::new(None),
         });
         let store = Arc::new(InMemoryCheckpointStore::new());
         let engine = SyncEngine::new(probe.clone(), store.clone());
@@ -328,6 +334,51 @@ fn wrong_password_remote_is_never_overwritten() {
     assert_eq!(fx.remote_bytes(), before);
     assert_eq!(fx.probe.writes(), 0);
     assert_eq!(fx.checkpoint(), None);
+}
+
+#[test]
+fn remote_kdf_above_limit_is_neither_adopted_nor_overwritten() {
+    let fx = Fx::new();
+    let local = fast_db("v");
+    let before = mypass_kdbx::test_util::vault_header_only(&KdfParams::AesKdf {
+        seed: vec![0; 32],
+        rounds: 300_000_001,
+    });
+    fs::write(&fx.file, &before).unwrap();
+    for push in [false, true] {
+        assert!(matches!(
+            run(&fx.engine, &local, push),
+            Err(SyncError::SyncKdfLimitExceeded {
+                recovery_file: None
+            })
+        ));
+    }
+    assert_eq!(fx.remote_bytes(), before);
+    assert_eq!(fx.probe.writes(), 0);
+    assert_eq!(fx.checkpoint(), None);
+}
+
+#[test]
+fn sync_accepts_keepassxc_like_costs() {
+    let fx = Fx::new();
+    let local = fast_db("v");
+    let mut remote = local.clone();
+    let KdfParams::Argon2 {
+        parallelism,
+        iterations,
+        ..
+    } = &mut remote.settings.kdf
+    else {
+        panic!("expected Argon2");
+    };
+    *parallelism = 16;
+    *iterations = 20;
+    add(&mut remote, "remote entry");
+    fx.external_write(&remote);
+
+    let result = run(&fx.engine, &local, false).unwrap();
+    let (merged, _) = result.into_parts();
+    assert_eq!(titles(&merged.unwrap()), ["remote entry"]);
 }
 
 #[test]
@@ -814,6 +865,88 @@ fn displaced_version_that_cannot_be_merged_is_reported() {
     assert_eq!(
         fx.engine.sync(&local, &pw(), SyncMode::Push).unwrap_err(),
         SyncError::ConcurrentCopyKept
+    );
+}
+
+/// A competing copy that survives only under a hidden name and cannot be merged must reach the
+/// user with that file name (a name only), not as a bare "kept".
+#[test]
+fn hidden_displaced_copy_that_cannot_be_merged_names_its_file() {
+    for bytes in [b"not a vault".to_vec(), {
+        let mut other = fast_db("other");
+        add(&mut other, "Theirs");
+        other.save(&pw()).unwrap()
+    }] {
+        let fx = Fx::new();
+        let base = fast_db("v");
+        run(&fx.engine, &base, false).unwrap();
+        *fx.probe.displace_hidden_next.lock().unwrap() =
+            Some((bytes, ".vault.kdbx.1.2.3.tmp".into()));
+        let mut local = base.clone();
+        add(&mut local, "Mine");
+        assert_eq!(
+            fx.engine.sync(&local, &pw(), SyncMode::Push).unwrap_err(),
+            SyncError::Storage(StorageError::VaultRetained {
+                path: ".vault.kdbx.1.2.3.tmp".into()
+            })
+        );
+    }
+}
+
+#[test]
+fn over_budget_hidden_displaced_copy_reports_limit_and_file_name() {
+    let fx = Fx::new();
+    let base = fast_db("v");
+    run(&fx.engine, &base, false).unwrap();
+    let bytes = mypass_kdbx::test_util::vault_header_only(&KdfParams::AesKdf {
+        seed: vec![0; 32],
+        rounds: 300_000_001,
+    });
+    let path = PathBuf::from(".vault.kdbx.1.2.3.tmp");
+    *fx.probe.displace_hidden_next.lock().unwrap() = Some((bytes, path.clone()));
+    let mut local = base.clone();
+    add(&mut local, "Mine");
+
+    assert_eq!(
+        fx.engine.sync(&local, &pw(), SyncMode::Push).unwrap_err(),
+        SyncError::SyncKdfLimitExceeded {
+            recovery_file: Some(path),
+        }
+    );
+}
+
+/// A hidden copy that merges is merged back like any displaced one.
+#[test]
+fn hidden_displaced_copy_that_can_be_merged_is_merged_back() {
+    let fx = Fx::new();
+    let base = fast_db("v");
+    run(&fx.engine, &base, false).unwrap();
+    let mut theirs = fx.remote_db();
+    add(&mut theirs, "Theirs");
+    *fx.probe.displace_hidden_next.lock().unwrap() =
+        Some((theirs.save(&pw()).unwrap(), ".vault.kdbx.1.2.3.tmp".into()));
+    let mut local = base.clone();
+    add(&mut local, "Mine");
+    let m = merged(fx.engine.sync(&local, &pw(), SyncMode::Push).unwrap());
+    assert_eq!(titles(m.database()), ["Mine", "Theirs"]);
+}
+
+#[test]
+fn withdrawal_after_a_hidden_displacement_keeps_its_recovery_path() {
+    let fx = Fx::new();
+    let mut local = fast_db("v");
+    run(&fx.engine, &local, false).unwrap();
+    add(&mut local, "local edit");
+    let kept = PathBuf::from("/resolved/.vault.kdbx.1.2.3.aside");
+    *fx.probe.displace_hidden_next.lock().unwrap() = Some((vec![], kept.clone()));
+
+    assert_eq!(
+        fx.engine
+            .sync_checked(&local, &pw(), SyncMode::Push, &|| {
+                fx.probe.write_attempts.load(Ordering::SeqCst) == 1
+            })
+            .unwrap_err(),
+        SyncError::Storage(StorageError::VaultRetained { path: kept })
     );
 }
 

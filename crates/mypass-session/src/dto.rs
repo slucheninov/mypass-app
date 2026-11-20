@@ -341,6 +341,10 @@ pub struct EntryEditModel {
     /// passkey stored after the editor opened (a browser replace) is never removed unseen.
     #[serde(default)]
     pub passkey_ref: Option<String>,
+    /// The user explicitly chose to bring this deleted entry back: when it sits in the recycle
+    /// bin, a save is refused unless this is set, and then it moves the entry to `group_id`.
+    #[serde(default)]
+    pub restore: bool,
 }
 
 impl std::fmt::Debug for EntryEditModel {
@@ -383,11 +387,30 @@ pub enum FieldRef {
 #[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryItem {
+    /// The position in the list, for restoring. It shifts whenever a version is added or dropped,
+    /// so a value is revealed by `revision`, never by this.
     pub index: u32,
+    /// An opaque, stable name of this exact version (the same one across reloads while the version
+    /// exists, a different one for a different version even with equal title and date). It is
+    /// derived with a per-run secret, so it reveals nothing about the values it covers.
+    pub revision: String,
     /// Unix milliseconds.
     pub modified: f64,
     pub title: String,
     pub changed_fields: Vec<String>,
+    /// The changed fields whose old value this version still holds and that can be revealed, in
+    /// the order of `changed_fields`. Reserved values (the code, passkey material, attachment
+    /// bytes, the app's own bookkeeping) are never listed.
+    pub revealable: Vec<HistoryReveal>,
+}
+
+/// One revealable field of a history version: `key` is the changed-field name from
+/// `HistoryItem::changed_fields`, `field` what to pass to `entry_history_reveal`.
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryReveal {
+    pub key: String,
+    pub field: FieldRef,
 }
 
 /// Input of the password generator. `host` selects the site rules; `record_url`, when present,

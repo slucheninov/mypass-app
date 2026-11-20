@@ -73,6 +73,7 @@ assert.ok(create.MATCH_HELP['registrable-domain'].includes('example.com'));
 assert.strictEqual(create.INSERT_PASSWORD_KEY, 'insertGeneratedPassword');
 
 const extensionDir = path.join(__dirname, '..');
+const englishCatalog = JSON.parse(fs.readFileSync(path.join(extensionDir, '_locales', 'en', 'messages.json'), 'utf8'));
 const generatorHtml = fs.readFileSync(path.join(extensionDir, 'generator.html'), 'utf8');
 const generatorJs = fs.readFileSync(path.join(extensionDir, 'generator.js'), 'utf8');
 const createHtml = fs.readFileSync(path.join(extensionDir, 'create.html'), 'utf8');
@@ -82,11 +83,16 @@ const createHtml = fs.readFileSync(path.join(extensionDir, 'create.html'), 'utf8
   'Commas', 'Underscores', 'Capitalize', 'Full words', 'Use by default for suggestions',
   'Password generator history', 'Generator history', 'Search history'
 ].forEach((label) => {
-  assert.ok(generatorHtml.includes(label), 'generator window is missing ' + label);
+  // The window's text lives in the catalog; the page (or its script) must reference a key whose
+  // English message is the label.
+  const keys = Object.keys(englishCatalog).filter((key) => englishCatalog[key].message === label);
+  assert.ok(keys.length > 0, 'the English catalog has no message ' + label);
+  assert.ok(keys.some((key) => generatorHtml.includes('"' + key + '"') || generatorJs.includes("'" + key + "'")),
+    'generator window is missing ' + label);
 });
-assert.ok(generatorJs.includes("textContent = 'Show'") || generatorJs.includes('Show'));
-assert.ok(generatorJs.includes("textContent = 'Copy'"));
-assert.ok(generatorJs.includes("textContent = 'Delete'"));
+assert.ok(generatorJs.includes("'show'"));
+assert.ok(generatorJs.includes("i18n.t('copy')"));
+assert.ok(generatorJs.includes("i18n.t('delete')"));
 assert.ok(generatorJs.includes('insertGeneratedPassword'));
 assert.ok(generatorJs.includes('••••••••'));
 assert.ok(generatorJs.includes('show-history'), 'history opens by sliding over the generator');
@@ -103,7 +109,10 @@ assert.ok(createHtml.includes('class="notes-card"'));
   '+ Add one-time password', 'Cancel', 'Save', 'New Card', 'Card Number', 'Cardholder Name',
   'Expiry Date (MM/YY)', 'CVV', 'New Note'
 ].forEach((label) => {
-  assert.ok(createHtml.includes(label) || fs.readFileSync(path.join(extensionDir, 'create.js'), 'utf8').includes(label), label);
+  const createJs = fs.readFileSync(path.join(extensionDir, 'create.js'), 'utf8');
+  const keys = Object.keys(englishCatalog).filter((key) => englishCatalog[key].message === label);
+  assert.ok(keys.length > 0, 'the English catalog has no message ' + label);
+  assert.ok(keys.some((key) => createHtml.includes('"' + key + '"') || createJs.includes("'" + key + "'")), label);
 });
 
 console.log('passwordGenerator.test.js: OK');

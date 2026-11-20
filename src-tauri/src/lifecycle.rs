@@ -17,7 +17,7 @@ use mypass_platform::{PlatformResult, Subscription};
 use mypass_session::scheduler::Scheduler;
 use mypass_session::session::SessionError;
 use mypass_session::settings::{Language, Settings, SettingsPatch, Theme};
-use mypass_session::{AppCore, LockReason, Platform, SaveState, SaveStatus, SessionState};
+use mypass_session::{AppCore, LockReason, Platform, SaveStatus, SessionState};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -296,10 +296,7 @@ impl ExternalWatcher {
                 let message = error.to_string();
                 if last.as_deref() != Some(message.as_str()) {
                     *last = Some(message.clone());
-                    (self.report)(SaveStatus {
-                        state: SaveState::Failed,
-                        message: Some(message),
-                    });
+                    (self.report)(SaveStatus::failed(&error, message));
                 }
             }
         }
@@ -884,7 +881,7 @@ mod tests {
         watcher.check();
         let reports = seen.lock().unwrap().clone();
         assert_eq!(reports.len(), 1, "the same failure is not repeated");
-        assert_eq!(reports[0].state, SaveState::Failed);
+        assert_eq!(reports[0].state, mypass_session::SaveState::Failed);
         assert!(reports[0].message.is_some());
     }
 

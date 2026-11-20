@@ -25,6 +25,20 @@
 
   const status = $derived(browser.status);
 
+  // The machine-readable reason the bridge is down (other than the pairing list), as a message.
+  const startFailureLine = $derived.by(() => {
+    switch (status?.startFailure) {
+      case "endpointStoreUnusable":
+        return t("Browser integration is not running because its connection record could not be stored. Check the permissions of the MyPass data folder, then restart MyPass.");
+      case "listenerUnavailable":
+        return t("Browser integration is not running because the local connection could not be opened. Restart MyPass.");
+      case "workerUnavailable":
+        return t("Browser integration is not running because a background task could not be started. Restart MyPass.");
+      default:
+        return null;
+    }
+  });
+
   function passkeyLine(d: BrowserDiagnosticsDto): string {
     switch (d.proxyState) {
       case "active":
@@ -156,6 +170,12 @@
     <div class="notice" role="alert">
       <p>{t("The list of connected browsers could not be read, so browser integration is not running.")}</p>
       <Button variant="danger" onclick={() => (resetting = true)}>{t("Reset paired browsers")}</Button>
+    </div>
+  {/if}
+
+  {#if startFailureLine}
+    <div class="notice" role="alert" data-testid="start-failure" data-reason={status.startFailure}>
+      <p>{startFailureLine}</p>
     </div>
   {/if}
 

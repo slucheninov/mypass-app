@@ -5,6 +5,7 @@ import { createFakeBackend } from "../test/fakeBackend";
 import { api, ApiFailure, call, errorDetail, errorMessage } from "./api";
 import { commands, type ErrorCode } from "./bindings";
 import { __resetCatalogsForTest, setLanguage, t } from "./i18n/index.svelte";
+import de from "./i18n/locales/de.json";
 import en from "./i18n/locales/en.json";
 import ru from "./i18n/locales/ru.json";
 import uk from "./i18n/locales/uk.json";
@@ -114,7 +115,6 @@ describe("errorMessage", () => {
     for (const key of [
       "Vault is locked",
       "Wrong master password",
-      "Vault not found",
       "Item not found",
       "Invalid input",
       "Limit reached",
@@ -129,20 +129,20 @@ describe("errorMessage", () => {
       "Turn on at least one character type in the generator",
       "This site's password requirements could not be satisfied",
     ]) {
-      expect(key in en && key in uk && key in ru, key).toBe(true);
+      expect(key in en && key in uk && key in ru && key in de, key).toBe(true);
     }
   });
 });
 
 it("every migration failure has a distinct actionable translation in every language", () => {
-  const codes: ErrorCode[] = ["migrationLocked", "migrationTargetUnreadable", "migrationTargetNotAVault", "migrationTargetPasswordMismatch", "migrationTargetWriteFailed", "migrationSourceInvalid", "migrationSameFile", "migrationValidationFailed"];
+  const codes: ErrorCode[] = ["migrationLocked", "migrationTargetUnreadable", "migrationTargetNotAVault", "migrationTargetPasswordMismatch", "migrationTargetWriteFailed", "migrationSourceInvalid", "migrationSameFile", "migrationValidationFailed", "syncKdfLimitExceeded"];
   setLanguage("en");
   const keys = codes.map(code => errorMessage(new ApiFailure(code)));
-  for (const lang of ["en", "uk", "ru"] as const) {
+  for (const lang of ["en", "uk", "ru", "de"] as const) {
     setLanguage(lang);
     const messages = codes.map(code => errorMessage(new ApiFailure(code, "RAW-BACKEND-TEXT")));
-    expect(new Set(messages).size).toBe(8);
-    const catalog = { en, uk, ru }[lang];
+    expect(new Set(messages).size).toBe(codes.length);
+    const catalog = { en, uk, ru, de }[lang];
     expect(messages).toEqual(keys.map(key => catalog[key as keyof typeof catalog]));
     for (const message of messages) {
       expect(message).not.toContain("RAW-BACKEND-TEXT");
