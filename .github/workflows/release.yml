@@ -92,9 +92,10 @@ jobs:
           if [[ "$existing" == published ]]; then echo 'Release is already published'; exit 1; fi
           if [[ "$existing" == draft ]]; then gh release delete "$tag" --yes; fi
           python3 scripts/release.py notes "${tag#v}" "$RUNNER_TEMP/notes.md"
+          # Bash 3.2 (macOS runners) treats a bare empty-array expansion as unbound under set -u.
           flags=()
           if [[ "$tag" == *-* ]]; then flags=(--prerelease --latest=false); fi
-          gh release create "$tag" --verify-tag --draft "${flags[@]}" --title "MyPass ${tag#v}" --generate-notes --notes-file "$RUNNER_TEMP/notes.md" "$RUNNER_TEMP/mypass-assets/"*
+          gh release create "$tag" --verify-tag --draft ${flags[@]+"${flags[@]}"} --title "MyPass ${tag#v}" --generate-notes --notes-file "$RUNNER_TEMP/notes.md" "$RUNNER_TEMP/mypass-assets/"*
           gh release download "$tag" --dir "$RUNNER_TEMP/draft-assets"
           python3 scripts/release.py check-assets "$RUNNER_TEMP/draft-assets" "${tag#v}" --platform macos
       - name: Delete temporary signing material
