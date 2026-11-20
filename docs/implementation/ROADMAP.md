@@ -14,9 +14,6 @@ Last updated: 2026-11-20
   directory fsync. On Unix the atomic save treats a directory-sync `Unsupported` or `InvalidInput`
   error as success by design; any other directory-sync error is reported after the replacement has
   committed, and the caller must reload. Only real mounts can show which error they return.
-- [ ] Wipe UI-facing secret copies in `crates/mypass-session/src/editing.rs`, secret DTO values in
-  `queries.rs`, and protected attachment buffers. These copies still use plain `String` or
-  `Vec` allocations that are freed without wiping.
 
 ## Stage 2a follow-ups
 
@@ -75,10 +72,11 @@ Last updated: 2026-11-20
 - [ ] The Vault pane's list of competing copies does not refresh while it stays open if a copy is
   kept by a save of the primary vault only. It refreshes when the pane opens, when the vault
   changes and when a sync finishes. Refresh it on a primary-only save too.
-- [ ] macOS tray panel position: the click point is read when the click event is handled, not when
-  it happened. If the pointer moves off the icon in between, the panel can open at the pointer's
-  new spot (still on a real screen). Capture the point at event time if the tray API gives it,
-  and check on a mixed-DPI, multi-monitor setup by hand.
+- [ ] Manual: macOS tray panel position on a mixed-DPI, multi-monitor desktop. The panel now uses
+  the position the tray event carried (captured at click time); only when that fits two monitor
+  scales does the cursor sampled at handling time pick between them, so check by hand that the
+  panel opens under the icon on each screen of such a setup, also after moving the pointer away
+  right after the click.
 - [ ] Upgrade device-unlock storage to `SecAccessControl(biometryCurrentSet)` with a data-protection
   Keychain and provisioning profile; current ordinary Keychain + LocalAuthentication handling
   checks biometric domain state for Touch ID-only enrolments.
