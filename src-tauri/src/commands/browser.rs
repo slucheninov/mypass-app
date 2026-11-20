@@ -670,7 +670,8 @@ mod tests {
         use crate::bridge::BridgeStartError;
         use mypass_bridge::server::ServerError;
         let f = unstarted(false, None);
-        let cases: [(fn() -> BridgeStartError, Option<BrowserStartFailure>, bool); 4] = [
+        type Case = (fn() -> BridgeStartError, Option<BrowserStartFailure>, bool);
+        let cases: [Case; 4] = [
             (
                 || BridgeStartError::Server(ServerError::Bind("in use".into())),
                 Some(BrowserStartFailure::ListenerUnavailable),
