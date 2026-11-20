@@ -4,7 +4,7 @@
 its tests pass, or, for manual-only items, once the manual check has actually been walked. History
 lives in `git log`, not here.
 
-Last updated: 2026-11-15
+Last updated: 2026-11-20
 
 ---
 
@@ -81,6 +81,23 @@ Last updated: 2026-11-15
   identity persisted at write time, in-flight files named separately, and confirmation bound to the
   displayed ids and session). The surfacing itself is done: the Vault pane lists the copies read-only.
   These competing vault copies are deliberately never auto-deleted.
+- [ ] Replacing a vault on the move-aside path (Windows and volumes without an atomic exchange)
+  renames the current file to a working `.aside` name with a rename that replaces. If another
+  program has put its own file under that exact name first, that file is overwritten. This
+  predates stage 7. Fix it with a rename that never replaces (or a private reserved name) and
+  fail closed where the volume cannot do that; test the collision with distinct bytes.
+- [ ] Working-name leftovers (`.aside`, or the hidden temp name after an atomic exchange) are not
+  listed in the sync status. The error now names the file when a failed replace strands the
+  vault there, but a leftover from a crash, or from a working name that could not be removed
+  after the copy was published, shows up only in the folder itself. List them read-only, apart
+  from the real competing copies.
+- [ ] The Vault pane's list of competing copies does not refresh while it stays open if a copy is
+  kept by a save of the primary vault only. It refreshes when the pane opens, when the vault
+  changes and when a sync finishes. Refresh it on a primary-only save too.
+- [ ] macOS tray panel position: the click point is read when the click event is handled, not when
+  it happened. If the pointer moves off the icon in between, the panel can open at the pointer's
+  new spot (still on a real screen). Capture the point at event time if the tray API gives it,
+  and check on a mixed-DPI, multi-monitor setup by hand.
 - [ ] Tighter KDF limits for remote/secondary opens: hostile-input limits exist, but expensive
   KDF work on an untrusted remote file can still consume substantial CPU/memory.
 - [ ] Upgrade device-unlock storage to `SecAccessControl(biometryCurrentSet)` with a data-protection
