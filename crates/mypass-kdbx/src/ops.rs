@@ -200,19 +200,16 @@ impl Database {
         Ok(true)
     }
     /// Moves an entry without editing content; rejects missing entry or destination. A move from
-    /// outside the recycle bin into it records the origin in `previous_parent`.
+    /// one group to another records the source in `previous_parent` (see `records_origin`).
     pub fn move_entry(&mut self, id: Uuid, new_parent: Uuid, now: Timestamp) -> Result<()> {
         if self.find_group(new_parent).is_none() {
             return Err(invalid("missing parent"));
         }
         let origin = self.parent_of_entry(id);
-        let recycled = self.enters_bin(origin, new_parent);
-        let leaves_bin = self.leaves_bin(origin, new_parent);
+        let record = self.records_origin(origin, new_parent);
         let mut e = self.take_entry(id)?;
-        if recycled {
+        if record {
             e.previous_parent = origin;
-        } else if leaves_bin {
-            e.previous_parent = None;
         }
         e.location_changed = now;
         self.find_group_mut(new_parent)
@@ -256,14 +253,17 @@ impl Database {
         self.live_bin()
             .is_some_and(|bin| groups(bin).any(|(g, _)| g.uuid == group))
     }
-    /// True when a move from `origin` to `dest` carries something into the bin from outside it.
-    fn enters_bin(&self, origin: Option<Uuid>, dest: Uuid) -> bool {
-        self.is_bin_or_below(dest) && !origin.is_some_and(|o| self.is_bin_or_below(o))
-    }
-    /// True when a move from `origin` to `dest` takes something out of the bin: the recorded origin
-    /// is consumed then, whichever API moved it (restore, a save into another group, a drag).
-    fn leaves_bin(&self, origin: Option<Uuid>, dest: Uuid) -> bool {
-        origin.is_some_and(|o| self.is_bin_or_below(o)) && !self.is_bin_or_below(dest)
+    /// Whether a move from `origin` to `dest` records `origin` as the previous parent (KDBX 4.1
+    /// defines the element as the immediate source of every parent change, not only of recycling).
+    /// Same-parent operations keep what was recorded. A move inside the bin keeps the recorded
+    /// origin as well: it is what a restore needs, and the bin's own groups say nothing about where
+    /// the item lived.
+    fn records_origin(&self, origin: Option<Uuid>, dest: Uuid) -> bool {
+        match origin {
+            None => false,
+            Some(o) if o == dest => false,
+            Some(o) => !(self.is_bin_or_below(o) && self.is_bin_or_below(dest)),
+        }
     }
     /// True for groups strictly below the configured, existing recycle bin.
     pub fn is_group_in_recycle_bin(&self, group_id: Uuid) -> bool {
@@ -295,7 +295,7 @@ impl Database {
         Ok(())
     }
     /// Moves a subtree; rejects root, missing groups, cycles or excessive resulting depth. A move
-    /// from outside the recycle bin into it records the origin in `previous_parent`.
+    /// one parent to another records the source in `previous_parent` (see `records_origin`).
     pub fn move_group(&mut self, id: Uuid, new_parent: Uuid, now: Timestamp) -> Result<()> {
         if id == self.root_id() {
             return Err(invalid("cannot move root"));
@@ -308,13 +308,10 @@ impl Database {
         }
         self.check_depth(new_parent, g)?;
         let origin = self.parent_of_group(id);
-        let recycled = self.enters_bin(origin, new_parent);
-        let leaves_bin = self.leaves_bin(origin, new_parent);
+        let record = self.records_origin(origin, new_parent);
         let mut g = self.take_group(id)?;
-        if recycled {
+        if record {
             g.previous_parent = origin;
-        } else if leaves_bin {
-            g.previous_parent = None;
         }
         g.location_changed = now;
         self.find_group_mut(new_parent)
@@ -324,7 +321,7 @@ impl Database {
         Ok(())
     }
     /// Moves a recycled group (below the bin, not the bin itself) to `target`; rejects anything
-    /// else and every case [`Database::move_group`] rejects. The recorded origin is consumed.
+    /// else and every case [`Database::move_group`] rejects. The recorded origin is still the bin-time one while in the bin, then the bin itself once the move leaves it.
     pub fn restore_group(&mut self, id: Uuid, target: Uuid, now: Timestamp) -> Result<()> {
         if !self.is_group_in_recycle_bin(id) {
             return Err(invalid("group is not in the recycle bin"));
