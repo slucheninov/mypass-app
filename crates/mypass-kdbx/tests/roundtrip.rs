@@ -111,3 +111,32 @@ fn typed_metadata_custom_data_and_nested_history_round_trip() {
     db.root.entries.push(top);
     assert_eq!(Database::open(&db.save(&p).unwrap(), &p).unwrap(), db);
 }
+#[test]
+fn previous_parent_of_a_recycled_entry_and_group_survives_a_round_trip() {
+    let now = Timestamp(1793750604);
+    let mut db = make_db();
+    let work = Group::new("work", now);
+    let work_id = work.uuid;
+    db.add_group(db.root_id(), work, now).unwrap();
+    let inner = Group::new("inner", now);
+    let inner_id = inner.uuid;
+    db.add_group(work_id, inner, now).unwrap();
+    let e = Entry::new(now);
+    let eid = e.uuid;
+    db.add_entry(work_id, e, now).unwrap();
+    db.delete_entry(eid, now).unwrap();
+    db.delete_group(inner_id, now).unwrap();
+    let p = SecretString::from("password");
+    let reopened = Database::open(&db.save(&p).unwrap(), &p).unwrap();
+    assert_eq!(reopened, db);
+    assert_eq!(
+        reopened.find_entry(eid).unwrap().previous_parent,
+        Some(work_id)
+    );
+    assert_eq!(
+        reopened.find_group(inner_id).unwrap().previous_parent,
+        Some(work_id)
+    );
+    assert_eq!(reopened.restore_target_of_entry(eid), work_id);
+    assert_eq!(reopened.restore_target_of_group(inner_id), work_id);
+}

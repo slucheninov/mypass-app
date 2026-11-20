@@ -275,7 +275,10 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     const bin = list.findIndex((g) => g.isRecycleBin);
     list.splice(bin === -1 ? list.length : bin, 0, node);
   };
+  /** The group each bin entry was deleted from (`PreviousParentGroup`), by entry id. */
+  const origins = new Map<string, string>();
   const sendToBin = (entry: FixtureEntry) => {
+    origins.set(entry.summary.id, entry.summary.groupId);
     entry.summary.groupId = BIN_GROUP_ID;
     entry.model.groupId = BIN_GROUP_ID;
     entry.summary.inRecycleBin = true;
@@ -606,16 +609,19 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         .slice(0, limit)
         .map((e) => structuredClone(e.summary));
     },
-    // Like `editing::restore_entry`: only a bin entry, into `groupId` (the root when null; the real
-    // backend does not remember the group an entry came from either).
+    // Like `editing::restore_entry`: only a bin entry, into `groupId`, or (null) back into the group
+    // it was deleted from while that group is still live, the root otherwise.
     entryRestore: ({ id, groupId }) => {
       requireUnlocked();
       const found = findEntry(id);
       if (!found.summary.inRecycleBin) throw apiError("invalidInput");
-      const target = groupId ?? ROOT_GROUP_ID;
+      const origin = origins.get(id);
+      const live = origin !== undefined && (origin === ROOT_GROUP_ID || locate(origin) !== null);
+      const target = groupId ?? (live ? origin : ROOT_GROUP_ID);
       if (target !== ROOT_GROUP_ID && (!locate(target) || locate(target)?.node.isRecycleBin)) {
         throw apiError(locate(target) ? "invalidInput" : "notFound");
       }
+      origins.delete(id);
       found.summary.groupId = target;
       found.model.groupId = target;
       found.summary.inRecycleBin = false;

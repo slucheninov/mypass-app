@@ -133,6 +133,14 @@ fn times(n: &Node) -> Result<Times> {
     }
     Ok(t)
 }
+/// `PreviousParentGroup` is a hint for restoring from the bin, so a value that does not parse (or
+/// the all-zero "none" another client writes) is dropped instead of failing the whole vault.
+fn previous_parent(n: &Node) -> Option<Uuid> {
+    text(n)
+        .ok()
+        .and_then(|t| uuid(t).ok())
+        .filter(|id| !id.is_nil())
+}
 struct Context<'a> {
     pool: &'a [InnerBinary],
     attachment_bytes: u64,
@@ -153,6 +161,7 @@ impl Context<'_> {
         // Missing times/UUID default deterministically; decoding never invents wall-clock values.
         let mut g = Group {
             uuid: Uuid::nil(),
+            previous_parent: None,
             name: String::new(),
             icon_id: 0,
             created: Timestamp(0),
@@ -169,6 +178,7 @@ impl Context<'_> {
         for c in &n.children {
             match GroupElement::from_name(&c.name) {
                 Some(GroupElement::Uuid) => g.uuid = uuid(text(c)?)?,
+                Some(GroupElement::PreviousParentGroup) => g.previous_parent = previous_parent(c),
                 Some(GroupElement::Name) => g.name = text(c)?.to_owned(),
                 Some(GroupElement::IconID) => {
                     g.icon_id = text(c)?.parse().map_err(|_| corrupt("icon ID"))?
@@ -195,6 +205,7 @@ impl Context<'_> {
     fn entry(&mut self, n: &Node) -> Result<Entry> {
         let mut e = Entry {
             uuid: Uuid::nil(),
+            previous_parent: None,
             icon_id: 0,
             fields: vec![],
             string_arrays: vec![],
@@ -213,6 +224,7 @@ impl Context<'_> {
         for c in &n.children {
             match EntryElement::from_name(&c.name) {
                 Some(EntryElement::Uuid) => e.uuid = uuid(text(c)?)?,
+                Some(EntryElement::PreviousParentGroup) => e.previous_parent = previous_parent(c),
                 Some(EntryElement::IconID) => {
                     e.icon_id = text(c)?.parse().map_err(|_| corrupt("icon ID"))?
                 }

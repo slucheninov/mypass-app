@@ -62,6 +62,9 @@ pub struct RawXml(pub String);
 #[derive(Clone, PartialEq)]
 pub struct Entry {
     pub uuid: Uuid,
+    /// KDBX 4.1 `PreviousParentGroup`: the group the entry was in before it moved into the recycle
+    /// bin. Location metadata, not content: edits never snapshot it and `content_eq` ignores it.
+    pub previous_parent: Option<Uuid>,
     pub icon_id: u32,
     pub fields: Vec<Field>,
     pub string_arrays: Vec<StringArray>,
@@ -81,6 +84,7 @@ impl Entry {
     pub fn new(now: Timestamp) -> Self {
         Self {
             uuid: Uuid::new_v4(),
+            previous_parent: None,
             icon_id: 0,
             fields: vec![],
             string_arrays: vec![],
@@ -136,6 +140,9 @@ impl Entry {
 #[derive(Clone, PartialEq)]
 pub struct Group {
     pub uuid: Uuid,
+    /// KDBX 4.1 `PreviousParentGroup`: the group this group was in before it moved into the
+    /// recycle bin.
+    pub previous_parent: Option<Uuid>,
     pub name: String,
     pub icon_id: u32,
     pub created: Timestamp,
@@ -153,6 +160,7 @@ impl Group {
     pub fn new(name: &str, now: Timestamp) -> Self {
         Self {
             uuid: Uuid::new_v4(),
+            previous_parent: None,
             name: name.into(),
             icon_id: 0,
             created: now,

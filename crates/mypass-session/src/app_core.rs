@@ -648,14 +648,12 @@ impl AppCore {
         Ok(())
     }
 
-    /// Moves a bin entry to `group_id` (the root when `None`).
+    /// Moves a bin entry to `group_id`, or back to the group it was deleted from when `None`
+    /// (the root if that group is gone).
     pub fn entry_restore(&self, id: &str, group_id: Option<&str>) -> Result<(), ApiError> {
         self.writable()?;
         let id = parse_id(id)?;
-        let group = match group_id {
-            Some(g) => parse_id(g)?,
-            None => self.session.with_db(Database::root_id)?,
-        };
+        let group = group_id.map(parse_id).transpose()?;
         Ok(editing::restore_entry(&self.session, id, group)?)
     }
 

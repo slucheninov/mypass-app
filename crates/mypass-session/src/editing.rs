@@ -631,17 +631,42 @@ pub fn delete_entry(session: &VaultSession, id: Uuid) -> Result<(), SessionError
     })
 }
 
-/// Moves an entry out of the recycle bin into `group`.
-pub fn restore_entry(session: &VaultSession, id: Uuid, group: Uuid) -> Result<(), SessionError> {
+/// Moves an entry out of the recycle bin into `group`, or, with `None`, back to the group it was
+/// deleted from (the KDBX 4.1 `PreviousParentGroup`), falling back to the root when that group no
+/// longer exists or is itself in the bin.
+pub fn restore_entry(
+    session: &VaultSession,
+    id: Uuid,
+    group: Option<Uuid>,
+) -> Result<(), SessionError> {
     session.mutate(|db, now| {
         find_entry(db, id)?;
-        require_not_history(db, group)?;
         if !db.is_in_recycle_bin(id) {
             return Err(SessionError::InvalidInput(
                 "entry is not in the recycle bin".into(),
             ));
         }
+        let group = group.unwrap_or_else(|| db.restore_target_of_entry(id));
+        require_not_history(db, group)?;
         db.restore_entry(id, group, now)?;
+        Ok(())
+    })
+}
+
+/// Moves a deleted group out of the recycle bin into `parent`, or, with `None`, back under the
+/// group it was deleted from (root fallback as for [`restore_entry`]).
+pub fn restore_group(
+    session: &VaultSession,
+    id: Uuid,
+    parent: Option<Uuid>,
+) -> Result<(), SessionError> {
+    session.mutate(|db, now| {
+        if db.find_group(id).is_none() {
+            return Err(SessionError::NotFound);
+        }
+        let parent = parent.unwrap_or_else(|| db.restore_target_of_group(id));
+        require_not_history(db, parent)?;
+        db.restore_group(id, parent, now)?;
         Ok(())
     })
 }
@@ -1794,11 +1819,11 @@ mod tests {
         let id = f.create(|m| m.title = "x".into());
         delete_entry(&f.session, id).unwrap();
         assert!(f.db(|d| d.is_in_recycle_bin(id)));
-        restore_entry(&f.session, id, f.root).unwrap();
+        restore_entry(&f.session, id, Some(f.root)).unwrap();
         assert!(!f.db(|d| d.is_in_recycle_bin(id)));
         assert_eq!(f.db(|d| d.parent_of_entry(id)), Some(f.root));
         assert_eq!(
-            restore_entry(&f.session, id, f.root),
+            restore_entry(&f.session, id, Some(f.root)),
             Err(SessionError::InvalidInput(
                 "entry is not in the recycle bin".into()
             ))
@@ -2314,11 +2339,91 @@ mod tests {
                 invalid(create_group(&f.session, target, "sub", None));
                 invalid(move_group(&f.session, other, target));
                 delete_entry(&f.session, id).unwrap();
-                invalid(restore_entry(&f.session, id, target));
-                restore_entry(&f.session, id, f.root).unwrap();
+                invalid(restore_entry(&f.session, id, Some(target)));
+                restore_entry(&f.session, id, Some(f.root)).unwrap();
             }
             assert_eq!(f.db(|d| d.parent_of_entry(id)), Some(f.root));
         }
+    }
+
+    #[test]
+    fn restore_without_a_target_returns_to_the_original_group() {
+        let f = fx();
+        let work = create_group(&f.session, f.root, "work", None).unwrap();
+        let id = f.create(|m| {
+            m.title = "x".into();
+            m.group_id = work.simple().to_string();
+        });
+        delete_entry(&f.session, id).unwrap();
+        assert_eq!(
+            f.db(|d| d.parent_of_entry(id)),
+            f.db(|d| d.meta.recycle_bin_uuid)
+        );
+        restore_entry(&f.session, id, None).unwrap();
+        assert_eq!(f.db(|d| d.parent_of_entry(id)), Some(work));
+    }
+
+    #[test]
+    fn restore_without_a_target_falls_back_to_the_root() {
+        let f = fx();
+        let work = create_group(&f.session, f.root, "work", None).unwrap();
+        let id = f.create(|m| {
+            m.title = "x".into();
+            m.group_id = work.simple().to_string();
+        });
+        delete_entry(&f.session, id).unwrap();
+        // Emptying the bin cannot take the entry, but deleting its group for good can.
+        f.session
+            .mutate(|db, now| {
+                db.purge_group(work, now)?;
+                Ok(())
+            })
+            .unwrap();
+        restore_entry(&f.session, id, None).unwrap();
+        assert_eq!(f.db(|d| d.parent_of_entry(id)), Some(f.root));
+    }
+
+    #[test]
+    fn restore_without_a_target_skips_an_original_group_that_is_in_the_bin() {
+        let f = fx();
+        let work = create_group(&f.session, f.root, "work", None).unwrap();
+        let id = f.create(|m| {
+            m.title = "x".into();
+            m.group_id = work.simple().to_string();
+        });
+        delete_entry(&f.session, id).unwrap();
+        delete_group(&f.session, work).unwrap();
+        restore_entry(&f.session, id, None).unwrap();
+        assert_eq!(f.db(|d| d.parent_of_entry(id)), Some(f.root));
+    }
+
+    #[test]
+    fn restore_group_returns_to_the_original_parent_or_the_root() {
+        let f = fx();
+        let parent = create_group(&f.session, f.root, "parent", None).unwrap();
+        let child = create_group(&f.session, parent, "child", None).unwrap();
+        let loner = create_group(&f.session, parent, "loner", None).unwrap();
+        delete_group(&f.session, child).unwrap();
+        delete_group(&f.session, loner).unwrap();
+        restore_group(&f.session, child, None).unwrap();
+        assert!(f.db(|d| d
+            .find_group(parent)
+            .is_some_and(|p| p.groups.iter().any(|g| g.uuid == child))));
+        // Its parent is purged for good: the root takes it.
+        f.session
+            .mutate(|db, now| {
+                db.purge_group(parent, now)?;
+                Ok(())
+            })
+            .unwrap();
+        restore_group(&f.session, loner, None).unwrap();
+        assert!(f.db(|d| d.root.groups.iter().any(|g| g.uuid == loner)));
+        // A group that is not in the bin is refused.
+        assert!(restore_group(&f.session, loner, None).is_err());
+        assert_eq!(
+            restore_group(&f.session, Uuid::new_v4(), None),
+            Err(SessionError::NotFound)
+        );
     }
 
     #[test]

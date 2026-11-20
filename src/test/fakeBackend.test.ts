@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { invoke } from "@tauri-apps/api/core";
 import { describe, expect, it } from "vitest";
 import { createFakeBackend } from "./fakeBackend";
-import { BIN_GROUP_ID, FIXTURE_MASTER_PASSWORD, WORK_GROUP_ID } from "./fixtures";
+import { BIN_GROUP_ID, FIXTURE_MASTER_PASSWORD, ROOT_GROUP_ID, WORK_GROUP_ID } from "./fixtures";
 import { renderWithBackend } from "./render";
 import MainApp from "../windows/MainApp.svelte";
 import { commands, events } from "../lib/bindings";
@@ -216,6 +216,14 @@ describe("fake backend", () => {
     old.model.groupId = BIN_GROUP_ID;
     expect(ok(await commands.entryRestore("e-old", null))).toBe(true);
     expect(fake.state.entries.find((e) => e.summary.id === "e-old")!.summary.inRecycleBin).toBe(false);
+    // Like the backend's `PreviousParentGroup`: a deleted entry goes back to the group it left, and
+    // to the root when it never recorded one or that group is gone.
+    expect(old.summary.groupId).toBe(ROOT_GROUP_ID);
+    expect(ok(await commands.entrySave({ ...structuredClone(old.model), groupId: WORK_GROUP_ID }))).toBe(true);
+    expect(ok(await commands.entryDelete("e-old"))).toBe(true);
+    expect(old.summary.groupId).toBe(BIN_GROUP_ID);
+    expect(ok(await commands.entryRestore("e-old", null))).toBe(true);
+    expect(old.summary.groupId).toBe(WORK_GROUP_ID);
     // Export answers false when the (Rust-side) save dialog is cancelled.
     fake.state.entries[0]!.model.attachments = [{ name: "a.txt", size: 1 }];
     expect(await commands.attachmentExport("e-github", "a.txt")).toEqual({ status: "ok", data: true });
