@@ -68,7 +68,7 @@ tauri-build = "=2.7.4"
 tauri-plugin-single-instance = "=2.5.5"
 tauri-plugin-global-shortcut = "=2.4.1"
 tauri-plugin-dialog = "=2.8.4"
-tauri-plugin-opener = "=2.7.2"
+tauri-plugin-opener = "=2.7.3"
 specta = { version = "=2.0.0-rc.26", features = ["derive"] }
 tauri-specta = { version = "=2.0.0-rc.26", features = ["derive", "typescript"] }
 # Used directly for the `Typescript` exporter handed to `tauri_specta::Builder::export`; the version

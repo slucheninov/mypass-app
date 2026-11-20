@@ -466,7 +466,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `tauri-plugin-dialog` | 2.8.4 | Apache-2.0 OR MIT |
 | `tauri-plugin-fs` | 2.7.1 | Apache-2.0 OR MIT |
 | `tauri-plugin-global-shortcut` | 2.4.1 | Apache-2.0 OR MIT |
-| `tauri-plugin-opener` | 2.7.2 | Apache-2.0 OR MIT |
+| `tauri-plugin-opener` | 2.7.3 | Apache-2.0 OR MIT |
 | `tauri-plugin-single-instance` | 2.5.5 | Apache-2.0 OR MIT |
 | `tauri-runtime` | 2.12.2 | Apache-2.0 OR MIT |
 | `tauri-runtime-wry` | 2.12.3 | Apache-2.0 OR MIT |
