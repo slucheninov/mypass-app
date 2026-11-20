@@ -1150,23 +1150,19 @@ fn replace_expected(
             false,
         )),
         Err(e) => {
-            // Ours is not installed and the path may be empty. Put the moved-aside file back
-            // without replacing anything (best effort), then ALWAYS publish it as a kept
-            // `.displaced` copy as well: nothing is deleted on a failure path, and whether or not
-            // the restore worked the file never stays under its unlisted working name. (After a
-            // successful restore the copy is a duplicate of the live vault: harmless, and it may
-            // hold a foreign version that was moved aside.)
+            // Ours is not installed. Restore the old path without replacing anything and
+            // attempt to publish the moved-aside file. A successful restore makes any retained
+            // name a second link to the vault, even when publication or cleanup fails.
             let restored = (seams.link)(&names.aside, target).is_ok();
             drop(cleanup);
-            Err(match publish_displaced(&names.aside, names, seams) {
-                // Restored, and the published copy is listed: nothing is stranded.
-                Some(p) if restored && p.leftover.is_none() => io_error(e),
-                // Not restored (the path is empty, perhaps a dangling symlink target), or a
-                // working name could not be removed: say which file holds the retained vault.
-                Some(p) => retained_error(&e, p.leftover.as_deref().unwrap_or(&p.path)),
-                // Nothing could name it: it is still under its working name, so say which file
-                // (the name only, never a folder) holds the retained vault.
-                None => retained_error(&e, &names.aside),
+            let published = publish_displaced(&names.aside, names, seams);
+            Err(if restored {
+                io_error(e)
+            } else {
+                let kept = published.as_ref().map_or(names.aside.as_path(), |p| {
+                    p.leftover.as_deref().unwrap_or(&p.path)
+                });
+                retained_error(&e, kept)
             })
         }
     }
@@ -2295,6 +2291,31 @@ mod tests {
         assert_eq!(kept[0].0, name);
     }
     #[test]
+    fn a_restored_install_failure_does_not_claim_the_vault_was_moved() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("vault.kdbx");
+        fs::write(&p, b"old").unwrap();
+        let mut race = Race::new(false);
+        let mut calls = 0;
+        race.link = Box::new(move |a: &Path, b: &Path| {
+            calls += 1;
+            // Probe and restore succeed. Install and publication fail.
+            if calls == 2 || calls >= 4 {
+                return Err(Error::other("injected link failure"));
+            }
+            fs::hard_link(a, b)
+        });
+        assert_eq!(
+            race.run(&p, Some(b"old"), b"new"),
+            Err(KdbxError::Io {
+                kind: ErrorKind::Other,
+                message: "injected link failure".into(),
+            }),
+        );
+        assert_eq!(fs::read(&p).unwrap(), b"old");
+    }
+
+    #[test]
     fn a_failed_cleanup_after_publication_is_reported_not_silent() {
         // The copy is published, but its working name cannot be unlinked: the hidden name is a
         // second, unlisted alias of the same data, so the outcome names it.
@@ -2322,9 +2343,9 @@ mod tests {
         }
     }
     #[test]
-    fn a_failed_cleanup_after_a_restored_install_failure_is_reported() {
+    fn a_failed_cleanup_after_a_restored_install_failure_keeps_both_links() {
         // Install fails, the restore works, the publication works, but the working name stays:
-        // the vault is safe at its path and the error still names the stray hidden name.
+        // the vault is safe at its path and the working name still holds the same bytes.
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("vault.kdbx");
         fs::write(&p, b"old").unwrap();
@@ -2338,10 +2359,20 @@ mod tests {
             fs::hard_link(a, b)
         });
         race.unlink = Box::new(|_: &Path| Err(Error::from(ErrorKind::PermissionDenied)));
-        let (_, name) = retained(race.run(&p, Some(b"old"), b"new"));
-        assert!(name.ends_with(".aside"), "{name}");
+        assert!(matches!(
+            race.run(&p, Some(b"old"), b"new"),
+            Err(KdbxError::Io {
+                kind: ErrorKind::Other,
+                ..
+            })
+        ));
         assert_eq!(fs::read(&p).unwrap(), b"old");
-        assert_eq!(fs::read(d.path().join(&name)).unwrap(), b"old");
+        let files = listing(d.path());
+        for suffix in [".aside", ".displaced"] {
+            assert!(files
+                .iter()
+                .any(|(name, bytes)| name.ends_with(suffix) && bytes == b"old"));
+        }
     }
     #[test]
     fn a_directory_sync_failure_after_an_unlisted_retention_keeps_its_name() {
