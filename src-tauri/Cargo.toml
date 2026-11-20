@@ -1,6 +1,6 @@
 [package]
 name = "mypass-app"
-version = "0.7.0"
+version = "0.7.1-alpha.1"
 description = "The MyPass desktop app shell (Tauri 2)."
 edition.workspace = true
 rust-version.workspace = true
