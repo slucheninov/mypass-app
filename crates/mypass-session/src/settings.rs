@@ -89,6 +89,7 @@ pub enum Language {
     En,
     Uk,
     Ru,
+    De,
 }
 
 /// How long a device unlock (Touch ID / account password) stays allowed after a master-password
@@ -728,6 +729,7 @@ mod tests {
             "everySave"
         );
         assert_eq!(serde_json::to_value(Language::Uk).unwrap(), "uk");
+        assert_eq!(serde_json::to_value(Language::De).unwrap(), "de");
         assert_eq!(
             serde_json::to_value(UnlockWithDeviceWindow::TwentyFourHours).unwrap(),
             "twentyFourHours"

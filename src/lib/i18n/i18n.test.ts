@@ -5,11 +5,12 @@ import I18nProbe from "../../test/I18nProbe.svelte";
 import { sourceFiles } from "../../test/sourceScan";
 import { formatBytes, formatDate } from "./format";
 import { type Lang, __resetCatalogsForTest, __setCatalogForTest, i18n, resolveSystemLanguage, setLanguage, t } from "./index.svelte";
+import de from "./locales/de.json";
 import en from "./locales/en.json";
 import ru from "./locales/ru.json";
 import uk from "./locales/uk.json";
 
-const cat = { en, uk, ru } as Record<string, Record<string, string>>;
+const cat = { en, uk, ru, de } as Record<string, Record<string, string>>;
 
 beforeEach(() => {
   __resetCatalogsForTest();
@@ -44,6 +45,21 @@ describe("t", () => {
     t("Warn me once");
     t("Warn me once");
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("german_falls_back_to_english_for_a_missing_key", () => {
+    __setCatalogForTest("de", { Cancel: "Abbrechen" });
+    setLanguage("de");
+    expect(t("Cancel")).toBe("Abbrechen");
+    expect(t("Close")).toBe("Close");
+    expect(document.documentElement.lang).toBe("de");
+  });
+
+  it("real_catalog_plural_forms_are_pinned_in_de", () => {
+    setLanguage("de");
+    expect(t("%lld files", 1)).toBe("1 Datei");
+    expect(t("%lld files", 2)).toBe("2 Dateien");
+    expect(t("%lld files", 0)).toBe("0 Dateien");
   });
 
   it("positional_args_array", () => {
@@ -127,7 +143,9 @@ describe("language", () => {
   it("system_resolves_from_navigator_language", () => {
     expect(resolveSystemLanguage(["uk-UA"])).toBe("uk");
     expect(resolveSystemLanguage(["ru"])).toBe("ru");
-    expect(resolveSystemLanguage(["de-DE", "uk"])).toBe("en");
+    expect(resolveSystemLanguage(["fr-FR", "uk"])).toBe("en");
+    expect(resolveSystemLanguage(["de-DE", "uk"])).toBe("de");
+    for (const locale of ["de", "de-AT", "de-CH", "DE-de"]) expect(resolveSystemLanguage([locale])).toBe("de");
     expect(resolveSystemLanguage([])).toBe("en");
     expect(resolveSystemLanguage(["UK"])).toBe("uk");
   });

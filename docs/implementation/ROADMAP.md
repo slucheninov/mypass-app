@@ -30,7 +30,6 @@ Last updated: 2026-11-20
 
 - [ ] Manual: walk the Stage 2b checklist in `RUN.md` on a copy of the owner's vault (unlock, shell,
   editors, history and bin, generator, settings, CSV import, tray panel, quit flow, themes, languages).
-- [ ] Prune unused legacy catalog keys (418 at the time of writing) once stage 3 has ported its screens.
 
 ## Stage 3 extension bridge
 
@@ -106,7 +105,6 @@ Last updated: 2026-11-20
 
 ## Carried over from the Swift app
 
-- [ ] German localisation for the app.
 - [ ] Passkey AAGUID registry: the upstream registry PR (`passkey-authenticator-aaguids`, which needs a
   vector icon) submitted and merged.
 - [ ] Google shows "MyPass" for newly created passkeys. Manual check; depends on Google ingesting

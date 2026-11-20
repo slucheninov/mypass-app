@@ -256,6 +256,11 @@ mod tests {
             ru.labels().first().map(String::as_str),
             i18n::lookup(i18n::Language::Ru, "Unlock")
         );
+        let de = tray_menu_model(SessionState::Locked, &[], Language::De, None);
+        assert_eq!(
+            de.labels().first().map(String::as_str),
+            i18n::lookup(i18n::Language::De, "Unlock")
+        );
     }
 
     #[test]

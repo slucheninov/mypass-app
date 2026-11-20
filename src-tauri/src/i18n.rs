@@ -1,6 +1,6 @@
 //! The bundled UI catalogs for the native side (tray menu, quit dialog).
 //!
-//! The three flat JSON catalogs under `src/lib/i18n/locales/` are embedded at build time, so the
+//! The four flat JSON catalogs under `src/lib/i18n/locales/` are embedded at build time, so the
 //! tray can show its labels in the current language without a webview and a language change needs
 //! no restart. A key maps to its ICU message; the native strings looked up here are plain text
 //! without placeholders. Lookup never fails: a key missing from the chosen language falls back to
@@ -19,6 +19,7 @@ pub enum Language {
     En,
     Uk,
     Ru,
+    De,
 }
 
 impl Language {
@@ -28,6 +29,7 @@ impl Language {
             Language::En => "en",
             Language::Uk => "uk",
             Language::Ru => "ru",
+            Language::De => "de",
         }
     }
 
@@ -37,6 +39,7 @@ impl Language {
             "en" => Some(Language::En),
             "uk" => Some(Language::Uk),
             "ru" => Some(Language::Ru),
+            "de" => Some(Language::De),
             _ => None,
         }
     }
@@ -53,6 +56,10 @@ const UK: &str = include_str!(concat!(
 const RU: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../src/lib/i18n/locales/ru.json"
+));
+const DE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../src/lib/i18n/locales/de.json"
 ));
 
 /// One language's messages: a flat `{ "key": "message" }` map.
@@ -135,10 +142,12 @@ fn catalog(lang: Language) -> &'static Catalog {
     static EN_CATALOG: OnceLock<Catalog> = OnceLock::new();
     static UK_CATALOG: OnceLock<Catalog> = OnceLock::new();
     static RU_CATALOG: OnceLock<Catalog> = OnceLock::new();
+    static DE_CATALOG: OnceLock<Catalog> = OnceLock::new();
     match lang {
         Language::En => EN_CATALOG.get_or_init(|| Catalog::from_json(EN)),
         Language::Uk => UK_CATALOG.get_or_init(|| Catalog::from_json(UK)),
         Language::Ru => RU_CATALOG.get_or_init(|| Catalog::from_json(RU)),
+        Language::De => DE_CATALOG.get_or_init(|| Catalog::from_json(DE)),
     }
 }
 
@@ -154,7 +163,7 @@ pub fn translate(lang: Language, key: &str) -> &str {
         .unwrap_or(key)
 }
 
-/// The language a locale string ("uk-UA", "ru_RU", "de-DE") selects: `uk*` and `ru*`, else
+/// The language a locale string ("uk-UA", "ru_RU", "de-AT") selects: `uk*`, `ru*` and `de*`, else
 /// English. Pure, so tests inject the locale.
 pub fn language_for_locale(locale: &str) -> Language {
     let primary = locale
@@ -165,6 +174,7 @@ pub fn language_for_locale(locale: &str) -> Language {
     match primary.as_str() {
         "uk" => Language::Uk,
         "ru" => Language::Ru,
+        "de" => Language::De,
         _ => Language::En,
     }
 }
@@ -176,6 +186,7 @@ pub fn resolve(setting: SettingsLanguage, locale: Option<&str>) -> Language {
         SettingsLanguage::En => Language::En,
         SettingsLanguage::Uk => Language::Uk,
         SettingsLanguage::Ru => Language::Ru,
+        SettingsLanguage::De => Language::De,
         SettingsLanguage::System => locale.map_or(Language::En, language_for_locale),
     }
 }
@@ -213,7 +224,7 @@ mod tests {
 
     #[test]
     fn bundled_catalogs_contain_all_tray_keys_in_all_languages() {
-        for lang in [Language::En, Language::Uk, Language::Ru] {
+        for lang in [Language::En, Language::Uk, Language::Ru, Language::De] {
             for key in TRAY_KEYS {
                 let text = lookup(lang, key);
                 assert!(
@@ -224,6 +235,7 @@ mod tests {
         }
         assert_ne!(translate(Language::Uk, "Unlock"), "Unlock");
         assert_ne!(translate(Language::Ru, "Unlock"), "Unlock");
+        assert_ne!(translate(Language::De, "Unlock"), "Unlock");
     }
 
     #[test]
@@ -235,16 +247,16 @@ mod tests {
 
     #[test]
     fn language_codes_round_trip() {
-        for lang in [Language::En, Language::Uk, Language::Ru] {
+        for lang in [Language::En, Language::Uk, Language::Ru, Language::De] {
             assert_eq!(Language::from_code(lang.code()), Some(lang));
         }
-        assert_eq!(Language::from_code("de"), None);
+        assert_eq!(Language::from_code("fr"), None);
     }
 
     #[test]
     fn i18n_fallback_to_english_for_unknown_key() {
         // A key no catalog holds comes back as itself, in every language.
-        for lang in [Language::En, Language::Uk, Language::Ru] {
+        for lang in [Language::En, Language::Uk, Language::Ru, Language::De] {
             assert_eq!(t_resolved(lang, "No such key {0}", &["x"]), "No such key x");
         }
         // A key only English holds (stub catalogs) falls back to English; without the
@@ -282,7 +294,12 @@ mod tests {
             ("ru-RU", Language::Ru),
             ("ru_RU", Language::Ru),
             ("UK-ua", Language::Uk),
-            ("de-DE", Language::En),
+            ("de-DE", Language::De),
+            ("de-AT", Language::De),
+            ("de-CH", Language::De),
+            ("de_DE", Language::De),
+            ("DE", Language::De),
+            ("fr-FR", Language::En),
             ("en-US", Language::En),
             ("", Language::En),
         ] {

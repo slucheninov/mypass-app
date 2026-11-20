@@ -854,7 +854,7 @@ export type ImportResult = {
 	skipped: number,
 };
 
-export type Language = "system" | "en" | "uk" | "ru";
+export type Language = "system" | "en" | "uk" | "ru" | "de";
 
 export type LocationChangeRequest = {
 	folderToken: string,

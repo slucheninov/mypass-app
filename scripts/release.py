@@ -197,12 +197,12 @@ def requirement(identifier):
 
 def verify_bundle(app, host_source, zip_path, allow_unsigned):
     info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
-    for key, value in {'CFBundleIdentifier': APP_ID, 'LSMinimumSystemVersion': '14.0', 'CFBundleDevelopmentRegion': 'en', 'CFBundleLocalizations': ['en', 'uk', 'ru']}.items():
+    for key, value in {'CFBundleIdentifier': APP_ID, 'LSMinimumSystemVersion': '14.0', 'CFBundleDevelopmentRegion': 'en', 'CFBundleLocalizations': ['en', 'uk', 'ru', 'de']}.items():
         require(info.get(key) == value, f'Info.plist {key}: expected {value}')
     resources = app / 'Contents/Resources'
-    for lang in ('en', 'uk', 'ru'):
+    for lang in ('en', 'uk', 'ru', 'de'):
         require((resources / f'{lang}.lproj/InfoPlist.strings').stat().st_size > 0, f'{lang}: empty InfoPlist.strings')
-    require({p.name for p in resources.glob('*.lproj')} == {'en.lproj', 'uk.lproj', 'ru.lproj'}, 'unexpected bundle localizations')
+    require({p.name for p in resources.glob('*.lproj')} == {'en.lproj', 'uk.lproj', 'ru.lproj', 'de.lproj'}, 'unexpected bundle localizations')
     require((resources / 'LICENSE').is_file() and (resources / 'THIRD_PARTY_NOTICES.md').is_file(), 'missing bundled notices')
     verify_zip(zip_path, info['CFBundleShortVersionString'], resources / 'extension')
     host = app / 'Contents/MacOS/mypass-native-host'
