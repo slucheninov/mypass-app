@@ -28,7 +28,7 @@ use crate::dto::{
     AppInfo, CsvPreview, EntryDetailDto, EntryEditModel, EntryQuery, EntrySummary, EntryTypeDto,
     FieldRef, FoundVaultFileDto, GenerateRequest, GeneratedPassword, GeneratorHistoryItem,
     HistoryItem, ImportResult, LoginItemStatus, OpenEntryEvent, OpenWarning, PasskeyDetails,
-    RecentVaultDto, RulesSummary, Sidebar, TotpDto,
+    RecentVaultDto, RulesSummary, SecretText, Sidebar, TotpDto,
 };
 use crate::editing;
 use crate::generator_service;
@@ -203,14 +203,6 @@ struct Schedulers {
     main: Arc<dyn Scheduler>,
     clipboard: Arc<dyn Scheduler>,
     sync: Arc<dyn Scheduler>,
-}
-
-/// Takes a revealed secret out of its wiping wrapper for the one place that has to hand a plain
-/// `String` to the webview (the command return value). The session-side copies were wiped by
-/// the callee's wrappers; the string returned here is moved, not copied, and what the IPC layer
-/// serialises from it is outside our control.
-fn into_ipc_string(mut value: Zeroizing<String>) -> String {
-    std::mem::take(&mut *value)
 }
 
 fn parse_id(id: &str) -> Result<Uuid, SessionError> {
@@ -609,10 +601,10 @@ impl AppCore {
     }
 
     /// One plain value, after an explicit click.
-    pub fn entry_reveal(&self, id: &str, field: FieldRef) -> Result<String, ApiError> {
+    pub fn entry_reveal(&self, id: &str, field: FieldRef) -> Result<SecretText, ApiError> {
         let now = self.now_secs();
         let value = self.read(|db| editing::reveal_at(db, parse_id(id)?, &field, now))?;
-        Ok(into_ipc_string(value))
+        Ok(SecretText::new(value))
     }
 
     /// One plain value of an earlier version of the entry (`revision` as in `entry_history`, not
@@ -623,9 +615,9 @@ impl AppCore {
         id: &str,
         revision: &str,
         field: FieldRef,
-    ) -> Result<String, ApiError> {
+    ) -> Result<SecretText, ApiError> {
         let value = self.read(|db| editing::reveal_history(db, parse_id(id)?, revision, &field))?;
-        Ok(into_ipc_string(value))
+        Ok(SecretText::new(value))
     }
 
     /// Copies a field to the clipboard from Rust (cleared after the configured seconds); the
@@ -949,9 +941,9 @@ impl AppCore {
         self.copy(&value)
     }
 
-    pub fn generator_history_reveal(&self, id: &str) -> Result<String, ApiError> {
+    pub fn generator_history_reveal(&self, id: &str) -> Result<SecretText, ApiError> {
         let value = self.read(|db| generator_service::history_reveal(db, parse_id(id)?))?;
-        Ok(into_ipc_string(value))
+        Ok(SecretText::new(value))
     }
 
     pub fn generator_history_delete(&self, id: &str) -> Result<(), ApiError> {

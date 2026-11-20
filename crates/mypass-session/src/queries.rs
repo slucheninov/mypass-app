@@ -315,7 +315,7 @@ fn subtitle(entry: &Entry) -> String {
         }
         EntryType::Address => {
             let a = address_of(entry);
-            [a.label, a.full_name, a.city]
+            [a.label.as_str(), a.full_name.as_str(), a.city.as_str()]
                 .into_iter()
                 .filter(|s| !s.is_empty())
                 .collect::<Vec<_>>()
@@ -463,18 +463,16 @@ pub fn sidebar(db: &Database) -> Sidebar {
 }
 
 fn last_digits(number: &str) -> String {
-    let digits: Vec<char> = number
-        .chars()
-        .filter(|c| !c.is_whitespace() && *c != '-')
-        .collect();
+    // Two passes over the borrowed text instead of collecting the whole number into a buffer:
+    // nothing but the four shown digits is ever copied, so no full-number allocation exists
+    // to be freed unwiped.
+    let digits = || number.chars().filter(|c| !c.is_whitespace() && *c != '-');
+    let count = digits().count();
     // A number too short to hide anything shows nothing.
-    if digits.len() <= CARD_LAST_DIGITS {
+    if count <= CARD_LAST_DIGITS {
         return String::new();
     }
-    digits
-        .iter()
-        .skip(digits.len() - CARD_LAST_DIGITS)
-        .collect()
+    digits().skip(count - CARD_LAST_DIGITS).collect()
 }
 
 /// The secret-free detail of one entry (also for an entry in the bin, flagged `in_recycle_bin`).

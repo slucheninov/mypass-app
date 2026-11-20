@@ -32,7 +32,7 @@ use std::io::Read;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 /// Attachments an entry may hold; only further adds are refused beyond it.
 pub const MAX_ATTACHMENTS_PER_ENTRY: usize = 8;
@@ -106,10 +106,7 @@ pub fn new_model(entry_type: EntryTypeDto, group_id: Uuid) -> EntryEditModel {
         uri_match_mode: UriMatchMode::RegistrableDomain.as_str().to_owned(),
         totp: String::new(),
         notes: String::new(),
-        address: (entry_type == EntryTypeDto::Address).then(|| AddressDto {
-            label: "Home".into(),
-            ..AddressDto::default()
-        }),
+        address: (entry_type == EntryTypeDto::Address).then(|| AddressDto::with_label("Home")),
         card: (entry_type == EntryTypeDto::Card).then(CardEdit::default),
         custom_fields: Vec::new(),
         attachments: Vec::new(),
@@ -353,6 +350,14 @@ fn dedupe_custom_fields(entry: &mut Entry) {
         .retain(|f| Entry::is_reserved_key(&f.key) || seen.insert(f.key.clone()));
 }
 
+/// Wipes the bytes of the last `added` attachments of a draft entry that is about to be
+/// discarded because a later step of the same edit failed.
+fn wipe_added_attachments(entry: &mut Entry, added: usize) {
+    for attachment in entry.attachments.iter_mut().rev().take(added) {
+        attachment.data.zeroize();
+    }
+}
+
 /// Applies a validated model to an entry. Errors (attachment limits, a removal of a file that is
 /// not there) leave the entry half edited; the caller discards it by returning the error from
 /// `VaultSession::mutate`, which rolls back.
@@ -477,6 +482,10 @@ fn apply(
     let (removes, adds): (Vec<_>, Vec<_>) = ops
         .into_iter()
         .partition(|op| matches!(op, ResolvedOp::Remove { .. }));
+    // How many attachments this call pushed (the adds run after the removals, so they are the
+    // last `added` ones). A failed add discards the whole draft, and the bytes the earlier adds
+    // already moved into it must not be freed unwiped.
+    let mut added = 0usize;
     for op in removes.into_iter().chain(adds) {
         match op {
             ResolvedOp::Remove { name } => {
@@ -489,12 +498,14 @@ fn apply(
             }
             ResolvedOp::Add { name, mut data } => {
                 if entry.attachments.iter().any(|a| a.name == name) {
+                    wipe_added_attachments(entry, added);
                     return Err(SessionError::InvalidInput(format!(
                         "an attachment named {name} already exists"
                     )));
                 }
                 if entry.attachments.len() >= MAX_ATTACHMENTS_PER_ENTRY {
                     // Only adds are limited: an entry that already exceeds it stays editable.
+                    wipe_added_attachments(entry, added);
                     return Err(SessionError::LimitExceeded(format!(
                         "an entry holds at most {MAX_ATTACHMENTS_PER_ENTRY} attachments"
                     )));
@@ -504,6 +515,7 @@ fn apply(
                     data: std::mem::take(&mut *data),
                     protected: false,
                 });
+                added += 1;
             }
         }
     }
@@ -2756,7 +2768,7 @@ mod tests {
         assert_eq!(m.group_id, g.simple().to_string());
         assert_eq!(m.uri_match_mode, "registrable-domain");
         let m = new_model(EntryTypeDto::Address, g);
-        assert_eq!(m.address.clone().map(|a| a.label), Some("Home".to_owned()));
+        assert_eq!(m.address.as_ref().map(|a| a.label.as_str()), Some("Home"));
         let m = new_model(EntryTypeDto::Login, g);
         assert!(m.card.is_none() && m.address.is_none());
     }
@@ -3090,6 +3102,45 @@ mod tests {
         let e = f.entry(id);
         assert_eq!(e.attachments.len(), 1);
         assert_eq!(e.attachments[0].data, b"two");
+    }
+
+    #[test]
+    fn a_failed_second_attachment_wipes_the_first_ones_bytes_in_the_discarded_draft() {
+        let mut entry = Entry::new(Timestamp(0));
+        entry.attachments.push(Attachment {
+            name: "taken.txt".into(),
+            data: b"existing".to_vec(),
+            protected: false,
+        });
+        let model = new_model(EntryTypeDto::Login, Uuid::new_v4());
+        let mode = validate(&model).unwrap();
+        let ops = vec![
+            ResolvedOp::Add {
+                name: "key.bin".into(),
+                data: Zeroizing::new(b"key file bytes".to_vec()),
+            },
+            ResolvedOp::Add {
+                name: "taken.txt".into(),
+                data: Zeroizing::new(b"second".to_vec()),
+            },
+        ];
+        let r = apply(&mut entry, &model, mode, ops);
+        assert!(matches!(r, Err(SessionError::InvalidInput(_))), "{r:?}");
+        let key = entry
+            .attachments
+            .iter()
+            .find(|a| a.name == "key.bin")
+            .unwrap();
+        assert!(key.data.is_empty(), "the draft kept the added bytes");
+        let kept = entry
+            .attachments
+            .iter()
+            .find(|a| a.name == "taken.txt")
+            .unwrap();
+        assert_eq!(
+            kept.data, b"existing",
+            "a committed attachment is untouched"
+        );
     }
 
     #[test]

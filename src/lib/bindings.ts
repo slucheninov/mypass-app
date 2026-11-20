@@ -60,7 +60,7 @@ export const commands = {
 	 *  Reveal command: one plain value of an earlier version of the entry, after the user's explicit
 	 *  click. `entry_history` never carries values.
 	 */
-	entryHistoryReveal: (id: string, revision: string, field: FieldRef) => typedError<string, ApiError>(__TAURI_INVOKE("entry_history_reveal", { id, revision, field })),
+	entryHistoryReveal: (id: string, revision: string, field: FieldRef) => typedError<SecretText, ApiError>(__TAURI_INVOKE("entry_history_reveal", { id, revision, field })),
 	entryList: (query: EntryQuery) => typedError<EntrySummary[], ApiError>(__TAURI_INVOKE("entry_list", { query })),
 	entryMove: (id: string, groupId: string) => typedError<null, ApiError>(__TAURI_INVOKE("entry_move", { id, groupId })),
 	entryNewModel: (entryType: EntryTypeDto, groupId: string | null) => typedError<EntryEditModel_Serialize, ApiError>(__TAURI_INVOKE("entry_new_model", { entryType, groupId })),
@@ -73,7 +73,7 @@ export const commands = {
 	entryRecent: (limit: number) => typedError<EntrySummary[], ApiError>(__TAURI_INVOKE("entry_recent", { limit })),
 	entryRestore: (id: string, groupId: string | null) => typedError<null, ApiError>(__TAURI_INVOKE("entry_restore", { id, groupId })),
 	/**  Reveal command: returns one secret value after the user's explicit click. */
-	entryReveal: (id: string, field: FieldRef) => typedError<string, ApiError>(__TAURI_INVOKE("entry_reveal", { id, field })),
+	entryReveal: (id: string, field: FieldRef) => typedError<SecretText, ApiError>(__TAURI_INVOKE("entry_reveal", { id, field })),
 	entrySave: (model: EntryEditModel_Deserialize) => typedError<string, ApiError>(__TAURI_INVOKE("entry_save", { model })),
 	entrySetFavorite: (id: string, favorite: boolean) => typedError<null, ApiError>(__TAURI_INVOKE("entry_set_favorite", { id, favorite })),
 	entryTotp: (id: string) => typedError<TotpDto, ApiError>(__TAURI_INVOKE("entry_totp", { id })),
@@ -88,7 +88,7 @@ export const commands = {
 	generatorHistoryCopy: (id: string) => typedError<null, ApiError>(__TAURI_INVOKE("generator_history_copy", { id })),
 	generatorHistoryDelete: (id: string) => typedError<null, ApiError>(__TAURI_INVOKE("generator_history_delete", { id })),
 	generatorHistoryList: () => typedError<GeneratorHistoryItem[], ApiError>(__TAURI_INVOKE("generator_history_list")),
-	generatorHistoryReveal: (id: string) => typedError<string, ApiError>(__TAURI_INVOKE("generator_history_reveal", { id })),
+	generatorHistoryReveal: (id: string) => typedError<SecretText, ApiError>(__TAURI_INVOKE("generator_history_reveal", { id })),
 	generatorRulesSummary: (host: string) => typedError<RulesSummary_Serialize | null, ApiError>(__TAURI_INVOKE("generator_rules_summary", { host })),
 	groupCreate: (parentId: string | null, name: string, emoji: string | null) => typedError<string, ApiError>(__TAURI_INVOKE("group_create", { parentId, name, emoji })),
 	groupDelete: (id: string) => typedError<null, ApiError>(__TAURI_INVOKE("group_delete", { id })),
@@ -1216,6 +1216,15 @@ export type SecondaryUnavailable =
  *  choose a folder on another volume.
  */
 "unsupportedFolder";
+
+/**
+ *  One revealed secret value on its way to the webview. The text stays in a wiping buffer until
+ *  the IPC layer has serialised it, and the buffer is then wiped when this value drops, so the
+ *  Rust-side source copy of a revealed password never outlives the command (the serialised copy
+ *  belongs to the IPC layer and is outside our control). It serialises, and appears in the
+ *  generated bindings, as a plain `string`; `Debug` is redacted.
+ */
+export type SecretText = string;
 
 export type SecurityFlag = "reused" | "weak" | "emptyPassword" | "insecureUrl";
 

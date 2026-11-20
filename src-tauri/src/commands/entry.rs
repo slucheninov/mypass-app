@@ -10,7 +10,7 @@ use crate::files::FileGrants;
 use crate::state::{AppState, ShellState};
 use mypass_session::dto::{
     EntryDetailDto, EntryEditModel, EntryQuery, EntrySummary, EntryTypeDto, FieldRef, HistoryItem,
-    PasskeyDetails, TotpDto,
+    PasskeyDetails, SecretText, TotpDto,
 };
 use mypass_session::ApiError;
 use tauri::State;
@@ -60,7 +60,7 @@ pub fn entry_reveal(
     state: State<'_, AppState>,
     id: String,
     field: FieldRef,
-) -> Result<String, ApiError> {
+) -> Result<SecretText, ApiError> {
     state.0.entry_reveal(&id, field)
 }
 
@@ -196,7 +196,7 @@ pub fn entry_history_reveal(
     id: String,
     revision: String,
     field: FieldRef,
-) -> Result<String, ApiError> {
+) -> Result<SecretText, ApiError> {
     state.0.entry_history_reveal(&id, &revision, field)
 }
 
