@@ -84,6 +84,8 @@ global.chrome = {
   }
 };
 
+require('./chromeI18nShim.js').install(global.chrome);
+
 const {
   APP_UNAVAILABLE_STATUS_TEXT,
   HOST_UNAVAILABLE_STATUS_TEXT,

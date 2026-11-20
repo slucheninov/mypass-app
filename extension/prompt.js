@@ -4,6 +4,10 @@
 // wrong tab. Here the background hands the prompt over by id and by recency, and the record it
 // returns is already bound to the tab, frame and document that raised it.
 
+const i18n = typeof require === 'function'
+  ? require('./shared/i18n.js')
+  : window.mypassI18n;
+
 function createPromptPage(env) {
   const doc = env.document;
   const chromeApi = env.chrome;
@@ -49,7 +53,7 @@ function createPromptPage(env) {
         return;
       }
       if (closeWhenEmpty) { env.closeWindow(); return; }
-      showMessage('Nothing to confirm. This prompt may have expired; trigger it on the page again.');
+      showMessage(i18n.t('promptNothingToConfirm'));
     });
   }
 
@@ -72,6 +76,7 @@ if (typeof module !== 'undefined') {
   module.exports = { createPromptPage };
 }
 if (typeof window !== 'undefined' && typeof module === 'undefined') {
+  i18n.apply(document);
   createPromptPage({
     document,
     chrome,

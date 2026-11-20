@@ -25,8 +25,9 @@ fn suites() -> Vec<String> {
 
 #[test]
 fn extension_suites_are_discovered_and_manifest_pins_the_extension_id() {
-    // 41 is the pin of the import from the old repository; a suite added later raises it here.
-    assert_eq!(suites().len(), 41);
+    // 41 is the pin of the import from the old repository; a suite added later raises it here
+    // (42: `locales.test.js`).
+    assert_eq!(suites().len(), 42);
     let manifest: serde_json::Value =
         serde_json::from_str(&read("extension/manifest.json")).unwrap();
     let key = manifest["key"].as_str().expect("manifest.json needs a key");

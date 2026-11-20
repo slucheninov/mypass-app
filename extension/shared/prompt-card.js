@@ -11,14 +11,16 @@
 // other extension scripts and can throw at load.
 
 var mypassPromptCard = (function () {
+  var i18n = typeof require === 'function' ? require('./i18n.js') : mypassI18n;
+
   var SETTING_ROWS = [
-    { name: 'offerSaveLogin', label: 'Offer to save passwords' },
-    { name: 'offerSaveTotp', label: 'Offer to save 2FA codes' },
-    { name: 'showFieldIcon', label: 'Show the MyPass icon in fields' },
-    { name: 'showLogins', label: 'Suggest logins' },
-    { name: 'showCards', label: 'Suggest cards' },
-    { name: 'showAddresses', label: 'Suggest addresses' },
-    { name: 'autoSubmit', label: 'Submit after filling a login' }
+    { name: 'offerSaveLogin', labelKey: 'promptOfferSaveLogin' },
+    { name: 'offerSaveTotp', labelKey: 'promptOfferSaveTotp' },
+    { name: 'showFieldIcon', labelKey: 'promptShowFieldIcon' },
+    { name: 'showLogins', labelKey: 'promptShowLogins' },
+    { name: 'showCards', labelKey: 'promptShowCards' },
+    { name: 'showAddresses', labelKey: 'promptShowAddresses' },
+    { name: 'autoSubmit', labelKey: 'promptAutoSubmit' }
   ];
 
   function el(doc, tag, className, text) {
@@ -63,15 +65,13 @@ var mypassPromptCard = (function () {
   }
 
   function messageFor(response) {
-    if (!response) return "Couldn't reach MyPass.";
-    if (response.type === 'locked') return 'MyPass is locked. Unlock it, then try again.';
-    if (response.type === 'pairingRequired') {
-      return 'This browser is not connected to MyPass yet. Open the MyPass toolbar button to connect it, then try again.';
-    }
-    if (response.code === 'prompt_gone') return 'This prompt expired. Trigger the action on the page again.';
-    if (response.code === 'prompt_page_changed') return 'The page changed, so nothing was saved.';
+    if (!response) return i18n.t('couldntReachMyPassSentence');
+    if (response.type === 'locked') return i18n.t('promptLocked');
+    if (response.type === 'pairingRequired') return i18n.t('promptNotPaired');
+    if (response.code === 'prompt_gone') return i18n.t('promptExpired');
+    if (response.code === 'prompt_page_changed') return i18n.t('promptPageChanged');
     if (typeof response.message === 'string' && response.message) return response.message;
-    return "Couldn't reach MyPass.";
+    return i18n.t('couldntReachMyPassSentence');
   }
 
   // Returns a controller: { id, busy() }. The popup consults busy() so a storage change that
@@ -123,19 +123,19 @@ var mypassPromptCard = (function () {
         if (!retryable && response && (response.code === 'prompt_gone' || response.code === 'prompt_page_changed')) {
           // Nothing left to retry: offer only a way out.
           if (saveBtn) saveBtn.hidden = true;
-          if (notNowBtn) notNowBtn.textContent = 'Close';
+          if (notNowBtn) notNowBtn.textContent = i18n.t('close');
         }
       });
     }
 
     if (view.kind === 'settings') {
-      card.appendChild(el(doc, 'h1', 'panel-title', 'MyPass autofill settings'));
+      card.appendChild(el(doc, 'h1', 'panel-title', i18n.t('promptAutofillSettings')));
       var list = el(doc, 'div', 'pc-toggles');
       SETTING_ROWS.forEach(function (row) {
-        list.appendChild(settingToggle(doc, api, row.name, row.label));
+        list.appendChild(settingToggle(doc, api, row.name, i18n.t(row.labelKey)));
       });
       card.appendChild(list);
-      var done = el(doc, 'button', 'btn-primary', 'Done');
+      var done = el(doc, 'button', 'btn-primary', i18n.t('done'));
       done.type = 'button';
       done.addEventListener('click', function () { answer('dismiss'); });
       var buttons = el(doc, 'div', 'btn-row');
@@ -145,27 +145,27 @@ var mypassPromptCard = (function () {
     }
 
     var isLogin = view.kind === 'saveLogin';
-    card.appendChild(el(doc, 'h1', 'panel-title', isLogin ? 'Save password?' : 'Add 2FA code?'));
+    card.appendChild(el(doc, 'h1', 'panel-title', i18n.t(isLogin ? 'promptSavePassword' : 'promptAdd2fa')));
     var details = el(doc, 'dl', 'passkey-fields pc-fields');
-    field(doc, details, 'Site', view.origin);
+    field(doc, details, i18n.t('promptSite'), view.origin);
     if (isLogin) {
-      field(doc, details, 'Username', view.username || '(none)');
-      field(doc, details, 'Password', '••••••••');
+      field(doc, details, i18n.t('username'), view.username || i18n.t('promptNone'));
+      field(doc, details, i18n.t('password'), '••••••••');
     } else {
-      field(doc, details, 'Account', view.label);
+      field(doc, details, i18n.t('detailAccount'), view.label);
     }
     card.appendChild(details);
 
     var state = isLogin ? 'ready' : view.state;
     if (!isLogin && state === 'ready') {
       if (accounts.length === 0) {
-        card.appendChild(el(doc, 'p', 'panel-helper', 'No saved login for this site. A new entry will be created.'));
+        card.appendChild(el(doc, 'p', 'panel-helper', i18n.t('promptNoSavedLogin')));
       } else if (accounts.length === 1) {
         var only = accounts[0];
         card.appendChild(el(doc, 'p', 'panel-helper',
-          'Add to ' + only.title + (only.username ? ' (' + only.username + ')' : '') + '.'));
+          only.username ? i18n.t('promptAddToOnlyWithUser', [only.title, only.username]) : i18n.t('promptAddToOnly', only.title)));
       } else {
-        card.appendChild(el(doc, 'p', 'panel-helper', 'Choose the account to add it to:'));
+        card.appendChild(el(doc, 'p', 'panel-helper', i18n.t('promptChooseAccount')));
         var picker = el(doc, 'ul', 'pc-accounts');
         var choices = [];
         accounts.forEach(function (account) {
@@ -198,17 +198,17 @@ var mypassPromptCard = (function () {
     var row = el(doc, 'div', 'btn-row');
     var canSave = isLogin || state === 'ready';
     if (canSave) {
-      saveBtn = el(doc, 'button', 'btn-primary', isLogin ? 'Save' : 'Add');
+      saveBtn = el(doc, 'button', 'btn-primary', i18n.t(isLogin ? 'save' : 'add'));
       saveBtn.type = 'button';
       saveBtn.addEventListener('click', function () { answer('save'); });
       row.appendChild(saveBtn);
     } else {
-      var retry = el(doc, 'button', 'btn-primary', 'Try again');
+      var retry = el(doc, 'button', 'btn-primary', i18n.t('tryAgain'));
       retry.type = 'button';
       retry.addEventListener('click', function () { api.reload(); });
       row.appendChild(retry);
     }
-    notNowBtn = el(doc, 'button', 'btn-secondary', 'Not now');
+    notNowBtn = el(doc, 'button', 'btn-secondary', i18n.t('notNow'));
     notNowBtn.type = 'button';
     notNowBtn.addEventListener('click', function () { answer('dismiss'); });
     row.appendChild(notNowBtn);
@@ -216,7 +216,7 @@ var mypassPromptCard = (function () {
     setBusy(false);
 
     card.appendChild(settingToggle(doc, api, isLogin ? 'offerSaveLogin' : 'offerSaveTotp',
-      isLogin ? 'Offer to save passwords' : 'Offer to save 2FA codes'));
+      i18n.t(isLogin ? 'promptOfferSaveLogin' : 'promptOfferSaveTotp')));
 
     // Expiry mid-display: the background drops the record at expiresAt, so the card must stop
     // offering a button that can only fail.
@@ -225,7 +225,7 @@ var mypassPromptCard = (function () {
       controller._timer = api.setTimer(function () {
         if (controller._busy) return;
         if (saveBtn) saveBtn.hidden = true;
-        if (notNowBtn) notNowBtn.textContent = 'Close';
+        if (notNowBtn) notNowBtn.textContent = i18n.t('close');
         showError(messageFor({ code: 'prompt_gone' }));
       }, remaining);
     }

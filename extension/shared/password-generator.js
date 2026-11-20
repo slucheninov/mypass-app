@@ -233,8 +233,14 @@ function historyHost(url) {
   }
 }
 
+// Dates follow the browser UI language; Node (the test suites) has no chrome.i18n and keeps en-US.
+function historyLocale() {
+  return typeof chrome !== 'undefined' && chrome && chrome.i18n && typeof chrome.i18n.getUILanguage === 'function'
+    ? chrome.i18n.getUILanguage() : 'en-US';
+}
+
 function formatHistoryDay(timestamp) {
-  return new Date(timestamp).toLocaleDateString('en-US', {
+  return new Date(timestamp).toLocaleDateString(historyLocale(), {
     month: 'long',
     day: 'numeric',
     year: 'numeric'
@@ -242,7 +248,7 @@ function formatHistoryDay(timestamp) {
 }
 
 function formatHistoryTime(timestamp) {
-  return new Date(timestamp).toLocaleTimeString('en-US', {
+  return new Date(timestamp).toLocaleTimeString(historyLocale(), {
     hour: 'numeric',
     minute: '2-digit'
   });

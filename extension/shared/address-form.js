@@ -67,8 +67,11 @@ var mypassAddressForm = (() => {
   function describe(groups, doc) {
     return groups.map((group, index) => ({
       id: String(index),
-      label: (group.purpose ? group.purpose[0].toUpperCase() + group.purpose.slice(1) : 'Address')
-        + ' form ' + (index + 1),
+      // `purpose` and `number` are what the popup localises into a name; `label` is only an opaque
+      // identifier the service worker validates and relays.
+      purpose: group.purpose === 'shipping' || group.purpose === 'billing' ? group.purpose : '',
+      number: index + 1,
+      label: (group.purpose || 'address') + '-' + (index + 1),
       fields: group.controls.length,
       focused: group.controls.some((control) => control.node === doc.activeElement)
     }));

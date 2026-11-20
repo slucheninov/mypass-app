@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Check this browser — MyPass</title>
+  <title data-i18n="browserCheckTitle"></title>
   <link rel="stylesheet" href="shared/ui.css">
   <style>
     body { margin: 0; padding: 32px 20px; background: var(--mp-fill); color: var(--mp-text); font: 15px -apple-system, BlinkMacSystemFont, sans-serif; }
@@ -24,24 +24,25 @@
 </head>
 <body>
   <main>
-    <h1>Check this browser</h1>
-    <p>Check this profile for other password managers and send the results to MyPass settings.</p>
-    <p class="muted">Chrome will ask to let MyPass read browser privacy settings and your installed extensions. This check does not change settings or disable extensions.</p>
+    <h1 data-i18n="checkThisBrowser"></h1>
+    <p data-i18n="browserCheckIntro"></p>
+    <p class="muted" data-i18n="browserCheckPermissionNote"></p>
     <div class="actions">
-      <button id="check-btn" type="button">Allow and check</button>
-      <button id="open-settings-btn" type="button">Open MyPass settings</button>
+      <button id="check-btn" type="button" data-i18n="allowAndCheck"></button>
+      <button id="open-settings-btn" type="button" data-i18n="openMyPassSettings"></button>
     </div>
-    <p id="check-status" role="status">Permission has not been requested.</p>
+    <p id="check-status" role="status" data-i18n="permissionNotRequested"></p>
     <dl id="results" hidden>
-      <dt>Browser password saving</dt><dd id="password-saving-result"></dd>
-      <dt>Other manager extensions</dt><dd id="extensions-result"></dd>
+      <dt data-i18n="browserPasswordSaving"></dt><dd id="password-saving-result"></dd>
+      <dt data-i18n="otherManagerExtensions"></dt><dd id="extensions-result"></dd>
     </dl>
-    <p class="muted">This cannot verify Google Password Manager passkeys, autofill, or macOS providers. Use the help in MyPass → Settings → Browser to check those separately.</p>
+    <p class="muted" data-i18n="browserCheckLimits"></p>
     <div class="actions">
-      <button id="password-settings-btn" type="button">Browser password settings</button>
-      <button id="extensions-settings-btn" type="button">Browser extensions</button>
+      <button id="password-settings-btn" type="button" data-i18n="browserPasswordSettings"></button>
+      <button id="extensions-settings-btn" type="button" data-i18n="browserExtensions"></button>
     </div>
   </main>
+  <script src="shared/i18n.js"></script>
   <script src="shared/appearance-settings.js"></script>
   <script src="shared/theme.js"></script>
   <script src="browser-check.js"></script>

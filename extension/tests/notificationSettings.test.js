@@ -52,7 +52,7 @@ const manifest = fs.readFileSync(path.join(root, 'manifest.json'), 'utf8');
 assert.ok(background.includes('noteVaultUnlock'), 'the worker uses the unlock transition');
 assert.ok(background.includes('passkeyConfirmation'), 'the passkey notification checks its switch');
 assert.ok(background.includes('"mypass-unlocked"'));
-assert.ok(background.includes('MyPass is unlocked.'));
+assert.ok(background.includes('"notifyUnlocked"'));
 assert.ok(background.includes('mypass-passkey'));
 assert.ok(!background.includes('Watchtower'));
 assert.ok(!background.includes('openAppRequested'));

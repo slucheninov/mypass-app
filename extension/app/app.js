@@ -9,6 +9,7 @@
   var notificationSettings = window.mypassNotificationSettings;
   var appearanceSettings = window.mypassAppearanceSettings;
   var appearanceTheme = window.mypassTheme;
+  var i18n = window.mypassI18n;
   var autofillPasskeyRevision = 0;
 
   function render() {
@@ -53,8 +54,8 @@
         // The app encodes ExtensionBridgeResponse.acknowledged as {"type":"ok"}.
         el.hidden = !!(result && result.type === 'ok');
         el.textContent = result && result.type === 'pairingRequired'
-          ? 'Connect this browser to MyPass first, then open settings.'
-          : 'Could not open settings. Open MyPass, then choose Settings → Browser.';
+          ? i18n.t('openSettingsPairing')
+          : i18n.t('openSettingsFailed');
       });
     });
     document.getElementById('check-browser-managers-btn').addEventListener('click', () => {
@@ -84,8 +85,8 @@
         const el = document.getElementById('open-mypass-app-error');
         el.hidden = !!(result && result.type === 'ok');
         el.textContent = result && result.type === 'pairingRequired'
-          ? 'Connect this browser to MyPass first.'
-          : 'Could not open MyPass. Open the app and try again.';
+          ? i18n.t('connectBrowserFirst')
+          : i18n.t('openAppFailed');
       });
     });
   }
@@ -153,10 +154,10 @@
         passkeyToggle.checked = !next;
         passkeyError.hidden = false;
         passkeyError.textContent = result && result.type === 'locked'
-          ? 'Unlock MyPass, then change passkeys.'
+          ? i18n.t('passkeyChangeLocked')
           : result && result.type === 'pairingRequired'
-            ? 'Connect this browser to MyPass first.'
-            : 'Could not change passkeys. Open MyPass and try again.';
+            ? i18n.t('connectBrowserFirst')
+            : i18n.t('passkeyChangeFailed');
       });
     });
     refreshAutofillPasskeyToggle();
@@ -220,6 +221,7 @@
     refreshShortcutLabels();
   }
 
+  i18n.apply(document);
   var canonical = router.canonicalHash(location.hash);
   if (canonical !== location.hash) {
     history.replaceState(null, '', canonical);
