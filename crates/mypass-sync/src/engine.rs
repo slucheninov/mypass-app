@@ -219,6 +219,7 @@ fn remote_open_error(e: KdbxError) -> SyncError {
         e @ (KdbxError::Io { .. }
         | KdbxError::VaultRetained { .. }
         | KdbxError::Random
+        | KdbxError::RetainedCopyRefused(_)
         | KdbxError::InvalidOperation(_)) => SyncError::RemoteCorrupt(e.to_string()),
     }
 }

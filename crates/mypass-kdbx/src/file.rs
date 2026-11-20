@@ -99,6 +99,18 @@ pub trait FileIo: Send + Sync {
         let _ = (path, expected, bytes, max_len);
         Err(unsupported("this file backend has no guarded replacement"))
     }
+    /// Deletes one retained copy of a vault only after re-verifying its name, type, link count,
+    /// length, full SHA-256 and vault identity, and that the live vault is a different readable
+    /// file (see [`remove_retained_copy`]). A refusal is [`KdbxError::RetainedCopyRefused`].
+    ///
+    /// The default refuses with `ErrorKind::Unsupported` (fail closed): a backend that cannot
+    /// make these checks on its own files must never delete one.
+    fn remove_retained(&self, removal: &RetainedRemoval, known: &[RetainedIdentity]) -> Result<()> {
+        let _ = (removal, known);
+        Err(unsupported(
+            "this file backend cannot remove retained copies",
+        ))
+    }
 }
 
 /// A file opened for a bounded read ([`FileIo::open_read`]). `regular` and `len` describe the
@@ -260,6 +272,9 @@ impl FileIo for PlainFileIo {
         max_len: u64,
     ) -> Result<ReplaceOutcome> {
         replace_if_production(path, expected, bytes, max_len)
+    }
+    fn remove_retained(&self, removal: &RetainedRemoval, known: &[RetainedIdentity]) -> Result<()> {
+        remove_retained_copy(removal, known)
     }
 }
 fn unsupported(message: &str) -> KdbxError {
@@ -668,6 +683,14 @@ fn split_target(target: &Path) -> Result<(&Path, &std::ffi::OsStr)> {
     })?;
     Ok((parent, name))
 }
+mod retained;
+pub use retained::{
+    inspect_retained_copies, recorded_retained_copies, remove_retained_copy,
+    set_retained_copy_listener, RetainedCopyCheck, RetainedCopyListener, RetainedIdentity,
+    RetainedInspection, RetainedProvenance, RetainedRefusal, RetainedRemoval,
+    RETAINED_IN_FLIGHT_GRACE,
+};
+
 /// The longest prefix of the target's file name used in a sibling name, in bytes. With the
 /// `.<pid>.<nanos>.<n>.displaced` tail (at most 64 bytes) a sibling name stays far below the
 /// 255-byte (or 255-UTF-16-unit) name limit of every common file system, whatever the length of
@@ -1119,6 +1142,20 @@ fn replace_if_with(
 ) -> Result<ReplaceOutcome> {
     // Resolved once: a symlink retargeted later cannot redirect the replacement to another file.
     let target = resolve_using(|| resolve_target(path), &mut *seams.sleep).map_err(io_error)?;
+    let outcome = replace_resolved(&target, expected, bytes, max_len, seams);
+    // Every copy this replacement retained gets its write-time identity now.
+    retained::record_outcome(&target, &outcome);
+    outcome
+}
+
+fn replace_resolved(
+    target: &Path,
+    expected: Option<&[u8; 32]>,
+    bytes: &[u8],
+    max_len: u64,
+    seams: &mut Seams<'_>,
+) -> Result<ReplaceOutcome> {
+    let target = target.to_path_buf();
     let (parent, name) = split_target(&target)?;
     let names = SiblingNames::new(parent, name)?;
     // The exchange flag is only read where `renameat_with` exists.

@@ -43,6 +43,10 @@ pub enum KdbxError {
         path: std::path::PathBuf,
         message: String,
     },
+    /// A retained vault copy was not deleted: it no longer matches what was confirmed, or it
+    /// cannot be proved to be a copy of this vault that is safe to drop. Nothing was deleted.
+    #[error("retained copy not deleted: {0}")]
+    RetainedCopyRefused(crate::RetainedRefusal),
     /// The caller asked for something the data model forbids.
     #[error("invalid operation: {0}")]
     InvalidOperation(String),
