@@ -60,6 +60,9 @@ type Commands = typeof commands;
 export type CommandName = keyof Commands;
 export type EventName = keyof typeof events;
 
+/** Canonical shortcuts the backend refuses on every platform (a subset of its reserved list). */
+const RESERVED_SHORTCUTS = new Set(["CommandOrControl+Q", "CommandOrControl+W", "CommandOrControl+Tab"]);
+
 /** The success payload of a generated command (a `Result` is unwrapped; `shortcutConflictsTake` has none). */
 export type OkData<K extends CommandName> =
   Awaited<ReturnType<Commands[K]>> extends infer R
@@ -913,6 +916,11 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         const code = state.settingsFailure;
         state.settingsFailure = null;
         throw apiError(code);
+      }
+      // Like the backend's `canonical_for`: a combination the system owns is refused, whatever the
+      // recorder let through (the settings window checks only as a convenience).
+      for (const value of [patch.shortcutLock, patch.shortcutShow]) {
+        if (typeof value === "string" && RESERVED_SHORTCUTS.has(value)) throw apiError("invalidInput");
       }
       if (typeof patch.launchAtLogin === "boolean") {
         if (state.loginItemError !== null) {

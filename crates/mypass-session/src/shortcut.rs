@@ -54,6 +54,17 @@ impl ParsedShortcut {
         parts.push(&self.key);
         parts.join("+")
     }
+
+    /// Whether the system owns this combination on macOS (`macos`) or elsewhere.
+    pub fn is_reserved(&self, macos: bool) -> bool {
+        let canonical = self.canonical();
+        let own: &[&str] = if macos {
+            RESERVED_MACOS
+        } else {
+            RESERVED_OTHER
+        };
+        RESERVED_EVERYWHERE.contains(&canonical.as_str()) || own.contains(&canonical.as_str())
+    }
 }
 
 /// Why a shortcut string was rejected.
@@ -71,7 +82,25 @@ pub enum ShortcutError {
     MultipleKeys,
     #[error("unknown key: {0}")]
     UnknownKey(String),
+    #[error("the shortcut is reserved by the system")]
+    Reserved,
 }
+
+// Combinations the system owns. Registering one globally would hijack it in every other app
+// (Ctrl+Q on Windows quits editors) or silently never fire (the OS consumes it first). Spelled in
+// the canonical form; the settings window keeps a copy of this list (`src/lib/shortcuts.ts`) only
+// to refuse a recording before it is sent, so the backend list below is the one that decides.
+const RESERVED_EVERYWHERE: &[&str] = &[
+    "CommandOrControl+Q",
+    "CommandOrControl+W",
+    "CommandOrControl+Tab",
+];
+/// Spotlight.
+const RESERVED_MACOS: &[&str] = &["CommandOrControl+Space"];
+const RESERVED_OTHER: &[&str] = &["Alt+F4", "Alt+Tab", "CommandOrControl+Alt+Delete"];
+
+/// Whether this build runs on macOS: where `CommandOrControl` means Cmd and the reserved set differs.
+pub const HOST_IS_MACOS: bool = cfg!(target_os = "macos");
 
 /// Named keys: accepted spellings (lower case) and the canonical name.
 const NAMED_KEYS: &[(&[&str], &str)] = &[
@@ -152,9 +181,25 @@ pub fn parse_shortcut(s: &str) -> Result<ParsedShortcut, ShortcutError> {
     Ok(ParsedShortcut { modifiers, key })
 }
 
-/// The canonical spelling of `s` (see the module documentation).
+/// The canonical spelling of `s` (see the module documentation). The syntax only: a reserved
+/// combination still parses, so an old settings file stays readable.
 pub fn canonical(s: &str) -> Result<String, ShortcutError> {
     parse_shortcut(s).map(|p| p.canonical())
+}
+
+/// [`parse_shortcut`] for a shortcut that is about to be stored or registered: a combination the
+/// system owns on `macos` (or elsewhere) is [`ShortcutError::Reserved`].
+pub fn parse_shortcut_for(s: &str, macos: bool) -> Result<ParsedShortcut, ShortcutError> {
+    let parsed = parse_shortcut(s)?;
+    if parsed.is_reserved(macos) {
+        return Err(ShortcutError::Reserved);
+    }
+    Ok(parsed)
+}
+
+/// [`canonical`] with the reserved check of [`parse_shortcut_for`].
+pub fn canonical_for(s: &str, macos: bool) -> Result<String, ShortcutError> {
+    parse_shortcut_for(s, macos).map(|p| p.canonical())
 }
 
 #[cfg(test)]
@@ -187,6 +232,35 @@ mod tests {
             canonical("control+SHIFT+l").unwrap(),
             "CommandOrControl+Shift+L"
         );
+    }
+
+    #[test]
+    fn reserved_combinations_are_refused_per_platform() {
+        for macos in [true, false] {
+            for s in ["cmd+q", "Ctrl+W", "control+tab", "CommandOrControl+Q"] {
+                assert_eq!(canonical_for(s, macos), Err(ShortcutError::Reserved), "{s}");
+            }
+            // Still valid syntax: only the storing and registering paths refuse it.
+            assert_eq!(canonical("cmd+q").unwrap(), "CommandOrControl+Q");
+        }
+        assert_eq!(
+            canonical_for("cmd+space", true),
+            Err(ShortcutError::Reserved)
+        );
+        assert_eq!(
+            canonical_for("cmd+space", false).unwrap(),
+            "CommandOrControl+Space"
+        );
+        for s in ["alt+f4", "Alt+Tab", "ctrl+alt+delete"] {
+            assert_eq!(canonical_for(s, false), Err(ShortcutError::Reserved), "{s}");
+            assert!(canonical_for(s, true).is_ok(), "{s}");
+        }
+        assert_eq!(
+            canonical_for("cmd+shift+l", true).unwrap(),
+            "CommandOrControl+Shift+L"
+        );
+        // Syntax errors keep their own kind.
+        assert_eq!(canonical_for("cmd", true), Err(ShortcutError::NoKey));
     }
 
     #[test]

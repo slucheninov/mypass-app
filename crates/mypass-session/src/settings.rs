@@ -589,7 +589,8 @@ fn checked_shortcut(value: String, field: &'static str) -> Result<String, Settin
     if value.trim().is_empty() {
         return Ok(String::new());
     }
-    shortcut::canonical(&value).map_err(|_| SettingsError::InvalidValue(field))
+    shortcut::canonical_for(&value, shortcut::HOST_IS_MACOS)
+        .map_err(|_| SettingsError::InvalidValue(field))
 }
 
 fn apply_patch(s: &mut Settings, p: SettingsPatch) -> Result<(), SettingsError> {
@@ -1102,6 +1103,21 @@ mod tests {
                 ..SettingsPatch::default()
             }),
             Err(SettingsError::InvalidValue("shortcutLock"))
+        );
+        // A combination the system owns is refused by the backend too, not only by the recorder.
+        assert_eq!(
+            store.update(SettingsPatch {
+                shortcut_lock: Some("cmd+Q".into()),
+                ..SettingsPatch::default()
+            }),
+            Err(SettingsError::InvalidValue("shortcutLock"))
+        );
+        assert_eq!(
+            store.update(SettingsPatch {
+                shortcut_show: Some("Ctrl+Tab".into()),
+                ..SettingsPatch::default()
+            }),
+            Err(SettingsError::InvalidValue("shortcutShow"))
         );
         // Empty means "no shortcut" and is accepted.
         let s = store

@@ -51,7 +51,10 @@ export type ShortcutRecording = { shortcut: string } | { refused: ShortcutRefusa
 
 // Combinations the system owns. Registering one globally would hijack it in every other app
 // (Ctrl+Q on Windows quits editors) or silently never fire (the OS consumes it first). Spelled
-// in the canonical form, so one set serves the recorder and a test per entry.
+// in the canonical form, so one set serves the recorder and a test per entry. This is a
+// convenience so the recorder can say why a key press was ignored: the backend list
+// (`mypass_session::shortcut`) refuses the same combinations when stored or registered, and
+// is the one that decides.
 const RESERVED_EVERYWHERE = new Set(["CommandOrControl+Q", "CommandOrControl+W", "CommandOrControl+Tab"]);
 const RESERVED_MACOS = new Set(["CommandOrControl+Space"]); // Spotlight
 const RESERVED_OTHER = new Set(["Alt+F4", "Alt+Tab", "CommandOrControl+Alt+Delete"]);

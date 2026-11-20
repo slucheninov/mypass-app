@@ -120,6 +120,11 @@ describe("fake backend", () => {
     expect(await commands.settingsLoginItemStatus()).toEqual({ status: "ok", data: "enabled" });
     const updated = await commands.settingsUpdate({ backupCount: 99, clipboardClearSeconds: 33 });
     expect(updated).toMatchObject({ status: "ok", data: { backupCount: 50, clipboardClearSeconds: 35 } });
+    // A reserved combination is refused by the backend even when the recorder never sent it.
+    expect(await commands.settingsUpdate({ shortcutShow: "CommandOrControl+Q" })).toMatchObject({
+      status: "error",
+      error: { code: "invalidInput" },
+    });
     expect(await commands.appRevealBackups()).toEqual({ status: "ok", data: null });
   });
 

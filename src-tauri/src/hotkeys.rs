@@ -30,7 +30,9 @@ impl HotkeyAction {
 
 /// The hotkeys the settings ask for, as `(action, canonical accelerator)`, Lock first. An empty
 /// shortcut means "none" and is left out; a legacy spelling is canonicalised; a string that does
-/// not parse is kept as stored, so registering it fails and is reported as a conflict.
+/// not parse is kept as stored, so registering it fails and is reported as a conflict. A
+/// combination the system owns (Cmd+Q, Alt+F4 ...) that a hand-edited settings file holds is
+/// left out as well: registering it would hijack it in every other app.
 pub fn hotkey_plan(settings: &Settings) -> Vec<(HotkeyAction, String)> {
     [
         (HotkeyAction::Lock, &settings.shortcut_lock),
@@ -38,6 +40,12 @@ pub fn hotkey_plan(settings: &Settings) -> Vec<(HotkeyAction, String)> {
     ]
     .into_iter()
     .filter(|(_, raw)| !raw.trim().is_empty())
+    .filter(|(_, raw)| {
+        !matches!(
+            shortcut::parse_shortcut_for(raw, shortcut::HOST_IS_MACOS),
+            Err(shortcut::ShortcutError::Reserved)
+        )
+    })
     .map(|(action, raw)| {
         let accelerator = shortcut::canonical(raw).unwrap_or_else(|_| raw.clone());
         (action, accelerator)
@@ -237,6 +245,14 @@ mod tests {
         assert_eq!(
             hotkey_plan(&settings("Hyper+L", "")),
             [(HotkeyAction::Lock, "Hyper+L".to_owned())]
+        );
+    }
+
+    #[test]
+    fn hotkey_plan_leaves_out_a_reserved_combination() {
+        assert_eq!(
+            hotkey_plan(&settings("cmd+Q", "Ctrl+Alt+M")),
+            [(HotkeyAction::Show, "CommandOrControl+Alt+M".to_owned())]
         );
     }
 
