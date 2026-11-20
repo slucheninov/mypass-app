@@ -408,13 +408,56 @@ fn scaled(rect: PanelRect, factor: f64) -> PanelRect {
     }
 }
 
+/// The click location in unscaled global points, from the position the tray event itself carried
+/// (taken by the tray API when the click happened, not when the handler got to run).
+///
+/// `position` is in physical pixels of the icon's own screen, a scale the event does not name,
+/// so each distinct monitor scale is tried: a candidate counts only if dividing by it lands the
+/// point inside a monitor that really has that scale. When exactly one point is consistent
+/// (every desktop with a single scale, and most mixed ones) it is the answer and nothing sampled
+/// later is consulted. When several are (a mixed-DPI desktop where the icon's pixels fit two
+/// screens), `hint`, a point sampled later from the cursor, only picks the nearest candidate;
+/// without one there is no answer. No candidate (a point outside every monitor) is also `None`.
+pub fn tray_click_point(
+    position: (f64, f64),
+    monitors: &[MonitorFrame],
+    hint: Option<(f64, f64)>,
+) -> Option<(f64, f64)> {
+    let mut candidates: Vec<(f64, f64)> = Vec::new();
+    for monitor in monitors {
+        let scale = monitor.scale();
+        let point = (position.0 / scale, position.1 / scale);
+        let consistent = monitors
+            .iter()
+            .any(|m| (m.scale() - scale).abs() < 1e-9 && contains(m.logical(), point.0, point.1));
+        let known = candidates
+            .iter()
+            .any(|c| (c.0 - point.0).abs() < 1e-6 && (c.1 - point.1).abs() < 1e-6);
+        if consistent && !known {
+            candidates.push(point);
+        }
+    }
+    match candidates.as_slice() {
+        [] => None,
+        [only] => Some(*only),
+        many => {
+            let (hx, hy) = hint?;
+            many.iter().copied().min_by(|a, b| {
+                let da = (a.0 - hx).hypot(a.1 - hy);
+                let db = (b.0 - hx).hypot(b.1 - hy);
+                da.total_cmp(&db)
+            })
+        }
+    }
+}
+
 /// Top-left of the tray panel in logical points (the unit macOS positions windows in).
 ///
 /// The tray icon lives on exactly one monitor, and that monitor's scale factor (never the panel
 /// window's, which belongs to wherever the panel was last shown) converts the icon between
 /// physical pixels and logical points. The monitor is found in global logical points, where the
 /// monitors never overlap: by `click`, the click location in unscaled global points (the caller
-/// derives it from the cursor, which sits on the icon at click time), or, for an icon that is
+/// derives it from the position the tray event carried, see [`tray_click_point`]), or, for an icon that is
 /// already logical, by the icon's own center. A physical icon rectangle is never matched against
 /// the physical monitor frames: tao places each monitor at its logical origin times that monitor's
 /// own scale, so those frames overlap on mixed-DPI desktops and the first match would be wrong.
@@ -743,6 +786,60 @@ mod tests {
     }
 
     const PANEL: (f64, f64) = (320.0, 420.0);
+
+    #[test]
+    fn click_point_on_a_single_scale_desktop_needs_no_later_cursor() {
+        let monitors = [
+            frame(0.0, 0.0, 2880.0, 1800.0, 2.0),
+            frame(1440.0 * 2.0, 0.0, 2880.0, 1800.0, 2.0),
+        ];
+        // The pointer has since moved to (10, 500), far from the icon; it is never consulted.
+        let point = tray_click_point((4000.0, 12.0), &monitors, Some((10.0, 500.0)));
+        assert_eq!(point, Some((2000.0, 6.0)));
+        assert_eq!(tray_click_point((4000.0, 12.0), &monitors, None), point);
+    }
+
+    #[test]
+    fn click_point_on_a_mixed_desktop_is_exact_when_only_one_scale_fits() {
+        // Physical x 600 is logical 300 on the 2x primary, and logical 600 on the 1x neighbour
+        // that only starts at 1440, so only the 2x reading lands on a monitor of that scale.
+        for monitors in both_orders() {
+            let point = tray_click_point((600.0, 10.0), &monitors, Some((2500.0, 900.0)));
+            assert_eq!(point, Some((300.0, 5.0)), "{monitors:?}");
+        }
+    }
+
+    #[test]
+    fn click_point_that_fits_two_scales_is_settled_by_the_nearest_later_cursor() {
+        // Physical x 2000: logical 1000 on the 2x primary, logical 2000 on the 1x neighbour.
+        for monitors in both_orders() {
+            let on_primary = tray_click_point((2000.0, 12.0), &monitors, Some((1012.0, 14.0)));
+            assert_eq!(on_primary, Some((1000.0, 6.0)), "{monitors:?}");
+            let on_neighbour = tray_click_point((2000.0, 12.0), &monitors, Some((2012.0, 14.0)));
+            assert_eq!(on_neighbour, Some((2000.0, 12.0)), "{monitors:?}");
+            // Without any later cursor there is no way to choose.
+            assert_eq!(tray_click_point((2000.0, 12.0), &monitors, None), None);
+        }
+    }
+
+    #[test]
+    fn click_point_outside_every_monitor_has_no_answer() {
+        let monitors = mixed_monitors();
+        assert_eq!(
+            tray_click_point((9000.0, 9000.0), &monitors, Some((10.0, 10.0))),
+            None
+        );
+        assert_eq!(
+            tray_click_point((10.0, 10.0), &[], Some((10.0, 10.0))),
+            None
+        );
+        // A zero scale is read as 1.
+        let odd = [frame(0.0, 0.0, 100.0, 100.0, 0.0)];
+        assert_eq!(
+            tray_click_point((50.0, 50.0), &odd, None),
+            Some((50.0, 50.0))
+        );
+    }
 
     /// Both orders the OS can list the monitors in; the answer must not depend on it.
     fn both_orders() -> [Vec<MonitorFrame>; 2] {
