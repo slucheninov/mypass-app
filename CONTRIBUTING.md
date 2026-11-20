@@ -48,7 +48,7 @@ request. Tests are not allowed to be skipped, weakened or deleted to make someth
 
 English is the source language: code, comments, commit messages, docs, error messages. Cyrillic
 appears only in `*.xcstrings` files, the root `RUN.md`, the translation files
-(`src/lib/i18n/locales/{uk,ru}.json`, `src-tauri/resources/macos/{uk,ru}.lproj/InfoPlist.strings`)
+(`src/lib/i18n/locales/{uk,ru}.json`, `src-tauri/resources/macos/{uk,ru}.lproj/InfoPlist.strings`; the English and German files stay Cyrillic-free)
 and as `\u{..}` escapes in tests (literal Cyrillic only in `crates/mypass-kdbx/tests/unicode.rs`).
 
 ## Commits and pull requests
