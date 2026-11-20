@@ -858,7 +858,7 @@ fn revision_of(version: &Entry) -> String {
     };
     for field in &version.fields {
         part(field.key.as_bytes());
-        part(field.value.as_bytes());
+        part(field.value().as_bytes());
         part(&[u8::from(field.protected)]);
     }
     for array in &version.string_arrays {
