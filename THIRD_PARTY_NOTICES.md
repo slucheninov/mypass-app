@@ -809,11 +809,11 @@ of DOMPurify is not selected.
 | `@tauri-apps/plugin-dialog` | 2.8.4 | MIT OR Apache-2.0 |
 | `@tauri-apps/plugin-opener` | 2.7.2 | MIT OR Apache-2.0 |
 | `dompurify` | 3.4.17 | MPL-2.0 OR Apache-2.0 |
-| `intl-messageformat` | 12.1.4 | BSD-3-Clause |
+| `intl-messageformat` | 12.1.5 | BSD-3-Clause |
 | `@formatjs/fast-memoize` (via `intl-messageformat`) | 3.1.7 | MIT |
-| `@formatjs/icu-messageformat-parser` (via `intl-messageformat`) | 3.5.22 | MIT |
-| `@formatjs/icu-skeleton-parser` (via `intl-messageformat`) | 2.1.12 | MIT |
-| `marked` | 18.1.1 | MIT |
+| `@formatjs/icu-messageformat-parser` (via `intl-messageformat`) | 3.5.23 | MIT |
+| `@formatjs/icu-skeleton-parser` (via `intl-messageformat`) | 2.1.13 | MIT |
+| `marked` | 18.2.0 | MIT |
 
 The Svelte runtime (`svelte` 5.57.3, MIT, a development dependency because the compiler runs at
 build time) is also copied into the bundle by the compiled components, together with the two
@@ -876,10 +876,10 @@ Used to build and test the frontend only; none of it is part of a MyPass artifac
 | `@sveltejs/vite-plugin-svelte` | 6.2.4 | MIT |
 | `@tauri-apps/cli` | 2.12.4 | Apache-2.0 OR MIT |
 | `@testing-library/svelte` | 5.4.2 | MIT |
-| `@types/node` | 26.6.5 | MIT |
+| `@types/node` | 26.6.6 | MIT |
 | `jsdom` | 30.1.3 | MIT |
 | `svelte` | 5.57.3 | MIT |
-| `svelte-check` | 4.7.7 | MIT |
+| `svelte-check` | 4.7.8 | MIT |
 | `typescript` | 5.9.3 | Apache-2.0 |
 | `vite` | 6.4.5 | MIT |
 | `vitest` | 3.2.7 | MIT |
@@ -892,5 +892,5 @@ These are `devDependencies` used by the component tests; nothing from them is in
 
 | Package | Version | Licence |
 |---|---|---|
-| `axe-core` | 4.11.0 | MPL-2.0 |
-| `@testing-library/user-event` | 14.6.1 | MIT |
+| `axe-core` | 4.14.0 | MPL-2.0 |
+| `@testing-library/user-event` | 14.6.10 | MIT |
