@@ -290,6 +290,9 @@ fn place_panel(app: &AppHandle, panel: &tauri::WebviewWindow, tray: tauri::Rect)
     // the PRIMARY monitor's scale, so dividing by that scale gives the global point. The cursor
     // sits on the icon at click time, and the global point tells overlapping physical frames
     // apart (the tray rectangle itself is in the scale of the icon's own screen, unknown here).
+    // Known limitation (accepted): the cursor is sampled here, when the click event is handled, not
+    // captured at event time; if the pointer moved off the icon in between (a slow main thread),
+    // the panel can land by the pointer's new spot, still on a valid monitor and clamped to it.
     let click = app.cursor_position().ok().and_then(|cursor| {
         let primary_scale = app.primary_monitor().ok().flatten()?.scale_factor();
         (primary_scale > 0.0).then(|| (cursor.x / primary_scale, cursor.y / primary_scale))
