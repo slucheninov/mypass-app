@@ -214,6 +214,35 @@ describe("retained vault copies", () => {
     expect(screen.queryByTestId("sync-recovery-file")).toBeNull();
   });
 
+  it("labels_a_retained_exchange_copy_as_a_replacement_working_copy", async () => {
+    const name = ".vault.kdbx.1.2.3.exchanged";
+    await open({}, (f) => {
+      f.state.displaced = { count: 1, copies: [{ location: "primary", kind: "exchanged", name, bytes: 10 }], unavailable: [] };
+    });
+    const section = await screen.findByTestId("displaced-copies");
+    expect(within(section).getByText("Replacement working copy")).toBeTruthy();
+    expect(within(section).getByText(name)).toBeTruthy();
+    expect(within(section).queryByText("Competing copy")).toBeNull();
+  });
+
+  it("refreshes_when_a_save_of_the_primary_vault_alone_settles", async () => {
+    // No secondary folder, so no sync status change: the settled save alone must refresh it.
+    const { fake } = await open();
+    await screen.findByText("Test vault");
+    await waitFor(() => expect(calls(fake, "syncDisplacedStatus").length).toBeGreaterThan(0));
+    expect(screen.queryByTestId("displaced-copies")).toBeNull();
+    fake.state.displaced = structuredClone(COPIES);
+    await fake.emit("saveStateChanged", { state: "saving", message: null });
+    await fake.emit("saveStateChanged", { state: "idle", message: null });
+    const section = await screen.findByTestId("displaced-copies");
+    expect(within(section).getByText(".vault.kdbx.1.2.3.displaced")).toBeTruthy();
+    // A failed save settles too (a failed replacement can retain a copy).
+    fake.state.displaced = { count: 0, copies: [], unavailable: [] };
+    await fake.emit("saveStateChanged", { state: "pending", message: null });
+    await fake.emit("saveStateChanged", { state: "failed", message: "disk full" });
+    await waitFor(() => expect(screen.queryByTestId("displaced-copies")).toBeNull());
+  });
+
   it("an_unreadable_folder_is_reported_not_shown_as_no_copies", async () => {
     await open({}, (fake) => {
       fake.state.displaced = { count: 0, copies: [], unavailable: ["secondary"] };
