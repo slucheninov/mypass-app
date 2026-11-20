@@ -18,13 +18,18 @@
 //!   or a restart may have replaced the primary with a delayed branch. Checkpoints are published
 //!   only after local durability, but never authorize a blind push.
 //! - The engine never mutates `local`.
+//! - A remote is opened within the automatic KDF budget: per dimension the larger of the default
+//!   ceiling, the local vault's cost and the highest cost already verified for this remote
+//!   (recorded in the checkpoint). Only a cost that decrypted with the user's key is recorded,
+//!   so a vault whose KDF was lowered still syncs with the older, costlier copy, while an
+//!   unverified costly file stays refused before any KDF work.
 use crate::{
     backend::{StorageBackend, StorageError, WriteOutcome},
     checkpoint::{SyncCheckpoint, SyncCheckpointStore},
     watcher::EchoFilter,
 };
 use mypass_core::merge::merge;
-use mypass_kdbx::{Database, KdbxError, KdfLimits, KdfParams, SaveSettings};
+use mypass_kdbx::{Database, KdbxError, KdfCost, KdfLimits, KdfParams, SaveSettings};
 use secrecy::SecretString;
 use sha2::{Digest, Sha256};
 use std::{
@@ -107,8 +112,8 @@ pub enum SyncMode {
 pub enum SyncResult {
     /// The remote was missing; the local vault was written there.
     UploadedInitial(PendingCheckpoint),
-    /// Nothing written: the remote is what this device last wrote (no checkpoint to record), or
-    /// local and remote already hold the same vault content.
+    /// Nothing written: local and remote already hold the same vault content. A checkpoint is
+    /// pending if the content stamp or the verified KDF cost needs updating.
     Unchanged(Option<PendingCheckpoint>),
     /// The local vault was written over a remote that held nothing new for it.
     UploadedLocal(PendingCheckpoint),
@@ -189,6 +194,10 @@ pub struct SyncEngine {
     /// password. Dropped with the engine. Production SecondarySync creates a fresh engine
     /// per run, so this cache does not carry verified content between production sync runs.
     verified: Mutex<Option<([u8; 32], Database)>>,
+    /// The default automatic KDF ceilings, raised per dimension by verified costs. Always
+    /// [`KdfCost::AUTOMATIC`] in production; the engine's own tests lower it so the budget can
+    /// be exercised without gigabytes of Argon2.
+    ceiling: KdfCost,
 }
 
 impl fmt::Debug for SyncEngine {
@@ -210,6 +219,7 @@ fn remote_open_error(e: KdbxError) -> SyncError {
         e @ (KdbxError::Io { .. }
         | KdbxError::VaultRetained { .. }
         | KdbxError::Random
+        | KdbxError::RetainedCopyRefused(_)
         | KdbxError::InvalidOperation(_)) => SyncError::RemoteCorrupt(e.to_string()),
     }
 }
@@ -272,6 +282,7 @@ impl SyncEngine {
             echo: None,
             gate: Mutex::new(()),
             verified: Mutex::new(None),
+            ceiling: KdfCost::AUTOMATIC,
         }
     }
 
@@ -314,6 +325,16 @@ impl SyncEngine {
     ) -> Result<SyncResult, SyncError> {
         let _serial = self.gate.lock().unwrap_or_else(PoisonError::into_inner);
         let vault = local.root.uuid.to_string();
+        // The local vault's own cost, plus the highest cost recorded for this remote. A store
+        // that cannot be read lends nothing (the narrower budget fails closed); the attempt
+        // below reports a checkpoint failure where it needs the checkpoint itself.
+        let mut verified = self
+            .checkpoints
+            .load()
+            .ok()
+            .flatten()
+            .map(|cp| cp.verified_kdf_for(&vault))
+            .unwrap_or_default();
         let mut rebased: Option<Database> = None;
         for _ in 0..MAX_SYNC_ATTEMPTS {
             let step = self.attempt(
@@ -322,6 +343,7 @@ impl SyncEngine {
                 password,
                 mode,
                 &vault,
+                &mut verified,
                 still_current,
             )?;
             match step {
@@ -342,6 +364,17 @@ impl SyncEngine {
             .map_err(checkpoint_error)
     }
 
+    /// The primary's own cost raises the budget for this run. Only costs verified for the
+    /// secondary are carried in its checkpoint.
+    fn limits(&self, local: &Database, verified: KdfCost) -> KdfLimits {
+        KdfLimits::within(
+            self.ceiling
+                .max(KdfCost::of(&local.settings.kdf))
+                .max(verified),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)] // one attempt's whole context, as `install` takes it
     fn attempt(
         &self,
         local: &Database,
@@ -349,6 +382,7 @@ impl SyncEngine {
         password: &SecretString,
         mode: SyncMode,
         vault: &str,
+        verified: &mut KdfCost,
         still_current: &dyn Fn() -> bool,
     ) -> Result<Attempt, SyncError> {
         if !still_current() {
@@ -363,7 +397,7 @@ impl SyncEngine {
             let bytes = encode(base, password)?;
             let adopt = rebased.is_some();
             let write = Write::new(None, &bytes, base, adopt, Upload::Initial);
-            return self.install(write, password, local, vault, still_current);
+            return self.install(write, password, local, vault, verified, still_current);
         };
 
         let checkpoint = self.checkpoints.load().map_err(checkpoint_error)?;
@@ -377,7 +411,7 @@ impl SyncEngine {
         let (remote_db, needs_rekey) = match Database::open_with_limits(
             &remote_bytes,
             password,
-            KdfLimits::remote(Some(&local.settings.kdf)),
+            self.limits(local, *verified),
         ) {
             Ok(db) => (db, false),
             Err(KdbxError::WrongPassword) => {
@@ -396,21 +430,30 @@ impl SyncEngine {
         if remote_db.root.uuid != local.root.uuid {
             return Err(SyncError::RemoteIsDifferentVault);
         }
+        // Decrypted with the user's key (or exactly a copy this engine decrypted): its cost is
+        // verified for this vault and remote.
+        *verified = verified.max(KdfCost::of(&remote_db.settings.kdf));
         self.remember_verified(&remote_bytes, &remote_db);
         let merged = merge(base, &remote_db);
         // `Database` equality depends on child order and `merge` sorts by UUID, so each side is
         // compared in its canonical (self-merged) form: equal exactly when it lacks nothing.
         let remote_has_all = merged == merge(&remote_db, &remote_db);
         let local_has_all = merged == merge(local, local);
+        let unchanged = || {
+            let pending = checkpoint
+                .filter(|cp| cp.verified_kdf.is_none() || cp.verified_kdf_for(vault) != *verified)
+                .map(|cp| PendingCheckpoint(cp.with_verified_kdf(*verified)));
+            Ok(Attempt::Done(SyncResult::Unchanged(pending)))
+        };
         if ours && local_has_all && mode == SyncMode::Pull {
-            return Ok(Attempt::Done(SyncResult::Unchanged(None)));
+            return unchanged();
         }
         if ours && remote_has_all && local_has_all {
             if mode == SyncMode::PushIfChanged
                 && !needs_rekey
                 && same_format(&remote_db.settings, &local.settings)
             {
-                return Ok(Attempt::Done(SyncResult::Unchanged(None)));
+                return unchanged();
             }
             if !still_current() {
                 return Err(SyncError::Cancelled);
@@ -418,11 +461,11 @@ impl SyncEngine {
             let bytes = encode(local, password)?;
             let expected = digest(&remote_bytes);
             let write = Write::new(Some(&expected), &bytes, local, false, Upload::Local);
-            return self.install(write, password, local, vault, still_current);
+            return self.install(write, password, local, vault, verified, still_current);
         }
         if remote_has_all && !needs_rekey {
             // Nothing to write: the remote already holds every change.
-            let cp = PendingCheckpoint(self.checkpoint_of(&remote_bytes, vault));
+            let cp = PendingCheckpoint(self.checkpoint_of(&remote_bytes, vault, *verified));
             if local_has_all {
                 return Ok(Attempt::Done(SyncResult::Unchanged(Some(cp))));
             }
@@ -443,7 +486,7 @@ impl SyncEngine {
             !local_has_all,
             Upload::Local,
         );
-        self.install(write, password, local, vault, still_current)
+        self.install(write, password, local, vault, verified, still_current)
     }
 
     fn remember_verified(&self, bytes: &[u8], db: &Database) {
@@ -458,6 +501,7 @@ impl SyncEngine {
         password: &SecretString,
         local: &Database,
         vault: &str,
+        verified: &mut KdfCost,
         still_current: &dyn Fn() -> bool,
     ) -> Result<Attempt, SyncError> {
         if !still_current() {
@@ -483,20 +527,20 @@ impl SyncEngine {
                     |path: Option<_>| path.map_or(SyncError::ConcurrentCopyKept, kept);
                 // Our bytes are on the remote, but they displaced a version another writer
                 // committed in the last instant: merge it back on the next attempt.
-                let theirs = Database::open_with_limits(
-                    &theirs,
-                    password,
-                    KdfLimits::remote(Some(&local.settings.kdf)),
-                )
-                .map_err(|e| match e {
-                    KdbxError::RemoteKdfLimitExceeded(_) => SyncError::SyncKdfLimitExceeded {
-                        recovery_file: hidden.clone(),
-                    },
-                    _ => kept_or_displaced(hidden.clone()),
-                })?;
+                let theirs =
+                    Database::open_with_limits(&theirs, password, self.limits(local, *verified))
+                        .map_err(|e| match e {
+                            KdbxError::RemoteKdfLimitExceeded(_) => {
+                                SyncError::SyncKdfLimitExceeded {
+                                    recovery_file: hidden.clone(),
+                                }
+                            }
+                            _ => kept_or_displaced(hidden.clone()),
+                        })?;
                 if theirs.root.uuid != local.root.uuid {
                     return Err(kept_or_displaced(hidden));
                 }
+                *verified = verified.max(KdfCost::of(&theirs.settings.kdf));
                 Ok(Attempt::Rebase(Box::new(merge(write.content, &theirs))))
             }
             WriteOutcome::Written => {
@@ -509,7 +553,9 @@ impl SyncEngine {
                     return Ok(Attempt::Rebase(Box::new(write.content.clone())));
                 }
                 self.remember_verified(write.bytes, write.content);
-                let cp = PendingCheckpoint(self.checkpoint_of(write.bytes, vault));
+                // Our own encoding: its cost is the one we just derived a key for.
+                *verified = verified.max(KdfCost::of(&write.content.settings.kdf));
+                let cp = PendingCheckpoint(self.checkpoint_of(write.bytes, vault, *verified));
                 Ok(Attempt::Done(if write.adopt {
                     SyncResult::Merged(Box::new(MergedRemote {
                         database: write.content.clone(),
@@ -525,10 +571,12 @@ impl SyncEngine {
         }
     }
 
-    fn checkpoint_of(&self, bytes: &[u8], vault: &str) -> SyncCheckpoint {
+    fn checkpoint_of(&self, bytes: &[u8], vault: &str, verified: KdfCost) -> SyncCheckpoint {
         // The time is informational: a failure to read it never fails the sync.
         let modified = self.remote.modification_date().ok().flatten();
-        SyncCheckpoint::of_bytes(bytes, modified).for_vault(vault)
+        SyncCheckpoint::of_bytes(bytes, modified)
+            .for_vault(vault)
+            .with_verified_kdf(verified)
     }
 }
 

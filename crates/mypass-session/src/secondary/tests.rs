@@ -267,13 +267,17 @@ impl World {
     }
 
     fn checkpoint_file(&self) -> PathBuf {
-        AppPaths::macos(&self.tmp.path().join("home"))
-            .data_dir
-            .join(SYNC_STATE_DIR)
-            .join(self.session.vault_id().unwrap())
-            .join(secondary_checkpoint_file(
+        self.checkpoint_for(&self.remote())
+    }
+
+    fn checkpoint_for(&self, secondary: &Path) -> PathBuf {
+        self.sync
+            .checkpoint_path(
+                &self.session.vault_id().unwrap(),
                 &self.session.vault_path().unwrap(),
-            ))
+                secondary,
+            )
+            .unwrap()
     }
 
     fn idle_synced(&self) -> bool {
@@ -1084,14 +1088,53 @@ fn unlock_with_nothing_new_does_not_rewrite_the_copy() {
     assert_eq!(w.remote_titles(), v(&["A", "C"]));
 }
 
+#[test]
+fn changing_secondary_folders_does_not_inherit_the_old_verified_cost() {
+    use mypass_kdbx::KdfCost;
+    let w = world();
+    w.open();
+    let old_path = w.checkpoint_file();
+    let old_store = FileCheckpointStore::new(old_path.clone());
+    let costly = KdfCost {
+        aes_rounds: 400_000_000,
+        ..KdfCost::default()
+    };
+    let checkpoint = old_store.load().unwrap().unwrap().with_verified_kdf(costly);
+    old_store.save(Some(&checkpoint)).unwrap();
+
+    let next = w.tmp.path().join("other-secondary");
+    fs::create_dir(&next).unwrap();
+    // The identical ciphertext also rules out using the old checkpoint based on content alone.
+    fs::write(next.join(FILE), w.remote_bytes()).unwrap();
+    w.settings
+        .set_secondary_folder(Some(next.to_str().unwrap().into()))
+        .unwrap();
+    w.sync.rearm();
+    w.advance_ms(0);
+    assert!(w.idle_synced());
+    let current = FileCheckpointStore::new(w.checkpoint_for(&next.join(FILE)))
+        .load()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        current
+            .verified_kdf_for(checkpoint.vault_uuid.as_deref().unwrap())
+            .aes_rounds,
+        0
+    );
+    assert_eq!(old_store.load().unwrap(), Some(checkpoint));
+}
+
 /// D-2: two copies of one vault (same root UUID) keep separate checkpoints.
 #[test]
 fn checkpoint_is_per_primary_file() {
-    let a = secondary_checkpoint_file(Path::new("/Users/u/Vaults/main.kdbx"));
-    let b = secondary_checkpoint_file(Path::new("/Users/u/Backup/main.kdbx"));
+    let w = world();
+    let folder = mypass_platform::file_identity(&w.folder).unwrap();
+    let a = secondary_checkpoint_file(&w.primary, &w.remote(), folder);
+    let b = secondary_checkpoint_file(&w.primary.with_file_name("copy.kdbx"), &w.remote(), folder);
     assert_ne!(a, b);
     assert!(a.starts_with("secondary-") && a.ends_with(".json"), "{a}");
-    assert_eq!(a.len(), "secondary-".len() + 16 + ".json".len());
+    assert_eq!(a.len(), "secondary-".len() + 32 + ".json".len());
 }
 
 /// D-5: only a path that does not exist is a missing folder; one that cannot be inspected is
@@ -1598,10 +1641,11 @@ fn a_successful_retry_keeps_the_stranded_vault_visible_until_it_is_removed() {
     );
 
     let settings_listing = || {
-        crate::displaced::list(&crate::displaced::targets(
-            Some(w.primary.clone()),
-            w.folder.to_str(),
-        ))
+        crate::displaced::list(
+            &crate::displaced::targets(Some(w.primary.clone()), w.folder.to_str()),
+            &[],
+            None,
+        )
     };
     let listed = settings_listing();
     assert_eq!(listed.count, 1);

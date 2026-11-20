@@ -12,7 +12,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
-from release import ROOT, check_version, extension_files, require, verify_zip
+from release import ROOT, check_extension_version, check_version, extension_files, require, verify_zip
 
 TARGET = 'x86_64-pc-windows-msvc'
 
@@ -49,7 +49,7 @@ def payloads(source, ver, root=ROOT):
         files[name] = source_bytes(root / name)
     for path, rel in extension_files(root / 'extension'):
         files['extension/' + rel] = source_bytes(path)
-    require(json.loads(files['extension/manifest.json'])['version'] == ver, 'extension version mismatch')
+    check_extension_version(json.loads(files['extension/manifest.json']), ver)
     return files
 
 

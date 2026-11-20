@@ -23,7 +23,7 @@ mod database;
 mod model;
 pub use database::{Database, SaveSettings};
 pub use format::kdf::{Argon2Variant, KdfParams};
-pub use format::limits::{KdfLimits, MAX_GROUP_DEPTH, MAX_VAULT_FILE_BYTES};
+pub use format::limits::{KdfCost, KdfLimits, MAX_GROUP_DEPTH, MAX_VAULT_FILE_BYTES};
 pub use format::outer_header::{Cipher, Compression};
 pub use model::*;
 
@@ -31,8 +31,12 @@ mod ops;
 
 mod file;
 pub use file::{
-    displaced_copies, write_atomic, DisplacedCopy, DisplacedCopyKind, FileIo, FileMeta, FileStamp,
-    OpenedFile, PlainFileIo, ReplaceOutcome, SaveOutcome, VaultFile,
+    authenticate_retained_copy, displaced_copies, inspect_retained_copies,
+    recorded_retained_copies, remove_retained_copy, set_retained_copy_listener, write_atomic,
+    AuthenticatedRetainedRemoval, DisplacedCopy, DisplacedCopyKind, FileIo, FileMeta, FileStamp,
+    OpenedFile, PlainFileIo, ReplaceOutcome, RetainedCopyCheck, RetainedCopyListener,
+    RetainedIdentity, RetainedInspection, RetainedProvenance, RetainedRefusal, RetainedRemoval,
+    SaveOutcome, VaultFile, RETAINED_IN_FLIGHT_GRACE,
 };
 #[cfg(feature = "test-util")]
 pub mod test_util;

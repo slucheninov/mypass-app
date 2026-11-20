@@ -33,16 +33,61 @@ const REMOTE_ARGON2_MEMORY_MAX_BYTES: u64 = 1024 * 1024 * 1024;
 const REMOTE_ARGON2_WORK_MAX_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const REMOTE_AES_KDF_ROUNDS_MAX: u64 = 300_000_000;
 
+/// A KDF cost per automatic-budget dimension: Argon2 memory in bytes, Argon2 work (memory times
+/// iterations) and AES-KDF rounds. Each KDF family has its own independent dimension; the
+/// dimensions of the other family are zero for a cost taken from one vault.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct KdfCost {
+    /// Argon2 memory, in bytes.
+    pub argon2_memory: u64,
+    /// Argon2 memory times iterations, in bytes.
+    pub argon2_work: u64,
+    /// AES-KDF rounds.
+    pub aes_rounds: u64,
+}
+
+impl KdfCost {
+    /// The default automatic-open ceilings.
+    pub const AUTOMATIC: Self = Self {
+        argon2_memory: REMOTE_ARGON2_MEMORY_MAX_BYTES,
+        argon2_work: REMOTE_ARGON2_WORK_MAX_BYTES,
+        aes_rounds: REMOTE_AES_KDF_ROUNDS_MAX,
+    };
+
+    /// The cost of one vault's KDF parameters.
+    pub fn of(kdf: &KdfParams) -> Self {
+        match kdf {
+            KdfParams::Argon2 {
+                memory_bytes,
+                iterations,
+                ..
+            } => Self {
+                argon2_memory: *memory_bytes,
+                argon2_work: memory_bytes.saturating_mul(*iterations),
+                aes_rounds: 0,
+            },
+            KdfParams::AesKdf { rounds, .. } => Self {
+                argon2_memory: 0,
+                argon2_work: 0,
+                aes_rounds: *rounds,
+            },
+        }
+    }
+
+    /// The larger of both costs, dimension by dimension.
+    #[must_use]
+    pub fn max(self, other: Self) -> Self {
+        Self {
+            argon2_memory: self.argon2_memory.max(other.argon2_memory),
+            argon2_work: self.argon2_work.max(other.argon2_work),
+            aes_rounds: self.aes_rounds.max(other.aes_rounds),
+        }
+    }
+}
+
 /// Additional cost ceilings for an automatic vault open. The local format limits always apply.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct KdfLimits(Option<KdfBudget>);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct KdfBudget {
-    argon2_memory: u64,
-    argon2_work: u64,
-    aes_rounds: u64,
-}
+pub struct KdfLimits(Option<KdfCost>);
 
 impl KdfLimits {
     /// Use the standard format limits for an explicit open.
@@ -51,28 +96,19 @@ impl KdfLimits {
     /// Use the automatic-open ceilings, raised only by the corresponding cost of the
     /// already authenticated vault. Each KDF family has its own independent budget.
     pub fn remote(authenticated: Option<&KdfParams>) -> Self {
-        let mut budget = KdfBudget {
-            argon2_memory: REMOTE_ARGON2_MEMORY_MAX_BYTES,
-            argon2_work: REMOTE_ARGON2_WORK_MAX_BYTES,
-            aes_rounds: REMOTE_AES_KDF_ROUNDS_MAX,
-        };
-        match authenticated {
-            Some(KdfParams::Argon2 {
-                memory_bytes,
-                iterations,
-                ..
-            }) => {
-                budget.argon2_memory = budget.argon2_memory.max(*memory_bytes);
-                budget.argon2_work = budget
-                    .argon2_work
-                    .max(memory_bytes.saturating_mul(*iterations));
-            }
-            Some(KdfParams::AesKdf { rounds, .. }) => {
-                budget.aes_rounds = budget.aes_rounds.max(*rounds);
-            }
-            None => {}
-        }
-        Self(Some(budget))
+        Self::remote_cost(authenticated.map(KdfCost::of).unwrap_or_default())
+    }
+
+    /// Use the automatic-open ceilings, raised per dimension by `authenticated`: a cost that
+    /// already authenticated with the user's key (never one merely read from an unverified
+    /// header).
+    pub fn remote_cost(authenticated: KdfCost) -> Self {
+        Self::within(KdfCost::AUTOMATIC.max(authenticated))
+    }
+
+    /// Use exactly `ceiling` as the automatic budget (still within the local format limits).
+    pub fn within(ceiling: KdfCost) -> Self {
+        Self(Some(ceiling))
     }
 
     pub(crate) fn check(self, kdf: &KdfParams) -> Result<()> {

@@ -546,6 +546,14 @@ impl fmt::Debug for ExtensionAddress {
     }
 }
 
+/// The history password is wiped when the item drops, so the buffer the handler moved out of its
+/// wiping wrapper is still wiped once the response has been serialised and discarded.
+impl Drop for ExtensionPasswordHistoryItem {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.password);
+    }
+}
+
 impl fmt::Debug for ExtensionPasswordHistoryItem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ExtensionPasswordHistoryItem")

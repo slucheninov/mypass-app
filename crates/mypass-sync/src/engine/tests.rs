@@ -1097,3 +1097,172 @@ fn persisted_checkpoint_cannot_authorize_overwriting_an_unreadable_secondary() {
     );
     assert_eq!(fx.remote_bytes(), before);
 }
+
+// --- Recorded verified KDF cost (a lowered KDF) ----------------------------------------------
+
+const MIB: u64 = 1024 * 1024;
+
+/// `db` with its Argon2 memory set to `memory` (one pass).
+fn with_memory(mut db: Database, memory: u64) -> Database {
+    if let KdfParams::Argon2 { memory_bytes, .. } = &mut db.settings.kdf {
+        *memory_bytes = memory;
+    }
+    db
+}
+
+/// An automatic ceiling of 8 MiB Argon2 (one pass), so the budget is exercised with fast KDFs.
+fn tight_ceiling() -> KdfCost {
+    KdfCost::of(&fast_db("ceiling").settings.kdf)
+}
+
+fn recorded_memory(fx: &Fx, local: &Database) -> u64 {
+    fx.checkpoint()
+        .unwrap()
+        .verified_kdf_for(&local.root.uuid.to_string())
+        .argon2_memory
+}
+
+#[test]
+fn a_lowered_kdf_still_syncs_the_older_costlier_copy_it_verified() {
+    let mut fx = Fx::new();
+    fx.engine.ceiling = tight_ceiling();
+    let mut local = with_memory(fast_db("v"), 16 * MIB);
+    add(&mut local, "A");
+    // The costlier vault is uploaded; the cost it was verified at is recorded.
+    run(&fx.engine, &local, true).unwrap();
+    assert_eq!(recorded_memory(&fx, &local), 16 * MIB);
+    let costly = fx.remote_bytes();
+
+    // The user lowers the KDF. Production builds a fresh engine for every sync run, over the
+    // same persisted checkpoint.
+    let mut lowered = with_memory(local.clone(), 8 * MIB);
+    add(&mut lowered, "B");
+    let mut engine = SyncEngine::new(fx.probe.clone(), fx.store.clone());
+    engine.ceiling = tight_ceiling();
+    let r = run(&engine, &lowered, true).unwrap();
+    assert!(matches!(r, SyncResult::UploadedLocal(_)), "{r:?}");
+    let remote = fx.remote_db();
+    assert_eq!(titles(&remote), ["A", "B"]);
+    assert_eq!(KdfCost::of(&remote.settings.kdf).argon2_memory, 8 * MIB);
+    // The record is kept across the lowered write: never ratcheted down.
+    assert_eq!(recorded_memory(&fx, &local), 16 * MIB);
+
+    // Without the record the same costly copy is refused (and left as it was).
+    let mut fresh = Fx::new();
+    fresh.engine.ceiling = tight_ceiling();
+    fs::write(&fresh.file, &costly).unwrap();
+    for push in [false, true] {
+        assert!(matches!(
+            run(&fresh.engine, &lowered, push),
+            Err(SyncError::SyncKdfLimitExceeded {
+                recovery_file: None
+            })
+        ));
+    }
+    assert_eq!(fresh.remote_bytes(), costly);
+    assert_eq!(fresh.checkpoint(), None);
+}
+
+#[test]
+fn unchanged_sync_records_the_cost_from_a_legacy_checkpoint() {
+    for mode in [SyncMode::Pull, SyncMode::PushIfChanged] {
+        let fx = Fx::new();
+        let local = with_memory(fast_db("v"), 16 * MIB);
+        let bytes = local.save(&pw()).unwrap();
+        fs::write(&fx.file, &bytes).unwrap();
+        let legacy = SyncCheckpoint::of_bytes(&bytes, None).for_vault(local.root.uuid.to_string());
+        fx.store.save(Some(&legacy)).unwrap();
+        let result = fx.engine.sync(&local, &pw(), mode).unwrap();
+        assert!(matches!(result, SyncResult::Unchanged(_)));
+        fx.engine
+            .commit(result.into_parts().1.expect("new verified cost"))
+            .unwrap();
+        assert_eq!(recorded_memory(&fx, &local), 16 * MIB);
+        assert_eq!(fx.remote_bytes(), bytes);
+        assert_eq!(fx.probe.writes(), 0);
+    }
+}
+
+#[test]
+fn unchanged_pull_records_the_secondary_cost_without_persisting_the_primary_budget() {
+    let fx = Fx::new();
+    let secondary = fast_db("v");
+    let bytes = secondary.save(&pw()).unwrap();
+    let legacy = SyncCheckpoint::of_bytes(&bytes, None).for_vault(secondary.root.uuid.to_string());
+    fs::write(&fx.file, &bytes).unwrap();
+    fx.store.save(Some(&legacy)).unwrap();
+    let local = with_memory(secondary, 16 * MIB);
+
+    let result = fx.engine.sync(&local, &pw(), SyncMode::Pull).unwrap();
+    assert!(matches!(result, SyncResult::Unchanged(_)));
+    fx.engine.commit(result.into_parts().1.unwrap()).unwrap();
+    assert_eq!(recorded_memory(&fx, &local), 8 * MIB);
+    assert_eq!(fx.remote_bytes(), bytes);
+}
+
+#[test]
+fn an_unverified_costly_file_is_refused_and_never_recorded() {
+    let mut fx = Fx::new();
+    fx.engine.ceiling = tight_ceiling();
+    let mut local = fast_db("v");
+    add(&mut local, "A");
+    run(&fx.engine, &local, true).unwrap();
+    assert_eq!(recorded_memory(&fx, &local), 8 * MIB);
+
+    // A costlier copy of the same vault that does not decrypt with the user's key.
+    let hostile = with_memory(fx.remote_db(), 16 * MIB)
+        .save(&SecretString::from("someone else"))
+        .unwrap();
+    fs::write(&fx.file, &hostile).unwrap();
+    for push in [false, true] {
+        assert!(matches!(
+            run(&fx.engine, &local, push),
+            Err(SyncError::SyncKdfLimitExceeded {
+                recovery_file: None
+            })
+        ));
+    }
+    // A bare header asking for more is refused before any key derivation.
+    let header = mypass_kdbx::test_util::vault_header_only(
+        &with_memory(fast_db("v"), 32 * MIB).settings.kdf,
+    );
+    fs::write(&fx.file, &header).unwrap();
+    assert!(matches!(
+        run(&fx.engine, &local, true),
+        Err(SyncError::SyncKdfLimitExceeded { .. })
+    ));
+    assert_eq!(fx.remote_bytes(), header);
+    assert_eq!(recorded_memory(&fx, &local), 8 * MIB, "nothing ratcheted");
+
+    // Even inside a raised ceiling, a file that does not decrypt lends nothing.
+    fs::write(&fx.file, &hostile).unwrap();
+    fx.engine.ceiling = KdfCost::of(&with_memory(fast_db("x"), 16 * MIB).settings.kdf);
+    assert_eq!(
+        run(&fx.engine, &local, true).unwrap_err(),
+        SyncError::RemotePasswordMismatch
+    );
+    assert_eq!(fx.remote_bytes(), hostile);
+    assert_eq!(recorded_memory(&fx, &local), 8 * MIB, "nothing ratcheted");
+}
+
+#[test]
+fn a_checkpoint_of_another_vault_lends_no_cost() {
+    let mut fx = Fx::new();
+    fx.engine.ceiling = tight_ceiling();
+    let mut other = with_memory(fast_db("other"), 16 * MIB);
+    add(&mut other, "X");
+    run(&fx.engine, &other, true).unwrap();
+    // Same remote, another vault: its record never raises this vault's budget.
+    let mut local = fast_db("v");
+    add(&mut local, "A");
+    assert_eq!(
+        fx.checkpoint()
+            .unwrap()
+            .verified_kdf_for(&local.root.uuid.to_string()),
+        KdfCost::default()
+    );
+    assert!(matches!(
+        run(&fx.engine, &local, true),
+        Err(SyncError::SyncKdfLimitExceeded { .. })
+    ));
+}

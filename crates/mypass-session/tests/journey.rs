@@ -113,11 +113,9 @@ fn full_lifecycle_create_edit_lock_unlock_reopen() {
     m.password = "login-pw".into();
     w.core.entry_save(m).unwrap();
     let mut m = model_of(&w.core, EntryTypeDto::Address, "Address");
-    m.address = Some(AddressDto {
-        label: "Home".into(),
-        city: "Kyiv".into(),
-        ..AddressDto::default()
-    });
+    let mut address = AddressDto::with_label("Home");
+    address.city = "Kyiv".into();
+    m.address = Some(address);
     w.core.entry_save(m).unwrap();
     let mut m = model_of(&w.core, EntryTypeDto::Card, "Card");
     m.card = Some(CardEdit {

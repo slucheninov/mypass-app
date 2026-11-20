@@ -1657,6 +1657,32 @@ mod tests {
     }
 
     #[test]
+    fn a_completed_save_reports_the_settled_transition_the_vault_pane_refreshes_on() {
+        // Without a secondary folder no sync status changes after a save, so the Vault pane's
+        // list of retained copies refreshes on this transition (busy, then idle) alone.
+        let (f, _io) = failing_setup();
+        let log = record(&f.session);
+        f.add("A").unwrap();
+        f.clock.advance(AUTOSAVE_DEBOUNCE);
+        let states: Vec<SaveState> = log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                SessionEvent::SaveChanged(s) => Some(s.state),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            states.windows(2).any(|w| {
+                matches!(w[0], SaveState::Pending | SaveState::Saving) && w[1] == SaveState::Idle
+            }),
+            "{states:?}"
+        );
+        assert_eq!(f.disk(), v(&["A", "first"]));
+    }
+
+    #[test]
     fn save_failed_state_reports_message_and_retries() {
         let (f, io) = failing_setup();
         let log = record(&f.session);

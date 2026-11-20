@@ -2687,7 +2687,7 @@ dependencies = [
 
 [[package]]
 name = "mypass-app"
-version = "0.7.0"
+version = "0.7.1-alpha.1"
 dependencies = [
  "mypass-bridge",
  "mypass-core",
@@ -2793,6 +2793,7 @@ dependencies = [
  "hmac",
  "keepass",
  "mypass-kdbx",
+ "mypass-platform",
  "quick-xml",
  "rand",
  "rustix",
@@ -2840,6 +2841,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
  "chacha20poly1305",
+ "hmac",
  "keepass",
  "mypass-core",
  "mypass-kdbx",

@@ -32,7 +32,7 @@ use std::io::Read;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 /// Attachments an entry may hold; only further adds are refused beyond it.
 pub const MAX_ATTACHMENTS_PER_ENTRY: usize = 8;
@@ -106,10 +106,7 @@ pub fn new_model(entry_type: EntryTypeDto, group_id: Uuid) -> EntryEditModel {
         uri_match_mode: UriMatchMode::RegistrableDomain.as_str().to_owned(),
         totp: String::new(),
         notes: String::new(),
-        address: (entry_type == EntryTypeDto::Address).then(|| AddressDto {
-            label: "Home".into(),
-            ..AddressDto::default()
-        }),
+        address: (entry_type == EntryTypeDto::Address).then(|| AddressDto::with_label("Home")),
         card: (entry_type == EntryTypeDto::Card).then(CardEdit::default),
         custom_fields: Vec::new(),
         attachments: Vec::new(),
@@ -237,8 +234,15 @@ pub fn edit_model(db: &Database, id: Uuid) -> Result<EntryEditModel, SessionErro
 
 /// An attachment change with its file already read (reads happen before the session lock).
 enum ResolvedOp {
-    Add { name: String, data: Vec<u8> },
-    Remove { name: String },
+    /// The file bytes are wiped on drop (an attachment can be a key file or a document); on a
+    /// successful save the buffer is moved into the vault entry, so no copy is left behind.
+    Add {
+        name: String,
+        data: Zeroizing<Vec<u8>>,
+    },
+    Remove {
+        name: String,
+    },
 }
 
 /// Writes `value` to `key`, keeping the protection flag of an existing field (`protected` is the
@@ -344,6 +348,14 @@ fn dedupe_custom_fields(entry: &mut Entry) {
     entry
         .fields
         .retain(|f| Entry::is_reserved_key(&f.key) || seen.insert(f.key.clone()));
+}
+
+/// Wipes the bytes of the last `added` attachments of a draft entry that is about to be
+/// discarded because a later step of the same edit failed.
+fn wipe_added_attachments(entry: &mut Entry, added: usize) {
+    for attachment in entry.attachments.iter_mut().rev().take(added) {
+        attachment.data.zeroize();
+    }
 }
 
 /// Applies a validated model to an entry. Errors (attachment limits, a removal of a file that is
@@ -470,6 +482,10 @@ fn apply(
     let (removes, adds): (Vec<_>, Vec<_>) = ops
         .into_iter()
         .partition(|op| matches!(op, ResolvedOp::Remove { .. }));
+    // How many attachments this call pushed (the adds run after the removals, so they are the
+    // last `added` ones). A failed add discards the whole draft, and the bytes the earlier adds
+    // already moved into it must not be freed unwiped.
+    let mut added = 0usize;
     for op in removes.into_iter().chain(adds) {
         match op {
             ResolvedOp::Remove { name } => {
@@ -480,23 +496,26 @@ fn apply(
                     .ok_or(SessionError::NotFound)?;
                 entry.attachments.remove(pos);
             }
-            ResolvedOp::Add { name, data } => {
+            ResolvedOp::Add { name, mut data } => {
                 if entry.attachments.iter().any(|a| a.name == name) {
+                    wipe_added_attachments(entry, added);
                     return Err(SessionError::InvalidInput(format!(
                         "an attachment named {name} already exists"
                     )));
                 }
                 if entry.attachments.len() >= MAX_ATTACHMENTS_PER_ENTRY {
                     // Only adds are limited: an entry that already exceeds it stays editable.
+                    wipe_added_attachments(entry, added);
                     return Err(SessionError::LimitExceeded(format!(
                         "an entry holds at most {MAX_ATTACHMENTS_PER_ENTRY} attachments"
                     )));
                 }
                 entry.attachments.push(Attachment {
                     name,
-                    data,
+                    data: std::mem::take(&mut *data),
                     protected: false,
                 });
+                added += 1;
             }
         }
     }
@@ -573,7 +592,15 @@ fn unix_now() -> u64 {
 }
 
 /// One plain value of an entry, after an explicit user action. `Totp` is the current code.
-pub fn reveal(db: &Database, id: Uuid, field: &FieldRef) -> Result<String, SessionError> {
+///
+/// The returned buffer is wiped when dropped. The command layer has to hand the value to the
+/// webview as a plain `String` (the IPC serialisation copy is outside our control), so callers
+/// take it out of the wrapper only at that last step.
+pub fn reveal(
+    db: &Database,
+    id: Uuid,
+    field: &FieldRef,
+) -> Result<Zeroizing<String>, SessionError> {
     reveal_at(db, id, field, unix_now())
 }
 
@@ -583,23 +610,25 @@ pub fn reveal_at(
     id: Uuid,
     field: &FieldRef,
     unix_secs: u64,
-) -> Result<String, SessionError> {
+) -> Result<Zeroizing<String>, SessionError> {
     let entry = find_entry(db, id)?;
     match field {
         FieldRef::Totp => totp_now(db, id, unix_secs)
-            .map(|t| t.code)
+            .map(|mut t| Zeroizing::new(std::mem::take(&mut t.code)))
             .ok_or(SessionError::NotFound),
         other => plain_value(entry, other),
     }
 }
 
 /// The stored value of every field kind except `Totp` (a code is computed from the live entry).
-fn plain_value(entry: &Entry, field: &FieldRef) -> Result<String, SessionError> {
-    let plain = |key: &str| Ok(field_or_empty(entry, key));
+fn plain_value(entry: &Entry, field: &FieldRef) -> Result<Zeroizing<String>, SessionError> {
+    let plain = |key: &str| Ok(Zeroizing::new(field_or_empty(entry, key)));
     match field {
         FieldRef::Username => plain("UserName"),
         FieldRef::Password => plain("Password"),
-        FieldRef::Url => Ok(entry.urls().into_iter().next().unwrap_or_default()),
+        FieldRef::Url => Ok(Zeroizing::new(
+            entry.urls().into_iter().next().unwrap_or_default(),
+        )),
         FieldRef::NotesBody => plain(notes_key(entry.entry_type())),
         FieldRef::CardNumber => plain(CARD_NUMBER),
         FieldRef::CardCvv => plain(CARD_CVV),
@@ -614,7 +643,7 @@ fn plain_value(entry: &Entry, field: &FieldRef) -> Result<String, SessionError> 
             }
             entry
                 .field(key)
-                .map(str::to_owned)
+                .map(|v| Zeroizing::new(v.to_owned()))
                 .ok_or(SessionError::NotFound)
         }
     }
@@ -630,7 +659,7 @@ pub fn reveal_history(
     id: Uuid,
     revision: &str,
     field: &FieldRef,
-) -> Result<String, SessionError> {
+) -> Result<Zeroizing<String>, SessionError> {
     let entry = find_entry(db, id)?;
     let version = history_revision(entry, revision).ok_or(SessionError::NotFound)?;
     plain_value(version, field)
@@ -946,8 +975,10 @@ pub fn restore_history(
 
 /// Reads a file to attach: its name and bytes. The size is checked from the metadata before
 /// reading and again on a read bounded to the limit plus one byte; symlinks are followed,
-/// directories and other non-files are refused.
-pub fn read_attachment_file(path: &Path) -> Result<(String, Vec<u8>), SessionError> {
+/// directories and other non-files are refused. The bytes are wiped on drop, and the buffer is
+/// sized from the metadata up front so the read does not grow (and free, unwiped) a smaller one;
+/// only a file that grows during the read can still reallocate.
+pub fn read_attachment_file(path: &Path) -> Result<(String, Zeroizing<Vec<u8>>), SessionError> {
     let meta = std::fs::metadata(path).map_err(|e| io_error(&e))?;
     if meta.is_dir() {
         return Err(SessionError::InvalidInput(
@@ -973,7 +1004,11 @@ pub fn read_attachment_file(path: &Path) -> Result<(String, Vec<u8>), SessionErr
         .filter(|n| !n.is_empty())
         .ok_or_else(|| SessionError::InvalidInput("the path has no file name".into()))?;
     let file = std::fs::File::open(path).map_err(|e| io_error(&e))?;
-    let mut data = Vec::new();
+    let mut data = Zeroizing::new(Vec::with_capacity(
+        usize::try_from(meta.len())
+            .unwrap_or(MAX_ATTACHMENT_BYTES)
+            .saturating_add(1),
+    ));
     file.take(MAX_ATTACHMENT_BYTES as u64 + 1)
         .read_to_end(&mut data)
         .map_err(|e| io_error(&e))?;
@@ -1213,6 +1248,22 @@ mod tests {
         (db, id)
     }
 
+    /// Type-level pin: every session-side copy of a secret that these functions hand out is a
+    /// `Zeroizing` buffer (wiped on drop). A change back to a plain `String` or `Vec<u8>` stops
+    /// compiling here.
+    #[test]
+    fn secret_returning_functions_hand_out_wiping_buffers() {
+        type Text = Result<Zeroizing<String>, SessionError>;
+        type Bytes = Result<Zeroizing<Vec<u8>>, SessionError>;
+        type Read = Result<(String, Zeroizing<Vec<u8>>), SessionError>;
+        let _: fn(&Database, Uuid, &FieldRef) -> Text = reveal;
+        let _: fn(&Database, Uuid, &FieldRef, u64) -> Text = reveal_at;
+        let _: fn(&Database, Uuid, &str, &FieldRef) -> Text = reveal_history;
+        let _: fn(&Path) -> Read = read_attachment_file;
+        let _: fn(&Database, Uuid, &str) -> Bytes = attachment_bytes;
+        let _: fn(&Database, Uuid) -> Text = crate::generator_service::history_reveal;
+    }
+
     #[test]
     fn new_login_saves_fields_and_urls() {
         let f = fx();
@@ -1307,7 +1358,7 @@ mod tests {
             );
         }
         // The stored full name is not synthesised from the parts.
-        assert_eq!(f.model(id).address.unwrap().full_name, "");
+        assert_eq!(f.model(id).address.clone().unwrap().full_name, "");
     }
 
     #[test]
@@ -1465,7 +1516,7 @@ mod tests {
         json["passkey"] =
             serde_json::json!({"relyingParty": "example.com", "username": "a", "created": null});
         let model: EntryEditModel = serde_json::from_value(json).unwrap();
-        assert!(!model.passkey.unwrap().usable);
+        assert!(!model.passkey.clone().unwrap().usable);
     }
 
     #[test]
@@ -1474,8 +1525,8 @@ mod tests {
         let keys: Vec<String> = f
             .model(id)
             .custom_fields
-            .into_iter()
-            .map(|c| c.key)
+            .iter()
+            .map(|c| c.key.clone())
             .collect();
         assert_eq!(keys, ["Recovery code"]);
         for key in [
@@ -1634,7 +1685,7 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        let foreign = f.model(other).passkey_ref;
+        let foreign = f.model(other).passkey_ref.clone();
         assert!(foreign.is_some());
         f.edit(id, |m| {
             m.remove_passkey = true;
@@ -1871,7 +1922,7 @@ mod tests {
         assert_eq!(e.attachments.len(), 1);
         assert_eq!(e.attachments[0].name, "note.txt");
         assert_eq!(e.attachments[0].data, b"abc");
-        let meta = f.model(id).attachments;
+        let meta = f.model(id).attachments.clone();
         assert_eq!(meta[0].name, "note.txt");
         assert_eq!(meta[0].size, 3.0);
     }
@@ -1894,7 +1945,7 @@ mod tests {
         std::os::unix::fs::symlink(&target, &link).unwrap();
         let (name, data) = read_attachment_file(&link).unwrap();
         assert_eq!(name, "link.txt");
-        assert_eq!(data, b"real");
+        assert_eq!(data.as_slice(), b"real");
     }
 
     #[test]
@@ -2076,7 +2127,7 @@ mod tests {
         });
         let note = f.create_as(EntryTypeDto::Notes, |m| m.notes = "secret body".into());
         f.db(|d| {
-            let r = |id, field: FieldRef| reveal(d, id, &field).unwrap();
+            let r = |id, field: FieldRef| reveal(d, id, &field).unwrap().to_string();
             assert_eq!(r(id, FieldRef::Username), "bob");
             assert_eq!(r(id, FieldRef::Password), "hunter2");
             assert_eq!(r(id, FieldRef::Url), "https://bank.test");
@@ -2096,7 +2147,7 @@ mod tests {
             let secs = 1_700_000_000;
             let code = reveal_at(d, id, &FieldRef::Totp, secs).unwrap();
             assert_eq!(code.len(), 6);
-            assert_eq!(code, totp_now(d, id, secs).unwrap().code);
+            assert_eq!(*code, totp_now(d, id, secs).unwrap().code);
             // The clock-reading variant also yields a code.
             assert_eq!(reveal(d, id, &FieldRef::Totp).unwrap().len(), 6);
             assert_eq!(
@@ -2178,13 +2229,17 @@ mod tests {
         let newest = revision(&f, id, 0);
         let oldest = revision(&f, id, 1);
         assert_ne!(newest, oldest);
-        let reveal = |rev: &str, field: FieldRef| f.db(|d| reveal_history(d, id, rev, &field));
+        let reveal = |rev: &str, field: FieldRef| {
+            f.db(|d| reveal_history(d, id, rev, &field))
+                .map(|v| v.to_string())
+        };
         assert_eq!(reveal(&newest, FieldRef::Password), Ok("p2".into()));
         assert_eq!(reveal(&oldest, FieldRef::Password), Ok("p1".into()));
         assert_eq!(reveal(&oldest, FieldRef::Username), Ok("old-user".into()));
         // The live value is untouched and still comes from `reveal`.
         assert_eq!(
-            f.db(|d| reveal_at(d, id, &FieldRef::Password, 0)),
+            f.db(|d| reveal_at(d, id, &FieldRef::Password, 0))
+                .map(|v| v.to_string()),
             Ok("p3".into())
         );
         assert_eq!(
@@ -2218,7 +2273,8 @@ mod tests {
         assert_ne!(now[0].revision, second);
         assert_eq!(now[1].revision, second);
         assert_eq!(
-            f.db(|d| reveal_history(d, id, &second, &FieldRef::Password)),
+            f.db(|d| reveal_history(d, id, &second, &FieldRef::Password))
+                .map(|v| v.to_string()),
             Ok("second".into())
         );
         // A version that was trimmed away answers NotFound instead of another password.
@@ -2349,7 +2405,8 @@ mod tests {
                 &FieldRef::Custom {
                     key: "MyPass.Project".into()
                 }
-            )),
+            ))
+            .map(|v| v.to_string()),
             Ok("alpha".into())
         );
     }
@@ -2711,7 +2768,7 @@ mod tests {
         assert_eq!(m.group_id, g.simple().to_string());
         assert_eq!(m.uri_match_mode, "registrable-domain");
         let m = new_model(EntryTypeDto::Address, g);
-        assert_eq!(m.address.map(|a| a.label), Some("Home".to_owned()));
+        assert_eq!(m.address.as_ref().map(|a| a.label.as_str()), Some("Home"));
         let m = new_model(EntryTypeDto::Login, g);
         assert!(m.card.is_none() && m.address.is_none());
     }
@@ -3045,6 +3102,45 @@ mod tests {
         let e = f.entry(id);
         assert_eq!(e.attachments.len(), 1);
         assert_eq!(e.attachments[0].data, b"two");
+    }
+
+    #[test]
+    fn a_failed_second_attachment_wipes_the_first_ones_bytes_in_the_discarded_draft() {
+        let mut entry = Entry::new(Timestamp(0));
+        entry.attachments.push(Attachment {
+            name: "taken.txt".into(),
+            data: b"existing".to_vec(),
+            protected: false,
+        });
+        let model = new_model(EntryTypeDto::Login, Uuid::new_v4());
+        let mode = validate(&model).unwrap();
+        let ops = vec![
+            ResolvedOp::Add {
+                name: "key.bin".into(),
+                data: Zeroizing::new(b"key file bytes".to_vec()),
+            },
+            ResolvedOp::Add {
+                name: "taken.txt".into(),
+                data: Zeroizing::new(b"second".to_vec()),
+            },
+        ];
+        let r = apply(&mut entry, &model, mode, ops);
+        assert!(matches!(r, Err(SessionError::InvalidInput(_))), "{r:?}");
+        let key = entry
+            .attachments
+            .iter()
+            .find(|a| a.name == "key.bin")
+            .unwrap();
+        assert!(key.data.is_empty(), "the draft kept the added bytes");
+        let kept = entry
+            .attachments
+            .iter()
+            .find(|a| a.name == "taken.txt")
+            .unwrap();
+        assert_eq!(
+            kept.data, b"existing",
+            "a committed attachment is untouched"
+        );
     }
 
     #[test]

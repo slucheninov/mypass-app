@@ -736,6 +736,20 @@ fn release_workflow_is_tag_only_minimal_and_publishes_last() {
     let doc = workflow(".github/workflows/release.yml");
     assert_eq!(triggers(&doc).len(), 1);
     assert!(triggers(&doc).contains_key("push"));
+    assert_eq!(
+        triggers(&doc)["push"]["tags"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|pattern| pattern.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "v[0-9]+.[0-9]+.[0-9]+",
+            "v[0-9]+.[0-9]+.[0-9]+-alpha.[0-9]+",
+            "v[0-9]+.[0-9]+.[0-9]+-beta.[0-9]+",
+            "v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+",
+        ]
+    );
     assert_eq!(doc["permissions"]["contents"].as_str(), Some("read"));
     let publish = job(&doc, "publish");
     assert_eq!(publish["permissions"]["contents"].as_str(), Some("write"));
@@ -773,8 +787,9 @@ fn release_workflow_is_tag_only_minimal_and_publishes_last() {
         "bash scripts/test.sh --ci",
         "package-macos.sh --release",
         "check-host-deps.sh",
-        "check-version.sh",
+        "check-version.sh --tag",
         "check-assets",
+        "--prerelease --latest=false",
         "APPLE_CERTIFICATE",
         "APPLE_SIGNING_IDENTITY",
     ] {
@@ -801,6 +816,46 @@ fn package_smoke_is_gated_and_unsigned() {
         .join("\n");
     assert!(runs.contains("package-macos.sh --allow-unsigned"));
     assert!(runs.contains("check-host-deps.sh"));
+}
+
+/// Bash 3.2 (the macOS runner and system shell) treats `"${name[@]}"` of an empty array as an
+/// unbound variable under `set -u`, which aborted every stable release before the draft was
+/// created. Every array a release script or workflow declares empty is expanded as
+/// `${name[@]+"${name[@]}"}`.
+#[test]
+fn release_scripts_never_expand_an_empty_array_bare() {
+    let mut texts = vec![
+        (
+            ".github/workflows/release.yml".to_owned(),
+            read(".github/workflows/release.yml"),
+        ),
+        (
+            "scripts/publish-release.sh".to_owned(),
+            read("scripts/publish-release.sh"),
+        ),
+    ];
+    texts.retain(|(_, text)| !text.is_empty());
+    let mut declared = 0;
+    for (name, text) in &texts {
+        for line in text.lines() {
+            let Some((array, _)) = line.trim().split_once("=()") else {
+                continue;
+            };
+            if array.is_empty() || !array.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                continue;
+            }
+            declared += 1;
+            let bare = format!("\"${{{array}[@]}}\"");
+            let guarded = format!("${{{array}[@]+\"${{{array}[@]}}\"}}");
+            // Remove the guarded spelling first: it contains the bare one.
+            let without_guarded = text.replace(&guarded, "");
+            assert!(
+                !without_guarded.contains(&bare),
+                "{name}: `{array}` is declared empty but expanded without the `+` guard"
+            );
+        }
+    }
+    assert!(declared >= 2, "the guard found no empty array to check");
 }
 
 #[test]
@@ -914,7 +969,7 @@ fn release_workflow_validates_windows_and_combined_publish() {
         .collect::<Vec<_>>()
         .join("\n");
     for required in [
-        "check-version.sh",
+        "check-version.sh --tag",
         "cargo fmt --all -- --check",
         "cargo clippy --workspace --all-targets -- -D warnings",
         "bash scripts/test.sh --ci",
@@ -950,6 +1005,8 @@ fn release_workflow_validates_windows_and_combined_publish() {
     let gate = read("scripts/publish-release.sh");
     assert!(gate.contains("\"$3\" == success && \"$4\" == success"));
     assert!(gate.contains("--platform all"));
+    assert!(gate.contains("check-version.sh"));
+    assert!(gate.contains("--prerelease --latest=false"));
     assert!(gate.find("check-assets").unwrap() < gate.find("--draft=false").unwrap());
     for line in read(".github/workflows/release.yml")
         .lines()

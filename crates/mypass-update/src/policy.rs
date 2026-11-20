@@ -159,8 +159,8 @@ impl UpdatePolicy {
     /// - A newer release sets `Available`; the banner is shown unless its version string equals
     ///   the dismissed one (equality, not order: a release newer than the dismissed one always
     ///   brings the banner back).
-    /// - A missing target payload/checksum, unsupported target, or equal/older release sets
-    ///   `UpToDate` and hides the banner.
+    /// - A missing target payload/checksum, unsupported target, equal/older release or prerelease
+    ///   offered to a stable build sets `UpToDate` and hides the banner.
     /// - A failed manual check sets `Failed(kind)`; a failed scheduled check silently restores the
     ///   previous status. Neither touches the banner.
     ///
@@ -169,6 +169,7 @@ impl UpdatePolicy {
         match input.result {
             Ok(release)
                 if release.version > input.current
+                    && (input.current.is_prerelease() || !release.version.is_prerelease())
                     && input
                         .platform
                         .and_then(|platform| {

@@ -23,7 +23,7 @@ import type {
   DraftVersionDto,
   events,
   FieldRef,
-  DisplacedCopies,
+  DisplacedCopies_Serialize,
   FoundVaultFileDto,
   GeneratorHistoryItem,
   GroupNode_Serialize,
@@ -180,8 +180,8 @@ export interface FakeState {
   touched: string[];
   /** What `sync_status` answers; `sync_now` and `sync_disconnect_secondary` edit it. */
   sync: SecondaryStatus_Serialize;
-  /** What `sync_displaced_status` answers (read-only: there is no delete command). */
-  displaced: DisplacedCopies;
+  /** What `sync_displaced_status` answers; `sync_displaced_delete` removes the copy whose id it names. */
+  displaced: DisplacedCopies_Serialize;
 }
 
 export interface FakeBackend {
@@ -1043,6 +1043,13 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     updateOpenRelease: () => null,
     syncStatus: () => structuredClone(state.sync),
     syncDisplacedStatus: () => structuredClone(state.displaced),
+    syncDisplacedDelete: ({ id }) => {
+      if (state.session.state !== "unlocked") throw apiError("locked");
+      const copies = state.displaced.copies.filter((copy) => copy.id !== id);
+      if (copies.length === state.displaced.copies.length) throw apiError("retainedCopyRefused", "staleId");
+      state.displaced = { ...state.displaced, count: copies.length, copies };
+      return structuredClone(state.displaced);
+    },
     // Like Rust: forgets the folder (the copy in it stays) and reports `off`.
     syncDisconnectSecondary: () => {
       state.settings.secondaryFolder = null;

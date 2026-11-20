@@ -4,7 +4,9 @@
 //! history value after an explicit click; those are the only secrets this file hands out.
 
 use crate::state::AppState;
-use mypass_session::dto::{GenerateRequest, GeneratedPassword, GeneratorHistoryItem, RulesSummary};
+use mypass_session::dto::{
+    GenerateRequest, GeneratedPassword, GeneratorHistoryItem, RulesSummary, SecretText,
+};
 use mypass_session::ApiError;
 use tauri::State;
 
@@ -67,7 +69,7 @@ pub fn generator_history_copy(state: State<'_, AppState>, id: String) -> Result<
 pub fn generator_history_reveal(
     state: State<'_, AppState>,
     id: String,
-) -> Result<String, ApiError> {
+) -> Result<SecretText, ApiError> {
     state.0.generator_history_reveal(&id)
 }
 

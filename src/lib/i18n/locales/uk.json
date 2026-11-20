@@ -539,5 +539,9 @@
   "Restore and save": "Відновити й зберегти",
   "This item is in Deleted. Saving restores it to the selected group.": "Цей запис у розділі «Видалено». Збереження відновить його в обраній групі.",
   "This item was permanently deleted. Saving creates a new item with your changes; its attachments and passkey are not carried over.": "Цей запис видалено назавжди. Збереження створить новий запис із вашими змінами; його вкладення та ключ доступу не буде перенесено.",
-  "No website": "Без вебсайту"
+  "No website": "Без вебсайту",
+  "Delete retained copy?": "Видалити збережену копію?",
+  "Delete %@? MyPass checks that the file is unchanged before deleting it. This cannot be undone.": "Видалити {0}? MyPass перевірить, що файл не змінився, перш ніж видалити його. Цю дію не можна скасувати.",
+  "The copy changed or could not be verified, so it was not deleted. The list was refreshed.": "Копія змінилася або її не вдалося перевірити, тому її не видалено. Список оновлено.",
+  "Could not delete this copy. Try again.": "Не вдалося видалити цю копію. Повторіть спробу."
 }

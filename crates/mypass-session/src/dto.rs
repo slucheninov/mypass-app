@@ -7,10 +7,61 @@ use crate::settings::GeneratorOptionsDto;
 use mypass_core::entry_ext::EntryType;
 use mypass_kdbx::Timestamp;
 use serde::{Deserialize, Serialize};
+use zeroize::{Zeroize, Zeroizing};
 
 /// A model timestamp (Unix seconds) as the `f64` Unix milliseconds the webview consumes.
 pub(crate) fn timestamp_ms(ts: Timestamp) -> f64 {
     ts.0 as f64 * 1000.0
+}
+
+/// One revealed secret value on its way to the webview. The text stays in a wiping buffer until
+/// the IPC layer has serialised it, and the buffer is then wiped when this value drops, so the
+/// Rust-side source copy of a revealed password never outlives the command (the serialised copy
+/// belongs to the IPC layer and is outside our control). It serialises, and appears in the
+/// generated bindings, as a plain `string`; `Debug` is redacted.
+#[derive(specta::Type)]
+#[specta(transparent)]
+pub struct SecretText(#[specta(type = String)] Zeroizing<String>);
+
+impl SecretText {
+    pub(crate) fn new(value: Zeroizing<String>) -> Self {
+        Self(value)
+    }
+
+    /// The text, borrowed; tests and in-process consumers read it here.
+    pub fn expose(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl Serialize for SecretText {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.0.as_str())
+    }
+}
+
+impl std::fmt::Debug for SecretText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SecretText(<redacted>)")
+    }
+}
+
+impl PartialEq<str> for SecretText {
+    fn eq(&self, other: &str) -> bool {
+        self.expose() == other
+    }
+}
+
+impl PartialEq<&str> for SecretText {
+    fn eq(&self, other: &&str) -> bool {
+        self.expose() == *other
+    }
+}
+
+impl PartialEq<String> for SecretText {
+    fn eq(&self, other: &String) -> bool {
+        self.expose() == other.as_str()
+    }
 }
 
 #[derive(Serialize, Deserialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug)]
@@ -135,7 +186,7 @@ pub struct Sidebar {
     pub recycle_bin_enabled: bool,
 }
 
-#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AddressDto {
     pub label: String,
@@ -152,6 +203,60 @@ pub struct AddressDto {
     pub country_name: String,
     pub phone: String,
     pub email: String,
+}
+
+impl AddressDto {
+    /// An empty address with `label`. A plain constructor because the type wipes itself on drop,
+    /// so a struct update from a default value cannot move fields out of it.
+    pub fn with_label(label: &str) -> Self {
+        Self {
+            label: label.to_owned(),
+            full_name: String::new(),
+            given_name: String::new(),
+            family_name: String::new(),
+            organization: String::new(),
+            address_line1: String::new(),
+            address_line2: String::new(),
+            city: String::new(),
+            region: String::new(),
+            postal_code: String::new(),
+            country_code: String::new(),
+            country_name: String::new(),
+            phone: String::new(),
+            email: String::new(),
+        }
+    }
+
+    /// Overwrites every address string with zeros and empties it; also what `Drop` runs. The
+    /// address is stored as protected fields, so every copy of it is a secret copy.
+    pub(crate) fn wipe(&mut self) {
+        self.label.zeroize();
+        self.full_name.zeroize();
+        self.given_name.zeroize();
+        self.family_name.zeroize();
+        self.organization.zeroize();
+        self.address_line1.zeroize();
+        self.address_line2.zeroize();
+        self.city.zeroize();
+        self.region.zeroize();
+        self.postal_code.zeroize();
+        self.country_code.zeroize();
+        self.country_name.zeroize();
+        self.phone.zeroize();
+        self.email.zeroize();
+    }
+}
+
+impl Drop for AddressDto {
+    fn drop(&mut self) {
+        self.wipe();
+    }
+}
+
+impl std::fmt::Debug for AddressDto {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AddressDto").finish_non_exhaustive()
+    }
 }
 
 /// Never carries the full number or the CVV.
@@ -241,7 +346,7 @@ pub struct EntryDetailDto {
 }
 
 /// A TOTP display value (the code is meant to be shown, the secret never leaves Rust).
-#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct TotpDto {
     pub code: String,
@@ -249,11 +354,41 @@ pub struct TotpDto {
     pub period: u32,
 }
 
+impl std::fmt::Debug for TotpDto {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TotpDto")
+            .field("code", &"<redacted>")
+            .field("seconds_remaining", &self.seconds_remaining)
+            .field("period", &self.period)
+            .finish()
+    }
+}
+
+/// The one-time code is short-lived but still a credential: the session-side copy is wiped when
+/// the value is dropped (the IPC copy is outside our control).
+impl TotpDto {
+    pub(crate) fn wipe(&mut self) {
+        self.code.zeroize();
+    }
+}
+
+impl Drop for TotpDto {
+    fn drop(&mut self) {
+        self.wipe();
+    }
+}
+
 // ---- the edit model: the one sanctioned place where secrets cross into the webview ----
 //
 // `entry_edit_model` returns the plain values after the user explicitly opens Edit; the UI drops
 // the model on close, save and lock. Because these types carry secrets, their `Debug` impls are
 // manual and print structure (counts, field names) but never a value.
+//
+// The session-side copies are wiped when a model is dropped (`Drop` impls below, via `zeroize`),
+// so a model that was built for the editor, cloned for a draft or discarded after a failed save
+// does not leave its passwords, notes, card numbers or custom values in freed heap memory. What
+// Tauri's IPC layer serialises from these values (JSON text, the webview's own strings) is a copy
+// we do not control and cannot wipe; keeping the lifetime of a model short is all we can do.
 
 /// One user-defined field of an entry. `key` is never a reserved key.
 #[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq)]
@@ -262,6 +397,19 @@ pub struct CustomFieldEdit {
     pub key: String,
     pub value: String,
     pub protected: bool,
+}
+
+impl CustomFieldEdit {
+    /// Overwrites the value with zeros and empties it; also what `Drop` runs.
+    pub(crate) fn wipe(&mut self) {
+        self.value.zeroize();
+    }
+}
+
+impl Drop for CustomFieldEdit {
+    fn drop(&mut self) {
+        self.wipe();
+    }
 }
 
 impl std::fmt::Debug for CustomFieldEdit {
@@ -281,6 +429,22 @@ pub struct CardEdit {
     pub number: String,
     pub expiry: String,
     pub cvv: String,
+}
+
+impl CardEdit {
+    /// Overwrites every card value with zeros and empties it; also what `Drop` runs.
+    pub(crate) fn wipe(&mut self) {
+        self.holder.zeroize();
+        self.number.zeroize();
+        self.expiry.zeroize();
+        self.cvv.zeroize();
+    }
+}
+
+impl Drop for CardEdit {
+    fn drop(&mut self) {
+        self.wipe();
+    }
 }
 
 impl std::fmt::Debug for CardEdit {
@@ -345,6 +509,23 @@ pub struct EntryEditModel {
     /// bin, a save is refused unless this is set, and then it moves the entry to `group_id`.
     #[serde(default)]
     pub restore: bool,
+}
+
+impl EntryEditModel {
+    /// Overwrites the model's own secret strings with zeros and empties them; also what `Drop`
+    /// runs (the card and the custom fields wipe themselves when they drop with the model).
+    pub(crate) fn wipe(&mut self) {
+        self.username.zeroize();
+        self.password.zeroize();
+        self.totp.zeroize();
+        self.notes.zeroize();
+    }
+}
+
+impl Drop for EntryEditModel {
+    fn drop(&mut self) {
+        self.wipe();
+    }
 }
 
 impl std::fmt::Debug for EntryEditModel {
@@ -575,4 +756,120 @@ impl From<mypass_platform::LoginItemStatus> for LoginItemStatus {
 pub struct OpenEntryEvent {
     pub id: String,
     pub edit: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::editing::new_model;
+    use uuid::Uuid;
+
+    #[test]
+    fn wipe_clears_every_secret_string_of_the_edit_model() {
+        let mut m = new_model(EntryTypeDto::Login, Uuid::new_v4());
+        m.username = "user".into();
+        m.password = "hunter2".into();
+        m.totp = "JBSWY3DPEHPK3PXP".into();
+        m.notes = "private notes".into();
+        m.wipe();
+        assert!(m.username.is_empty() && m.password.is_empty());
+        assert!(m.totp.is_empty() && m.notes.is_empty());
+        // The non-secret structure is untouched.
+        assert_eq!(m.entry_type, EntryTypeDto::Login);
+    }
+
+    #[test]
+    fn wipe_clears_the_card_values_and_the_custom_value() {
+        let mut card = CardEdit {
+            holder: "J Doe".into(),
+            number: "4111111111111111".into(),
+            expiry: "09/28".into(),
+            cvv: "7391".into(),
+        };
+        card.wipe();
+        assert_eq!(card, CardEdit::default());
+        let mut field = CustomFieldEdit {
+            key: "Recovery".into(),
+            value: "r-1".into(),
+            protected: true,
+        };
+        field.wipe();
+        assert!(field.value.is_empty());
+        assert_eq!(field.key, "Recovery");
+    }
+
+    #[test]
+    fn wipe_clears_the_totp_code() {
+        let mut t = TotpDto {
+            code: "123456".into(),
+            seconds_remaining: 12,
+            period: 30,
+        };
+        t.wipe();
+        assert!(t.code.is_empty());
+        assert_eq!((t.seconds_remaining, t.period), (12, 30));
+    }
+
+    #[test]
+    fn secret_bearing_types_still_redact_their_debug_output() {
+        let card = CardEdit {
+            holder: "J Doe".into(),
+            number: "4111111111111111".into(),
+            expiry: "09/28".into(),
+            cvv: "7391".into(),
+        };
+        let field = CustomFieldEdit {
+            key: "k".into(),
+            value: "s3cret-value".into(),
+            protected: true,
+        };
+        let mut m = new_model(EntryTypeDto::Login, Uuid::new_v4());
+        m.password = "hunter2-pw".into();
+        m.notes = "private notes".into();
+        let mut address = AddressDto::with_label("Home");
+        address.full_name = "Jane Q Public".into();
+        address.address_line1 = "221B Baker Street".into();
+        let totp = TotpDto {
+            code: "482913".into(),
+            seconds_remaining: 12,
+            period: 30,
+        };
+        let secret_text = SecretText::new(Zeroizing::new("reveal-me-pw".to_owned()));
+        let shown = format!("{card:?} {field:?} {m:?} {address:?} {totp:?} {secret_text:?}");
+        for secret in [
+            "4111111111111111",
+            "7391",
+            "s3cret-value",
+            "hunter2-pw",
+            "private notes",
+            "Jane Q Public",
+            "221B Baker Street",
+            "482913",
+            "reveal-me-pw",
+        ] {
+            assert!(!shown.contains(secret), "Debug leaked {secret}");
+        }
+    }
+
+    #[test]
+    fn address_wipe_empties_every_field_and_the_type_wipes_on_drop() {
+        let mut a = AddressDto::with_label("Home");
+        a.full_name = "Jane Q Public".into();
+        a.phone = "+1 555 0100".into();
+        a.wipe();
+        assert_eq!(a, AddressDto::default());
+        assert!(
+            std::mem::needs_drop::<AddressDto>(),
+            "the address must run its wipe when dropped"
+        );
+    }
+
+    #[test]
+    fn secret_text_serialises_as_a_plain_string_and_compares_by_value() {
+        let t = SecretText::new(Zeroizing::new("Gen#Pass-1".to_owned()));
+        assert_eq!(serde_json::to_string(&t).unwrap(), "\"Gen#Pass-1\"");
+        assert_eq!(t.expose(), "Gen#Pass-1");
+        assert!(t == "Gen#Pass-1");
+        assert!(std::mem::needs_drop::<SecretText>());
+    }
 }

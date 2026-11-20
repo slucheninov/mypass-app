@@ -28,7 +28,7 @@ use crate::dto::{
     AppInfo, CsvPreview, EntryDetailDto, EntryEditModel, EntryQuery, EntrySummary, EntryTypeDto,
     FieldRef, FoundVaultFileDto, GenerateRequest, GeneratedPassword, GeneratorHistoryItem,
     HistoryItem, ImportResult, LoginItemStatus, OpenEntryEvent, OpenWarning, PasskeyDetails,
-    RecentVaultDto, RulesSummary, Sidebar, TotpDto,
+    RecentVaultDto, RulesSummary, SecretText, Sidebar, TotpDto,
 };
 use crate::editing;
 use crate::generator_service;
@@ -41,7 +41,7 @@ use crate::session::{
 use crate::settings::{Settings, SettingsError, SettingsPatch, SettingsStore};
 use crate::unlock_request::UnlockRequestState;
 use crate::vault_files::{self, ProcessLookup, ScanLimits};
-use mypass_kdbx::{Database, PlainFileIo};
+use mypass_kdbx::{Database, KdbxError, PlainFileIo};
 pub use mypass_platform::{AppPaths, Platform};
 use mypass_platform::{DeviceUnlockAvailability, PlatformError, VaultId};
 use secrecy::SecretString;
@@ -92,6 +92,9 @@ pub enum ErrorCode {
     MigrationSourceInvalid,
     MigrationSameFile,
     MigrationValidationFailed,
+    /// A retained vault copy was not deleted: the id is stale, or the copy no longer verifies
+    /// (`message` names the reason, such as `changed`, `liveVaultMissing` or `staleId`).
+    RetainedCopyRefused,
     Internal,
 }
 
@@ -232,6 +235,10 @@ pub struct AppCore {
     /// but has not yet reached the disk (cleared only by a successful flush).
     drafts: Arc<Mutex<Option<String>>>,
     migration_gate: Arc<Mutex<()>>,
+    /// Persisted write-time identities of retained vault copies.
+    retained_registry: Arc<crate::displaced::RetainedRegistry>,
+    /// The ids of the latest retained-copy listing, bound to this run and unlock.
+    retained_listing: Arc<crate::displaced::RetainedListing>,
 }
 
 impl AppCore {
@@ -271,6 +278,11 @@ impl AppCore {
                     .data_dir
                     .join(mypass_sync::icloud::ICLOUD_CACHE_DIR),
             ));
+        // Every retained copy a replacement keeps is persisted the moment it is recorded.
+        let registry = core.retained_registry.clone();
+        mypass_kdbx::set_retained_copy_listener(Some(Arc::new(move |identity| {
+            registry.add(std::slice::from_ref(identity));
+        })));
         Ok(core)
     }
 
@@ -331,6 +343,9 @@ impl AppCore {
             "0.0.0",
             &paths.config_dir,
         );
+        let retained_registry = Arc::new(crate::displaced::RetainedRegistry::new(
+            paths.config_dir.join("retained-copies.json"),
+        ));
         Self {
             update,
             backups: session.backups(),
@@ -347,6 +362,8 @@ impl AppCore {
             processes: Arc::new(NoOtherProcesses),
             drafts: Arc::new(Mutex::new(None)),
             migration_gate: Arc::new(Mutex::new(())),
+            retained_registry,
+            retained_listing: Arc::new(crate::displaced::RetainedListing::new()),
         }
     }
 
@@ -601,9 +618,10 @@ impl AppCore {
     }
 
     /// One plain value, after an explicit click.
-    pub fn entry_reveal(&self, id: &str, field: FieldRef) -> Result<String, ApiError> {
+    pub fn entry_reveal(&self, id: &str, field: FieldRef) -> Result<SecretText, ApiError> {
         let now = self.now_secs();
-        self.read(|db| editing::reveal_at(db, parse_id(id)?, &field, now))
+        let value = self.read(|db| editing::reveal_at(db, parse_id(id)?, &field, now))?;
+        Ok(SecretText::new(value))
     }
 
     /// One plain value of an earlier version of the entry (`revision` as in `entry_history`, not
@@ -614,8 +632,9 @@ impl AppCore {
         id: &str,
         revision: &str,
         field: FieldRef,
-    ) -> Result<String, ApiError> {
-        self.read(|db| editing::reveal_history(db, parse_id(id)?, revision, &field))
+    ) -> Result<SecretText, ApiError> {
+        let value = self.read(|db| editing::reveal_history(db, parse_id(id)?, revision, &field))?;
+        Ok(SecretText::new(value))
     }
 
     /// Copies a field to the clipboard from Rust (cleared after the configured seconds); the
@@ -939,8 +958,9 @@ impl AppCore {
         self.copy(&value)
     }
 
-    pub fn generator_history_reveal(&self, id: &str) -> Result<String, ApiError> {
-        self.read(|db| generator_service::history_reveal(db, parse_id(id)?))
+    pub fn generator_history_reveal(&self, id: &str) -> Result<SecretText, ApiError> {
+        let value = self.read(|db| generator_service::history_reveal(db, parse_id(id)?))?;
+        Ok(SecretText::new(value))
     }
 
     pub fn generator_history_delete(&self, id: &str) -> Result<(), ApiError> {
@@ -1180,7 +1200,7 @@ impl AppCore {
             self.session
                 .publish_if_current(
                     snapshot.incarnation,
-                    || true,
+                    |_| true,
                     || {
                         self.settings.set_secondary_folder(
                             target.parent().map(|p| p.to_string_lossy().into_owned()),
@@ -1205,11 +1225,67 @@ impl AppCore {
         self.secondary.sync_now()
     }
 
-    /// The vault copies kept next to the open vault and its secondary copy. Read-only:
-    /// MyPass never deletes them. A folder that could not be read is reported as unavailable.
-    /// No vault open means none.
+    /// The vault copies kept next to the open vault and its secondary copy. Listing deletes
+    /// nothing: MyPass never deletes them on its own. While the vault is unlocked, every copy
+    /// that may be deleted carries an id for [`AppCore::sync_displaced_delete`]. A folder that
+    /// could not be read is reported as unavailable. No vault open means none.
     pub fn sync_displaced_status(&self) -> Result<crate::displaced::DisplacedCopies, ApiError> {
-        Ok(crate::displaced::list(&self.displaced_targets()))
+        let targets = self.displaced_targets();
+        let key = self.retained_listing_key(&targets);
+        Ok(crate::displaced::list(
+            &targets,
+            &self.retained_registry.all(),
+            key.map(|key| (&*self.retained_listing, key)),
+        ))
+    }
+
+    /// Deletes the one retained copy `id` names, then lists again. The id must come from the
+    /// current listing of this unlocked session. The copy is re-listed, re-hashed, authenticated
+    /// against the unlocked vault's key and root UUID, then re-verified along with the live vault.
+    /// Any mismatch refuses with
+    /// `RetainedCopyRefused` and deletes nothing. `Locked` / `NoVault` unless a vault is unlocked.
+    pub fn sync_displaced_delete(
+        &self,
+        id: &str,
+    ) -> Result<crate::displaced::DisplacedCopies, ApiError> {
+        let incarnation = self.session.unlocked_incarnation()?;
+        let targets = self.displaced_targets();
+        let key = self
+            .retained_listing_key(&targets)
+            .filter(|key| key.incarnation == incarnation)
+            .ok_or_else(|| ApiError::from(SessionError::Locked))?;
+        let known = self.retained_registry.all();
+        let deleted =
+            crate::displaced::delete(&self.retained_listing, &key, id, &known, &self.session)
+                .map_err(|e| match e {
+                    crate::displaced::DeleteError::StaleId => {
+                        ApiError::new(ErrorCode::RetainedCopyRefused, "staleId")
+                    }
+                    crate::displaced::DeleteError::Session(error) => ApiError::from(error),
+                    crate::displaced::DeleteError::Refused(KdbxError::RetainedCopyRefused(
+                        reason,
+                    )) => ApiError::new(ErrorCode::RetainedCopyRefused, reason.as_str()),
+                    crate::displaced::DeleteError::Refused(other) => {
+                        ApiError::from(SessionError::from(other))
+                    }
+                })?;
+        self.retained_registry.forget(&deleted);
+        self.sync_displaced_status()
+    }
+
+    /// The key a listing's ids are bound to; `None` unless a vault is unlocked.
+    fn retained_listing_key(
+        &self,
+        targets: &[(crate::displaced::DisplacedLocation, PathBuf)],
+    ) -> Option<crate::displaced::ListingKey> {
+        let incarnation = self.session.unlocked_incarnation().ok()?;
+        Some(crate::displaced::ListingKey {
+            vault_id: self.session.vault_id()?,
+            incarnation,
+            targets: targets.to_vec(),
+            can_delete_primary: self.session.storage_status().location
+                == mypass_sync::icloud::VaultLocation::Local,
+        })
     }
 
     fn displaced_targets(&self) -> Vec<(crate::displaced::DisplacedLocation, PathBuf)> {
@@ -1279,6 +1355,7 @@ mod tests {
     use mypass_platform::testing::{fake_platform, FakePlatform};
     use mypass_platform::PlatformError;
     use secrecy::SecretString;
+    use sha2::{Digest, Sha256};
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::{Duration, UNIX_EPOCH};
@@ -2749,5 +2826,266 @@ mod tests {
             .unwrap();
         f.core.vault_lock().unwrap();
         assert_eq!(code(f.core.sync_now()), ErrorCode::Locked);
+    }
+
+    /// A competing copy next to the open vault and the id the current listing gives it.
+    fn listed_copy(f: &Fx) -> (PathBuf, String) {
+        let name = f.path.file_name().unwrap().to_string_lossy().into_owned();
+        let copy = f.path.with_file_name(format!(".{name}.1.2.3.displaced"));
+        std::fs::copy(&f.path, &copy).unwrap();
+        let status = f.core.sync_displaced_status().unwrap();
+        assert_eq!(status.count, 1);
+        let id = status.copies[0]
+            .id
+            .clone()
+            .expect("a deletable copy has an id");
+        (copy, id)
+    }
+
+    fn refusal<T: std::fmt::Debug>(r: Result<T, ApiError>) -> String {
+        let e = r.unwrap_err();
+        assert_eq!(e.code, ErrorCode::RetainedCopyRefused, "{e:?}");
+        e.message
+    }
+
+    #[test]
+    fn a_confirmed_copy_is_deleted_and_the_list_refreshed() {
+        let f = fx_open();
+        let copy = f.path.with_file_name(".v.kdbx.1.2.3.displaced");
+        let live = std::fs::read(&f.path).unwrap();
+        let mut db = Database::open(&live, &pw("pw")).unwrap();
+        db.meta.database_name = "Matching vault with a competing edit".to_owned();
+        std::fs::write(&copy, db.save(&pw("pw")).unwrap()).unwrap();
+        let status = f.core.sync_displaced_status().unwrap();
+        let id = status.copies[0].id.as_ref().unwrap();
+        let after = f.core.sync_displaced_delete(id).unwrap();
+        assert_eq!(after.count, 0);
+        assert!(!copy.exists());
+        assert_eq!(std::fs::read(&f.path).unwrap(), live);
+        // The same id never deletes twice.
+        assert_eq!(refusal(f.core.sync_displaced_delete(id)), "staleId");
+    }
+
+    #[test]
+    fn a_copy_of_another_vault_previously_at_the_same_path_is_refused() {
+        let f = fx();
+        let old = fast_database("Previous vault");
+        let bytes = old.save(&pw("pw")).unwrap();
+        std::fs::write(&f.path, &bytes).unwrap();
+        let parent = std::fs::canonicalize(f.path.parent().unwrap()).unwrap();
+        let copy = parent.join(".v.kdbx.1.2.3.displaced");
+        std::fs::rename(&f.path, &copy).unwrap();
+        f.core
+            .retained_registry
+            .add(&[mypass_kdbx::RetainedIdentity {
+                target: parent.join("v.kdbx"),
+                path: copy.clone(),
+                len: bytes.len() as u64,
+                sha256: Sha256::digest(&bytes).into(),
+            }]);
+        let new = fast_database("New vault");
+        assert_ne!(old.root_id(), new.root_id());
+        f.core
+            .session
+            .create_vault_with(&f.path, pw("pw"), new)
+            .unwrap();
+
+        let listed = f.core.sync_displaced_status().unwrap();
+        let id = listed.copies[0]
+            .id
+            .as_ref()
+            .expect("authentication waits for deletion");
+        assert_eq!(refusal(f.core.sync_displaced_delete(id)), "otherVault");
+        assert_eq!(std::fs::read(copy).unwrap(), bytes);
+    }
+
+    #[test]
+    fn a_copy_that_cannot_be_authenticated_is_refused() {
+        let f = fx_open();
+        let live = std::fs::read(&f.path).unwrap();
+        let db = Database::open(&live, &pw("pw")).unwrap();
+        let copy = f.path.with_file_name(".v.kdbx.1.2.3.displaced");
+        let over_limit =
+            mypass_kdbx::test_util::vault_header_only(&mypass_kdbx::KdfParams::AesKdf {
+                seed: vec![0; 32],
+                rounds: 1_000_000_001,
+            });
+        assert!(matches!(
+            Database::open(&over_limit, &pw("pw")),
+            Err(KdbxError::InvalidKdfParameters(_))
+        ));
+        for bytes in [
+            db.save(&pw("other password")).unwrap(),
+            b"invalid kdbx".to_vec(),
+            over_limit,
+        ] {
+            std::fs::write(&copy, &bytes).unwrap();
+            let listed = f.core.sync_displaced_status().unwrap();
+            let id = listed.copies[0]
+                .id
+                .as_ref()
+                .expect("authentication waits for deletion");
+            assert_eq!(refusal(f.core.sync_displaced_delete(id)), "unverifiedVault");
+            assert_eq!(std::fs::read(&copy).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn an_unreadable_copy_is_refused_without_deleting_it() {
+        let f = fx_open();
+        let (copy, id) = listed_copy(&f);
+        let bytes = std::fs::read(&copy).unwrap();
+        let io = Arc::new(FailingFileIo::new(Arc::new(PlainFileIo)));
+        f.core.session.set_file_io(io.clone());
+        io.fail_read(std::io::ErrorKind::PermissionDenied);
+        assert_eq!(refusal(f.core.sync_displaced_delete(&id)), "unreadable");
+        assert_eq!(std::fs::read(copy).unwrap(), bytes);
+    }
+
+    #[test]
+    fn a_copy_is_kept_when_the_live_vault_is_missing() {
+        let f = fx_open();
+        let (copy, id) = listed_copy(&f);
+        let live = std::fs::read(&f.path).unwrap();
+        std::fs::remove_file(&f.path).unwrap();
+        assert_eq!(
+            refusal(f.core.sync_displaced_delete(&id)),
+            "liveVaultMissing"
+        );
+        assert_eq!(std::fs::read(&copy).unwrap(), live);
+        std::fs::write(&f.path, live).unwrap();
+    }
+
+    #[test]
+    fn a_copy_swapped_after_listing_is_refused() {
+        let f = fx_open();
+        let (copy, id) = listed_copy(&f);
+        std::fs::write(&copy, b"COMPETING").unwrap();
+        assert_eq!(refusal(f.core.sync_displaced_delete(&id)), "changed");
+        assert_eq!(std::fs::read(&copy).unwrap(), b"COMPETING");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_at_the_listed_name_is_refused() {
+        let f = fx_open();
+        let (copy, id) = listed_copy(&f);
+        let moved = f.dir.path().join("moved");
+        std::fs::rename(&copy, &moved).unwrap();
+        std::os::unix::fs::symlink(&moved, &copy).unwrap();
+        // A symlink is not a retained copy: it is no longer listed, so the id names nothing.
+        assert_eq!(
+            refusal(f.core.sync_displaced_delete(&id)),
+            "notRetainedCopy"
+        );
+        assert!(moved.exists());
+        assert!(std::fs::symlink_metadata(&copy)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+
+    #[test]
+    fn a_copy_recorded_for_another_vault_gets_no_id() {
+        let f = fx_open();
+        let name = f.path.file_name().unwrap().to_string_lossy().into_owned();
+        let copy = put_displaced(f.path.parent().unwrap(), &name, "1.2.3");
+        let folder = std::fs::canonicalize(f.path.parent().unwrap()).unwrap();
+        f.core
+            .retained_registry
+            .add(&[mypass_kdbx::RetainedIdentity {
+                target: folder.join("another.kdbx"),
+                path: folder.join(copy.file_name().unwrap()),
+                len: 9,
+                sha256: Sha256::digest(b"competing").into(),
+            }]);
+        let status = f.core.sync_displaced_status().unwrap();
+        assert_eq!(status.count, 1);
+        assert_eq!(status.copies[0].id, None);
+        assert_eq!(
+            refusal(f.core.sync_displaced_delete(&"0".repeat(64))),
+            "staleId"
+        );
+        assert!(copy.exists());
+    }
+
+    #[test]
+    fn an_id_from_an_earlier_unlock_or_run_is_refused() {
+        let f = fx_open();
+        let (copy, id) = listed_copy(&f);
+        f.core.vault_lock().unwrap();
+        assert_eq!(code(f.core.sync_displaced_delete(&id)), ErrorCode::Locked);
+        // Listing while locked offers no ids.
+        assert_eq!(f.core.sync_displaced_status().unwrap().copies[0].id, None);
+        f.core.vault_unlock(pw("pw")).unwrap();
+        assert_eq!(refusal(f.core.sync_displaced_delete(&id)), "staleId");
+        // A fresh listing of this unlock gives a different id that works.
+        let fresh = f.core.sync_displaced_status().unwrap().copies[0]
+            .id
+            .clone()
+            .unwrap();
+        assert_ne!(fresh, id);
+        // Another app run (another salt) over the same files never accepts this run's id.
+        let other = AppCore::with_parts(
+            AppPaths::macos(f.dir.path()),
+            f.fake.platform.clone(),
+            f.clock.clone(),
+            SettingsStore::in_memory(),
+        );
+        other.session.open_vault(&f.path, pw("pw")).unwrap();
+        let theirs = other.sync_displaced_status().unwrap().copies[0]
+            .id
+            .clone()
+            .unwrap();
+        assert_ne!(theirs, fresh);
+        assert_eq!(refusal(other.sync_displaced_delete(&fresh)), "staleId");
+        assert!(copy.exists());
+    }
+
+    #[test]
+    fn an_io_failure_leaves_the_copy_in_place() {
+        let f = fx_open();
+        let (copy, id) = listed_copy(&f);
+        let bytes = std::fs::read(&copy).unwrap();
+        let io = Arc::new(FailingFileIo::new(Arc::new(PlainFileIo)));
+        f.core.session.set_file_io(io.clone());
+        io.fail_write_atomic(std::io::ErrorKind::PermissionDenied);
+        assert_eq!(code(f.core.sync_displaced_delete(&id)), ErrorCode::Io);
+        assert_eq!(std::fs::read(&copy).unwrap(), bytes);
+        assert!(f.path.is_file());
+        // Healed, the same listing still deletes exactly that copy.
+        io.heal();
+        assert_eq!(f.core.sync_displaced_delete(&id).unwrap().count, 0);
+        assert!(!copy.exists());
+    }
+
+    #[test]
+    fn deleting_without_a_vault_is_no_vault() {
+        let f = fx();
+        assert_eq!(code(f.core.sync_displaced_delete("x")), ErrorCode::NoVault);
+    }
+
+    #[test]
+    fn write_time_identities_are_persisted_and_reloaded() {
+        let f = fx_open();
+        let folder = std::fs::canonicalize(f.path.parent().unwrap()).unwrap();
+        let identity = mypass_kdbx::RetainedIdentity {
+            target: folder.join("v.kdbx"),
+            path: folder.join(".v.kdbx.9.9.9.displaced"),
+            len: 3,
+            sha256: [7; 32],
+        };
+        f.core
+            .retained_registry
+            .add(std::slice::from_ref(&identity));
+        let reloaded = crate::displaced::RetainedRegistry::new(
+            f.core.paths().config_dir.join("retained-copies.json"),
+        );
+        assert!(reloaded.all().contains(&identity));
+        reloaded.forget(&identity.path);
+        let again = crate::displaced::RetainedRegistry::new(
+            f.core.paths().config_dir.join("retained-copies.json"),
+        );
+        assert!(!again.all().contains(&identity));
     }
 }

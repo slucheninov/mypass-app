@@ -91,10 +91,12 @@ fn create_tray(app: &AppHandle, model: &TrayMenuModel) -> tauri::Result<()> {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
                 rect,
+                position,
                 ..
             } = event
             {
-                toggle_panel(tray.app_handle(), rect);
+                // `position` and `rect` are the tray API's own snapshot of the click.
+                toggle_panel(tray.app_handle(), rect, position);
             }
         });
     if let Some(icon) = app.default_window_icon() {
@@ -155,8 +157,9 @@ fn run_tray_action(app: &AppHandle, action: TrayAction) {
     }
 }
 
-/// Left click on the icon: toggle the panel, placed under the icon inside the monitor.
-fn toggle_panel(app: &AppHandle, tray: tauri::Rect) {
+/// Left click on the icon: toggle the panel, placed under the icon inside the monitor. `click` is
+/// the pointer position the tray event carried (physical, at the icon's own scale).
+fn toggle_panel(app: &AppHandle, tray: tauri::Rect, click: PhysicalPosition<f64>) {
     let Some(panel) = app.get_webview_window(PANEL_WINDOW) else {
         return;
     };
@@ -178,7 +181,9 @@ fn toggle_panel(app: &AppHandle, tray: tauri::Rect) {
     #[cfg(windows)]
     place_panel_windows(app, &panel, tray);
     #[cfg(not(windows))]
-    place_panel(app, &panel, tray);
+    place_panel(app, &panel, tray, click);
+    #[cfg(windows)]
+    let _ = click;
     let _ = panel.show();
     let _ = panel.set_focus();
 }
@@ -238,8 +243,13 @@ fn place_panel_windows(app: &AppHandle, panel: &tauri::WebviewWindow, tray: taur
 /// supplies the scale factor, so a panel last shown on another display is not misplaced
 /// (`shell::tray_panel_origin` decides).
 #[cfg(not(windows))]
-fn place_panel(app: &AppHandle, panel: &tauri::WebviewWindow, tray: tauri::Rect) {
-    use crate::shell::{tray_panel_origin, MonitorFrame, TrayRect};
+fn place_panel(
+    app: &AppHandle,
+    panel: &tauri::WebviewWindow,
+    tray: tauri::Rect,
+    click_position: PhysicalPosition<f64>,
+) {
+    use crate::shell::{tray_click_point, tray_panel_origin, MonitorFrame, TrayRect};
     use tauri::{LogicalPosition, Position, Size};
     let to_frame = |m: &tauri::Monitor| MonitorFrame {
         x: f64::from(m.position().x),
@@ -286,17 +296,20 @@ fn place_panel(app: &AppHandle, panel: &tauri::WebviewWindow, tray: tauri::Rect)
             })
         }
     };
-    // The click location in unscaled global points: tao reports the cursor in physical pixels of
-    // the PRIMARY monitor's scale, so dividing by that scale gives the global point. The cursor
-    // sits on the icon at click time, and the global point tells overlapping physical frames
-    // apart (the tray rectangle itself is in the scale of the icon's own screen, unknown here).
-    // Known limitation (accepted): the cursor is sampled here, when the click event is handled, not
-    // captured at event time; if the pointer moved off the icon in between (a slow main thread),
-    // the panel can land by the pointer's new spot, still on a valid monitor and clamped to it.
-    let click = app.cursor_position().ok().and_then(|cursor| {
+    // The click location in unscaled global points comes from the position the tray event itself
+    // carried, which the tray API captured when the click happened, so a pointer that moved off
+    // the icon before this handler ran changes nothing. That position is physical at the icon's
+    // own screen scale, which the event does not name; `tray_click_point` finds the one scale
+    // that fits the monitors. Only on a mixed-DPI desktop where two scales both fit is the
+    // cursor sampled now (tao: physical pixels of the PRIMARY monitor's scale, so dividing by
+    // that scale gives the global point) used, and only to choose between those candidates; it
+    // is also the fallback when the event point fits no monitor at all.
+    let late_cursor = app.cursor_position().ok().and_then(|cursor| {
         let primary_scale = app.primary_monitor().ok().flatten()?.scale_factor();
         (primary_scale > 0.0).then(|| (cursor.x / primary_scale, cursor.y / primary_scale))
     });
+    let click = tray_click_point((click_position.x, click_position.y), &frames, late_cursor)
+        .or(late_cursor);
     if let Some((x, y)) = tray_panel_origin(
         tray_rect,
         click,

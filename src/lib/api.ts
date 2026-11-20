@@ -66,6 +66,8 @@ const MESSAGES: Record<ErrorCode, () => string> = {
   migrationSourceInvalid: () => t("Cannot validate the source vault or its backup. Keep the original file and restore a known good backup before retrying."),
   migrationSameFile: () => t("This is the current vault. Choose a different folder."),
   migrationValidationFailed: () => t("Destination verification failed. The source and verified backup are retained; the destination may already have changed. Keep all copies and inspect them before retrying."),
+  retainedCopyRefused: () =>
+    t("The copy changed or could not be verified, so it was not deleted. The list was refreshed."),
   internal: () => t("Something went wrong"),
 };
 
@@ -162,6 +164,7 @@ export const api = {
   sidebarGet: wrap(commands.sidebarGet),
   syncDisconnectSecondary: wrap(commands.syncDisconnectSecondary),
   syncConnectSecondary: wrap(commands.syncConnectSecondary),
+  syncDisplacedDelete: wrap(commands.syncDisplacedDelete),
   syncDisplacedStatus: wrap(commands.syncDisplacedStatus),
   syncNow: wrap(commands.syncNow),
   syncStatus: wrap(commands.syncStatus),
