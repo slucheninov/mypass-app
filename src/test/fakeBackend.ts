@@ -9,6 +9,7 @@ import { emit } from "@tauri-apps/api/event";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type {
   ApiError,
+  HistoryReveal,
   DeviceUnlockStatus_Serialize,
   UpdateStatus_Serialize,
   AttachmentMeta,
@@ -324,6 +325,45 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
   let groupSeq = 0;
   let generatedSeq = 0;
   let historySeq = 0;
+  let revisionSeq = 0;
+  /** Like `editing::revealable_fields`: the changed fields whose old value the version still holds. */
+  const revealableOf = (model: EntryEditModel_Serialize, keys: string[]): HistoryReveal[] => {
+    const out: HistoryReveal[] = [];
+    for (const key of keys) {
+      let field: FieldRef | null = null;
+      switch (key) {
+        case "UserName":
+          field = { kind: "username" };
+          break;
+        case "Password":
+          field = { kind: "password" };
+          break;
+        case "URL":
+          field = model.urls.length > 0 ? { kind: "url" } : null;
+          break;
+        case "Notes":
+        case "MyPass.NotesBody":
+          field = { kind: "notesBody" };
+          break;
+        case "MyPass.CardNumber":
+          field = model.card ? { kind: "cardNumber" } : null;
+          break;
+        case "MyPass.CVV":
+          field = model.card ? { kind: "cardCvv" } : null;
+          break;
+        case "Title":
+        case "otp":
+        case "Attachments":
+          break;
+        default:
+          if (!key.startsWith("MyPass.") && !key.startsWith("KPEX_") && model.customFields.some((f) => f.key === key)) {
+            field = { kind: "custom", key };
+          }
+      }
+      if (field && !out.some((r) => JSON.stringify(r.field) === JSON.stringify(field))) out.push({ key, field });
+    }
+    return out;
+  };
   /** The host a rules lookup keys on: what the user typed or pasted, reduced to its lower-case host. */
   const canonicalHost = (raw: string) =>
     raw.trim().toLowerCase().replace(/^[a-z][a-z0-9+.-]*:\/\//, "").replace(/[/?#].*$/, "").replace(/^www\./, "");
@@ -504,11 +544,15 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       const found = findEntry(id);
       return [...found.history].reverse().map((v, index) => {
         const newer = found.history[found.history.length - index] ?? { model: found.model };
+        const changedFields = v.changedFields ?? changedKeys(v.model, newer.model);
+        v.revision ??= `rev-${++revisionSeq}`;
         return {
           index,
+          revision: v.revision,
           modified: v.modified,
           title: v.model.title,
-          changedFields: v.changedFields ?? changedKeys(v.model, newer.model),
+          changedFields,
+          revealable: revealableOf(v.model, changedFields),
         };
       });
     },
@@ -632,12 +676,12 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       changed();
       return null;
     },
-    // Like `editing::reveal_history`: one value of the version at `index` (newest first), never a
-    // one-time code; `entryHistory` itself carries no values.
-    entryHistoryReveal: ({ id, index, field }) => {
+    // Like `editing::reveal_history`: one value of the version named by `revision` (never an
+    // index, which shifts), never a one-time code; `entryHistory` itself carries no values.
+    entryHistoryReveal: ({ id, revision, field }) => {
       requireUnlocked();
       const found = findEntry(id);
-      const version = found.history[found.history.length - 1 - index];
+      const version = found.history.find((v) => v.revision === revision);
       if (!version) throw apiError("notFound");
       if (field.kind === "totp") throw apiError("invalidInput");
       return secretOf({ ...found, model: version.model }, field);

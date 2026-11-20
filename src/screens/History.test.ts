@@ -7,6 +7,7 @@ import { setLanguage } from "../lib/i18n/index.svelte";
 import { session } from "../lib/stores/session.svelte";
 import { navigation } from "../lib/stores/navigation.svelte";
 import { expectNoAxeViolations } from "../test/axe";
+import type { HistoryItem } from "../lib/bindings";
 import { apiError, createFakeBackend, type FakeBackend } from "../test/fakeBackend";
 import { FIXTURE_LOGIN_PASSWORD, makeEntry, sessionStatus, type EntrySpec } from "../test/fixtures";
 import { calls, renderMainApp } from "../test/mainApp";
@@ -138,7 +139,7 @@ describe("history list", () => {
   it("a_version_without_a_date_says_so_instead_of_repeating_its_title", async () => {
     const fake = backend();
     fake.handlers.entryHistory = () => [
-      { index: 0, modified: null, title: "Router (undated)", changedFields: ["Title"] },
+      { index: 0, revision: "r0", modified: null, title: "Router (undated)", changedFields: ["Title"], revealable: [] },
     ];
     const dialog = await openHistory(fake);
     const row = options(dialog)[0]!;
@@ -161,9 +162,11 @@ describe("reveal an old value", () => {
     await user.click(within(dialog).getByRole("button", { name: "Show Password" }));
     await waitFor(() => expect(within(dialog).queryByText(MID_SECRET)).not.toBeNull());
     expect(calls(fake, "entryHistoryReveal")).toHaveLength(1);
+    // By the version's revision, never by its position.
+    const listed = (await fake.handlers.entryHistory!({ id: "e-router" })) as HistoryItem[];
     expect(calls(fake, "entryHistoryReveal")[0]!.args).toEqual({
       id: "e-router",
-      index: 1,
+      revision: listed[1]!.revision,
       field: { kind: "password" },
     });
     expect(document.body.textContent).not.toContain(OLD_SECRET);
@@ -211,6 +214,81 @@ describe("reveal an old value", () => {
     await user.click(within(dialog).getByRole("button", { name: "Show Password" }));
     await waitFor(() => expect(within(dialog).queryByText(MID_SECRET)).not.toBeNull());
     await expectNoAxeViolations(dialog);
+  });
+});
+
+describe("reveal bound to a revision and to the backend's descriptors", () => {
+  it("a_list_change_between_selection_and_click_still_reveals_the_version_that_was_shown", async () => {
+    const fake = backend();
+    const dialog = await openHistory(fake);
+    const user = userEvent.setup();
+    await user.click(options(dialog)[1]!);
+    const found = fake.state.entries.find((e) => e.summary.id === "e-router")!;
+    // A sync lands a newer version: the shown row moves from position 1 to 2, the list is refetched.
+    found.history.push({ modified: T, model: structuredClone(found.model), changedFields: ["Title"] });
+    await fake.emit("vaultChanged", null);
+    await waitFor(() => expect(options(dialog)).toHaveLength(4));
+    // The selection follows the version, not the index.
+    expect(options(dialog)[2]!.getAttribute("aria-selected")).toBe("true");
+    await user.click(within(dialog).getByRole("button", { name: "Show Password" }));
+    await waitFor(() => expect(within(dialog).queryByText(MID_SECRET)).not.toBeNull());
+  });
+
+  it("equal_dates_and_titles_do_not_alias_two_versions", async () => {
+    const fake = backend([
+      {
+        id: "e-twin",
+        title: "Twin",
+        password: "current",
+        modified: T,
+        history: [
+          { modified: T - DAY, password: "twin-A", changedFields: ["Password"] },
+          { modified: T - DAY, password: "twin-B", changedFields: ["Password"] },
+        ],
+      },
+    ]);
+    const dialog = await openHistory(fake, "e-twin");
+    const user = userEvent.setup();
+    const show = async (at: number, expected: string) => {
+      await user.click(options(dialog)[at]!);
+      await user.click(within(dialog).getByRole("button", { name: "Show Password" }));
+      await waitFor(() => expect(within(dialog).queryByText(expected)).not.toBeNull());
+    };
+    await show(0, "twin-B");
+    await show(1, "twin-A");
+  });
+
+  it("only_the_fields_the_backend_lists_are_offered_and_custom_keys_are_shown", async () => {
+    const fake = backend();
+    fake.handlers.entryHistory = () => [
+      {
+        index: 0,
+        revision: "r-x",
+        modified: T,
+        title: "Router",
+        // Password changed but the old snapshot holds none; the custom key is valid user data.
+        changedFields: ["Password", "MyPass.Project", "Custom Thing"],
+        revealable: [
+          { key: "MyPass.Project", field: { kind: "custom", key: "MyPass.Project" } },
+          { key: "Custom Thing", field: { kind: "custom", key: "Custom Thing" } },
+        ],
+      },
+    ];
+    const dialog = await openHistory(fake);
+    expect(within(dialog).queryByRole("button", { name: "Show Password" })).toBeNull();
+    expect(within(dialog).getByRole("button", { name: "Show MyPass.Project" })).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Show Custom Thing" })).toBeTruthy();
+  });
+
+  it("a_vault_change_hides_a_shown_value", async () => {
+    const fake = backend();
+    const dialog = await openHistory(fake);
+    const user = userEvent.setup();
+    await user.click(options(dialog)[1]!);
+    await user.click(within(dialog).getByRole("button", { name: "Show Password" }));
+    await waitFor(() => expect(within(dialog).queryByText(MID_SECRET)).not.toBeNull());
+    await fake.emit("vaultChanged", null);
+    await waitFor(() => expect(within(dialog).queryByText(MID_SECRET)).toBeNull());
   });
 });
 

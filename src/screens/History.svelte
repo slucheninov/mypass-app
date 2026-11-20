@@ -64,38 +64,11 @@
     }
   }
 
-  /** The backend reference for the old value of a changed field; `null` when it has none to show
-   *  (the title is on the row, a one-time secret, files and the app's own bookkeeping are not values). */
-  function valueRef(key: string): FieldRef | null {
-    switch (key) {
-      case "Password":
-        return { kind: "password" };
-      case "UserName":
-        return { kind: "username" };
-      case "URL":
-        return { kind: "url" };
-      case "Notes":
-      case "MyPass.NotesBody":
-        return { kind: "notesBody" };
-      case "MyPass.CardNumber":
-        return { kind: "cardNumber" };
-      case "MyPass.CVV":
-        return { kind: "cardCvv" };
-      case "Title":
-      case "otp":
-      case "Attachments":
-        return null;
-      default:
-        return key.startsWith("MyPass.") ? null : { kind: "custom", key };
-    }
-  }
-
-  /** The changed fields of a version whose old value can be revealed, without repeats. */
+  /** The fields of a version whose old value can be revealed: exactly what the backend listed
+   *  (`revealable`), so a field the version never held, a code or passkey material is never offered
+   *  and a custom field with any valid key is shown. */
   const revealable = (item: HistoryItem) =>
-    [...new Set(item.changedFields)].flatMap((key) => {
-      const ref = valueRef(key);
-      return ref ? [{ key, ref, label: fieldLabel(key) }] : [];
-    });
+    item.revealable.map((r) => ({ key: r.key, ref: r.field, label: fieldLabel(r.key) }));
 
   // One old value at a time, for the field named by `shownKey`.
   const group = createRevealGroup();
@@ -104,14 +77,14 @@
 
   const toggleValue = (item: HistoryItem, key: string, ref: FieldRef) =>
     toasts.guard(async () => {
-      const id = `${item.index}:${key}`;
+      const id = `${item.revision}:${key}`;
       if (shownKey === id && shown.value !== null) {
         shown.hide();
         shownKey = null;
         return;
       }
       shownKey = id;
-      await shown.reveal(() => api.entryHistoryReveal(entryId, item.index, ref));
+      await shown.reveal(() => api.entryHistoryReveal(entryId, item.revision, ref));
     });
 
   const changed = (item: HistoryItem): string =>
@@ -119,8 +92,9 @@
   const when = (item: HistoryItem): string =>
     item.modified === null ? t("Unknown date") : formatDate(item.modified, "datetime");
 
-  /** A version is the same revision across a reload when its date and title match; its `index` is not stable. */
-  const sameVersion = (a: HistoryItem, b: HistoryItem) => a.modified === b.modified && a.title === b.title;
+  /** A version is the same across a reload when its `revision` matches; its `index` and its date and
+   *  title are not enough (two edits can share both). */
+  const sameVersion = (a: HistoryItem, b: HistoryItem) => a.revision === b.revision;
 
   async function load() {
     const mine = ++generation;
@@ -245,7 +219,7 @@
       bind:this={listbox}
       {onkeydown}
     >
-      {#each items as item, position (item.index)}
+      {#each items as item, position (item.revision)}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <div
           class="version"
@@ -272,7 +246,7 @@
       {#if values.length > 0}
         <div class="values" role="group" aria-label={when(current)}>
           {#each values as value (value.key)}
-            {@const id = `${current.index}:${value.key}`}
+            {@const id = `${current.revision}:${value.key}`}
             {@const text = shownKey === id ? shown.value : null}
             <div class="value">
               <span class="label">{value.label}</span>
