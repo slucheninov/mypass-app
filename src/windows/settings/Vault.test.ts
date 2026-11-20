@@ -208,4 +208,17 @@ describe("competing copies", () => {
     const section = await screen.findByTestId("displaced-copies");
     expect(within(section).getByRole("alert").textContent).toBe("Competing copies could not be checked.");
   });
+
+  it("a_failed_refresh_after_a_vault_switch_shows_no_filenames_of_the_previous_vault", async () => {
+    const { fake } = await open({}, withCopies);
+    const section = await screen.findByTestId("displaced-copies");
+    expect(within(section).getByText(".vault.kdbx.1.2.3.displaced")).toBeTruthy();
+    fake.handlers.syncDisplacedStatus = () => {
+      throw new Error("boom");
+    };
+    await fake.emit("sessionChanged", { ...fake.state.session, vaultPath: "/other/vault.kdbx" });
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("Competing copies could not be checked."));
+    expect(screen.queryByText(".vault.kdbx.1.2.3.displaced")).toBeNull();
+    expect(screen.queryByText(/Competing copies kept/)).toBeNull();
+  });
 });
