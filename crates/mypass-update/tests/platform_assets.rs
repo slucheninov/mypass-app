@@ -137,6 +137,52 @@ fn current_platform_uses_os_and_architecture() {
 }
 
 #[test]
+fn prerelease_banners_require_an_eligible_version_and_exact_platform_assets() {
+    for (current, candidate, expected) in [
+        ("0.7.0", "0.7.1-alpha.1", false),
+        ("0.7.0", "0.7.1-beta.1", false),
+        ("0.7.0", "0.7.1-rc.1", false),
+        ("0.7.1-alpha.2", "0.7.1-alpha.1", false),
+        ("0.7.1-alpha.2", "0.7.1-alpha.2", false),
+        ("0.7.1-alpha.2", "0.7.1-alpha.10", true),
+        ("0.7.1-alpha.2", "0.7.1-beta.1", true),
+        ("0.7.1-alpha.2", "0.7.1-rc.1", true),
+        ("0.7.1-alpha.2", "0.7.1", true),
+    ] {
+        let release = parse_release_payload(&serde_json::to_vec(&serde_json::json!({
+            "tag_name": format!("v{candidate}"),
+            "html_url": format!("https://github.com/slucheninov/mypass-app/releases/tag/v{candidate}"),
+            "assets": [
+                {"name": format!("MyPass-{candidate}-macos-arm64.dmg")},
+                {"name": "SHA256SUMS.txt"},
+                {"name": format!("MyPass-{candidate}-windows-x64.zip")},
+                {"name": format!("MyPass-{candidate}-windows-x64.zip.sha256")},
+            ]
+        })).unwrap()).unwrap();
+        for platform in [ReleasePlatform::MacosArm64, ReleasePlatform::WindowsX64] {
+            let outcome = UpdatePolicy::finish(FinishInput {
+                result: &Ok(release.clone()),
+                current: current.parse().unwrap(),
+                platform: Some(platform),
+                previous: &UpdateStatus::Idle,
+                manual: true,
+                dismissed_version: None,
+                now: 42,
+            });
+            assert_eq!(
+                outcome.banner,
+                if expected {
+                    BannerChange::Show(release.clone())
+                } else {
+                    BannerChange::Clear
+                },
+                "{current} -> {candidate} on {platform:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn update_checks_never_download_binaries() {
     let github = include_str!("../src/github.rs")
         .split("#[cfg(test)]\nmod tests")
@@ -144,7 +190,7 @@ fn update_checks_never_download_binaries() {
         .unwrap();
     assert_eq!(github.matches(".get(").count(), 1);
     assert!(github.contains(".get(&self.endpoint)"));
-    assert!(github.contains("/releases/latest"));
+    assert!(github.contains("/releases{suffix}"));
     assert!(!github.contains("browser_download_url"));
     for source in [
         include_str!("../src/asset.rs"),

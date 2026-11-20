@@ -2687,7 +2687,7 @@ dependencies = [
 
 [[package]]
 name = "mypass-app"
-version = "0.7.0"
+version = "0.7.1-alpha.1"
 dependencies = [
  "mypass-bridge",
  "mypass-core",

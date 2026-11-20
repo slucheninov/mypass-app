@@ -128,13 +128,20 @@ esac
                          {self.dmg, self.ext, 'SHA256SUMS.txt', self.win, self.win + '.sha256'})
         with self.assertRaises(ValueError): self.release.expected_release_assets(self.version, ('linux',))
         self.publish()
-        self.assertIn('--draft=false', (self.root / 'gh.log').read_text())
+        flags = ' --prerelease --latest=false' if '-' in self.version else ''
+        self.assertEqual((self.root / 'gh.log').read_text().splitlines()[-1],
+                         f'release edit v{self.version} --draft=false{flags}')
         for mode, names in [('macos', [self.dmg, self.ext, 'SHA256SUMS.txt']), ('windows', [self.win, self.win + '.sha256'])]:
             folder = self.root / mode
             folder.mkdir()
             for name in names: shutil.copy2(self.folder / name, folder / name)
             subprocess.run([sys.executable, self.root / 'scripts/release.py', 'check-assets', folder,
                             self.version, '--platform', mode], check=True)
+
+    def test_mismatched_tag_stops_before_github(self):
+        self.run_script('publish-release.sh', f'v{self.next_version}-alpha.1',
+                        self.root / 'download', 'success', 'success', ok=False)
+        self.assertFalse((self.root / 'gh.log').exists())
 
     def test_missing_windows_and_extra_assets_block_publish(self):
         for missing in (self.win, self.win + '.sha256'):

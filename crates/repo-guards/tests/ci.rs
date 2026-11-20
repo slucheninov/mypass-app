@@ -736,6 +736,20 @@ fn release_workflow_is_tag_only_minimal_and_publishes_last() {
     let doc = workflow(".github/workflows/release.yml");
     assert_eq!(triggers(&doc).len(), 1);
     assert!(triggers(&doc).contains_key("push"));
+    assert_eq!(
+        triggers(&doc)["push"]["tags"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|pattern| pattern.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "v[0-9]+.[0-9]+.[0-9]+",
+            "v[0-9]+.[0-9]+.[0-9]+-alpha.[0-9]+",
+            "v[0-9]+.[0-9]+.[0-9]+-beta.[0-9]+",
+            "v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+",
+        ]
+    );
     assert_eq!(doc["permissions"]["contents"].as_str(), Some("read"));
     let publish = job(&doc, "publish");
     assert_eq!(publish["permissions"]["contents"].as_str(), Some("write"));
@@ -773,8 +787,9 @@ fn release_workflow_is_tag_only_minimal_and_publishes_last() {
         "bash scripts/test.sh --ci",
         "package-macos.sh --release",
         "check-host-deps.sh",
-        "check-version.sh",
+        "check-version.sh --tag",
         "check-assets",
+        "--prerelease --latest=false",
         "APPLE_CERTIFICATE",
         "APPLE_SIGNING_IDENTITY",
     ] {
@@ -914,7 +929,7 @@ fn release_workflow_validates_windows_and_combined_publish() {
         .collect::<Vec<_>>()
         .join("\n");
     for required in [
-        "check-version.sh",
+        "check-version.sh --tag",
         "cargo fmt --all -- --check",
         "cargo clippy --workspace --all-targets -- -D warnings",
         "bash scripts/test.sh --ci",
@@ -950,6 +965,8 @@ fn release_workflow_validates_windows_and_combined_publish() {
     let gate = read("scripts/publish-release.sh");
     assert!(gate.contains("\"$3\" == success && \"$4\" == success"));
     assert!(gate.contains("--platform all"));
+    assert!(gate.contains("check-version.sh"));
+    assert!(gate.contains("--prerelease --latest=false"));
     assert!(gate.find("check-assets").unwrap() < gate.find("--draft=false").unwrap());
     for line in read(".github/workflows/release.yml")
         .lines()

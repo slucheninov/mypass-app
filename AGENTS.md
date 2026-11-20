@@ -163,6 +163,9 @@ jobs are independent and run in parallel, so the wall-clock time is the slowest 
   and its `.zip.sha256`. `publish` needs both successful producers, downloads exactly five assets
   and verifies both checksum manifests before publishing last. Native OS integration is not run
   by the release job. Apple temporary keychain cleanup remains unconditional; no Windows signing.
+  For the first alpha, the owner runs `git tag v0.7.1-alpha.1 && git push origin v0.7.1-alpha.1`
+  from the approved version bump. The workflow publishes it as a prerelease without setting Latest
+  and requires `APPLE_SIGNING_IDENTITY`, `APPLE_CERTIFICATE` and `APPLE_CERTIFICATE_PASSWORD` for macOS.
 - `.github/workflows/codeql.yml` is a separate workflow (push to `main`, weekly, manual; never on pull
   requests) and is not part of `ci`.
 - Every `uses:` is pinned to a full commit SHA with the tag in a trailing comment.
