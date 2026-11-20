@@ -807,7 +807,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     // "Use" fills the form and only records the history (nothing is copied).
     generatorUse: ({ value, recordUrl }) => {
       requireUnlocked();
-      recordHistory(value, recordUrl);
+      recordHistory(value, recordUrl ?? "");
       return null;
     },
     // Mirrors `resolve_options`: the length is clamped to the site bounds, forced classes switch on,
