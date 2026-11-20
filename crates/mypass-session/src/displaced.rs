@@ -1,15 +1,16 @@
-//! Competing vault copies kept next to a vault file ("displaced" copies).
+//! Retained vault copies and move-aside working files next to a vault.
 //!
 //! A replacement that loses a last-instant race against another writer keeps the other writer's
 //! file next to the vault as `.<name>.<pid>.<nanos>.<n>.displaced` (see
 //! `mypass_kdbx::ReplaceOutcome::Displaced`). MyPass never deletes one: it may be the only copy
 //! of someone's edit. This module only lists them, read-only, for the Settings vault pane; the
-//! user reviews and removes them by hand in the vault folder.
+//! user reviews them in the vault folder. A move-aside working file can also remain after
+//! a failed replacement and is labelled separately.
 //!
 //! The status carries file names only (no folder), a location marker and, for a folder that
 //! could not be read, an `unavailable` marker: a failed scan is never reported as "no copies".
 
-use mypass_kdbx::displaced_copies;
+use mypass_kdbx::{displaced_copies, DisplacedCopyKind};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -23,17 +24,26 @@ pub enum DisplacedLocation {
     Secondary,
 }
 
-/// One kept competing copy. `name` is the file name only, for display.
+/// How the replacement named the copy.
+#[derive(Serialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum RetainedCopyKind {
+    Displaced,
+    Aside,
+}
+
+/// One retained copy. `name` is the file name only, for display.
 #[derive(Serialize, specta::Type, Clone, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct DisplacedCopyInfo {
     pub location: DisplacedLocation,
+    pub kind: RetainedCopyKind,
     pub name: String,
     /// Length in bytes.
     pub bytes: f64,
 }
 
-/// The kept competing copies of the open vault.
+/// The retained copies of the open vault.
 #[derive(Serialize, specta::Type, Clone, PartialEq, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DisplacedCopies {
@@ -72,6 +82,10 @@ pub(crate) fn list(targets: &[(DisplacedLocation, PathBuf)]) -> DisplacedCopies 
             Ok(found) => copies.extend(found.into_iter().map(|copy| {
                 DisplacedCopyInfo {
                     location: *location,
+                    kind: match copy.kind {
+                        DisplacedCopyKind::Displaced => RetainedCopyKind::Displaced,
+                        DisplacedCopyKind::Aside => RetainedCopyKind::Aside,
+                    },
                     name: copy
                         .path
                         .file_name()

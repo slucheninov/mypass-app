@@ -110,7 +110,7 @@ export const commands = {
 	sidebarGet: () => typedError<Sidebar_Serialize, ApiError>(__TAURI_INVOKE("sidebar_get")),
 	syncConnectSecondary: (folderToken: string, strategy: MigrationStrategy) => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_connect_secondary", { folderToken, strategy })),
 	syncDisconnectSecondary: () => typedError<null, ApiError>(__TAURI_INVOKE("sync_disconnect_secondary")),
-	/**  The kept competing vault copies, for display. Read-only: MyPass never deletes them. */
+	/**  The kept vault copies, for display. Read-only: MyPass never deletes them. */
 	syncDisplacedStatus: () => typedError<DisplacedCopies, ApiError>(__TAURI_INVOKE("sync_displaced_status")),
 	syncNow: () => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_now")),
 	syncStatus: () => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_status")),
@@ -457,7 +457,7 @@ export type DeviceUnlockStatus_Serialize = {
 	reason: OfferBlock | null,
 };
 
-/**  The kept competing copies of the open vault. */
+/**  The retained copies of the open vault. */
 export type DisplacedCopies = {
 	count: number,
 	copies: DisplacedCopyInfo[],
@@ -465,9 +465,10 @@ export type DisplacedCopies = {
 	unavailable: DisplacedLocation[],
 };
 
-/**  One kept competing copy. `name` is the file name only, for display. */
+/**  One retained copy. `name` is the file name only, for display. */
 export type DisplacedCopyInfo = {
 	location: DisplacedLocation,
+	kind: RetainedCopyKind,
 	name: string,
 	/**  Length in bytes. */
 	bytes: number | null,
@@ -1064,6 +1065,9 @@ export type RecentVaultDto = {
 /**  How often the master password is required again regardless of device unlock (stage 5). */
 export type RequireAccountPasswordWindow = "oneDay" | "sevenDays" | "fourteenDays" | "thirtyDays" | "ninetyDays" | "never";
 
+/**  How the replacement named the copy. */
+export type RetainedCopyKind = "displaced" | "aside";
+
 /**
  *  The site rules that applied, as the generator panel shows them. Class names are `lowercase`,
  *  `uppercase`, `digits` and `symbols`.
@@ -1164,20 +1168,15 @@ export type SecondaryStatus_Deserialize =
  *  Configured and not running; `last_sync` is the time of the last success for this vault
  *  and folder in this run of the app, in unix milliseconds.
  */
-{ state: "idle"; lastSync?: number | null } | 
+{ state: "idle"; lastSync?: number | null; recoveryFile?: string | null } | 
 /**  A sync is running. */
-{ state: "syncing" } | 
+{ state: "syncing"; recoveryFile?: string | null } | 
 /**
  *  The folder cannot be used; retried every [`SECONDARY_RETRY`] except for `invalidFolder`
  *  and `unsupportedFolder`.
  */
-{ state: "unavailable"; reason: SecondaryUnavailable } | 
-/**
- *  The last sync failed; the remote and the primary are untouched, except when
- *  `recovery_file` is set: then the previous vault survives only under that hidden file
- *  name (a name, never a folder) next to the synced copy, and the user is told to look
- *  for it. No listing shows such a file.
- */
+{ state: "unavailable"; reason: SecondaryUnavailable; recoveryFile?: string | null } | 
+/**  The last sync failed. `recovery_file` names a retained file from this or an earlier run. */
 { state: "error"; code: SecondaryError; recoveryFile?: string | null };
 
 /**  What the Settings sync pane shows (the `SyncStatusChanged` event payload). */
@@ -1188,20 +1187,15 @@ export type SecondaryStatus_Serialize =
  *  Configured and not running; `last_sync` is the time of the last success for this vault
  *  and folder in this run of the app, in unix milliseconds.
  */
-{ state: "idle"; lastSync: number | null } | 
+{ state: "idle"; lastSync: number | null; recoveryFile?: string } | 
 /**  A sync is running. */
-{ state: "syncing" } | 
+{ state: "syncing"; recoveryFile?: string } | 
 /**
  *  The folder cannot be used; retried every [`SECONDARY_RETRY`] except for `invalidFolder`
  *  and `unsupportedFolder`.
  */
-{ state: "unavailable"; reason: SecondaryUnavailable } | 
-/**
- *  The last sync failed; the remote and the primary are untouched, except when
- *  `recovery_file` is set: then the previous vault survives only under that hidden file
- *  name (a name, never a folder) next to the synced copy, and the user is told to look
- *  for it. No listing shows such a file.
- */
+{ state: "unavailable"; reason: SecondaryUnavailable; recoveryFile?: string } | 
+/**  The last sync failed. `recovery_file` names a retained file from this or an earlier run. */
 { state: "error"; code: SecondaryError; recoveryFile?: string };
 
 /**  Why the secondary folder cannot be used right now (a localisable code). */

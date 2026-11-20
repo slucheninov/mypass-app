@@ -9,7 +9,8 @@ use tauri::State;
 #[tauri::command]
 #[specta::specta]
 pub async fn sync_status(state: State<'_, AppState>) -> Result<SecondaryStatus, ApiError> {
-    state.0.sync_status()
+    let core = state.0.clone();
+    blocking(move || core.sync_status()).await
 }
 
 #[tauri::command]
@@ -26,7 +27,7 @@ pub async fn sync_disconnect_secondary(state: State<'_, AppState>) -> Result<(),
     blocking(move || core.sync_disconnect_secondary()).await
 }
 
-/// The kept competing vault copies, for display. Read-only: MyPass never deletes them.
+/// The kept vault copies, for display. Read-only: MyPass never deletes them.
 #[tauri::command]
 #[specta::specta]
 pub async fn sync_displaced_status(

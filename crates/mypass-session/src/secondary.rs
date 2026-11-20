@@ -93,7 +93,7 @@ use mypass_sync::{
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::ErrorKind;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -185,21 +185,40 @@ pub enum SecondaryStatus {
     Idle {
         #[serde(rename = "lastSync")]
         last_sync: Option<f64>,
+        #[serde(rename = "recoveryFile", skip_serializing_if = "Option::is_none")]
+        recovery_file: Option<String>,
     },
     /// A sync is running.
-    Syncing,
+    Syncing {
+        #[serde(rename = "recoveryFile", skip_serializing_if = "Option::is_none")]
+        recovery_file: Option<String>,
+    },
     /// The folder cannot be used; retried every [`SECONDARY_RETRY`] except for `invalidFolder`
     /// and `unsupportedFolder`.
-    Unavailable { reason: SecondaryUnavailable },
-    /// The last sync failed; the remote and the primary are untouched, except when
-    /// `recovery_file` is set: then the previous vault survives only under that hidden file
-    /// name (a name, never a folder) next to the synced copy, and the user is told to look
-    /// for it. No listing shows such a file.
+    Unavailable {
+        reason: SecondaryUnavailable,
+        #[serde(rename = "recoveryFile", skip_serializing_if = "Option::is_none")]
+        recovery_file: Option<String>,
+    },
+    /// The last sync failed. `recovery_file` names a retained file from this or an earlier run.
     Error {
         code: SecondaryError,
         #[serde(rename = "recoveryFile", skip_serializing_if = "Option::is_none")]
         recovery_file: Option<String>,
     },
+}
+
+impl SecondaryStatus {
+    fn with_recovery(mut self, name: Option<String>) -> Self {
+        match &mut self {
+            Self::Idle { recovery_file, .. }
+            | Self::Syncing { recovery_file }
+            | Self::Unavailable { recovery_file, .. }
+            | Self::Error { recovery_file, .. } => *recovery_file = name,
+            Self::Off => {}
+        }
+        self
+    }
 }
 
 /// A status observer; runs after the service's lock is released, on the calling thread.
@@ -280,7 +299,7 @@ impl RunKind {
 }
 
 /// What the service is armed for; a change of any part re-arms.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 struct ArmKey {
     vault_id: String,
     /// The canonical primary path (`VaultSession::vault_path`).
@@ -352,6 +371,9 @@ struct State {
     suspended: bool,
     armed: Option<Armed>,
     status: SecondaryStatus,
+    // Keep notices scoped to the vault and folder even across lock/unlock and re-arm.
+    context: Option<ArmKey>,
+    recovery: HashMap<ArmKey, Vec<PathBuf>>,
     last_sync: Option<LastSync>,
     /// The last save state seen, to detect a completed save (Pending or Saving, then Idle).
     last_save: SaveState,
@@ -379,6 +401,8 @@ enum Outcome {
 pub(crate) struct Probe {
     /// Engine calls made (a run that stops at the echo check makes none).
     pub(crate) engine_runs: std::sync::atomic::AtomicUsize,
+    /// Optional file I/O seam for the secondary backend.
+    pub(crate) io: Mutex<Option<Arc<dyn mypass_kdbx::FileIo>>>,
     /// Runs between the engine call and the adoption of a merge.
     pub(crate) before_adopt: Hook,
     /// Runs inside the engine call, right before each remote write (outside the session lock).
@@ -548,7 +572,10 @@ impl SecondarySync {
         watch: Arc<dyn FolderWatch>,
     ) -> Self {
         let status = if settings.get().secondary_folder.is_some() {
-            SecondaryStatus::Idle { last_sync: None }
+            SecondaryStatus::Idle {
+                last_sync: None,
+                recovery_file: None,
+            }
         } else {
             SecondaryStatus::Off
         };
@@ -563,6 +590,8 @@ impl SecondarySync {
                 suspended: false,
                 armed: None,
                 status,
+                context: None,
+                recovery: HashMap::new(),
                 last_sync: None,
                 last_save: SaveState::Idle,
                 jobs: Jobs::default(),
@@ -583,9 +612,33 @@ impl SecondarySync {
         &self.0.probe
     }
 
-    /// The current status.
+    /// The current status. May inspect a retained file on a remote volume.
     pub fn status(&self) -> SecondaryStatus {
-        lock(&self.0.state).status.clone()
+        let (context, paths) = {
+            let st = lock(&self.0.state);
+            let Some(key) = &st.context else {
+                return cached_status(&st);
+            };
+            let Some(paths) = st.recovery.get(key) else {
+                return cached_status(&st);
+            };
+            (key.clone(), paths.clone())
+        };
+
+        // Remote filesystem calls stay outside the service and session locks. A disconnected
+        // or unreadable folder does not establish that its file is gone.
+        let gone: Vec<_> = paths
+            .iter()
+            .filter(|path| recovery_file_gone(path))
+            .collect();
+        let mut st = lock(&self.0.state);
+        if let Some(paths) = st.recovery.get_mut(&context) {
+            paths.retain(|path| !gone.contains(&path));
+            if paths.is_empty() {
+                st.recovery.remove(&context);
+            }
+        }
+        cached_status(&st)
     }
 
     /// Registers an observer for every later status change.
@@ -654,6 +707,7 @@ impl SecondarySync {
                 last_sync: old
                     .as_ref()
                     .and_then(|a| last_sync_for(&st, Some(&a.key.vault_id), &a.key.folder)),
+                recovery_file: None,
             };
             let changed = old.is_some().then(|| set_status(&mut st, status)).flatten();
             (old, changed)
@@ -796,9 +850,20 @@ impl SecondarySync {
     /// `SettingsStore::set_secondary_folder` (the session events call it themselves).
     pub fn rearm(&self) {
         let expected_epoch = lock(&self.0.state).epoch;
-        let desired = self.desired_key();
         let vault_id = self.0.session.vault_id();
         let folder = self.0.settings.get().secondary_folder;
+        let context = self
+            .0
+            .session
+            .vault_path()
+            .zip(vault_id.as_ref())
+            .zip(folder.as_ref())
+            .map(|((primary, vault_id), folder)| ArmKey {
+                vault_id: vault_id.clone(),
+                primary,
+                folder: folder.clone(),
+            });
+        let unlocked = self.0.session.is_unlocked();
         // The epoch bump runs under the session lock once no checkpoint publication is in
         // progress (`VaultSession::while_unpublished`): a run's adoption and its checkpoint
         // commit check the epoch under that same lock, so an arm change either comes first
@@ -809,7 +874,12 @@ impl SecondarySync {
             if st.epoch != expected_epoch {
                 return Err(None);
             }
-            let desired = if st.suspended { None } else { desired };
+            let desired = if unlocked && !st.suspended {
+                context.clone()
+            } else {
+                None
+            };
+            st.context = context;
             if st.armed.as_ref().map(|a| &a.key) == desired.as_ref() {
                 // Still disarmed: only the configured / not configured status can have changed.
                 let changed = if st.armed.is_none() {
@@ -852,18 +922,6 @@ impl SecondarySync {
         if let Some(status) = changed {
             self.notify(&status);
         }
-    }
-
-    fn desired_key(&self) -> Option<ArmKey> {
-        let folder = self.0.settings.get().secondary_folder?;
-        if !self.0.session.is_unlocked() {
-            return None;
-        }
-        Some(ArmKey {
-            vault_id: self.0.session.vault_id()?,
-            primary: self.0.session.vault_path()?,
-            folder,
-        })
     }
 
     fn checkpoint_path(&self, vault_id: &str, primary: &Path) -> PathBuf {
@@ -993,7 +1051,7 @@ impl SecondarySync {
             let st = lock(&self.0.state);
             match &st.armed {
                 Some(armed) if st.epoch == epoch => (armed.key.clone(), armed.echo.clone()),
-                _ => return st.status.clone(),
+                _ => return cached_status(&st),
             }
         };
         if self.0.session.is_quitting() {
@@ -1026,8 +1084,16 @@ impl SecondarySync {
                 }
             }
         }
-        if let Some(status) = self.set_status_if(epoch, SecondaryStatus::Syncing) {
-            self.notify(&status);
+        if self
+            .set_status_if(
+                epoch,
+                SecondaryStatus::Syncing {
+                    recovery_file: None,
+                },
+            )
+            .is_some()
+        {
+            self.notify(&self.status());
         }
         // The vault switched between the arm check and here: not this arm's vault.
         let snapshot = match self.0.session.sync_snapshot() {
@@ -1039,6 +1105,11 @@ impl SecondarySync {
         let checkpoints = Arc::new(FileCheckpointStore::new(
             self.checkpoint_path(&key.vault_id, &key.primary),
         ));
+        #[cfg(test)]
+        let backend: Arc<dyn StorageBackend> = match lock(&self.0.probe.io).clone() {
+            Some(io) => Arc::new(mypass_sync::FileIoBackend::new(io, backend.path())),
+            None => backend,
+        };
         let engine = SyncEngine::new(backend, checkpoints).with_echo_filter(echo);
         let still_current = || {
             #[cfg(test)]
@@ -1058,6 +1129,7 @@ impl SecondarySync {
             Err(e) => Outcome::Failed(e),
         };
         drop(snapshot);
+        self.remember_recovery(key, &outcome);
         self.finish(epoch, outcome)
     }
 
@@ -1171,18 +1243,32 @@ impl SecondarySync {
         found
     }
 
-    /// Records the outcome of a run of `epoch` (ignored when the service re-armed meanwhile),
-    /// arms the retry for transient failures and stops the watcher while the folder is
-    /// unavailable.
+    /// Keep the recovery path with the run that produced it, even if the arm changed meanwhile.
+    fn remember_recovery(&self, key: ArmKey, outcome: &Outcome) {
+        let path = match outcome {
+            Outcome::Failed(SyncError::Storage(StorageError::VaultRetained { path }))
+            | Outcome::Failed(SyncError::SyncKdfLimitExceeded {
+                recovery_file: Some(path),
+            }) => path,
+            _ => return,
+        };
+        let mut st = lock(&self.0.state);
+        let paths = st.recovery.entry(key).or_default();
+        if !paths.contains(path) {
+            paths.push(path.clone());
+        }
+    }
+
+    /// Records the outcome of a current run, manages retries, and stops an unavailable watcher.
     fn finish(&self, epoch: u64, outcome: Outcome) -> SecondaryStatus {
         let now = self.now_millis();
-        let (status, stop, changed) = {
+        let (stop, changed) = {
             let mut st = lock(&self.0.state);
             let Some(key) = st.armed.as_ref().map(|a| a.key.clone()) else {
-                return st.status.clone();
+                return cached_status(&st);
             };
             if st.epoch != epoch {
-                return st.status.clone();
+                return cached_status(&st);
             }
             let deferred = matches!(outcome, Outcome::Deferred);
             let status = match outcome {
@@ -1194,12 +1280,17 @@ impl SecondarySync {
                     });
                     SecondaryStatus::Idle {
                         last_sync: Some(now),
+                        recovery_file: None,
                     }
                 }
                 Outcome::Stale | Outcome::Deferred => SecondaryStatus::Idle {
                     last_sync: last_sync_for(&st, Some(&key.vault_id), &key.folder),
+                    recovery_file: None,
                 },
-                Outcome::Unavailable(reason) => SecondaryStatus::Unavailable { reason },
+                Outcome::Unavailable(reason) => SecondaryStatus::Unavailable {
+                    reason,
+                    recovery_file: None,
+                },
                 Outcome::Failed(e) => failure_status(&e),
             };
             // A healthy-looking run never hides a folder that is not watched.
@@ -1220,13 +1311,14 @@ impl SecondarySync {
             } else {
                 None
             };
-            let changed = set_status(&mut st, status.clone());
-            (status, stop, changed)
+            let changed = set_status(&mut st, status).is_some();
+            (stop, changed)
         };
         if let Some(watcher) = stop {
             watcher.stop();
         }
-        if let Some(status) = changed {
+        let status = self.status();
+        if changed {
             self.notify(&status);
         }
         status
@@ -1248,16 +1340,18 @@ impl SecondarySync {
                 Some(key) if recovered => {
                     let status = SecondaryStatus::Idle {
                         last_sync: last_sync_for(&st, Some(&key.vault_id), &key.folder),
+                        recovery_file: None,
                     };
                     set_status(&mut st, status)
                 }
                 _ => None,
             }
         };
-        if let Some(status) = &changed {
-            self.notify(status);
+        let status = self.status();
+        if changed.is_some() {
+            self.notify(&status);
         }
-        self.status()
+        status
     }
 
     /// Sets the status when `epoch` is still current; returns it when it changed.
@@ -1292,8 +1386,30 @@ impl SecondarySync {
 fn set_status(st: &mut State, status: SecondaryStatus) -> Option<SecondaryStatus> {
     (st.status != status).then(|| {
         st.status = status.clone();
-        status
+        cached_status(st)
     })
+}
+
+fn recovery_name(path: &Path) -> Option<String> {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+}
+
+fn cached_status(st: &State) -> SecondaryStatus {
+    let name = st
+        .context
+        .as_ref()
+        .and_then(|key| st.recovery.get(key))
+        .and_then(|paths| paths.last())
+        .and_then(|path| recovery_name(path));
+    st.status.clone().with_recovery(name)
+}
+
+fn recovery_file_gone(path: &Path) -> bool {
+    match fs::symlink_metadata(path) {
+        Ok(meta) => !meta.is_file(),
+        Err(e) => e.kind() == ErrorKind::NotFound && path.parent().is_some_and(Path::is_dir),
+    }
 }
 
 /// `Off` without a folder, otherwise `Idle` with the last success for this vault and folder.
@@ -1302,6 +1418,7 @@ fn idle_status(st: &State, vault_id: Option<&str>, folder: Option<&str>) -> Seco
         None => SecondaryStatus::Off,
         Some(folder) => SecondaryStatus::Idle {
             last_sync: last_sync_for(st, vault_id, folder),
+            recovery_file: None,
         },
     }
 }
@@ -1316,14 +1433,16 @@ fn last_sync_for(st: &State, vault_id: Option<&str>, folder: &str) -> Option<f64
 /// Whether the retry timer should run for this status.
 fn is_transient(status: &SecondaryStatus) -> bool {
     match status {
-        SecondaryStatus::Unavailable { reason } => !matches!(
+        SecondaryStatus::Unavailable { reason, .. } => !matches!(
             reason,
             SecondaryUnavailable::InvalidFolder | SecondaryUnavailable::UnsupportedFolder
         ),
         SecondaryStatus::Error { code, .. } => {
             matches!(code, SecondaryError::Io | SecondaryError::RemoteBusy)
         }
-        SecondaryStatus::Off | SecondaryStatus::Idle { .. } | SecondaryStatus::Syncing => false,
+        SecondaryStatus::Off | SecondaryStatus::Idle { .. } | SecondaryStatus::Syncing { .. } => {
+            false
+        }
     }
 }
 
@@ -1344,15 +1463,18 @@ fn storage_outcome(e: StorageError) -> Outcome {
 fn failure_status(e: &SyncError) -> SecondaryStatus {
     let code = match e {
         // The vault survives only under a hidden name: the status carries that file name.
-        SyncError::Storage(StorageError::VaultRetained { name }) => {
+        SyncError::Storage(StorageError::VaultRetained { path }) => {
             return SecondaryStatus::Error {
                 code: SecondaryError::Io,
-                recovery_file: Some(name.clone()),
+                recovery_file: recovery_name(path),
             };
         }
         SyncError::Storage(storage) => {
             return match storage_outcome(storage.clone()) {
-                Outcome::Unavailable(reason) => SecondaryStatus::Unavailable { reason },
+                Outcome::Unavailable(reason) => SecondaryStatus::Unavailable {
+                    reason,
+                    recovery_file: None,
+                },
                 _ => SecondaryStatus::Error {
                     code: match storage {
                         StorageError::TooLarge { .. } => SecondaryError::TooLarge,
@@ -1369,7 +1491,7 @@ fn failure_status(e: &SyncError) -> SecondaryStatus {
         SyncError::SyncKdfLimitExceeded { recovery_file } => {
             return SecondaryStatus::Error {
                 code: SecondaryError::SyncKdfLimitExceeded,
-                recovery_file: recovery_file.clone(),
+                recovery_file: recovery_file.as_deref().and_then(recovery_name),
             };
         }
         SyncError::RemoteCorrupt(_) => SecondaryError::Corrupt,

@@ -75,7 +75,7 @@ struct Probe {
     /// Reported as the displaced version of the next write that lands.
     displace_next: Mutex<Option<Vec<u8>>>,
     /// Like `displace_next`, but the copy survives only under this hidden file name.
-    displace_hidden_next: Mutex<Option<(Vec<u8>, String)>>,
+    displace_hidden_next: Mutex<Option<(Vec<u8>, PathBuf)>>,
 }
 impl Probe {
     fn writes(&self) -> usize {
@@ -113,8 +113,8 @@ impl StorageBackend for Probe {
             if let Some(theirs) = self.displace_next.lock().unwrap().take() {
                 return Ok(WriteOutcome::Displaced(theirs));
             }
-            if let Some((bytes, name)) = self.displace_hidden_next.lock().unwrap().take() {
-                return Ok(WriteOutcome::DisplacedKept { bytes, name });
+            if let Some((bytes, path)) = self.displace_hidden_next.lock().unwrap().take() {
+                return Ok(WriteOutcome::DisplacedKept { bytes, path });
             }
         }
         Ok(outcome)
@@ -887,7 +887,7 @@ fn hidden_displaced_copy_that_cannot_be_merged_names_its_file() {
         assert_eq!(
             fx.engine.sync(&local, &pw(), SyncMode::Push).unwrap_err(),
             SyncError::Storage(StorageError::VaultRetained {
-                name: ".vault.kdbx.1.2.3.tmp".into()
+                path: ".vault.kdbx.1.2.3.tmp".into()
             })
         );
     }
@@ -902,15 +902,15 @@ fn over_budget_hidden_displaced_copy_reports_limit_and_file_name() {
         seed: vec![0; 32],
         rounds: 300_000_001,
     });
-    let name = ".vault.kdbx.1.2.3.tmp".to_owned();
-    *fx.probe.displace_hidden_next.lock().unwrap() = Some((bytes, name.clone()));
+    let path = PathBuf::from(".vault.kdbx.1.2.3.tmp");
+    *fx.probe.displace_hidden_next.lock().unwrap() = Some((bytes, path.clone()));
     let mut local = base.clone();
     add(&mut local, "Mine");
 
     assert_eq!(
         fx.engine.sync(&local, &pw(), SyncMode::Push).unwrap_err(),
         SyncError::SyncKdfLimitExceeded {
-            recovery_file: Some(name),
+            recovery_file: Some(path),
         }
     );
 }
@@ -929,6 +929,25 @@ fn hidden_displaced_copy_that_can_be_merged_is_merged_back() {
     add(&mut local, "Mine");
     let m = merged(fx.engine.sync(&local, &pw(), SyncMode::Push).unwrap());
     assert_eq!(titles(m.database()), ["Mine", "Theirs"]);
+}
+
+#[test]
+fn withdrawal_after_a_hidden_displacement_keeps_its_recovery_path() {
+    let fx = Fx::new();
+    let mut local = fast_db("v");
+    run(&fx.engine, &local, false).unwrap();
+    add(&mut local, "local edit");
+    let kept = PathBuf::from("/resolved/.vault.kdbx.1.2.3.aside");
+    *fx.probe.displace_hidden_next.lock().unwrap() = Some((vec![], kept.clone()));
+
+    assert_eq!(
+        fx.engine
+            .sync_checked(&local, &pw(), SyncMode::Push, &|| {
+                fx.probe.write_attempts.load(Ordering::SeqCst) == 1
+            })
+            .unwrap_err(),
+        SyncError::Storage(StorageError::VaultRetained { path: kept })
+    );
 }
 
 #[test]

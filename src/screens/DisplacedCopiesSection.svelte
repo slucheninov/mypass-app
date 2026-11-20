@@ -1,18 +1,13 @@
 <script lang="ts">
-  // Competing copies of the open vault that a save or sync kept next to it instead of
-  // overwriting (`.displaced` files). Read-only: MyPass never deletes them and this pane has no
-  // way to; it names them (file names only, no folder) and says where to look. A folder that could
-  // not be read, or a status that could not be fetched, is reported as such, never as "no copies".
-  // Shown only while there is something to say. The list is fetched on mount and again whenever the
-  // vault or the sync status changes (a sync result can have produced a copy). Known limitation: a
-  // pane that stays open while another app or device keeps a copy shows the list as of the last
-  // refresh; it refreshes when the pane opens, the vault changes or a sync finishes, not by polling.
+  // The read-only list names retained files and identifies which folder to check. It
+  // refreshes on mount, a vault change and a sync status change.
   import { api } from "../lib/api";
   import type { DisplacedCopies } from "../lib/bindings";
   import { formatBytes } from "../lib/i18n/format";
   import { t } from "../lib/i18n/index.svelte";
   import { session } from "../lib/stores/session.svelte";
   import { sync } from "../lib/stores/sync.svelte";
+  import { settings } from "../lib/stores/settings.svelte";
 
   let found = $state<DisplacedCopies>({ count: 0, copies: [], unavailable: [] });
   let failed = $state(false);
@@ -21,7 +16,7 @@
 
   async function load(forKey: string) {
     const mine = ++sequence;
-    // A different vault (or lock state) must never show the previous vault's file names, not even
+    // A different vault, folder or lock state must never show the previous vault's file names, not even
     // while the refresh runs or after it fails: clear the list before fetching.
     if (forKey !== loadedFor) {
       found = { count: 0, copies: [], unavailable: [] };
@@ -42,9 +37,9 @@
     }
   }
 
-  const vaultKey = $derived(`${session.status.state}|${session.status.vaultPath ?? ""}`);
+  const vaultKey = $derived(`${session.status.state}|${session.status.vaultPath ?? ""}|${settings.value?.secondaryFolder ?? ""}`);
   const key = $derived(
-    `${vaultKey}|${sync.status.state}|${sync.status.state === "idle" ? (sync.status.lastSync ?? "") : ""}`,
+    `${vaultKey}|${sync.status.state}|${sync.status.state === "idle" ? (sync.status.lastSync ?? "") : ""}|${"recoveryFile" in sync.status ? (sync.status.recoveryFile ?? "") : ""}`,
   );
   $effect(() => {
     void key;
@@ -56,17 +51,18 @@
 
 {#if found.count > 0 || found.unavailable.length > 0 || failed}
   <section data-testid="displaced-copies">
-    <h2>{t("Competing copies of your vault")}</h2>
+    <h2>{t("Retained vault copies")}</h2>
     {#if failed}
-      <p role="alert" data-testid="displaced-unavailable">{t("Competing copies could not be checked.")}</p>
+      <p role="alert" data-testid="displaced-unavailable">{t("Retained copies could not be checked.")}</p>
     {/if}
     {#if found.count > 0}
-      <p role="status">{t("Competing copies kept: %@", [String(found.count)])}</p>
-      <p>{t("Another app or device saved the vault at the same moment as MyPass. MyPass kept those versions next to your vault and never deletes them automatically. You can review them and remove them yourself in the vault folder.")}</p>
+      <p role="status">{t("Retained copies: %@", [String(found.count)])}</p>
+      <p>{t("Review these copies in the folder shown. MyPass never deletes competing copies automatically.")}</p>
       <ul>
         {#each found.copies as copy (`${copy.location}/${copy.name}`)}
           <li>
             <span class="where">{place(copy.location)}</span>
+            <span>{copy.kind === "aside" ? t("Replacement working copy") : t("Competing copy")}</span>
             <span class="name">{copy.name}</span>
             {#if copy.bytes !== null}<span class="size">{formatBytes(copy.bytes)}</span>{/if}
           </li>
@@ -74,7 +70,7 @@
       </ul>
     {/if}
     {#if found.unavailable.length > 0}
-      <p role="alert" data-testid="displaced-unavailable">{t("Competing copies could not be checked in: %@", [found.unavailable.map(place).join(", ")])}</p>
+      <p role="alert" data-testid="displaced-unavailable">{t("Retained copies could not be checked in: %@", [found.unavailable.map(place).join(", ")])}</p>
     {/if}
   </section>
 {/if}

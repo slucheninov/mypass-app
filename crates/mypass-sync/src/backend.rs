@@ -46,12 +46,11 @@ pub enum StorageError {
     /// Nothing was written; the remote is untouched.
     #[error("the storage cannot replace the file safely")]
     NoSafeReplace,
-    /// A write failed and the previous vault file survives only under a hidden working name
-    /// that no listing shows: `name` is that file name (never a folder), next to the vault.
-    #[error("the previous vault is kept as {name} next to it")]
+    /// A write failed and a previous vault file was retained at its resolved path.
+    #[error("the previous vault is kept as {}", .path.file_name().unwrap_or_default().to_string_lossy())]
     VaultRetained {
-        /// The file name holding the vault.
-        name: String,
+        /// The retained file's path, checked for recovery status.
+        path: PathBuf,
     },
 }
 
@@ -96,14 +95,13 @@ pub enum WriteOutcome {
     /// place, but not when yet another writer created the file meanwhile: the next attempt
     /// re-reads the file either way.
     Displaced(Vec<u8>),
-    /// Like [`Displaced`](Self::Displaced), but the displaced copy (or a leftover working name
-    /// of it) survives only under a hidden name that no listing shows: `name` is its file name
-    /// (never a folder). It must reach the user if the copy cannot be merged back.
+    /// Like [`Displaced`](Self::Displaced), with the path of the retained working file.
+    /// If the copy cannot be merged back, the user must be able to find it.
     DisplacedKept {
         /// The displaced content (empty when unreadable).
         bytes: Vec<u8>,
-        /// The hidden file name that holds the copy.
-        name: String,
+        /// The full path of the retained working copy.
+        path: PathBuf,
     },
 }
 
@@ -113,8 +111,13 @@ impl fmt::Debug for WriteOutcome {
             Self::Written => f.write_str("Written"),
             Self::Conflict => f.write_str("Conflict"),
             Self::Displaced(bytes) => write!(f, "Displaced({} bytes)", bytes.len()),
-            Self::DisplacedKept { bytes, name } => {
-                write!(f, "DisplacedKept({} bytes, {name})", bytes.len())
+            Self::DisplacedKept { bytes, path } => {
+                write!(
+                    f,
+                    "DisplacedKept({} bytes, {:?})",
+                    bytes.len(),
+                    path.file_name()
+                )
             }
         }
     }
@@ -201,7 +204,7 @@ fn read_error(e: KdbxError, max_bytes: u64) -> StorageError {
 fn write_error(e: KdbxError, path: &Path) -> StorageError {
     match e {
         // First: whatever the failure was, the user must be told where the vault is.
-        KdbxError::VaultRetained { name, .. } => StorageError::VaultRetained { name },
+        KdbxError::VaultRetained { path, .. } => StorageError::VaultRetained { path },
         KdbxError::Io {
             kind: ErrorKind::PermissionDenied | ErrorKind::ReadOnlyFilesystem,
             ..
@@ -280,12 +283,12 @@ impl StorageBackend for FileIoBackend {
             Ok(ReplaceOutcome::Replaced) => Ok(WriteOutcome::Written),
             Ok(ReplaceOutcome::Conflict) => Ok(WriteOutcome::Conflict),
             Ok(outcome @ ReplaceOutcome::Displaced { .. }) => {
-                let name = outcome.unlisted_name();
+                let working_path = outcome.retained_working_path().map(Path::to_path_buf);
                 let ReplaceOutcome::Displaced { bytes, .. } = outcome else {
                     return Ok(WriteOutcome::Conflict);
                 };
-                Ok(match name {
-                    Some(name) => WriteOutcome::DisplacedKept { bytes, name },
+                Ok(match working_path {
+                    Some(path) => WriteOutcome::DisplacedKept { bytes, path },
                     None => WriteOutcome::Displaced(bytes),
                 })
             }
@@ -497,13 +500,13 @@ mod tests {
         ] {
             let backend = canned(Err(KdbxError::VaultRetained {
                 kind,
-                name: ".vault.kdbx.1.2.3.aside".into(),
+                path: "/vault/folder/.vault.kdbx.1.2.3.aside".into(),
                 message: "injected".into(),
             }));
             assert_eq!(
                 backend.write_if(Some(&digest(b"old")), b"new"),
                 Err(StorageError::VaultRetained {
-                    name: ".vault.kdbx.1.2.3.aside".into()
+                    path: "/vault/folder/.vault.kdbx.1.2.3.aside".into()
                 }),
                 "{kind:?}"
             );
@@ -521,7 +524,7 @@ mod tests {
             hidden.write_if(Some(&digest(b"old")), b"new"),
             Ok(WriteOutcome::DisplacedKept {
                 bytes: b"theirs".to_vec(),
-                name: ".vault.kdbx.1.2.3.tmp".into()
+                path: "/vault/folder/.vault.kdbx.1.2.3.tmp".into()
             })
         );
         // A listed copy needs no extra name; a working name left after publication does.
@@ -543,7 +546,7 @@ mod tests {
             stray.write_if(Some(&digest(b"old")), b"new"),
             Ok(WriteOutcome::DisplacedKept {
                 bytes: b"theirs".to_vec(),
-                name: ".vault.kdbx.1.2.3.aside".into()
+                path: "/vault/folder/.vault.kdbx.1.2.3.aside".into()
             })
         );
     }

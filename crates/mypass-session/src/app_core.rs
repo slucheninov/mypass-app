@@ -1205,7 +1205,7 @@ impl AppCore {
         self.secondary.sync_now()
     }
 
-    /// The competing vault copies kept next to the open vault and its secondary copy. Read-only:
+    /// The vault copies kept next to the open vault and its secondary copy. Read-only:
     /// MyPass never deletes them. A folder that could not be read is reported as unavailable.
     /// No vault open means none.
     pub fn sync_displaced_status(&self) -> Result<crate::displaced::DisplacedCopies, ApiError> {
@@ -2683,7 +2683,13 @@ mod tests {
         f.core.secondary.rearm();
         let status = f.core.sync_now().unwrap();
         assert!(
-            matches!(status, SecondaryStatus::Idle { last_sync: Some(_) }),
+            matches!(
+                status,
+                SecondaryStatus::Idle {
+                    last_sync: Some(_),
+                    ..
+                }
+            ),
             "{status:?}"
         );
         assert!(folder.join("v.kdbx").is_file());

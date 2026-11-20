@@ -36,14 +36,11 @@ pub enum KdbxError {
         kind: std::io::ErrorKind,
         message: String,
     },
-    /// A replacement failed and the previous vault file could be neither left at its path nor
-    /// given a listed `.displaced` name: it survives under `name` (a file name only, never a
-    /// folder) next to the target, and the user must be able to find it. `kind` and `message`
-    /// describe the failure itself, like [`KdbxError::Io`].
-    #[error("i/o error ({kind:?}): {message}; the previous vault is kept as {name} next to it")]
+    /// A replacement failed, with a previous vault file retained at `path`.
+    #[error("i/o error ({kind:?}): {message}; the previous vault is kept as {}", .path.file_name().unwrap_or_default().to_string_lossy())]
     VaultRetained {
         kind: std::io::ErrorKind,
-        name: String,
+        path: std::path::PathBuf,
         message: String,
     },
     /// The caller asked for something the data model forbids.

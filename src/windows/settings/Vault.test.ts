@@ -157,12 +157,12 @@ describe("backups", () => {
   });
 });
 
-describe("competing copies", () => {
+describe("retained vault copies", () => {
   const COPIES: DisplacedCopies = {
     count: 2,
     copies: [
-      { location: "primary", name: ".vault.kdbx.1.2.3.displaced", bytes: 2048 },
-      { location: "secondary", name: ".vault.kdbx.4.5.6.displaced", bytes: 12 },
+      { location: "primary", kind: "displaced", name: ".vault.kdbx.1.2.3.displaced", bytes: 2048 },
+      { location: "secondary", kind: "displaced", name: ".vault.kdbx.4.5.6.displaced", bytes: 12 },
     ],
     unavailable: [],
   };
@@ -178,16 +178,40 @@ describe("competing copies", () => {
   it("lists_the_copies_by_name_and_says_they_are_never_deleted_automatically", async () => {
     await open({}, withCopies);
     const section = await screen.findByTestId("displaced-copies");
-    expect(within(section).getByText("Competing copies kept: 2")).toBeTruthy();
+    expect(within(section).getByText("Retained copies: 2")).toBeTruthy();
     expect(within(section).getByText(".vault.kdbx.1.2.3.displaced")).toBeTruthy();
     expect(within(section).getByText(".vault.kdbx.4.5.6.displaced")).toBeTruthy();
     expect(within(section).getByText("Vault folder")).toBeTruthy();
     expect(within(section).getByText("Sync folder")).toBeTruthy();
     expect(within(section).getByText("2 KB")).toBeTruthy();
-    expect(within(section).getByText(/never deletes them automatically/)).toBeTruthy();
-    expect(within(section).getByText(/remove them yourself in the vault folder/)).toBeTruthy();
+    expect(within(section).getByText(/never deletes competing copies automatically/)).toBeTruthy();
+    expect(within(section).getByText(/Review these copies in the folder shown/)).toBeTruthy();
     // Read-only: no way to delete from here.
     expect(within(section).queryByRole("button")).toBeNull();
+  });
+
+  it("shows the retained working copy alongside a successful sync until it is gone", async () => {
+    const name = ".vault.kdbx.1.2.3.aside";
+    const { fake } = await open({}, (f) => {
+      f.state.sync = { state: "idle", lastSync: 5000, recoveryFile: name };
+      f.state.displaced = {
+        count: 1,
+        copies: [{ location: "secondary", kind: "aside", name, bytes: 1024 }],
+        unavailable: [],
+      };
+    });
+
+    const section = await screen.findByTestId("displaced-copies");
+    expect(within(section).getByText("Replacement working copy")).toBeTruthy();
+    expect(within(section).getByText("Sync folder")).toBeTruthy();
+    expect(within(section).getByText(name)).toBeTruthy();
+    expect((await screen.findByTestId("sync-recovery-file")).textContent).toContain(name);
+    expect(screen.getByText(/Last synced/)).toBeTruthy();
+
+    fake.state.displaced = { count: 0, copies: [], unavailable: [] };
+    await fake.emit("syncStatusChanged", { state: "idle", lastSync: 5000 });
+    await waitFor(() => expect(screen.queryByTestId("displaced-copies")).toBeNull());
+    expect(screen.queryByTestId("sync-recovery-file")).toBeNull();
   });
 
   it("an_unreadable_folder_is_reported_not_shown_as_no_copies", async () => {
@@ -195,8 +219,8 @@ describe("competing copies", () => {
       fake.state.displaced = { count: 0, copies: [], unavailable: ["secondary"] };
     });
     const section = await screen.findByTestId("displaced-copies");
-    expect(within(section).getByRole("alert").textContent).toBe("Competing copies could not be checked in: Sync folder");
-    expect(within(section).queryByText(/Competing copies kept/)).toBeNull();
+    expect(within(section).getByRole("alert").textContent).toBe("Retained copies could not be checked in: Sync folder");
+    expect(within(section).queryByText(/Retained copies:/)).toBeNull();
   });
 
   it("a_failed_status_read_is_reported", async () => {
@@ -206,7 +230,7 @@ describe("competing copies", () => {
       };
     });
     const section = await screen.findByTestId("displaced-copies");
-    expect(within(section).getByRole("alert").textContent).toBe("Competing copies could not be checked.");
+    expect(within(section).getByRole("alert").textContent).toBe("Retained copies could not be checked.");
   });
 
   it("a_failed_refresh_after_a_vault_switch_shows_no_filenames_of_the_previous_vault", async () => {
@@ -217,8 +241,8 @@ describe("competing copies", () => {
       throw new Error("boom");
     };
     await fake.emit("sessionChanged", { ...fake.state.session, vaultPath: "/other/vault.kdbx" });
-    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("Competing copies could not be checked."));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("Retained copies could not be checked."));
     expect(screen.queryByText(".vault.kdbx.1.2.3.displaced")).toBeNull();
-    expect(screen.queryByText(/Competing copies kept/)).toBeNull();
+    expect(screen.queryByText(/Retained copies:/)).toBeNull();
   });
 });

@@ -37,6 +37,7 @@ struct Failures {
     read: Option<ErrorKind>,
     write: Option<ErrorKind>,
     metadata: Option<ErrorKind>,
+    strand: bool,
 }
 /// Test-only backend behind the `test-util` feature; never enable in production.
 /// Persistent per-operation failures and counters, including failed calls.
@@ -74,6 +75,10 @@ impl FailingFileIo {
     /// Persistently fail metadata calls until `heal`.
     pub fn fail_metadata(&self, kind: ErrorKind) {
         self.failures().metadata = Some(kind);
+    }
+    /// Fail the next conditional install and leave the previous file at its working name.
+    pub fn strand_next_replace(&self) {
+        self.failures().strand = true;
     }
     /// Clear test failures without resetting operation counters.
     pub fn heal(&self) {
@@ -128,6 +133,12 @@ impl FileIo for FailingFileIo {
         let failure = self.failures().write;
         if let Some(kind) = failure {
             return Err(io_error(kind.into()));
+        }
+        if let Some(expected) = expected {
+            let strand = std::mem::take(&mut self.failures().strand);
+            if strand {
+                return crate::file::replace_if_stranded(path, expected, bytes, max_len);
+            }
         }
         self.inner.replace_if(path, expected, bytes, max_len)
     }

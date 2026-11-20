@@ -57,8 +57,8 @@ pub enum SyncError {
     /// A copy exceeds the automatic-open budget. An already displaced copy is kept.
     #[error("vault KDF cost above the sync limit")]
     SyncKdfLimitExceeded {
-        /// The hidden file name when a displaced copy cannot be listed.
-        recovery_file: Option<String>,
+        /// The retained working copy's path, when one exists.
+        recovery_file: Option<std::path::PathBuf>,
     },
     /// The remote vault is damaged.
     #[error("the remote vault is damaged: {0}")]
@@ -470,18 +470,17 @@ impl SyncEngine {
             WriteOutcome::Conflict => Ok(Attempt::Raced),
             outcome @ (WriteOutcome::Displaced(_) | WriteOutcome::DisplacedKept { .. }) => {
                 let (theirs, hidden) = match outcome {
-                    WriteOutcome::DisplacedKept { bytes, name } => (bytes, Some(name)),
+                    WriteOutcome::DisplacedKept { bytes, path } => (bytes, Some(path)),
                     WriteOutcome::Displaced(bytes) => (bytes, None),
                     _ => return Err(SyncError::Cancelled),
                 };
+                let kept = |path| SyncError::Storage(StorageError::VaultRetained { path });
                 if !still_current() {
-                    return Err(SyncError::Cancelled);
+                    return Err(hidden.map_or(SyncError::Cancelled, kept));
                 }
-                // A copy that cannot be merged stays on disk: say where when no listing can.
-                let kept = |hidden: Option<String>| match hidden {
-                    Some(name) => SyncError::Storage(StorageError::VaultRetained { name }),
-                    None => SyncError::ConcurrentCopyKept,
-                };
+                // Carry the working path when the displaced copy cannot be merged.
+                let kept_or_displaced =
+                    |path: Option<_>| path.map_or(SyncError::ConcurrentCopyKept, kept);
                 // Our bytes are on the remote, but they displaced a version another writer
                 // committed in the last instant: merge it back on the next attempt.
                 let theirs = Database::open_with_limits(
@@ -493,10 +492,10 @@ impl SyncEngine {
                     KdbxError::RemoteKdfLimitExceeded(_) => SyncError::SyncKdfLimitExceeded {
                         recovery_file: hidden.clone(),
                     },
-                    _ => kept(hidden.clone()),
+                    _ => kept_or_displaced(hidden.clone()),
                 })?;
                 if theirs.root.uuid != local.root.uuid {
-                    return Err(kept(hidden));
+                    return Err(kept_or_displaced(hidden));
                 }
                 Ok(Attempt::Rebase(Box::new(merge(write.content, &theirs))))
             }
