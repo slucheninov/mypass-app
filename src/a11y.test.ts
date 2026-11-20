@@ -376,6 +376,18 @@ const SCENARIOS: Record<string, Scenario> = {
     await click(user, opener);
     return { dialog: "Restore this backup?", opener };
   },
+  "src/screens/DisplacedCopiesSection.svelte#Delete competing copies?": async (user) => {
+    await renderSettingsApp(
+      {},
+      {
+        pane: "Vault",
+        prepare: (f) => (f.state.displaced = { count: 1, copies: [{ location: "primary", path: "/v/.vault.kdbx.1.2.3.displaced", bytes: 12 }] }),
+      },
+    );
+    const opener = await screen.findByRole("button", { name: "Delete competing copies…" });
+    await click(user, opener);
+    return { dialog: "Delete competing copies?", opener };
+  },
 };
 
 /** The balanced `{...}` starting at `from` (string literals skipped). */
