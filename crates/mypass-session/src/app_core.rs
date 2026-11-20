@@ -205,6 +205,14 @@ struct Schedulers {
     sync: Arc<dyn Scheduler>,
 }
 
+/// Takes a revealed secret out of its wiping wrapper for the one place that has to hand a plain
+/// `String` to the webview (the command return value). The session-side copies were wiped by
+/// the callee's wrappers; the string returned here is moved, not copied, and what the IPC layer
+/// serialises from it is outside our control.
+fn into_ipc_string(mut value: Zeroizing<String>) -> String {
+    std::mem::take(&mut *value)
+}
+
 fn parse_id(id: &str) -> Result<Uuid, SessionError> {
     Uuid::parse_str(id).map_err(|_| SessionError::InvalidInput("malformed id".into()))
 }
@@ -603,7 +611,8 @@ impl AppCore {
     /// One plain value, after an explicit click.
     pub fn entry_reveal(&self, id: &str, field: FieldRef) -> Result<String, ApiError> {
         let now = self.now_secs();
-        self.read(|db| editing::reveal_at(db, parse_id(id)?, &field, now))
+        let value = self.read(|db| editing::reveal_at(db, parse_id(id)?, &field, now))?;
+        Ok(into_ipc_string(value))
     }
 
     /// One plain value of an earlier version of the entry (`revision` as in `entry_history`, not
@@ -615,7 +624,8 @@ impl AppCore {
         revision: &str,
         field: FieldRef,
     ) -> Result<String, ApiError> {
-        self.read(|db| editing::reveal_history(db, parse_id(id)?, revision, &field))
+        let value = self.read(|db| editing::reveal_history(db, parse_id(id)?, revision, &field))?;
+        Ok(into_ipc_string(value))
     }
 
     /// Copies a field to the clipboard from Rust (cleared after the configured seconds); the
@@ -940,7 +950,8 @@ impl AppCore {
     }
 
     pub fn generator_history_reveal(&self, id: &str) -> Result<String, ApiError> {
-        self.read(|db| generator_service::history_reveal(db, parse_id(id)?))
+        let value = self.read(|db| generator_service::history_reveal(db, parse_id(id)?))?;
+        Ok(into_ipc_string(value))
     }
 
     pub fn generator_history_delete(&self, id: &str) -> Result<(), ApiError> {
