@@ -882,7 +882,7 @@ Used to build and test the frontend only; none of it is part of a MyPass artifac
 | `svelte-check` | 4.7.8 | MIT |
 | `typescript` | 5.9.3 | Apache-2.0 |
 | `vite` | 6.4.5 | MIT |
-| `vitest` | 3.2.7 | MIT |
+| `vitest` | 5.1.0 | MIT |
 
 Their own transitive dependencies are listed in `pnpm-lock.yaml`.
 
