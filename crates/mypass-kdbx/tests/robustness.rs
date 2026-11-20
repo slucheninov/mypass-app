@@ -1,7 +1,7 @@
 // Test-only support code.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 use mypass_kdbx::*;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{rngs::StdRng, RngExt, SeedableRng};
 use secrecy::SecretString;
 const DATA: &[u8] = include_bytes!("fixtures/aeskdf-aes256-none.kdbx");
 fn assert_open(data: &[u8]) -> Result<Database> {
@@ -40,7 +40,7 @@ fn single_bit_flips_never_panic() {
 fn random_garbage_never_panics_or_hangs() {
     let mut rng = StdRng::seed_from_u64(9);
     for i in 0..200 {
-        let n = rng.gen_range(0..4096);
+        let n = rng.random_range(0..4096);
         let mut data = vec![0; n];
         rng.fill(data.as_mut_slice());
         if i % 3 == 0 && n >= 12 {

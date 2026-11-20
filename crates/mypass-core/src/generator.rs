@@ -1,7 +1,13 @@
 //! Cryptographic password generation with site constraints.
 use crate::generator_toggles::{forced_on_toggle_classes, toggle_backed_class_of};
 use crate::{CharacterClass, PasswordRules};
-use rand::{seq::SliceRandom, CryptoRng, Rng, RngCore};
+use rand::{
+    distr::{Distribution, Uniform},
+    rand_core::UnwrapErr,
+    rngs::SysRng,
+    seq::SliceRandom,
+    CryptoRng,
+};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use zeroize::Zeroizing;
 use CharacterClass::{AsciiPrintable, Custom, Digit, Lower, Special, Unicode, Upper};
@@ -107,17 +113,14 @@ fn effective_pool(opts: &GeneratorOptions, rules: &PasswordRules) -> EffectivePo
         membership,
     }
 }
-fn sample<R: CryptoRng + RngCore>(pool: &[char], rng: &mut R) -> Result<char, GeneratorError> {
-    if pool.is_empty() {
-        return Err(UnsatisfiableRules);
-    }
-    // gen_range rejects values that would introduce modulo bias for pools
-    // whose size does not divide the RNG range. Never replace this with %.
-    pool.get(rng.gen_range(0..pool.len()))
+fn sample<R: CryptoRng>(pool: &[char], rng: &mut R) -> Result<char, GeneratorError> {
+    // Uniform uses rejection sampling for pools whose size does not divide the RNG range.
+    let index = Uniform::new(0, pool.len()).map_err(|_| UnsatisfiableRules)?;
+    pool.get(index.sample(rng))
         .copied()
         .ok_or(UnsatisfiableRules)
 }
-fn random_candidate<R: CryptoRng + RngCore>(
+fn random_candidate<R: CryptoRng>(
     length: usize,
     pool: &[char],
     rng: &mut R,
@@ -187,7 +190,7 @@ fn satisfies(candidate: &[char], rules: &PasswordRules, pool: &EffectivePool) ->
 /// itself creates a new violation at the next boundary. A forward pass
 /// re-examines that boundary. Sampling is bounded; final validation rejects
 /// degenerate pools with no alternative rather than looping forever.
-fn repair_max_consecutive<R: CryptoRng + RngCore>(
+fn repair_max_consecutive<R: CryptoRng>(
     chars: &mut [char],
     max: u32,
     pool: &[char],
@@ -212,7 +215,7 @@ fn repair_max_consecutive<R: CryptoRng + RngCore>(
     }
     Ok(())
 }
-fn deterministic_candidate<R: CryptoRng + RngCore>(
+fn deterministic_candidate<R: CryptoRng>(
     length: usize,
     clauses: &[Vec<char>],
     pool: &[char],
@@ -244,7 +247,7 @@ fn into_password(chars: &[char]) -> Zeroizing<String> {
 /// Generate with an injected cryptographic RNG. Length is capped at 4096
 /// characters. Rules are checked before returning; bounded search may reject
 /// a satisfiable but pathologically restrictive synthetic rule.
-pub fn generate<R: CryptoRng + RngCore>(
+pub fn generate<R: CryptoRng>(
     opts: &GeneratorOptions,
     rules: Option<&PasswordRules>,
     rng: &mut R,
@@ -328,12 +331,12 @@ pub fn generate<R: CryptoRng + RngCore>(
     Err(UnsatisfiableRules)
 }
 /// Generate using operating-system entropy. OS entropy failure fails closed
-/// through rand's OsRng, consistent with the infallible RNG trait contract.
+/// through rand's SysRng adapter, consistent with the infallible RNG trait contract.
 pub fn generate_os(
     opts: &GeneratorOptions,
     rules: Option<&PasswordRules>,
 ) -> Result<Zeroizing<String>, GeneratorError> {
-    generate(opts, rules, &mut rand::rngs::OsRng)
+    generate(opts, rules, &mut UnwrapErr(SysRng))
 }
 #[cfg(test)]
 mod tests;

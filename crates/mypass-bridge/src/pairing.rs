@@ -21,7 +21,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use mypass_platform::SecretStore;
 use mypass_session::scheduler::Scheduler;
-use rand::RngCore;
+use rand::{rand_core::UnwrapErr, rngs::SysRng, Rng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -545,7 +545,7 @@ fn sanitize_label(raw: Option<&str>) -> String {
 fn generate_code() -> String {
     // The largest multiple of 10^6 that fits in a u32; values at or above it are rejected.
     const LIMIT: u32 = 4_294_000_000;
-    let mut rng = rand::rngs::OsRng;
+    let mut rng = UnwrapErr(SysRng);
     loop {
         let v = rng.next_u32();
         if v < LIMIT {

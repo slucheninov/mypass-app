@@ -14,11 +14,7 @@ Last updated: 2026-11-15
   directory fsync. On Unix the atomic save treats a directory-sync `Unsupported` or `InvalidInput`
   error as success by design; any other directory-sync error is reported after the replacement has
   committed, and the caller must reload. Only real mounts can show which error they return.
-- [ ] Migrate `rand` to 0.10 (generator API, `rand_core` unification). The public `generate` takes
-  `R: CryptoRng + RngCore` and `generate_os` uses `rand::rngs::OsRng`; 0.10 moves
-  `RngCore`, `OsRng` and `rand::Error`, and the lockfile still carries `rand_core` 0.6 next to 0.10,
-  so check that the RustCrypto crates agree on one trait set first. Update the generator tests
-  (`BoundaryRng`) and `THIRD_PARTY_NOTICES.md` in the same change.
+
 ## Stage 2a follow-ups
 
 - [ ] Quit-dialog default button: with tauri-plugin-dialog 2.8.4 a closed dialog is reported as the
