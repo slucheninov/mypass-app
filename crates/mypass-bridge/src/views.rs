@@ -45,7 +45,7 @@ fn identifiers(entry: &Entry) -> Vec<String> {
         .fields
         .iter()
         .filter(|f| !f.protected && !Entry::is_reserved_key(&f.key))
-        .map(|f| f.value.trim())
+        .map(|f| f.value().trim())
         .filter(|v| !v.is_empty())
         .map(str::to_owned)
         .collect()

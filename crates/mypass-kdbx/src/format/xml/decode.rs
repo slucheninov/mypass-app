@@ -221,11 +221,11 @@ impl Context<'_> {
                     if v.is_some_and(|v| v.invalid_protected_utf8) {
                         return Err(corrupt("protected UTF-8"));
                     }
-                    e.fields.push(Field {
-                        key: value(c, "Key")?.into(),
-                        value: value(c, "Value")?.into(),
-                        protected: v.is_some_and(|v| v.attr("Protected") == Some("True")),
-                    });
+                    e.fields.push(Field::new(
+                        value(c, "Key")?,
+                        value(c, "Value")?,
+                        v.is_some_and(|v| v.attr("Protected") == Some("True")),
+                    ));
                 }
                 Some(EntryElement::StringArray) => e.string_arrays.push(StringArray {
                     key: value(c, "Key")?.into(),

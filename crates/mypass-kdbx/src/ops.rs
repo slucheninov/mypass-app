@@ -20,7 +20,7 @@ fn snapshot_size(e: &Entry) -> u128 {
         .iter()
         .fold(0u128, |n, f| {
             n.saturating_add(f.key.len() as u128)
-                .saturating_add(f.value.len() as u128)
+                .saturating_add(f.value().len() as u128)
         })
         .saturating_add(e.attachments.iter().fold(0u128, |n, a| {
             n.saturating_add(a.data.len() as u128)

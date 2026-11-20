@@ -230,7 +230,7 @@ pub fn entry_matches(entry: &Entry, group_name: &str, query: &str, scope: Search
                 f.key
                     .starts_with(mypass_core::entry_ext::ADDITIONAL_URLS_KEY)
             })
-            .any(|f| hit(&f.value))
+            .any(|f| hit(f.value()))
         || entry
             .string_arrays
             .iter()
@@ -250,7 +250,7 @@ pub fn entry_matches(entry: &Entry, group_name: &str, query: &str, scope: Search
             f.key
                 .strip_prefix(ADDRESS_PREFIX)
                 .is_some_and(|name| ADDRESS_FIELDS.contains(&name))
-                && hit(&f.value)
+                && hit(f.value())
         })
     {
         return true;
@@ -507,7 +507,7 @@ pub fn entry_detail(db: &Database, id: Uuid) -> Option<EntryDetailDto> {
         .map(|f| CustomFieldDto {
             key: f.key.clone(),
             protected: f.protected,
-            value: (!f.protected).then(|| f.value.clone()),
+            value: (!f.protected).then(|| f.value().to_owned()),
         })
         .collect();
     Some(EntryDetailDto {

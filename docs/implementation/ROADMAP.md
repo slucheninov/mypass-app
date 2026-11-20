@@ -19,13 +19,6 @@ Last updated: 2026-11-15
   `RngCore`, `OsRng` and `rand::Error`, and the lockfile still carries `rand_core` 0.6 next to 0.10,
   so check that the RustCrypto crates agree on one trait set first. Update the generator tests
   (`BoundaryRng`) and `THIRD_PARTY_NOTICES.md` in the same change.
-- [ ] Zeroize protected field values in entry clones and history, not only when `Entry::set_field`
-  replaces or removes one. Today every such `String` is freed without a wipe, so a passkey private
-  key PEM (or password) can linger in freed memory: the old value `set_field` replaces, history
-  copies, and the full `Entry` clones the passkey confirm keeps for its undo
-  (`mypass-bridge/src/passkeys/create.rs`, `Undo.after` with the new key and, on Replace,
-  `Undo.before` with the old one), alive from the write until the confirm answers.
-
 ## Stage 2a follow-ups
 
 - [ ] Quit-dialog default button: with tauri-plugin-dialog 2.8.4 a closed dialog is reported as the

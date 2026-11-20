@@ -210,7 +210,7 @@ pub fn edit_model(db: &Database, id: Uuid) -> Result<EntryEditModel, SessionErro
                 .filter(|f| !Entry::is_reserved_key(&f.key) && seen.insert(f.key.as_str()))
                 .map(|f| CustomFieldEdit {
                     key: f.key.clone(),
-                    value: f.value.clone(),
+                    value: f.value().to_owned(),
                     protected: f.protected,
                 })
                 .collect()
@@ -244,7 +244,7 @@ enum ResolvedOp {
 /// `create_empty` is set; an unchanged value is not touched at all.
 pub(crate) fn put(entry: &mut Entry, key: &str, value: &str, protected: bool, create_empty: bool) {
     match entry.fields.iter().find(|f| f.key == key) {
-        Some(f) if f.value == value => {}
+        Some(f) if f.value() == value => {}
         Some(f) => {
             let keep = f.protected;
             entry.set_field(key, value, keep);
@@ -442,7 +442,7 @@ fn apply(
             .fields
             .iter()
             .find(|f| f.key == field.key)
-            .is_some_and(|f| f.value == field.value && f.protected == field.protected);
+            .is_some_and(|f| f.value() == field.value && f.protected == field.protected);
         if !same {
             entry.set_field(&field.key, &field.value, field.protected);
         }
@@ -713,7 +713,7 @@ fn changed_fields(older: &Entry, newer: &Entry) -> Vec<String> {
         let same = newer
             .fields
             .iter()
-            .any(|n| n.key == f.key && n.value == f.value && n.protected == f.protected);
+            .any(|n| n.key == f.key && n.value() == f.value() && n.protected == f.protected);
         if !same {
             push(&f.key);
         }
@@ -1216,7 +1216,7 @@ mod tests {
         e.fields
             .iter()
             .filter(|f| f.key.starts_with(PASSKEY_PREFIX))
-            .map(|f| (f.key.clone(), f.value.clone(), f.protected))
+            .map(|f| (f.key.clone(), f.value().to_owned(), f.protected))
             .collect()
     }
 
@@ -2438,16 +2438,10 @@ mod tests {
     #[test]
     fn duplicate_custom_keys_from_another_client_stay_saveable() {
         let mut e = titled("Dup");
-        e.fields.push(mypass_kdbx::Field {
-            key: "dup".into(),
-            value: "first".into(),
-            protected: false,
-        });
-        e.fields.push(mypass_kdbx::Field {
-            key: "dup".into(),
-            value: "second".into(),
-            protected: false,
-        });
+        e.fields
+            .push(mypass_kdbx::Field::new("dup", "first", false));
+        e.fields
+            .push(mypass_kdbx::Field::new("dup", "second", false));
         let (db, id) = db_with(e);
         let f = fx_with(db);
         f.session.flush().unwrap();
@@ -2466,7 +2460,7 @@ mod tests {
             .fields
             .iter()
             .filter(|x| x.key == "dup")
-            .map(|x| x.value.as_str())
+            .map(|x| x.value())
             .collect();
         assert_eq!(dups, ["first"]);
         // Editing the value to what the extra held is a real edit of the first one.

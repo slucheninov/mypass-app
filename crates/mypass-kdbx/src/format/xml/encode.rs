@@ -103,13 +103,13 @@ fn entry(
         out.push_str("<String>");
         text(out, "Key", &f.key);
         if f.protected {
-            let mut bytes = Zeroizing::new(clean(&f.value).as_bytes().to_vec());
+            let mut bytes = Zeroizing::new(clean(f.value()).as_bytes().to_vec());
             stream.apply(&mut bytes);
             out.push_str("<Value Protected=\"True\">");
             out.push_str(&B64.encode(&*bytes));
             out.push_str("</Value>");
         } else {
-            text(out, "Value", &f.value);
+            text(out, "Value", f.value());
         }
         out.push_str("</String>");
     }
