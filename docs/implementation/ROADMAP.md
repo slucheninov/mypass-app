@@ -77,6 +77,9 @@ Last updated: 2026-11-15
   team W645B93PPQ without notarization and require INSTALL.txt's quarantine-removal steps.
 - [ ] Safe secondary-folder sync on FAT/exFAT: volumes without atomic exchange or hard links
   currently fail closed with unavailable/unsupportedFolder; never overwrite a competing vault.
+- [ ] Explicit, race-free cleanup UI for retained `.displaced` copies (needs exact vault and copy
+  identity persisted at write time, in-flight files named separately, and confirmation bound to the
+  displayed ids and session). The surfacing itself is done: the Vault pane lists the copies read-only.
   These competing vault copies are deliberately never auto-deleted.
 - [ ] Tighter KDF limits for remote/secondary opens: hostile-input limits exist, but expensive
   KDF work on an untrusted remote file can still consume substantial CPU/memory.
