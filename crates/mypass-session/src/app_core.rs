@@ -921,12 +921,13 @@ impl AppCore {
     }
 
     /// Records a generated password the user took with "Use" (the form fills it in; nothing is
-    /// copied) in the generator history, exactly like a copy with a record URL does. The caller
-    /// passes a record URL only when the user typed or kept a website, so a use without one is
-    /// not sent at all. The history entry is written before the form takes the value.
-    pub fn generator_use(&self, value: &str, record_url: &str) -> Result<(), ApiError> {
+    /// copied) in the generator history, exactly like a copy with a record URL does. The website
+    /// is optional: a login without one still lands in the history (with a blank website), so the
+    /// password can be recovered if the form is never saved. The history entry is written before
+    /// the form takes the value.
+    pub fn generator_use(&self, value: &str, record_url: Option<&str>) -> Result<(), ApiError> {
         self.writable()?;
-        generator_service::record_history(&self.session, value, record_url)?;
+        generator_service::record_history(&self.session, value, record_url.unwrap_or(""))?;
         Ok(())
     }
 
@@ -1502,7 +1503,7 @@ mod tests {
         call!("generator_history_delete", c, a => c.generator_history_delete(&a.entry));
         call!("generator_generate+record", c, a => c.generator_generate(a.generate.clone()));
         call!("generator_copy+record", c, a => c.generator_copy("secret", Some("https://example.com")));
-        call!("generator_use", c, a => c.generator_use("secret", "https://example.com"));
+        call!("generator_use", c, a => c.generator_use("secret", Some("https://example.com")));
         call!("import_csv_commit", c, a => c.import_csv_commit("/nonexistent/in.csv", &a.root));
         call!("backup_restore", c, a => c.backup_restore("backup-1.kdbx"));
         calls
@@ -2123,7 +2124,7 @@ mod tests {
     fn generator_use_records_history_without_touching_the_clipboard() {
         let f = fx_open();
         f.core
-            .generator_use("Gen#Pass-2", "https://login.example.com/path")
+            .generator_use("Gen#Pass-2", Some("https://login.example.com/path"))
             .unwrap();
         assert_eq!(f.fake.clipboard.contents(), None, "use never copies");
         let history = f.core.generator_history_list().unwrap();
@@ -2136,17 +2137,34 @@ mod tests {
     }
 
     #[test]
+    fn generator_use_without_a_website_still_records_the_value() {
+        let f = fx_open();
+        f.core.generator_use("Gen#Pass-3", None).unwrap();
+        assert_eq!(f.fake.clipboard.contents(), None, "use never copies");
+        let history = f.core.generator_history_list().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            (history[0].url.as_str(), history[0].title.as_str()),
+            ("", "")
+        );
+        assert_eq!(
+            f.core.generator_history_reveal(&history[0].id).unwrap(),
+            "Gen#Pass-3"
+        );
+    }
+
+    #[test]
     fn generator_use_fails_when_locked_or_quitting() {
         let f = fx_open();
         f.core.vault_lock().unwrap();
         assert_eq!(
-            code(f.core.generator_use("secret", "https://example.com")),
+            code(f.core.generator_use("secret", Some("https://example.com"))),
             ErrorCode::Locked
         );
         f.core.vault_unlock(pw("pw")).unwrap();
         f.core.begin_quit();
         assert_eq!(
-            code(f.core.generator_use("secret", "https://example.com")),
+            code(f.core.generator_use("secret", Some("https://example.com"))),
             ErrorCode::Quitting
         );
     }

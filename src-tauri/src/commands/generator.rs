@@ -44,15 +44,16 @@ pub fn generator_copy(
     state.0.generator_copy(&value, record_url.as_deref())
 }
 
-/// Records a password the form took with "Use" in the generator history; nothing is copied.
+/// Records a password the form took with "Use" in the generator history (the website is
+/// optional); nothing is copied.
 #[tauri::command]
 #[specta::specta]
 pub fn generator_use(
     state: State<'_, AppState>,
     value: String,
-    record_url: String,
+    record_url: Option<String>,
 ) -> Result<(), ApiError> {
-    state.0.generator_use(&value, &record_url)
+    state.0.generator_use(&value, record_url.as_deref())
 }
 
 #[tauri::command]
