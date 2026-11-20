@@ -72,6 +72,12 @@ pub enum ErrorCode {
     Quitting,
     GeneratorNoClass,
     GeneratorUnsatisfiable,
+    /// The CSV has no `title`, `username` or `password` column (`message` names the column).
+    CsvMissingColumn,
+    /// The CSV is not valid UTF-8 text.
+    CsvNotUtf8,
+    /// The CSV file has no content.
+    CsvEmpty,
     Cancelled,
     Lockout,
     Invalidated,
@@ -165,13 +171,19 @@ impl From<SettingsError> for ApiError {
 
 impl From<CsvImportError> for ApiError {
     fn from(e: CsvImportError) -> Self {
-        // The messages name a column or nothing, never a cell.
-        match e {
-            CsvImportError::TooLarge => {
-                Self::new(ErrorCode::LimitExceeded, "the file is too large")
-            }
-            other => Self::new(ErrorCode::InvalidInput, other.to_string()),
-        }
+        // The messages name a column or nothing, never a cell. Each cause has its own code, so the
+        // UI never matches the English text.
+        let code = match &e {
+            CsvImportError::TooLarge => ErrorCode::LimitExceeded,
+            CsvImportError::NotUtf8 => ErrorCode::CsvNotUtf8,
+            CsvImportError::MissingRequiredColumn(_) => ErrorCode::CsvMissingColumn,
+            CsvImportError::Empty => ErrorCode::CsvEmpty,
+        };
+        let message = match e {
+            CsvImportError::TooLarge => "the file is too large".to_owned(),
+            other => other.to_string(),
+        };
+        Self::new(code, message)
     }
 }
 
@@ -2528,19 +2540,21 @@ mod tests {
             ApiError::from(CsvImportError::TooLarge).code,
             ErrorCode::LimitExceeded
         );
-        for e in [
-            CsvImportError::NotUtf8,
-            CsvImportError::Empty,
-            CsvImportError::MissingRequiredColumn("title".into()),
+        for (e, code) in [
+            (CsvImportError::NotUtf8, ErrorCode::CsvNotUtf8),
+            (CsvImportError::Empty, ErrorCode::CsvEmpty),
+            (
+                CsvImportError::MissingRequiredColumn("title".into()),
+                ErrorCode::CsvMissingColumn,
+            ),
         ] {
-            assert_eq!(ApiError::from(e).code, ErrorCode::InvalidInput);
+            assert_eq!(ApiError::from(e).code, code);
         }
         assert_eq!(
             ApiError::from(CsvImportError::MissingRequiredColumn("title".into())).message,
             "missing required column title"
         );
-        // The import dialog tells these causes apart by this English text (the code is the same
-        // `InvalidInput` for all of them), so a rewording must change the UI in the same commit.
+        // The English text is diagnostics only: the UI localises by code.
         assert_eq!(
             ApiError::from(CsvImportError::NotUtf8).message,
             "file is not valid UTF-8"
@@ -2580,8 +2594,18 @@ mod tests {
             .core
             .import_csv_preview(csv.to_str().unwrap())
             .unwrap_err();
-        assert_eq!(error.code, ErrorCode::InvalidInput);
+        assert_eq!(error.code, ErrorCode::CsvMissingColumn);
         assert!(!error.message.contains("secret-cell"));
+        std::fs::write(&csv, b"title,username,password\n\xff\xfe,x,y\n").unwrap();
+        assert_eq!(
+            code(f.core.import_csv_preview(csv.to_str().unwrap())),
+            ErrorCode::CsvNotUtf8
+        );
+        std::fs::write(&csv, "").unwrap();
+        assert_eq!(
+            code(f.core.import_csv_preview(csv.to_str().unwrap())),
+            ErrorCode::CsvEmpty
+        );
         assert_eq!(
             code(f.core.import_csv_preview("/nonexistent/in.csv")),
             ErrorCode::NotFound

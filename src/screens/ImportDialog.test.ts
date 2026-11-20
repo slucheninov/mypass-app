@@ -98,17 +98,27 @@ describe("import dialog", () => {
   });
 
   it.each([
-    ["missing required column title", "The file must have title, username and password columns"],
-    ["file is not valid UTF-8", "The file is not UTF-8 text"],
-    ["file is empty", "The file is empty"],
-  ])("import_missing_column_error_maps_to_message (%s)", async (message, expected) => {
+    ["csvMissingColumn", "The file must have title, username and password columns"],
+    ["csvNotUtf8", "The file is not UTF-8 text"],
+    ["csvEmpty", "The file is empty"],
+  ] as const)("import_csv_error_code_maps_to_message (%s)", async (code, expected) => {
     const { onclose } = await openDialog(PREVIEW, (fake) => {
-      fake.state.csvFailure = apiError("invalidInput", message);
+      // The English text is diagnostics only: the message comes from the code.
+      fake.state.csvFailure = apiError(code, "RAW-BACKEND-TEXT");
     });
     const dialog = await screen.findByRole("dialog", { name: "Import CSV" });
     expect((await within(dialog).findByRole("alert")).textContent).toBe(expected);
     expect(within(dialog).queryByRole("button", { name: "Import" })).toBeNull();
+    expect(dialog.textContent).not.toContain("RAW-BACKEND-TEXT");
     expect(onclose).not.toHaveBeenCalled();
+  });
+
+  it("an_invalid_input_failure_is_not_guessed_from_its_english_text", async () => {
+    await openDialog(PREVIEW, (fake) => {
+      fake.state.csvFailure = apiError("invalidInput", "file is empty");
+    });
+    const dialog = await screen.findByRole("dialog", { name: "Import CSV" });
+    expect((await within(dialog).findByRole("alert")).textContent).toBe("Invalid input");
   });
 
   it("an_unknown_failure_shows_the_generic_localised_message", async () => {
@@ -121,7 +131,7 @@ describe("import dialog", () => {
 
   it("choose_a_csv_file_retries_the_picker_after_a_failure", async () => {
     const { fake, user } = await openDialog(PREVIEW, (f) => {
-      f.state.csvFailure = apiError("invalidInput", "file is empty");
+      f.state.csvFailure = apiError("csvEmpty");
     });
     const dialog = await screen.findByRole("dialog");
     await within(dialog).findByRole("alert");

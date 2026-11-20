@@ -612,7 +612,13 @@ export type EntryTypeDto = "login" | "address" | "card" | "notes" | "files";
 /**  The stable error code the UI localises. Serialised in camelCase. */
 export type ErrorCode = "locked" | "noVault" | "wrongPassword" | "alreadyExists" | "notFound" | "invalidInput" | "limitExceeded" | "corrupt" | "unsupported" | "changedOnDisk" | "io" | 
 /**  The vault is in iCloud Drive and did not download in time, try again later. */
-"downloading" | "quitting" | "generatorNoClass" | "generatorUnsatisfiable" | "cancelled" | "lockout" | "invalidated" | "notEnrolledOnDevice" | "deviceUnlockUnavailable" | "migrationLocked" | "migrationTargetUnreadable" | "migrationTargetNotAVault" | "migrationTargetPasswordMismatch" | "migrationTargetWriteFailed" | "migrationSourceInvalid" | "migrationSameFile" | "migrationValidationFailed" | "internal";
+"downloading" | "quitting" | "generatorNoClass" | "generatorUnsatisfiable" | 
+/**  The CSV has no `title`, `username` or `password` column (`message` names the column). */
+"csvMissingColumn" | 
+/**  The CSV is not valid UTF-8 text. */
+"csvNotUtf8" | 
+/**  The CSV file has no content. */
+"csvEmpty" | "cancelled" | "lockout" | "invalidated" | "notEnrolledOnDevice" | "deviceUnlockUnavailable" | "migrationLocked" | "migrationTargetUnreadable" | "migrationTargetNotAVault" | "migrationTargetPasswordMismatch" | "migrationTargetWriteFailed" | "migrationSourceInvalid" | "migrationSameFile" | "migrationValidationFailed" | "internal";
 
 /**  A single field to reveal or copy. `Totp` resolves to the current code. */
 export type FieldRef = { kind: "username" } | { kind: "password" } | { kind: "url" } | { kind: "notesBody" } | { kind: "cardNumber" } | { kind: "cardCvv" } | { kind: "totp" } | { kind: "custom"; key: string };
