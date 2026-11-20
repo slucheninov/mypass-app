@@ -58,20 +58,6 @@ Last updated: 2026-11-20
   identity persisted at write time, in-flight files named separately, and confirmation bound to the
   displayed ids and session). The surfacing itself is done: the Vault pane lists the copies read-only.
   These competing vault copies are deliberately never auto-deleted.
-- [ ] Replacing a vault on the move-aside path (Windows and volumes without an atomic exchange)
-  renames the current file to a working `.aside` name with a rename that replaces. If another
-  program has put its own file under that exact name first, that file is overwritten. This
-  predates stage 7. Fix it with a rename that never replaces (or a private reserved name) and
-  fail closed where the volume cannot do that; test the collision with distinct bytes.
-- [ ] Working-name leftovers under the hidden temp name after an atomic exchange are not listed.
-  Temp names can also hold an uninstalled candidate. Identify retained exchange copies separately
-  before listing them.
-- [ ] If a user lowers the KDF settings of a vault, secondary sync refuses the older, costlier
-  secondary copy (`SyncKdfLimitExceeded`) until the file is replaced by hand. Consider recording
-  the highest verified cost per secondary.
-- [ ] The Vault pane's list of competing copies does not refresh while it stays open if a copy is
-  kept by a save of the primary vault only. It refreshes when the pane opens, when the vault
-  changes and when a sync finishes. Refresh it on a primary-only save too.
 - [ ] Manual: macOS tray panel position on a mixed-DPI, multi-monitor desktop. The panel now uses
   the position the tray event carried (captured at click time); only when that fits two monitor
   scales does the cursor sampled at handling time pick between them, so check by hand that the

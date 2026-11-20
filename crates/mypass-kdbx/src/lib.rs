@@ -23,7 +23,7 @@ mod database;
 mod model;
 pub use database::{Database, SaveSettings};
 pub use format::kdf::{Argon2Variant, KdfParams};
-pub use format::limits::{KdfLimits, MAX_GROUP_DEPTH, MAX_VAULT_FILE_BYTES};
+pub use format::limits::{KdfCost, KdfLimits, MAX_GROUP_DEPTH, MAX_VAULT_FILE_BYTES};
 pub use format::outer_header::{Cipher, Compression};
 pub use model::*;
 

@@ -1,6 +1,7 @@
 <script lang="ts">
   // The read-only list names retained files and identifies which folder to check. It
-  // refreshes on mount, a vault change and a sync status change.
+  // refreshes on mount, a vault change, a sync status change and a settled save.
+  import { untrack } from "svelte";
   import { api } from "../lib/api";
   import type { DisplacedCopies } from "../lib/bindings";
   import { formatBytes } from "../lib/i18n/format";
@@ -37,9 +38,21 @@
     }
   }
 
+  // A save of the primary vault alone (no secondary folder, so no sync status change) can keep a
+  // copy too: count the saves that settle (pending or saving, then idle or failed), the same
+  // transition the secondary sync waits for, and refresh on each.
+  let settledSaves = $state(0);
+  let saveBusy = false;
+  $effect(() => {
+    const state = session.status.save.state;
+    const busy = state === "pending" || state === "saving";
+    if (saveBusy && !busy) untrack(() => (settledSaves += 1));
+    saveBusy = busy;
+  });
+
   const vaultKey = $derived(`${session.status.state}|${session.status.vaultPath ?? ""}|${settings.value?.secondaryFolder ?? ""}`);
   const key = $derived(
-    `${vaultKey}|${sync.status.state}|${sync.status.state === "idle" ? (sync.status.lastSync ?? "") : ""}|${"recoveryFile" in sync.status ? (sync.status.recoveryFile ?? "") : ""}`,
+    `${vaultKey}|${sync.status.state}|${sync.status.state === "idle" ? (sync.status.lastSync ?? "") : ""}|${"recoveryFile" in sync.status ? (sync.status.recoveryFile ?? "") : ""}|${settledSaves}`,
   );
   $effect(() => {
     void key;
@@ -62,7 +75,7 @@
         {#each found.copies as copy (`${copy.location}/${copy.name}`)}
           <li>
             <span class="where">{place(copy.location)}</span>
-            <span>{copy.kind === "aside" ? t("Replacement working copy") : t("Competing copy")}</span>
+            <span>{copy.kind === "displaced" ? t("Competing copy") : t("Replacement working copy")}</span>
             <span class="name">{copy.name}</span>
             {#if copy.bytes !== null}<span class="size">{formatBytes(copy.bytes)}</span>{/if}
           </li>

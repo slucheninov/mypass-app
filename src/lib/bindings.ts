@@ -1066,7 +1066,9 @@ export type RecentVaultDto = {
 export type RequireAccountPasswordWindow = "oneDay" | "sevenDays" | "fourteenDays" | "thirtyDays" | "ninetyDays" | "never";
 
 /**  How the replacement named the copy. */
-export type RetainedCopyKind = "displaced" | "aside";
+export type RetainedCopyKind = "displaced" | "aside" | 
+/**  The previous file an atomic exchange swapped out, left under its working name. */
+"exchanged";
 
 /**
  *  The site rules that applied, as the generator panel shows them. Class names are `lowercase`,
