@@ -880,7 +880,7 @@ Used to build and test the frontend only; none of it is part of a MyPass artifac
 | `jsdom` | 31.0.1 | MIT |
 | `svelte` | 5.57.3 | MIT |
 | `svelte-check` | 4.7.8 | MIT |
-| `typescript` | 5.9.3 | Apache-2.0 |
+| `typescript` | 6.0.3 | Apache-2.0 |
 | `vite` | 6.4.5 | MIT |
 | `vitest` | 5.1.0 | MIT |
 
