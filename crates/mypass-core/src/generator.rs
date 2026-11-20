@@ -114,7 +114,8 @@ fn effective_pool(opts: &GeneratorOptions, rules: &PasswordRules) -> EffectivePo
     }
 }
 fn sample<R: CryptoRng>(pool: &[char], rng: &mut R) -> Result<char, GeneratorError> {
-    // Uniform uses rejection sampling for pools whose size does not divide the RNG range.
+    // Uniform rejects biased buckets when the pool size does not divide the RNG range.
+    // Taking a random integer modulo the pool length would introduce bias.
     let index = Uniform::new(0, pool.len()).map_err(|_| UnsatisfiableRules)?;
     pool.get(index.sample(rng))
         .copied()
@@ -229,6 +230,7 @@ fn deterministic_candidate<R: CryptoRng>(
     while chars.len() < length {
         chars.push(sample(pool, rng)?);
     }
+    // SliceRandom's range sampling depends on rand's unbiased feature.
     chars.shuffle(rng);
     if let Some(max) = max {
         repair_max_consecutive(&mut chars, max, pool, rng)?;

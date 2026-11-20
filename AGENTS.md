@@ -183,9 +183,15 @@ change is done.
   AES-256-CBC, gzip and a ChaCha20 inner stream.
 - **Hostile input.** Limits are named constants in `format/limits.rs` (Argon2 memory, iterations,
   parallelism, salt length, AES-KDF rounds, block length, decompressed size, XML nesting). Parsers
-  return `Err` and never panic. Secondary-folder and iCloud opens and automatic reloads of
-  changed vaults use lower KDF ceilings: 128 MiB, 6 iterations and 8 lanes for Argon2, and
-  10 million rounds for AES-KDF. Explicit local opens keep the standard limits.
+  return `Err` and never panic. User-initiated open, create, unlock and backup validation use the
+  standard local KDF limits, including for iCloud files and the migration source. Automatic
+  reloads after an external change or save race, secondary sync, iCloud conflict versions and
+  migration destination validation use an additional budget. Each budget dimension is the
+  larger of the default ceiling and the already authenticated vault's cost for that dimension.
+  The default ceilings are 1 GiB Argon2 memory, 4 GiB of memory times iterations, and 300 million
+  AES-KDF rounds. Argon2 lane limits are those of the local format. During an explicit iCloud
+  open or unlock, the selected main file establishes the budget for conflict versions. After a
+  backup restore, readback uses the validated backup's cost as its baseline.
 - **Merge.** Two-way merge keyed by UUID.
 - **Domain matching.** Always through the Public Suffix List; never suffix heuristics. Credentials
   are offered only on `https` pages: a target whose parsed scheme is not `https` never matches (no
@@ -225,10 +231,12 @@ change is done.
   `Ok` (rollback by construction). Saving (`mypass_session::saving`) is a debounced autosave
   (1 s) that writes outside the session lock, one write at a time (an in-flight flag plus a
   condvar orders autosave, `flush` and `lock`, and its one finish path re-arms the autosave while
-  the session is dirty); a file changed on disk is reloaded and adopted wholesale by a clean
-  session (nothing written) or two-way merged into a dirty one, which is then written, never
-  overwritten blindly (the remote's save settings are always kept, the remote's metadata unless
-  it was edited locally); `flush` is `Ok` only when every edit is on disk. `lock` saves first and keeps the encrypted bytes when that
+  the session is dirty). A changed file within the automatic KDF budget is authenticated and
+  adopted wholesale by a clean session (nothing written) or two-way merged into a dirty session
+  and then written. The remote save settings are kept, along with remote metadata unless edited
+  locally. An over-budget replacement produces a dedicated error and leaves the live contents
+  and any pending edits intact. On explicit unlock, reconciliation uses the local-open limits.
+  `flush` is `Ok` only when every edit is on disk. `lock` saves first and keeps the encrypted bytes when that
   save fails: a timer writes them over an unchanged file, otherwise the next unlock merges them,
   and switching vaults first writes them as an `unsaved-*` copy into the backup folder (the
   path when the password was changed elsewhere); observers run after the session lock is released;

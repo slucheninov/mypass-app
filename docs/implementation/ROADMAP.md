@@ -14,6 +14,9 @@ Last updated: 2026-11-15
   directory fsync. On Unix the atomic save treats a directory-sync `Unsupported` or `InvalidInput`
   error as success by design; any other directory-sync error is reported after the replacement has
   committed, and the caller must reload. Only real mounts can show which error they return.
+- [ ] Wipe UI-facing secret copies in `crates/mypass-session/src/editing.rs`, secret DTO values in
+  `queries.rs`, and protected attachment buffers. These copies still use plain `String` or
+  `Vec` allocations that are freed without wiping.
 
 ## Stage 2a follow-ups
 

@@ -226,6 +226,17 @@ fn member_crates_take_versions_only_from_the_workspace_table() {
 }
 
 #[test]
+fn password_shuffle_has_unbiased_rand_sampling() {
+    let root = root_manifest();
+    let features = workspace_table(&root)["dependencies"]["rand"]["features"]
+        .as_array()
+        .expect("rand features");
+    assert!(features
+        .iter()
+        .any(|feature| feature.as_str() == Some("unbiased")));
+}
+
+#[test]
 fn workspace_lints_forbid_unsafe() {
     let root = root_manifest();
     let lints = workspace_table(&root)
