@@ -1063,7 +1063,7 @@ fn replace_expected(
             // of the vault, so it is promoted to a kept `.displaced` copy, which the
             // competing-copy listing shows.
             if (seams.link)(&names.aside, target).is_err() {
-                let _ = fs::rename(&names.aside, &names.displaced);
+                let _ = (seams.rename)(&names.aside, &names.displaced);
             }
             drop(cleanup);
             Err(io_error(e))
