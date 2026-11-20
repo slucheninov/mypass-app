@@ -73,6 +73,10 @@ pub enum ServerError {
     /// The endpoint record could not be published.
     #[error("endpoint store: {0}")]
     Endpoint(String),
+    /// The listener was bound and the record published, but the accept thread could not be
+    /// started (the record is withdrawn again).
+    #[error("worker thread: {0}")]
+    Worker(String),
 }
 
 struct Shared {
@@ -154,10 +158,7 @@ impl LoopbackServer {
         let handle = std::thread::Builder::new()
             .name("bridge-accept".into())
             .spawn(move || accept_loop(&listener, &accept_shared))
-            .map_err(|e| {
-                clear_if_ours(&endpoints, &published);
-                ServerError::Bind(e.to_string())
-            })?;
+            .map_err(|e| accept_spawn_failed(&endpoints, &published, &e))?;
         Ok(Self {
             shared,
             endpoints,
@@ -218,6 +219,17 @@ impl LoopbackServer {
         }
         clear_if_ours(&self.endpoints, &self.published);
     }
+}
+
+/// The accept thread could not be spawned after the record was published: withdraw the record
+/// and name the failure a worker failure (the listener itself was fine).
+fn accept_spawn_failed(
+    endpoints: &EndpointStore,
+    published: &Endpoint,
+    e: &std::io::Error,
+) -> ServerError {
+    clear_if_ours(endpoints, published);
+    ServerError::Worker(e.to_string())
 }
 
 /// Clears the stored record only when it is still the one this server published. `Endpoint`
@@ -467,4 +479,30 @@ fn send(stream: &mut TcpStream, reply: &HelloReply) -> bool {
         }
     };
     stream.write_all(&framed).is_ok() && stream.flush().is_ok()
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod spawn_tests {
+    use super::*;
+    use mypass_platform::testing::InMemorySecretStore;
+
+    #[test]
+    fn a_failed_accept_thread_spawn_withdraws_the_record_and_is_a_worker_failure() {
+        let endpoints = EndpointStore::new(InMemorySecretStore::new());
+        let published = Endpoint {
+            port: 40_000,
+            token: generate_token(),
+            pid: std::process::id(),
+            started_at: 1,
+        };
+        endpoints.save(&published).unwrap();
+        let error = accept_spawn_failed(
+            &endpoints,
+            &published,
+            &std::io::Error::other("no threads left"),
+        );
+        assert!(matches!(error, ServerError::Worker(_)), "{error:?}");
+        assert!(endpoints.load().unwrap().is_none(), "the record is gone");
+    }
 }

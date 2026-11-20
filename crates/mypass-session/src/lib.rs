@@ -9,6 +9,7 @@ pub mod backups;
 pub mod clipboard_service;
 pub mod csv_import;
 pub mod device_unlock;
+pub mod displaced;
 pub mod drafts;
 pub mod dto;
 pub mod editing;
@@ -28,6 +29,7 @@ pub mod vault_files;
 
 pub use app_core::{ApiError, AppCore, AppPaths, ErrorCode, Platform};
 pub use backups::{BackupFailure, BackupItem, BackupStatus};
+pub use displaced::{DisplacedCopies, DisplacedCopyInfo, DisplacedLocation};
 pub use drafts::DraftVersionDto;
 pub use dto::*;
 pub use secondary::{SecondaryError, SecondaryStatus, SecondarySync, SecondaryUnavailable};

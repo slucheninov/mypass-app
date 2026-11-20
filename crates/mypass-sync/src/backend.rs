@@ -46,6 +46,13 @@ pub enum StorageError {
     /// Nothing was written; the remote is untouched.
     #[error("the storage cannot replace the file safely")]
     NoSafeReplace,
+    /// A write failed and the previous vault file survives only under a hidden working name
+    /// that no listing shows: `name` is that file name (never a folder), next to the vault.
+    #[error("the previous vault is kept as {name} next to it")]
+    VaultRetained {
+        /// The file name holding the vault.
+        name: String,
+    },
 }
 
 /// One vault file in remote storage. `read` returns `Ok(None)` only when the file is missing; every
@@ -89,6 +96,15 @@ pub enum WriteOutcome {
     /// place, but not when yet another writer created the file meanwhile: the next attempt
     /// re-reads the file either way.
     Displaced(Vec<u8>),
+    /// Like [`Displaced`](Self::Displaced), but the displaced copy (or a leftover working name
+    /// of it) survives only under a hidden name that no listing shows: `name` is its file name
+    /// (never a folder). It must reach the user if the copy cannot be merged back.
+    DisplacedKept {
+        /// The displaced content (empty when unreadable).
+        bytes: Vec<u8>,
+        /// The hidden file name that holds the copy.
+        name: String,
+    },
 }
 
 impl fmt::Debug for WriteOutcome {
@@ -97,6 +113,9 @@ impl fmt::Debug for WriteOutcome {
             Self::Written => f.write_str("Written"),
             Self::Conflict => f.write_str("Conflict"),
             Self::Displaced(bytes) => write!(f, "Displaced({} bytes)", bytes.len()),
+            Self::DisplacedKept { bytes, name } => {
+                write!(f, "DisplacedKept({} bytes, {name})", bytes.len())
+            }
         }
     }
 }
@@ -181,6 +200,8 @@ fn read_error(e: KdbxError, max_bytes: u64) -> StorageError {
 
 fn write_error(e: KdbxError, path: &Path) -> StorageError {
     match e {
+        // First: whatever the failure was, the user must be told where the vault is.
+        KdbxError::VaultRetained { name, .. } => StorageError::VaultRetained { name },
         KdbxError::Io {
             kind: ErrorKind::PermissionDenied | ErrorKind::ReadOnlyFilesystem,
             ..
@@ -258,7 +279,16 @@ impl StorageBackend for FileIoBackend {
         {
             Ok(ReplaceOutcome::Replaced) => Ok(WriteOutcome::Written),
             Ok(ReplaceOutcome::Conflict) => Ok(WriteOutcome::Conflict),
-            Ok(ReplaceOutcome::Displaced { bytes, .. }) => Ok(WriteOutcome::Displaced(bytes)),
+            Ok(outcome @ ReplaceOutcome::Displaced { .. }) => {
+                let name = outcome.unlisted_name();
+                let ReplaceOutcome::Displaced { bytes, .. } = outcome else {
+                    return Ok(WriteOutcome::Conflict);
+                };
+                Ok(match name {
+                    Some(name) => WriteOutcome::DisplacedKept { bytes, name },
+                    None => WriteOutcome::Displaced(bytes),
+                })
+            }
             Err(e) => Err(match e {
                 // Refusals of the current content (too large, not a regular file) are read
                 // errors; everything else is a write error.
@@ -428,6 +458,94 @@ mod tests {
                 message: "no exchange and no hard links".into(),
             })
         }
+    }
+
+    /// A `FileIo` whose guarded replacement answers a canned result (the seam under the writer).
+    struct Canned(mypass_kdbx::Result<ReplaceOutcome>);
+    impl FileIo for Canned {
+        fn read(&self, path: &Path) -> mypass_kdbx::Result<Vec<u8>> {
+            PlainFileIo.read(path)
+        }
+        fn write_atomic(&self, path: &Path, bytes: &[u8]) -> mypass_kdbx::Result<()> {
+            PlainFileIo.write_atomic(path, bytes)
+        }
+        fn metadata(&self, path: &Path) -> mypass_kdbx::Result<FileMeta> {
+            PlainFileIo.metadata(path)
+        }
+        fn replace_if(
+            &self,
+            _: &Path,
+            _: Option<&[u8; 32]>,
+            _: &[u8],
+            _: u64,
+        ) -> mypass_kdbx::Result<ReplaceOutcome> {
+            self.0.clone()
+        }
+    }
+    fn canned(result: mypass_kdbx::Result<ReplaceOutcome>) -> FileIoBackend {
+        FileIoBackend::new(Arc::new(Canned(result)), "/vault/folder/vault.kdbx")
+    }
+
+    #[test]
+    fn a_retained_vault_keeps_its_file_name_whatever_the_failure_kind() {
+        // Even a permission failure (otherwise `ReadOnly`) must say where the vault is.
+        for kind in [
+            ErrorKind::PermissionDenied,
+            ErrorKind::Unsupported,
+            ErrorKind::NotFound,
+            ErrorKind::Other,
+        ] {
+            let backend = canned(Err(KdbxError::VaultRetained {
+                kind,
+                name: ".vault.kdbx.1.2.3.aside".into(),
+                message: "injected".into(),
+            }));
+            assert_eq!(
+                backend.write_if(Some(&digest(b"old")), b"new"),
+                Err(StorageError::VaultRetained {
+                    name: ".vault.kdbx.1.2.3.aside".into()
+                }),
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_displaced_copy_under_a_hidden_name_carries_that_name() {
+        let hidden = canned(Ok(ReplaceOutcome::Displaced {
+            bytes: b"theirs".to_vec(),
+            kept: "/vault/folder/.vault.kdbx.1.2.3.tmp".into(),
+            leftover: None,
+        }));
+        assert_eq!(
+            hidden.write_if(Some(&digest(b"old")), b"new"),
+            Ok(WriteOutcome::DisplacedKept {
+                bytes: b"theirs".to_vec(),
+                name: ".vault.kdbx.1.2.3.tmp".into()
+            })
+        );
+        // A listed copy needs no extra name; a working name left after publication does.
+        let listed = canned(Ok(ReplaceOutcome::Displaced {
+            bytes: b"theirs".to_vec(),
+            kept: "/vault/folder/.vault.kdbx.1.2.3.displaced".into(),
+            leftover: None,
+        }));
+        assert_eq!(
+            listed.write_if(Some(&digest(b"old")), b"new"),
+            Ok(WriteOutcome::Displaced(b"theirs".to_vec()))
+        );
+        let stray = canned(Ok(ReplaceOutcome::Displaced {
+            bytes: b"theirs".to_vec(),
+            kept: "/vault/folder/.vault.kdbx.1.2.3.displaced".into(),
+            leftover: Some("/vault/folder/.vault.kdbx.1.2.3.aside".into()),
+        }));
+        assert_eq!(
+            stray.write_if(Some(&digest(b"old")), b"new"),
+            Ok(WriteOutcome::DisplacedKept {
+                bytes: b"theirs".to_vec(),
+                name: ".vault.kdbx.1.2.3.aside".into()
+            })
+        );
     }
 
     #[test]

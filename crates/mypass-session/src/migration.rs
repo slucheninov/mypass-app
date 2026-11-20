@@ -142,7 +142,7 @@ impl VaultMigrationService {
                     SyncError::Cancelled => MigrationError::Locked,
                     SyncError::RemotePasswordMismatch => MigrationError::TargetPasswordMismatch,
                     SyncError::RemoteNotAVault => MigrationError::TargetNotAVault,
-                    SyncError::SyncKdfLimitExceeded => MigrationError::SyncKdfLimitExceeded,
+                    SyncError::SyncKdfLimitExceeded { .. } => MigrationError::SyncKdfLimitExceeded,
                     _ => MigrationError::TargetWriteFailed,
                 })?;
             let (adopt, _) = result.into_parts();
@@ -173,7 +173,9 @@ impl VaultMigrationService {
                 .map_err(|_| MigrationError::TargetWriteFailed)?
             {
                 WriteOutcome::Written => {}
-                WriteOutcome::Conflict | WriteOutcome::Displaced(_) => {
+                WriteOutcome::Conflict
+                | WriteOutcome::Displaced(_)
+                | WriteOutcome::DisplacedKept { .. } => {
                     return Err(MigrationError::TargetWriteFailed)
                 }
             }

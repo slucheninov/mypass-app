@@ -191,8 +191,15 @@ pub enum SecondaryStatus {
     /// The folder cannot be used; retried every [`SECONDARY_RETRY`] except for `invalidFolder`
     /// and `unsupportedFolder`.
     Unavailable { reason: SecondaryUnavailable },
-    /// The last sync failed; the remote and the primary are untouched.
-    Error { code: SecondaryError },
+    /// The last sync failed; the remote and the primary are untouched, except when
+    /// `recovery_file` is set: then the previous vault survives only under that hidden file
+    /// name (a name, never a folder) next to the synced copy, and the user is told to look
+    /// for it. No listing shows such a file.
+    Error {
+        code: SecondaryError,
+        #[serde(rename = "recoveryFile", skip_serializing_if = "Option::is_none")]
+        recovery_file: Option<String>,
+    },
 }
 
 /// A status observer; runs after the service's lock is released, on the calling thread.
@@ -1199,6 +1206,7 @@ impl SecondarySync {
             let status = match status {
                 SecondaryStatus::Idle { .. } if st.watch_failed => SecondaryStatus::Error {
                     code: SecondaryError::WatchFailed,
+                    recovery_file: None,
                 },
                 other => other,
             };
@@ -1234,6 +1242,7 @@ impl SecondarySync {
                 && st.status
                     == (SecondaryStatus::Error {
                         code: SecondaryError::WatchFailed,
+                        recovery_file: None,
                     });
             match st.armed.as_ref().map(|a| a.key.clone()) {
                 Some(key) if recovered => {
@@ -1311,7 +1320,7 @@ fn is_transient(status: &SecondaryStatus) -> bool {
             reason,
             SecondaryUnavailable::InvalidFolder | SecondaryUnavailable::UnsupportedFolder
         ),
-        SecondaryStatus::Error { code } => {
+        SecondaryStatus::Error { code, .. } => {
             matches!(code, SecondaryError::Io | SecondaryError::RemoteBusy)
         }
         SecondaryStatus::Off | SecondaryStatus::Idle { .. } | SecondaryStatus::Syncing => false,
@@ -1334,6 +1343,13 @@ fn storage_outcome(e: StorageError) -> Outcome {
 /// The status for an engine failure (typed codes only, R17).
 fn failure_status(e: &SyncError) -> SecondaryStatus {
     let code = match e {
+        // The vault survives only under a hidden name: the status carries that file name.
+        SyncError::Storage(StorageError::VaultRetained { name }) => {
+            return SecondaryStatus::Error {
+                code: SecondaryError::Io,
+                recovery_file: Some(name.clone()),
+            };
+        }
         SyncError::Storage(storage) => {
             return match storage_outcome(storage.clone()) {
                 Outcome::Unavailable(reason) => SecondaryStatus::Unavailable { reason },
@@ -1343,13 +1359,19 @@ fn failure_status(e: &SyncError) -> SecondaryStatus {
                         StorageError::NotRegularFile => SecondaryError::NotRegularFile,
                         _ => SecondaryError::Io,
                     },
+                    recovery_file: None,
                 },
             }
         }
         SyncError::RemotePasswordMismatch => SecondaryError::WrongPassword,
         SyncError::RemoteNotAVault => SecondaryError::NotAVault,
         SyncError::RemoteUnsupported(_) => SecondaryError::Unsupported,
-        SyncError::SyncKdfLimitExceeded => SecondaryError::SyncKdfLimitExceeded,
+        SyncError::SyncKdfLimitExceeded { recovery_file } => {
+            return SecondaryStatus::Error {
+                code: SecondaryError::SyncKdfLimitExceeded,
+                recovery_file: recovery_file.clone(),
+            };
+        }
         SyncError::RemoteCorrupt(_) => SecondaryError::Corrupt,
         SyncError::RemoteIsDifferentVault => SecondaryError::DifferentVault,
         SyncError::RemoteChangedDuringSync | SyncError::ConcurrentCopyKept => {
@@ -1360,7 +1382,10 @@ fn failure_status(e: &SyncError) -> SecondaryStatus {
             SecondaryError::Io
         }
     };
-    SecondaryStatus::Error { code }
+    SecondaryStatus::Error {
+        code,
+        recovery_file: None,
+    }
 }
 
 /// Checks the folder from the settings (untrusted, R7) and returns it canonicalised: absolute,

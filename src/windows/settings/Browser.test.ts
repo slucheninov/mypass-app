@@ -31,6 +31,7 @@ const diagnostics = (over: Partial<BrowserDiagnosticsDto_Serialize> = {}): Brows
 const status = (over: Partial<BrowserStatus_Serialize> = {}): BrowserStatus_Serialize => ({
   listening: true,
   pairingStoreFailed: false,
+  startFailure: null,
   paired: [{ id: "b1", label: "Chrome (Work)", createdAt: CONNECTED, diagnostics: null }],
   pairing: null,
   registrations: [],
@@ -193,6 +194,25 @@ describe("Browser pane", () => {
     await waitFor(() => expect(calls(fake, "browserResetPairings")).toHaveLength(1));
     await waitFor(() => expect(screen.queryByText(/could not be read/)).toBeNull());
     expect(within(panel()).getByText("Listening")).toBeTruthy();
+  });
+
+  it.each([
+    ["endpointStoreUnusable", /connection record could not be stored.*permissions of the MyPass data folder/],
+    ["listenerUnavailable", /local connection could not be opened/],
+    ["workerUnavailable", /background task could not be started/],
+  ] as const)("a_failed_start_shows_the_%s_reason_without_the_reset_action", async (reason, message) => {
+    await open({ listening: false, startFailure: reason });
+    const notice = await screen.findByTestId("start-failure");
+    expect(notice.getAttribute("data-reason")).toBe(reason);
+    expect(within(notice).getByText(message)).toBeTruthy();
+    expect(within(panel()).getByText("Not running")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Reset paired browsers" })).toBeNull();
+  });
+
+  it("a_running_bridge_shows_no_start_failure", async () => {
+    await open();
+    await within(panel()).findByText("Listening");
+    expect(screen.queryByTestId("start-failure")).toBeNull();
   });
 
   it("the_stored_status_never_keeps_the_pairing_code", async () => {

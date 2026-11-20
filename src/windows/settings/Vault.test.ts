@@ -1,6 +1,8 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { DisplacedCopies } from "../../lib/bindings";
+import type { FakeBackend } from "../../test/fakeBackend";
 import { calls } from "../../test/mainApp";
 import { renderSettingsApp } from "../../test/settingsApp";
 
@@ -152,5 +154,71 @@ describe("backups", () => {
     await screen.findByRole("button", { name: "Show in Finder" });
     expect(screen.queryByText("Last backup failed", { exact: false })).toBeNull();
     expect(screen.queryAllByRole("listitem")).toEqual([]);
+  });
+});
+
+describe("competing copies", () => {
+  const COPIES: DisplacedCopies = {
+    count: 2,
+    copies: [
+      { location: "primary", name: ".vault.kdbx.1.2.3.displaced", bytes: 2048 },
+      { location: "secondary", name: ".vault.kdbx.4.5.6.displaced", bytes: 12 },
+    ],
+    unavailable: [],
+  };
+  const withCopies = (fake: FakeBackend) => void (fake.state.displaced = structuredClone(COPIES));
+
+  it("shows_nothing_without_competing_copies", async () => {
+    const { fake } = await open();
+    await screen.findByText("Test vault");
+    await waitFor(() => expect(calls(fake, "syncDisplacedStatus").length).toBeGreaterThan(0));
+    expect(screen.queryByTestId("displaced-copies")).toBeNull();
+  });
+
+  it("lists_the_copies_by_name_and_says_they_are_never_deleted_automatically", async () => {
+    await open({}, withCopies);
+    const section = await screen.findByTestId("displaced-copies");
+    expect(within(section).getByText("Competing copies kept: 2")).toBeTruthy();
+    expect(within(section).getByText(".vault.kdbx.1.2.3.displaced")).toBeTruthy();
+    expect(within(section).getByText(".vault.kdbx.4.5.6.displaced")).toBeTruthy();
+    expect(within(section).getByText("Vault folder")).toBeTruthy();
+    expect(within(section).getByText("Sync folder")).toBeTruthy();
+    expect(within(section).getByText("2 KB")).toBeTruthy();
+    expect(within(section).getByText(/never deletes them automatically/)).toBeTruthy();
+    expect(within(section).getByText(/remove them yourself in the vault folder/)).toBeTruthy();
+    // Read-only: no way to delete from here.
+    expect(within(section).queryByRole("button")).toBeNull();
+  });
+
+  it("an_unreadable_folder_is_reported_not_shown_as_no_copies", async () => {
+    await open({}, (fake) => {
+      fake.state.displaced = { count: 0, copies: [], unavailable: ["secondary"] };
+    });
+    const section = await screen.findByTestId("displaced-copies");
+    expect(within(section).getByRole("alert").textContent).toBe("Competing copies could not be checked in: Sync folder");
+    expect(within(section).queryByText(/Competing copies kept/)).toBeNull();
+  });
+
+  it("a_failed_status_read_is_reported", async () => {
+    await open({}, (fake) => {
+      fake.handlers.syncDisplacedStatus = () => {
+        throw new Error("boom");
+      };
+    });
+    const section = await screen.findByTestId("displaced-copies");
+    expect(within(section).getByRole("alert").textContent).toBe("Competing copies could not be checked.");
+  });
+
+  it("a_failed_refresh_after_a_vault_switch_shows_no_filenames_of_the_previous_vault", async () => {
+    const { fake } = await open({}, withCopies);
+    const section = await screen.findByTestId("displaced-copies");
+    expect(within(section).getByText(".vault.kdbx.1.2.3.displaced")).toBeTruthy();
+    fake.handlers.syncDisplacedStatus = () => {
+      throw new Error("boom");
+    };
+    await fake.emit("sessionChanged", { ...fake.state.session, vaultPath: "/other/vault.kdbx" });
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("Competing copies could not be checked."));
+    expect(screen.queryByText(".vault.kdbx.1.2.3.displaced")).toBeNull();
+    expect(screen.queryByText(/Competing copies kept/)).toBeNull();
   });
 });

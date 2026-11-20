@@ -220,7 +220,7 @@ impl From<KdbxError> for SessionError {
             } => Self::Downloading,
             KdbxError::Io { message, .. } => Self::Io(message),
             KdbxError::InvalidOperation(m) => Self::InvalidInput(m),
-            e @ KdbxError::Random => Self::Io(e.to_string()),
+            e @ (KdbxError::Random | KdbxError::VaultRetained { .. }) => Self::Io(e.to_string()),
         }
     }
 }

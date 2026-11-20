@@ -4,7 +4,7 @@
 its tests pass, or, for manual-only items, once the manual check has actually been walked. History
 lives in `git log`, not here.
 
-Last updated: 2026-11-15
+Last updated: 2026-11-20
 
 ---
 
@@ -25,22 +25,11 @@ Last updated: 2026-11-15
   custom dialog would let Cancel be the default.
 - [ ] Manual: confirm that Cmd+Q and logout/restart raise `ExitRequested` on macOS, and session end
   on Windows (checklist in `RUN.md`).
-- [ ] macOS tray panel position still uses the panel window's scale factor; use the scale factor
-  of the monitor that holds the tray icon (Windows now uses destination-monitor scale/work area).
 
 ## Stage 2b UI follow-ups
 
 - [ ] Manual: walk the Stage 2b checklist in `RUN.md` on a copy of the owner's vault (unlock, shell,
   editors, history and bin, generator, settings, CSV import, tray panel, quit flow, themes, languages).
-- [ ] Restore from the bin to the original group: the UI restores to the root today because the backend
-  keeps no origin; use the KDBX 4.1 `PreviousParentGroup` in `mypass-session`.
-- [ ] Empty Deleted or deleting a parent group while one of its entries is open in the editor: define
-  and test what the editor does (close, or keep and refuse to save).
-- [ ] History values are not revealable: add a backend command for per-version reveal, then the UI.
-- [ ] Generator Use is not recorded in the generator history (only Copy is).
-- [ ] Reserved hotkeys are refused in the UI only; move the check into the backend hotkey parser.
-- [ ] CSV import error causes are matched by their English message; add separate error codes
-  (`csvMissingColumn`, `csvNotUtf8`, `csvEmpty`) instead.
 - [ ] Prune unused legacy catalog keys (418 at the time of writing) once stage 3 has ported its screens.
 - [ ] npm dependencies are bumped by hand (exact pins); add an npm ecosystem with grouping to
   Dependabot, with the same cooldown as cargo.
@@ -50,13 +39,8 @@ Last updated: 2026-11-15
 - [ ] Manual: walk the Stage 3 checklist in `RUN.md` (registration, pairing, endpoint file, autofill,
   save flows, lock behaviour, crash and quit, other browsers, old-app guard) on a copy of the owner's
   vault and record the results in the PR.
-- [ ] `PairingManager`: add one atomic "clear all" (a single save plus the cache). `reset_pairings` on a
-  running bridge revokes one browser at a time, so an error midway leaves a partial reset.
 - [ ] Before any `connectNative` use: host handshake lazily on the first frame, reconnect with a fresh
   handshake, never resend a frame already written.
-- [ ] A failed `LoopbackServer::start` (for example a `secrets/shared` folder with group or other
-  bits) shows `listening: false` with no reason and no action in the Browser pane; surface an
-  "endpoint store unusable" state.
 
 ## Stage 4 passkeys
 
@@ -76,8 +60,27 @@ Last updated: 2026-11-15
   team W645B93PPQ without notarization and require INSTALL.txt's quarantine-removal steps.
 - [ ] Safe secondary-folder sync on FAT/exFAT: volumes without atomic exchange or hard links
   currently fail closed with unavailable/unsupportedFolder; never overwrite a competing vault.
-- [ ] Surface retained `.displaced` copies in sync status and provide an explicit cleanup UI.
+- [ ] Explicit, race-free cleanup UI for retained `.displaced` copies (needs exact vault and copy
+  identity persisted at write time, in-flight files named separately, and confirmation bound to the
+  displayed ids and session). The surfacing itself is done: the Vault pane lists the copies read-only.
   These competing vault copies are deliberately never auto-deleted.
+- [ ] Replacing a vault on the move-aside path (Windows and volumes without an atomic exchange)
+  renames the current file to a working `.aside` name with a rename that replaces. If another
+  program has put its own file under that exact name first, that file is overwritten. This
+  predates stage 7. Fix it with a rename that never replaces (or a private reserved name) and
+  fail closed where the volume cannot do that; test the collision with distinct bytes.
+- [ ] Working-name leftovers (`.aside`, or the hidden temp name after an atomic exchange) are not
+  listed in the sync status. The error now names the file when a failed replace strands the
+  vault there, but a leftover from a crash, or from a working name that could not be removed
+  after the copy was published, shows up only in the folder itself. List them read-only, apart
+  from the real competing copies.
+- [ ] The Vault pane's list of competing copies does not refresh while it stays open if a copy is
+  kept by a save of the primary vault only. It refreshes when the pane opens, when the vault
+  changes and when a sync finishes. Refresh it on a primary-only save too.
+- [ ] macOS tray panel position: the click point is read when the click event is handled, not when
+  it happened. If the pointer moves off the icon in between, the panel can open at the pointer's
+  new spot (still on a real screen). Capture the point at event time if the tray API gives it,
+  and check on a mixed-DPI, multi-monitor setup by hand.
 - [ ] Upgrade device-unlock storage to `SecAccessControl(biometryCurrentSet)` with a data-protection
   Keychain and provisioning profile; current ordinary Keychain + LocalAuthentication handling
   checks biometric domain state for Touch ID-only enrolments.

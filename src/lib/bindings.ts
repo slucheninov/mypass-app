@@ -110,6 +110,8 @@ export const commands = {
 	sidebarGet: () => typedError<Sidebar_Serialize, ApiError>(__TAURI_INVOKE("sidebar_get")),
 	syncConnectSecondary: (folderToken: string, strategy: MigrationStrategy) => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_connect_secondary", { folderToken, strategy })),
 	syncDisconnectSecondary: () => typedError<null, ApiError>(__TAURI_INVOKE("sync_disconnect_secondary")),
+	/**  The kept competing vault copies, for display. Read-only: MyPass never deletes them. */
+	syncDisplacedStatus: () => typedError<DisplacedCopies, ApiError>(__TAURI_INVOKE("sync_displaced_status")),
 	syncNow: () => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_now")),
 	syncStatus: () => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_status")),
 	vaultCreate: (path: string, password: string, name: string) => typedError<SessionStatus_Serialize, ApiError>(__TAURI_INVOKE("vault_create", { path, password, name })),
@@ -289,6 +291,21 @@ export type BrowserRegistrationDto_Serialize = {
 	detail: string | null,
 };
 
+/**
+ *  Why the bridge is not running when the pairing list is not the cause. A fixed reason only: no
+ *  path, no store error text.
+ */
+export type BrowserStartFailure = 
+/**
+ *  The endpoint record cannot be stored (for example a `secrets/shared` folder with group or
+ *  other permission bits).
+ */
+"endpointStoreUnusable" | 
+/**  The loopback listener could not be created. */
+"listenerUnavailable" | 
+/**  A worker thread could not be started. */
+"workerUnavailable";
+
 /**  Everything the Browser pane shows. */
 export type BrowserStatus = BrowserStatus_Serialize | BrowserStatus_Deserialize;
 
@@ -301,6 +318,8 @@ export type BrowserStatus_Deserialize = {
 	 *  offers `browser_reset_pairings`.
 	 */
 	pairingStoreFailed: boolean,
+	/**  The machine-readable reason the bridge is not running, other than the pairing list. */
+	startFailure?: BrowserStartFailure | null,
 	paired: PairedBrowserDto_Deserialize[],
 	pairing?: PairingChallengeDto | null,
 	registrations: BrowserRegistrationDto_Deserialize[],
@@ -319,6 +338,8 @@ export type BrowserStatus_Serialize = {
 	 *  offers `browser_reset_pairings`.
 	 */
 	pairingStoreFailed: boolean,
+	/**  The machine-readable reason the bridge is not running, other than the pairing list. */
+	startFailure: BrowserStartFailure | null,
 	paired: PairedBrowserDto_Serialize[],
 	pairing: PairingChallengeDto | null,
 	registrations: BrowserRegistrationDto_Serialize[],
@@ -435,6 +456,29 @@ export type DeviceUnlockStatus_Serialize = {
 	 */
 	reason: OfferBlock | null,
 };
+
+/**  The kept competing copies of the open vault. */
+export type DisplacedCopies = {
+	count: number,
+	copies: DisplacedCopyInfo[],
+	/**  Locations whose folder could not be read: their copies are unknown, not absent. */
+	unavailable: DisplacedLocation[],
+};
+
+/**  One kept competing copy. `name` is the file name only, for display. */
+export type DisplacedCopyInfo = {
+	location: DisplacedLocation,
+	name: string,
+	/**  Length in bytes. */
+	bytes: number | null,
+};
+
+/**  Which copy of the vault the displaced file sits next to. */
+export type DisplacedLocation = 
+/**  Next to the open vault file. */
+"primary" | 
+/**  Next to the copy in the secondary sync folder. */
+"secondary";
 
 /**  One saved version of an entry's notes, as the webview sees it. */
 export type DraftVersionDto = {
@@ -1128,8 +1172,13 @@ export type SecondaryStatus_Deserialize =
  *  and `unsupportedFolder`.
  */
 { state: "unavailable"; reason: SecondaryUnavailable } | 
-/**  The last sync failed; the remote and the primary are untouched. */
-{ state: "error"; code: SecondaryError };
+/**
+ *  The last sync failed; the remote and the primary are untouched, except when
+ *  `recovery_file` is set: then the previous vault survives only under that hidden file
+ *  name (a name, never a folder) next to the synced copy, and the user is told to look
+ *  for it. No listing shows such a file.
+ */
+{ state: "error"; code: SecondaryError; recoveryFile?: string | null };
 
 /**  What the Settings sync pane shows (the `SyncStatusChanged` event payload). */
 export type SecondaryStatus_Serialize = 
@@ -1147,8 +1196,13 @@ export type SecondaryStatus_Serialize =
  *  and `unsupportedFolder`.
  */
 { state: "unavailable"; reason: SecondaryUnavailable } | 
-/**  The last sync failed; the remote and the primary are untouched. */
-{ state: "error"; code: SecondaryError };
+/**
+ *  The last sync failed; the remote and the primary are untouched, except when
+ *  `recovery_file` is set: then the previous vault survives only under that hidden file
+ *  name (a name, never a folder) next to the synced copy, and the user is told to look
+ *  for it. No listing shows such a file.
+ */
+{ state: "error"; code: SecondaryError; recoveryFile?: string };
 
 /**  Why the secondary folder cannot be used right now (a localisable code). */
 export type SecondaryUnavailable = 

@@ -198,6 +198,17 @@ it.each([
   await renderSettingsApp({}, { pane: "Vault", prepare: f => { f.state.sync = status; } });
   expect(await screen.findByText(label)).toBeTruthy();
 });
+it("secondary error with a retained vault shows the recovery file name only", async () => {
+  await renderSettingsApp({}, { pane: "Vault", prepare: f => { f.state.sync = { state: "error", code: "io", recoveryFile: ".vault.kdbx.1.2.3.aside" }; } });
+  const note = await screen.findByTestId("sync-recovery-file");
+  expect(note.textContent).toBe("The previous vault is kept as .vault.kdbx.1.2.3.aside next to the synced copy. Do not delete it.");
+  expect(screen.getByText("Something went wrong")).toBeTruthy();
+});
+it("secondary error without a recovery file shows no recovery note", async () => {
+  await renderSettingsApp({}, { pane: "Vault", prepare: f => { f.state.sync = { state: "error", code: "io" }; } });
+  await screen.findByText("Something went wrong");
+  expect(screen.queryByTestId("sync-recovery-file")).toBeNull();
+});
 it("About automatic update toggle uses settings API", async () => {
   const { fake } = await renderSettingsApp({}, { pane: "About" });
   await userEvent.click(await screen.findByRole("switch", { name: "Check for updates automatically" }));

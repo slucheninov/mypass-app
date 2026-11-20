@@ -3,7 +3,7 @@
 
 use super::blocking;
 use crate::state::AppState;
-use mypass_session::{ApiError, SecondaryStatus};
+use mypass_session::{ApiError, DisplacedCopies, SecondaryStatus};
 use tauri::State;
 
 #[tauri::command]
@@ -24,6 +24,16 @@ pub async fn sync_now(state: State<'_, AppState>) -> Result<SecondaryStatus, Api
 pub async fn sync_disconnect_secondary(state: State<'_, AppState>) -> Result<(), ApiError> {
     let core = state.0.clone();
     blocking(move || core.sync_disconnect_secondary()).await
+}
+
+/// The kept competing vault copies, for display. Read-only: MyPass never deletes them.
+#[tauri::command]
+#[specta::specta]
+pub async fn sync_displaced_status(
+    state: State<'_, AppState>,
+) -> Result<DisplacedCopies, ApiError> {
+    let core = state.0.clone();
+    blocking(move || core.sync_displaced_status()).await
 }
 
 #[tauri::command]

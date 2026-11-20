@@ -1205,6 +1205,20 @@ impl AppCore {
         self.secondary.sync_now()
     }
 
+    /// The competing vault copies kept next to the open vault and its secondary copy. Read-only:
+    /// MyPass never deletes them. A folder that could not be read is reported as unavailable.
+    /// No vault open means none.
+    pub fn sync_displaced_status(&self) -> Result<crate::displaced::DisplacedCopies, ApiError> {
+        Ok(crate::displaced::list(&self.displaced_targets()))
+    }
+
+    fn displaced_targets(&self) -> Vec<(crate::displaced::DisplacedLocation, PathBuf)> {
+        crate::displaced::targets(
+            self.session.vault_path(),
+            self.settings.get().secondary_folder.as_deref(),
+        )
+    }
+
     /// Stops syncing and forgets the folder; the copy in it is left as it is.
     pub fn sync_disconnect_secondary(&self) -> Result<(), ApiError> {
         let _gate = self
@@ -2677,6 +2691,45 @@ mod tests {
         assert_eq!(f.core.sync_status().unwrap(), SecondaryStatus::Off);
         assert_eq!(f.core.settings.get().secondary_folder, None);
         assert!(folder.join("v.kdbx").is_file(), "the copy is left in place");
+    }
+
+    fn put_displaced(dir: &Path, name: &str, tag: &str) -> PathBuf {
+        let path = dir.join(format!(".{name}.{tag}.displaced"));
+        std::fs::write(&path, b"competing").unwrap();
+        path
+    }
+
+    #[test]
+    fn displaced_copies_are_listed_and_never_deleted() {
+        let f = fx_open();
+        assert_eq!(
+            f.core.sync_displaced_status().unwrap(),
+            crate::displaced::DisplacedCopies::default()
+        );
+        let folder = f.dir.path().join("secondary");
+        std::fs::create_dir_all(&folder).unwrap();
+        f.core
+            .settings
+            .set_secondary_folder(Some(folder.to_string_lossy().into_owned()))
+            .unwrap();
+        let name = f.path.file_name().unwrap().to_string_lossy().into_owned();
+        let primary_copy = put_displaced(f.path.parent().unwrap(), &name, "1.2.3");
+        let secondary_copy = put_displaced(&folder, &name, "4.5.6");
+        let other = put_displaced(f.path.parent().unwrap(), "other.kdbx", "7.8.9");
+        // A sync, a save and a status read leave every copy alone.
+        f.login("A", "pw-a");
+        let _ = f.core.sync_now();
+        let status = f.core.sync_displaced_status().unwrap();
+        assert_eq!(status.count, 2);
+        assert_eq!(status.copies.len(), 2);
+        assert!(status.unavailable.is_empty());
+        assert!(primary_copy.exists() && secondary_copy.exists() && other.exists());
+    }
+
+    #[test]
+    fn displaced_status_without_a_vault_is_empty() {
+        let f = fx();
+        assert_eq!(f.core.sync_displaced_status().unwrap().count, 0);
     }
 
     #[test]

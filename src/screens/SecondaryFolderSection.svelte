@@ -41,6 +41,9 @@
     {:else if sync.status.state === "error"}{errors[sync.status.code]}
     {:else if sync.status.state === "off"}{t("Not syncing to another folder")}{/if}
   </p>
+  {#if sync.status.state === "error" && sync.status.recoveryFile}
+    <p role="alert" data-testid="sync-recovery-file">{t("The previous vault is kept as %@ next to the synced copy. Do not delete it.", [sync.status.recoveryFile])}</p>
+  {/if}
   <Button disabled={busy || session.status.state !== "unlocked"} onclick={() => void run(choose)}>{t("Choose folder…")}</Button>
   {#if sync.status.state !== "off"}
     <Button disabled={busy || sync.status.state === "syncing" || session.status.state !== "unlocked"} onclick={() => void run(async () => { sync.status = await api.syncNow(); })}>{t("Sync now")}</Button>

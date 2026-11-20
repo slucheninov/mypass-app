@@ -56,7 +56,10 @@ pub enum SyncError {
     RemoteUnsupported(String),
     /// A copy exceeds the automatic-open budget. An already displaced copy is kept.
     #[error("vault KDF cost above the sync limit")]
-    SyncKdfLimitExceeded,
+    SyncKdfLimitExceeded {
+        /// The hidden file name when a displaced copy cannot be listed.
+        recovery_file: Option<String>,
+    },
     /// The remote vault is damaged.
     #[error("the remote vault is damaged: {0}")]
     RemoteCorrupt(String),
@@ -199,12 +202,15 @@ fn remote_open_error(e: KdbxError) -> SyncError {
         KdbxError::WrongPassword => SyncError::RemotePasswordMismatch,
         KdbxError::NotKdbx => SyncError::RemoteNotAVault,
         e @ KdbxError::UnsupportedVersion { .. } => SyncError::RemoteUnsupported(e.to_string()),
-        KdbxError::RemoteKdfLimitExceeded(_) => SyncError::SyncKdfLimitExceeded,
+        KdbxError::RemoteKdfLimitExceeded(_) => SyncError::SyncKdfLimitExceeded {
+            recovery_file: None,
+        },
         KdbxError::Unsupported(m) => SyncError::RemoteUnsupported(m),
         KdbxError::Corrupt(m) | KdbxError::InvalidKdfParameters(m) => SyncError::RemoteCorrupt(m),
-        e @ (KdbxError::Io { .. } | KdbxError::Random | KdbxError::InvalidOperation(_)) => {
-            SyncError::RemoteCorrupt(e.to_string())
-        }
+        e @ (KdbxError::Io { .. }
+        | KdbxError::VaultRetained { .. }
+        | KdbxError::Random
+        | KdbxError::InvalidOperation(_)) => SyncError::RemoteCorrupt(e.to_string()),
     }
 }
 
@@ -462,10 +468,20 @@ impl SyncEngine {
         }
         match self.remote.write_if(write.expected, write.bytes)? {
             WriteOutcome::Conflict => Ok(Attempt::Raced),
-            WriteOutcome::Displaced(theirs) => {
+            outcome @ (WriteOutcome::Displaced(_) | WriteOutcome::DisplacedKept { .. }) => {
+                let (theirs, hidden) = match outcome {
+                    WriteOutcome::DisplacedKept { bytes, name } => (bytes, Some(name)),
+                    WriteOutcome::Displaced(bytes) => (bytes, None),
+                    _ => return Err(SyncError::Cancelled),
+                };
                 if !still_current() {
                     return Err(SyncError::Cancelled);
                 }
+                // A copy that cannot be merged stays on disk: say where when no listing can.
+                let kept = |hidden: Option<String>| match hidden {
+                    Some(name) => SyncError::Storage(StorageError::VaultRetained { name }),
+                    None => SyncError::ConcurrentCopyKept,
+                };
                 // Our bytes are on the remote, but they displaced a version another writer
                 // committed in the last instant: merge it back on the next attempt.
                 let theirs = Database::open_with_limits(
@@ -474,11 +490,13 @@ impl SyncEngine {
                     KdfLimits::remote(Some(&local.settings.kdf)),
                 )
                 .map_err(|e| match e {
-                    KdbxError::RemoteKdfLimitExceeded(_) => SyncError::SyncKdfLimitExceeded,
-                    _ => SyncError::ConcurrentCopyKept,
+                    KdbxError::RemoteKdfLimitExceeded(_) => SyncError::SyncKdfLimitExceeded {
+                        recovery_file: hidden.clone(),
+                    },
+                    _ => kept(hidden.clone()),
                 })?;
                 if theirs.root.uuid != local.root.uuid {
-                    return Err(SyncError::ConcurrentCopyKept);
+                    return Err(kept(hidden));
                 }
                 Ok(Attempt::Rebase(Box::new(merge(write.content, &theirs))))
             }
