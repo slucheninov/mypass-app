@@ -15,6 +15,8 @@ Last updated: 2026-11-20
   error as success by design; any other directory-sync error is reported after the replacement has
   committed, and the caller must reload. Only real mounts can show which error they return.
 
+- [ ] Bridge wire types (credential, generated password) still carry plain strings that are freed without wiping.
+
 ## Stage 2a follow-ups
 
 - [ ] Quit-dialog default button: with tauri-plugin-dialog 2.8.4 a closed dialog is reported as the
