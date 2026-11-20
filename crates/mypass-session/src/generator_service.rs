@@ -22,6 +22,7 @@ use mypass_core::{
 use mypass_kdbx::{Database, Entry, Group, Timestamp};
 use std::collections::BTreeSet;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 /// The history keeps this many generated passwords.
 pub const HISTORY_LIMIT: usize = 30;
@@ -251,11 +252,12 @@ fn record_history_inner(
 }
 
 /// The recorded password of history entry `id`; `NotFound` for anything outside the history.
-pub fn history_reveal(db: &Database, id: Uuid) -> Result<String, SessionError> {
+/// The copy is wiped on drop.
+pub fn history_reveal(db: &Database, id: Uuid) -> Result<Zeroizing<String>, SessionError> {
     history_entries(db)
         .into_iter()
         .find(|e| e.uuid == id)
-        .map(|e| e.field("Password").unwrap_or_default().to_owned())
+        .map(|e| Zeroizing::new(e.field("Password").unwrap_or_default().to_owned()))
         .ok_or(SessionError::NotFound)
 }
 
@@ -648,7 +650,10 @@ mod tests {
         let f = fx();
         let id = record(&f, "reveal-me", "https://example.com");
         assert_eq!(
-            f.session.with_db(|db| history_reveal(db, id)).unwrap(),
+            f.session
+                .with_db(|db| history_reveal(db, id))
+                .unwrap()
+                .map(|v| v.to_string()),
             Ok("reveal-me".to_owned())
         );
         // An entry outside the history group is not revealable or deletable through it.
@@ -703,7 +708,10 @@ mod tests {
         f.session
             .with_db(|db| {
                 assert_eq!(history_list(db).len(), 1);
-                assert_eq!(history_reveal(db, id), Ok("marked".to_owned()));
+                assert_eq!(
+                    history_reveal(db, id).map(|v| v.to_string()),
+                    Ok("marked".to_owned())
+                );
             })
             .unwrap();
         history_delete(&f.session, id).unwrap();
@@ -747,7 +755,10 @@ mod tests {
         let f = fx();
         let id = record(&f, "copied-value", "https://copy.example.org");
         assert_eq!(
-            f.session.with_db(|db| history_reveal(db, id)).unwrap(),
+            f.session
+                .with_db(|db| history_reveal(db, id))
+                .unwrap()
+                .map(|v| v.to_string()),
             Ok("copied-value".to_owned())
         );
     }

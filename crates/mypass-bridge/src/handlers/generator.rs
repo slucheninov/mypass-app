@@ -95,7 +95,7 @@ pub(crate) fn get_generated_password_history(ctx: &Ctx<'_>) -> Response {
             .into_iter()
             .filter_map(|item| {
                 let id = Uuid::parse_str(&item.id).ok()?;
-                let password = history_reveal(db, id).ok()?;
+                let password = std::mem::take(&mut *history_reveal(db, id).ok()?);
                 Some(ExtensionPasswordHistoryItem {
                     id: wire_id(id),
                     password,
