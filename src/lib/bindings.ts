@@ -543,6 +543,11 @@ export type EntryEditModel_Deserialize = {
 	 *  passkey stored after the editor opened (a browser replace) is never removed unseen.
 	 */
 	passkeyRef?: string | null,
+	/**
+	 *  The user explicitly chose to bring this deleted entry back: when it sits in the recycle
+	 *  bin, a save is refused unless this is set, and then it moves the entry to `group_id`.
+	 */
+	restore?: boolean,
 };
 
 /**
@@ -583,6 +588,11 @@ export type EntryEditModel_Serialize = {
 	 *  passkey stored after the editor opened (a browser replace) is never removed unseen.
 	 */
 	passkeyRef: string | null,
+	/**
+	 *  The user explicitly chose to bring this deleted entry back: when it sits in the recycle
+	 *  bin, a save is refused unless this is set, and then it moves the entry to `group_id`.
+	 */
+	restore: boolean,
 };
 
 export type EntryQuery = {

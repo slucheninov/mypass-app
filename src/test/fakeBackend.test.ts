@@ -214,7 +214,13 @@ describe("fake backend", () => {
     // Like `save_entry`: saving an entry with another group moves it, out of the bin too.
     const old = fake.state.entries.find((e) => e.summary.id === "e-old")!;
     expect(old.summary.inRecycleBin).toBe(true);
-    expect(await commands.entrySave({ ...structuredClone(old.model), groupId: WORK_GROUP_ID })).toEqual({ status: "ok", data: "e-old" });
+    // Like the backend, a save of a deleted entry needs the explicit `restore`.
+    expect(await commands.entrySave({ ...structuredClone(old.model), groupId: WORK_GROUP_ID })).toMatchObject({
+      status: "error",
+      error: { code: "invalidInput" },
+    });
+    expect(old.summary.inRecycleBin).toBe(true);
+    expect(await commands.entrySave({ ...structuredClone(old.model), groupId: WORK_GROUP_ID, restore: true })).toEqual({ status: "ok", data: "e-old" });
     expect(old.summary.inRecycleBin).toBe(false);
     old.summary.inRecycleBin = true;
     old.summary.groupId = BIN_GROUP_ID;

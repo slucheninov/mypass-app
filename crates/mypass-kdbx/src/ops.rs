@@ -249,7 +249,7 @@ impl Database {
             .unwrap_or_else(|| self.root_id())
     }
     /// True for the live recycle bin itself and every group below it.
-    fn is_bin_or_below(&self, group: Uuid) -> bool {
+    pub fn is_bin_or_below(&self, group: Uuid) -> bool {
         self.live_bin()
             .is_some_and(|bin| groups(bin).any(|(g, _)| g.uuid == group))
     }

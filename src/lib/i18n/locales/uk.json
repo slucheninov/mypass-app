@@ -711,7 +711,6 @@
   "This folder is not inside iCloud Drive, so iCloud will not sync it. MyPass will still keep the vault there.": "Ця папка не розташована в iCloud Drive, тому iCloud не синхронізуватиме її. MyPass усе одно зберігатиме сховище там.",
   "This group is empty": "Ця група порожня",
   "This is the last reported state, not a live check. Reopen the extension and choose Check this browser after changing another manager.": "Це останній зареєстрований стан, а не перевірка в реальному часі. Після зміни іншого менеджера знову відкрийте розширення й виберіть «Check this browser».",
-  "This item is in Deleted. Restore it before saving your changes.": "Цей запис у розділі «Видалено». Відновіть його, перш ніж зберігати зміни.",
   "This item was deleted, so its editor was closed.": "Цей запис видалено, тому редактор закрито.",
   "This password protects your vault. Remember it — it cannot be changed or reset later.": "Цей пароль захищає ваше сховище. Запам’ятайте його — пізніше його не можна буде змінити чи скинути.",
   "This site's password requirements could not be satisfied": "Вимоги цього сайту до пароля неможливо виконати",
@@ -869,5 +868,8 @@
   "Disabled in Windows Startup settings. Open Windows Settings > Apps > Startup and allow MyPass.": "Вимкнено в параметрах автозавантаження Windows. Відкрийте Параметри Windows > Програми > Автозавантаження та дозвольте MyPass.",
   "On Windows, turning off the display also locks MyPass when this option is enabled.": "У Windows вимкнення дисплея також блокує MyPass, коли цей параметр увімкнено.",
   "Ctrl+Shift+L is also used by Word and some editors. MyPass overrides it while running; you can change the lock hotkey here.": "Ctrl+Shift+L також використовується у Word і деяких редакторах. MyPass перехоплює його під час роботи; тут можна змінити клавіші блокування.",
-  "startup.webview2.missing": "MyPass потрібен Microsoft Edge WebView2 Runtime, якого немає на цьому комп’ютері. Установіть його з https://go.microsoft.com/fwlink/p/?LinkId=2124703 і запустіть MyPass знову."
+  "startup.webview2.missing": "MyPass потрібен Microsoft Edge WebView2 Runtime, якого немає на цьому комп’ютері. Установіть його з https://go.microsoft.com/fwlink/p/?LinkId=2124703 і запустіть MyPass знову.",
+  "Restore and save": "Відновити й зберегти",
+  "This item is in Deleted. Saving restores it to the selected group.": "Цей запис у розділі «Видалено». Збереження відновить його в обраній групі.",
+  "This item was permanently deleted. Saving creates a new item with your changes.": "Цей запис видалено назавжди. Збереження створить новий запис із вашими змінами."
 }

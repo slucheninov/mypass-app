@@ -158,6 +158,7 @@ export function makeEntry(spec: EntrySpec): FixtureEntry {
       passkey: spec.passkey ?? null,
       removePasskey: false,
       passkeyRef: spec.passkey ? `passkey-ref-${spec.id}` : null,
+      restore: false,
     },
   };
   const versions: HistorySpec[] =

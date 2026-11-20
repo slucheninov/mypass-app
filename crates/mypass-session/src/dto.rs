@@ -341,6 +341,10 @@ pub struct EntryEditModel {
     /// passkey stored after the editor opened (a browser replace) is never removed unseen.
     #[serde(default)]
     pub passkey_ref: Option<String>,
+    /// The user explicitly chose to bring this deleted entry back: when it sits in the recycle
+    /// bin, a save is refused unless this is set, and then it moves the entry to `group_id`.
+    #[serde(default)]
+    pub restore: bool,
 }
 
 impl std::fmt::Debug for EntryEditModel {

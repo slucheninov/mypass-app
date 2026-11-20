@@ -117,6 +117,7 @@ pub fn new_model(entry_type: EntryTypeDto, group_id: Uuid) -> EntryEditModel {
         passkey: None,
         remove_passkey: false,
         passkey_ref: None,
+        restore: false,
     }
 }
 
@@ -228,6 +229,7 @@ pub fn edit_model(db: &Database, id: Uuid) -> Result<EntryEditModel, SessionErro
         passkey: passkey_meta(entry),
         remove_passkey: false,
         passkey_ref: passkey_fingerprint(entry),
+        restore: false,
     })
 }
 
@@ -504,12 +506,14 @@ fn apply(
 /// Creates the entry (`model.id` is `None`) or saves the edit. Attachment files are read before
 /// the vault is touched. Returns the entry id.
 ///
-/// The target group must still be a live group: one that is gone answers `NotFound`, one that was
-/// deleted (it sits in the recycle bin) answers `InvalidInput`, and nothing is written. This is the
-/// backend half of the editor rule (see `EntryEditor.svelte`): the editor keeps its draft when the
-/// group it points at is removed and asks for another group instead of silently losing the item
-/// into the bin. An entry that already lives in that deleted group and is saved without moving is
-/// not refused.
+/// Both rules below are checked inside the same transaction that writes, so a delete that lands
+/// between the editor's last look and the save cannot be overwritten or undone silently:
+/// - the destination group must be live: one that is gone answers `NotFound`, the recycle bin or
+///   anything below it answers `InvalidInput`, and nothing is written (the editor keeps its draft
+///   and asks for another group, see `EntryEditor.svelte`);
+/// - an entry that sits in the recycle bin is saved only with `model.restore`, the user's explicit
+///   choice to bring it back to the destination group; otherwise `InvalidInput`, nothing written.
+///   This covers the entry that was deleted alone and the one deleted with its group.
 pub fn save_entry(session: &VaultSession, model: EntryEditModel) -> Result<Uuid, SessionError> {
     let id = model.id.as_deref().map(parse_id).transpose()?;
     let group = parse_id(&model.group_id)?;
@@ -517,9 +521,15 @@ pub fn save_entry(session: &VaultSession, model: EntryEditModel) -> Result<Uuid,
     let ops = resolve_ops(&model.attachment_ops)?;
     session.mutate_tracked(|db, now| {
         require_not_history(db, group)?;
-        let stays_put = id.is_some_and(|id| db.parent_of_entry(id) == Some(group));
-        if db.is_group_in_recycle_bin(group) && !stays_put {
+        if db.is_bin_or_below(group) {
             return Err(SessionError::InvalidInput("the group was deleted".into()));
+        }
+        if let Some(id) = id {
+            if db.is_in_recycle_bin(id) && !model.restore {
+                return Err(SessionError::InvalidInput(
+                    "the item was deleted; restore it explicitly".into(),
+                ));
+            }
         }
         match id {
             None => {
@@ -2488,24 +2498,76 @@ mod tests {
     }
 
     #[test]
-    fn an_entry_already_in_a_deleted_group_can_be_saved_without_moving() {
+    fn an_entry_deleted_with_its_group_needs_an_explicit_restore_to_be_saved() {
         let f = fx();
         let work = create_group(&f.session, f.root, "work", None).unwrap();
         let id = f.create(|m| {
             m.title = "x".into();
             m.group_id = work.simple().to_string();
         });
+        // The editor looked while the group was live; the group is deleted before the save lands.
+        let mut stale = f.model(id);
+        stale.title = "kept".into();
         delete_group(&f.session, work).unwrap();
-        // The model still names the deleted group (the editor kept its draft): no move, no refusal.
-        let mut m = f.model(id);
-        m.group_id = work.simple().to_string();
-        m.title = "kept".into();
-        save_entry(&f.session, m).unwrap();
+        let before = f.db(Clone::clone);
+        assert!(matches!(
+            save_entry(&f.session, stale.clone()),
+            Err(SessionError::InvalidInput(_))
+        ));
+        assert!(f.db(|d| *d == before), "a refused save writes nothing");
+        // Even with the explicit choice, the destination must be live.
+        stale.restore = true;
+        assert!(matches!(
+            save_entry(&f.session, stale.clone()),
+            Err(SessionError::InvalidInput(_))
+        ));
+        assert!(f.db(|d| *d == before));
+        // Explicit restore into a live group saves the edit and brings the entry back.
+        stale.group_id = f.root.simple().to_string();
+        save_entry(&f.session, stale).unwrap();
+        assert_eq!(f.db(|d| d.parent_of_entry(id)), Some(f.root));
         assert_eq!(
             f.db(|d| d.find_entry(id).map(|e| e.title().to_owned())),
             Some("kept".into())
         );
-        assert_eq!(f.db(|d| d.parent_of_entry(id)), Some(work));
+    }
+
+    #[test]
+    fn a_save_never_silently_undoes_the_deletion_of_the_entry_alone() {
+        let f = fx();
+        let id = f.create(|m| m.title = "x".into());
+        let mut stale = f.model(id);
+        stale.title = "edited".into();
+        delete_entry(&f.session, id).unwrap();
+        let before = f.db(Clone::clone);
+        // The old destination is still live, yet the save is refused without the explicit choice.
+        assert!(matches!(
+            save_entry(&f.session, stale.clone()),
+            Err(SessionError::InvalidInput(_))
+        ));
+        assert!(f.db(|d| *d == before));
+        assert!(f.db(|d| d.is_in_recycle_bin(id)));
+        // The explicit restore to the original (root) group works, also in a root-only vault.
+        stale.restore = true;
+        save_entry(&f.session, stale).unwrap();
+        assert_eq!(f.db(|d| d.parent_of_entry(id)), Some(f.root));
+        assert!(!f.db(|d| d.is_in_recycle_bin(id)));
+    }
+
+    #[test]
+    fn saving_into_the_recycle_bin_itself_is_refused() {
+        let f = fx();
+        let id = f.create(|m| m.title = "x".into());
+        delete_entry(&f.session, id).unwrap();
+        let bin = f.db(|d| d.meta.recycle_bin_uuid).unwrap();
+        let mut m = f.model(id);
+        m.group_id = bin.simple().to_string();
+        m.restore = true;
+        assert!(matches!(
+            save_entry(&f.session, m),
+            Err(SessionError::InvalidInput(_))
+        ));
+        assert!(f.db(|d| d.is_in_recycle_bin(id)));
     }
 
     #[test]

@@ -587,6 +587,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         passkey: null,
         removePasskey: false,
         passkeyRef: null,
+        restore: false,
       };
     },
     // Like `queries::passkey_details`: the metadata plus the public credential id, never the key.
@@ -655,15 +656,16 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         state.saveFailure = null;
         throw apiError(code);
       }
-      // Like `save_entry`: a group that is gone is `notFound`; one that was deleted (below the bin)
-      // is `invalidInput` unless the entry already lives there.
+      // Like `save_entry`: a group that is gone is `notFound`; the bin or a group below it is
+      // `invalidInput`; an entry in the bin is saved only with the explicit `restore`.
       if (model.groupId !== ROOT_GROUP_ID) {
         const target = locate(model.groupId);
         if (!target) throw apiError("notFound");
         const bin = state.groups.find((g) => g.isRecycleBin);
-        const deleted = bin !== undefined && bin.id !== model.groupId && locate(model.groupId, bin.children) !== null;
-        if (deleted && (!model.id || findEntry(model.id).summary.groupId !== model.groupId)) throw apiError("invalidInput");
+        const deleted = bin !== undefined && (bin.id === model.groupId || locate(model.groupId, bin.children) !== null);
+        if (deleted) throw apiError("invalidInput");
       }
+      if (model.id && findEntry(model.id).summary.inRecycleBin && !model.restore) throw apiError("invalidInput");
       let attachments: AttachmentMeta[] = structuredClone(model.attachments);
       for (const op of model.attachmentOps) {
         if (op.kind === "remove") {
@@ -694,6 +696,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         passkey,
         removePasskey: false,
         passkeyRef,
+        restore: false,
       };
       if (found) {
         found.passkey = passkey;

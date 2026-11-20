@@ -711,7 +711,6 @@
   "This folder is not inside iCloud Drive, so iCloud will not sync it. MyPass will still keep the vault there.": "This folder is not inside iCloud Drive, so iCloud will not sync it. MyPass will still keep the vault there.",
   "This group is empty": "This group is empty",
   "This is the last reported state, not a live check. Reopen the extension and choose Check this browser after changing another manager.": "This is the last reported state, not a live check. Reopen the extension and choose Check this browser after changing another manager.",
-  "This item is in Deleted. Restore it before saving your changes.": "This item is in Deleted. Restore it before saving your changes.",
   "This item was deleted, so its editor was closed.": "This item was deleted, so its editor was closed.",
   "This password protects your vault. Remember it — it cannot be changed or reset later.": "This password protects your vault. Remember it — it cannot be changed or reset later.",
   "This site's password requirements could not be satisfied": "This site's password requirements could not be satisfied",
@@ -869,5 +868,8 @@
   "Disabled in Windows Startup settings. Open Windows Settings > Apps > Startup and allow MyPass.": "Disabled in Windows Startup settings. Open Windows Settings > Apps > Startup and allow MyPass.",
   "On Windows, turning off the display also locks MyPass when this option is enabled.": "On Windows, turning off the display also locks MyPass when this option is enabled.",
   "Ctrl+Shift+L is also used by Word and some editors. MyPass overrides it while running; you can change the lock hotkey here.": "Ctrl+Shift+L is also used by Word and some editors. MyPass overrides it while running; you can change the lock hotkey here.",
-  "startup.webview2.missing": "MyPass needs the Microsoft Edge WebView2 Runtime, which is missing on this PC. Install it from https://go.microsoft.com/fwlink/p/?LinkId=2124703 and start MyPass again."
+  "startup.webview2.missing": "MyPass needs the Microsoft Edge WebView2 Runtime, which is missing on this PC. Install it from https://go.microsoft.com/fwlink/p/?LinkId=2124703 and start MyPass again.",
+  "Restore and save": "Restore and save",
+  "This item is in Deleted. Saving restores it to the selected group.": "This item is in Deleted. Saving restores it to the selected group.",
+  "This item was permanently deleted. Saving creates a new item with your changes.": "This item was permanently deleted. Saving creates a new item with your changes."
 }

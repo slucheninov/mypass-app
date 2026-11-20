@@ -7,16 +7,19 @@
   // message, `limitExceeded` goes to the Files form, everything else is a toast.
   //
   // The editor of an existing entry follows the vault underneath it (Empty Deleted, deleting a
-  // parent group, a sync). One rule, in two halves:
-  //   1. The entry is gone (`entryGet` answers `notFound`, e.g. Empty Deleted purged it): there is
-  //      nothing left to save into, so the editor closes at once with a notice and the draft is
-  //      dropped (the backend has already dropped its note drafts).
-  //   2. The entry still exists but what it would be saved into is removed: the group chosen in the
-  //      editor was deleted or purged, or the entry itself sits in the recycle bin. The editor stays
-  //      open and the draft is kept, an inline alert says why, and Save is refused (nothing is sent)
-  //      until the cause is gone: the user picks another live group (saving then moves the entry
-  //      there, out of the bin too) or cancels. The backend refuses a save into a removed group too
-  //      (`save_entry`).
+  // parent group, a sync). One rule: unsaved edits are never discarded by a change in the vault,
+  // and nothing is written into a place the user did not choose.
+  //   1. The entry is gone (`entryGet` answers `notFound`, e.g. Empty Deleted purged it). A clean
+  //      editor closes at once with a notice. A dirty one stays open with its draft and says so:
+  //      Save then creates a new item from the draft (the purged one cannot be saved into), and
+  //      Cancel asks before discarding, like any dirty editor.
+  //   2. The entry is in the recycle bin (deleted alone or with its group): the editor stays open
+  //      and Save becomes "Restore and save", the user's explicit choice to bring the entry back to
+  //      the group shown (also the original group, also the root of a vault with no other group).
+  //      The backend refuses a save of a deleted entry without that choice, and checks it inside
+  //      the saving transaction, so a delete that lands after the last look cannot be undone silently.
+  //   3. The group chosen in the editor was deleted or purged: Save is refused (nothing is sent)
+  //      until the user picks a live group. The backend refuses a save into a removed group too.
   import { events } from "../lib/bindings";
   import { onDestroy, onMount, tick, untrack } from "svelte";
   import { api, ApiFailure, errorMessage } from "../lib/api";
@@ -107,20 +110,23 @@
   );
   /** The entry being edited is in the recycle bin (deleted under the editor). */
   let entryInBin = $state(false);
-  // Choosing another group is the way out: saving there moves the entry (out of the bin too).
-  const groupAtOpen = untrack(() => model.groupId);
+  /** The entry was purged under a dirty editor: Save creates a new item from the draft. */
+  let entryGone = $state(false);
   const blocked = $derived(
-    groupRemoved
-      ? t("The group of this item was deleted. Choose another group to save it.")
-      : entryInBin && model.groupId === groupAtOpen
-        ? t("This item is in Deleted. Restore it before saving your changes.")
+    groupRemoved ? t("The group of this item was deleted. Choose another group to save it.") : null,
+  );
+  const notice = $derived(
+    entryGone
+      ? t("This item was permanently deleted. Saving creates a new item with your changes.")
+      : entryInBin
+        ? t("This item is in Deleted. Saving restores it to the selected group.")
         : null,
   );
 
   /** Asks the backend whether the entry is still there and where it is (rule above, both halves). */
   async function follow() {
     const id = model.id;
-    if (id === null || saving) return;
+    if (id === null || saving || entryGone) return;
     const unchanged = lockGuard();
     try {
       const detail = await api.entryGet(id);
@@ -129,8 +135,14 @@
     } catch (e) {
       if (!unchanged() || model.id !== id) return;
       if (e instanceof ApiFailure && e.code === "notFound") {
-        toasts.push("info", t("This item was deleted, so its editor was closed."));
-        close();
+        if (isDirty()) {
+          // The draft may be the only copy of what was typed: keep it (rule above, half 1).
+          entryGone = true;
+          entryInBin = false;
+        } else {
+          toasts.push("info", t("This item was deleted, so its editor was closed."));
+          close();
+        }
       }
       // Any other failure keeps the editor as it is: the next change asks again.
     }
@@ -220,7 +232,11 @@
       titleInput?.focus();
       return;
     }
+    // The explicit choices of the rule above: a deleted entry is restored, a purged one is recreated.
+    payload.restore = entryInBin && !entryGone;
+    if (entryGone) payload.id = null;
     saving = true;
+    let resync = false;
     const unchanged = lockGuard();
     try {
       const id = await api.entrySave(payload);
@@ -228,7 +244,7 @@
       // A draft write still in flight must land before the clear below, never after it.
       await notes?.settle();
       if (!unchanged()) return;
-      const previous = payload.id;
+      const previous = model.id;
       navigation.select(id);
       close();
       // The saved note supersedes its drafts (R30); a failure here is invisible and harmless.
@@ -242,9 +258,12 @@
         formError = errorMessage(e);
         void focusError();
       } else toasts.reportError(e);
+      // The vault changed under the save (a delete, a purge): look again, so the editor shows why.
+      resync = e instanceof ApiFailure && (e.code === "notFound" || e.code === "invalidInput");
     } finally {
       saving = false;
     }
+    if (resync) void follow();
   }
 
   // Mod+Enter saves, Escape cancels. A dialog of the editor (websites, group picker, discard) owns
@@ -275,7 +294,9 @@
     <h2 id="editor-title">{heading}</h2>
     <div class="actions">
       <Button disabled={saving} onclick={cancel}>{t("Cancel")}</Button>
-      <Button variant="primary" disabled={saving} onclick={() => void save()}>{t("Save")}</Button>
+      <Button variant="primary" disabled={saving} onclick={() => void save()}>
+        {entryInBin && !entryGone ? t("Restore and save") : t("Save")}
+      </Button>
     </div>
   </header>
 
@@ -288,6 +309,7 @@
   {/if}
 
   {#if blocked}<p class="form-error" role="alert" tabindex="-1">{blocked}</p>{/if}
+  {#if notice}<p class="notice" role="status" data-testid="editor-notice">{notice}</p>{/if}
   {#if formError}<p class="form-error" role="alert" tabindex="-1">{formError}</p>{/if}
 
   <div class="body">
@@ -371,6 +393,15 @@
     gap: 12px;
     margin: 0 0 12px;
     padding: 6px 10px;
+    border: var(--sep);
+    border-radius: var(--radius);
+    background: var(--list-bg);
+    color: var(--text-2);
+    font-size: 13px;
+  }
+  .notice {
+    margin: 0 0 12px;
+    padding: 8px 10px;
     border: var(--sep);
     border-radius: var(--radius);
     background: var(--list-bg);
