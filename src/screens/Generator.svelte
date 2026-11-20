@@ -263,7 +263,7 @@
    *  value was replaced or cleared, the window hid, the session locked or the generator closed is
    *  dropped: the form never receives a stale password. */
   async function use() {
-    if (value === null || !onuse || using) return;
+    if (value === null || !onuse || using || busy) return;
     const current = value;
     const target = recordTarget;
     const mine = genSeq;
@@ -273,7 +273,7 @@
     try {
       await toasts.guard(async () => {
         await api.generatorUse(current, target);
-        if (mine !== genSeq || !unchanged()) return;
+        if (mine !== genSeq || value !== current || !unchanged()) return;
         onuse(current);
       });
     } finally {
@@ -425,7 +425,7 @@
       <div class="actions">
         <Button disabled={value === null} onclick={() => void copy()}>{t("Copy")}</Button>
         {#if onuse}
-          <Button variant="primary" disabled={value === null || using} onclick={() => void use()}>{t("Use password")}</Button>
+          <Button variant="primary" disabled={value === null || using || busy} onclick={() => void use()}>{t("Use password")}</Button>
         {/if}
       </div>
     </div>

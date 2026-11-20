@@ -310,6 +310,34 @@ describe("copy and use", () => {
     await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
   });
 
+  it("keeps the previous password from being used while generation is pending", async () => {
+    const user = userEvent.setup();
+    const used: string[] = [];
+    const { fake } = await mount({ onuse: (v) => used.push(v) });
+    const generate = screen.getByRole("button", { name: "Generate" });
+    const use = screen.getByRole<HTMLButtonElement>("button", { name: "Use password" });
+    await user.click(generate);
+    await waitFor(() => expect(use.disabled).toBe(false));
+    const original = fake.handlers.generatorGenerate;
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    fake.handlers.generatorGenerate = async (args) => {
+      await gate;
+      return { ...await original(args), value: "replacement" };
+    };
+
+    await user.click(generate);
+    expect(use.disabled).toBe(true);
+    await user.click(use);
+    expect(calls(fake, "generatorUse")).toHaveLength(0);
+
+    release();
+    await waitFor(() => expect(use.disabled).toBe(false));
+    expect(shown().textContent).toBe("replacement");
+    await user.click(use);
+    await waitFor(() => expect(used).toEqual(["replacement"]));
+  });
+
   it("a_use_answered_after_the_session_locked_never_fills_the_form", async () => {
     const user = userEvent.setup();
     const used: string[] = [];
