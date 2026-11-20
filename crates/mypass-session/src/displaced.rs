@@ -101,12 +101,14 @@ pub(crate) fn targets(
 }
 
 /// What a listing's ids are bound to: the unlocked vault, its unlock incarnation and the
-/// searched vault files. A delete recomputes it; any difference makes every id stale.
+/// searched vault files and whether the primary supports deletion. A delete recomputes it;
+/// any difference makes every id stale.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct ListingKey {
     pub(crate) vault_id: String,
     pub(crate) incarnation: u64,
     pub(crate) targets: Vec<(DisplacedLocation, PathBuf)>,
+    pub(crate) can_delete_primary: bool,
 }
 
 /// One deletable copy of the current listing, as the user saw it.
@@ -206,7 +208,9 @@ pub(crate) fn list(
         };
         for check in inspection.copies {
             let id = match (&ids, check.verdict, check.sha256, check.path.file_name()) {
-                (Some((listing, key)), Ok(_), Some(sha256), Some(name)) => {
+                (Some((listing, key)), Ok(_), Some(sha256), Some(name))
+                    if *location != DisplacedLocation::Primary || key.can_delete_primary =>
+                {
                     let id = listing.id(key, *location, &check.path, check.len, &sha256);
                     listed.push(ListedCopy {
                         id: id.clone(),

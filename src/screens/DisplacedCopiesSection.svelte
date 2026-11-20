@@ -70,17 +70,20 @@
   let deleting = $state<DisplacedCopyInfo | null>(null);
   let busy = $state(false);
 
+  const canDelete = (copy: DisplacedCopyInfo) =>
+    copy.id && (copy.location !== "primary" || sync.storage.location !== "iCloudDrive");
+
   // A vault switch, a lock or a refresh that no longer offers the copy closes the confirmation.
   $effect(() => {
     const pending = deleting;
-    if (pending && !found.copies.some((copy) => copy.id && copy.id === pending.id)) {
+    if (pending && !found.copies.some((copy) => canDelete(copy) && copy.id === pending.id)) {
       untrack(() => (deleting = null));
     }
   });
 
   async function remove() {
     const target = deleting;
-    if (!target?.id || busy) return;
+    if (!target?.id || !canDelete(target) || busy) return;
     busy = true;
     try {
       await api.syncDisplacedDelete(target.id);
@@ -117,7 +120,7 @@
             <span>{copy.kind === "displaced" ? t("Competing copy") : t("Replacement working copy")}</span>
             <span class="name">{copy.name}</span>
             {#if copy.bytes !== null}<span class="size">{formatBytes(copy.bytes)}</span>{/if}
-            {#if copy.id}
+            {#if canDelete(copy)}
               <Button variant="danger" aria-label={`${t("Delete")}: ${copy.name}`} disabled={busy} onclick={() => (deleting = copy)}>
                 {t("Delete")}
               </Button>

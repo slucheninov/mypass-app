@@ -304,6 +304,23 @@ describe("retained vault copies", () => {
     expect(within(section).getByText(".vault.kdbx.1.2.3.displaced")).toBeTruthy();
   });
 
+  it("hides_delete_for_iCloud_primary_copies_and_keeps_secondary_delete_available", async () => {
+    const { fake } = await open({}, (backend) => {
+      backend.state.displaced = {
+        ...structuredClone(DELETABLE),
+        copies: DELETABLE.copies.map((copy) => ({ ...copy, id: copy.name })),
+      };
+    });
+    await askToDelete();
+    await fake.emit("storageStatusChanged", { ...fake.state.storage, location: "iCloudDrive" });
+    await waitFor(() => expect(screen.queryByTestId("displaced-delete-confirm")).toBeNull());
+    const section = await screen.findByTestId("displaced-copies");
+    expect(within(section).getByText(".vault.kdbx.1.2.3.displaced")).toBeTruthy();
+    expect(within(section).queryByRole("button", { name: "Delete: .vault.kdbx.1.2.3.displaced" })).toBeNull();
+    expect(within(section).getByRole("button", { name: "Delete: .vault.kdbx.4.5.6.aside" })).toBeTruthy();
+    expect(calls(fake, "syncDisplacedDelete")).toEqual([]);
+  });
+
   it("deletes_the_confirmed_copy_by_its_id_and_refreshes_the_list", async () => {
     const { fake } = await open({}, withDeletable);
     await askToDelete();

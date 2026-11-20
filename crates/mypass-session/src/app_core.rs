@@ -1285,6 +1285,8 @@ impl AppCore {
             vault_id: self.session.vault_id()?,
             incarnation,
             targets: targets.to_vec(),
+            can_delete_primary: self.session.storage_status().location
+                == mypass_sync::icloud::VaultLocation::Local,
         })
     }
 
