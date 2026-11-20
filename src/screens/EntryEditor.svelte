@@ -117,11 +117,22 @@
   );
   const notice = $derived(
     entryGone
-      ? t("This item was permanently deleted. Saving creates a new item with your changes.")
+      ? t("This item was permanently deleted. Saving creates a new item with your changes; its attachments and passkey are not carried over.")
       : entryInBin
         ? t("This item is in Deleted. Saving restores it to the selected group.")
         : null,
   );
+
+  /** Saving a purged entry's draft creates a new item: nothing of the old one exists any more, so
+   *  its attachments and passkey are dropped from the form (queued removals would name files the new
+   *  item never had and fail the save). Files picked for adding stay. */
+  function forgetPurgedItem() {
+    model.attachments = [];
+    model.attachmentOps = model.attachmentOps.filter((op) => op.kind === "add");
+    model.passkey = null;
+    model.removePasskey = false;
+    model.passkeyRef = null;
+  }
 
   /** Asks the backend whether the entry is still there and where it is (rule above, both halves). */
   async function follow() {
@@ -139,6 +150,7 @@
           // The draft may be the only copy of what was typed: keep it (rule above, half 1).
           entryGone = true;
           entryInBin = false;
+          forgetPurgedItem();
         } else {
           toasts.push("info", t("This item was deleted, so its editor was closed."));
           close();

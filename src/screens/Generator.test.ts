@@ -486,6 +486,20 @@ describe("history", () => {
   });
 });
 
+describe("history of a use without a website", () => {
+  it("a_blank_website_row_gets_a_muted_no_website_label", async () => {
+    const user = userEvent.setup();
+    await mount({ onuse: () => undefined });
+    await user.click(screen.getByRole("button", { name: "Generate" }));
+    await waitFor(() => expect(shown().textContent).toHaveLength(20));
+    await user.click(screen.getByRole("button", { name: "Use password" }));
+    await user.click(screen.getByRole("tab", { name: "Recently generated" }));
+    const list = await screen.findByRole("list", { name: "Generated passwords" });
+    const label = within(list).getByText("No website");
+    expect(label.className).toContain("muted");
+  });
+});
+
 describe("toolbar entry", () => {
   it("toolbar_menu_opens_the_generator_in_a_dialog_without_use", async () => {
     const user = userEvent.setup();

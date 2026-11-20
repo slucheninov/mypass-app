@@ -441,6 +441,8 @@
               <div class="info">
                 {#if item.title !== "" || item.url !== ""}
                   <span class="title">{item.title === "" ? item.url : item.title}</span>
+                {:else}
+                  <span class="title muted">{t("No website")}</span>
                 {/if}
                 <span class="date">{when(item)}</span>
                 {#if r && r.value !== null}
@@ -574,6 +576,9 @@
     flex-wrap: wrap;
     align-items: baseline;
     gap: 4px 10px;
+  }
+  .muted {
+    color: var(--text-2);
   }
   .title {
     font-weight: 600;

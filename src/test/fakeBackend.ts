@@ -711,9 +711,12 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         if (deleted) throw apiError("invalidInput");
       }
       if (model.id && findEntry(model.id).summary.inRecycleBin && !model.restore) throw apiError("invalidInput");
-      let attachments: AttachmentMeta[] = structuredClone(model.attachments);
+      // Like `apply_attachment_ops`: a new entry starts with none, and removing a file the entry
+      // does not hold is `notFound`.
+      let attachments: AttachmentMeta[] = model.id === null ? [] : structuredClone(model.attachments);
       for (const op of model.attachmentOps) {
         if (op.kind === "remove") {
+          if (!attachments.some((a) => a.name === op.name)) throw apiError("notFound");
           attachments = attachments.filter((a) => a.name !== op.name);
           continue;
         }

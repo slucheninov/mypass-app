@@ -871,5 +871,6 @@
   "startup.webview2.missing": "MyPass потрібен Microsoft Edge WebView2 Runtime, якого немає на цьому комп’ютері. Установіть його з https://go.microsoft.com/fwlink/p/?LinkId=2124703 і запустіть MyPass знову.",
   "Restore and save": "Відновити й зберегти",
   "This item is in Deleted. Saving restores it to the selected group.": "Цей запис у розділі «Видалено». Збереження відновить його в обраній групі.",
-  "This item was permanently deleted. Saving creates a new item with your changes.": "Цей запис видалено назавжди. Збереження створить новий запис із вашими змінами."
+  "This item was permanently deleted. Saving creates a new item with your changes; its attachments and passkey are not carried over.": "Цей запис видалено назавжди. Збереження створить новий запис із вашими змінами; його вкладення та ключ доступу не буде перенесено.",
+  "No website": "Без вебсайту"
 }

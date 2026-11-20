@@ -515,7 +515,7 @@ describe("the vault changing under the editor", () => {
   const notice = () => screen.queryByTestId("editor-notice")?.textContent ?? null;
   const GROUP_GONE = "The group of this item was deleted. Choose another group to save it.";
   const ITEM_DELETED = "This item is in Deleted. Saving restores it to the selected group.";
-  const ITEM_PURGED = "This item was permanently deleted. Saving creates a new item with your changes.";
+  const ITEM_PURGED = "This item was permanently deleted. Saving creates a new item with your changes; its attachments and passkey are not carried over.";
   const entryOf = (fake: { state: { entries: { summary: { id: string } }[] } }, id: string) =>
     fake.state.entries.find((e) => e.summary.id === id);
 
@@ -548,6 +548,43 @@ describe("the vault changing under the editor", () => {
     expect(savedModel(fake)).toMatchObject({ id: null, title: "Bank draft", groupId: WORK_GROUP_ID, restore: false });
     expect(fake.state.entries.map((e) => e.model.title)).toContain("Bank draft");
     await waitFor(() => expect(navigation.editModel).toBeNull());
+  });
+
+  it("a_purged_entry_draft_with_a_queued_attachment_removal_saves_as_a_new_item_without_the_old_files", async () => {
+    const fake = backendWith([
+      {
+        id: "e-bank",
+        title: "Bank",
+        groupId: WORK_GROUP_ID,
+        modified: 1,
+        attachments: [{ name: "a.txt", size: 1 }],
+        passkey: { relyingParty: "bank.test", username: "ann", created: 1, usable: true },
+      },
+    ]);
+    await openEdit(fake, "e-bank");
+    // The user queues the removal of the existing file and edits the title.
+    await user().click(screen.getByRole("button", { name: "Remove" }));
+    await user().type(field("Title"), " draft");
+    await fake.handlers.entryDelete({ id: "e-bank" });
+    await fake.handlers.entryEmptyBin({});
+    await waitFor(() => expect(notice()).toBe(ITEM_PURGED));
+    expect(ITEM_PURGED).toContain("attachments and passkey are not carried over");
+    // The form no longer offers what no longer exists.
+    expect(screen.queryByText("a.txt")).toBeNull();
+    await user().click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(calls(fake, "entrySave")).toHaveLength(1));
+    expect(savedModel(fake)).toMatchObject({
+      id: null,
+      title: "Bank draft",
+      attachments: [],
+      attachmentOps: [],
+      passkey: null,
+      removePasskey: false,
+      passkeyRef: null,
+    });
+    await waitFor(() => expect(navigation.editModel).toBeNull());
+    expect(fake.state.entries.map((e) => e.model.title)).toContain("Bank draft");
+    expect(toasts.items.map((x) => x.text)).toEqual([]);
   });
 
   it("discarding_the_draft_of_a_purged_entry_is_an_explicit_choice", async () => {

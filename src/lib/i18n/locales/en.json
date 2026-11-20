@@ -871,5 +871,6 @@
   "startup.webview2.missing": "MyPass needs the Microsoft Edge WebView2 Runtime, which is missing on this PC. Install it from https://go.microsoft.com/fwlink/p/?LinkId=2124703 and start MyPass again.",
   "Restore and save": "Restore and save",
   "This item is in Deleted. Saving restores it to the selected group.": "This item is in Deleted. Saving restores it to the selected group.",
-  "This item was permanently deleted. Saving creates a new item with your changes.": "This item was permanently deleted. Saving creates a new item with your changes."
+  "This item was permanently deleted. Saving creates a new item with your changes; its attachments and passkey are not carried over.": "This item was permanently deleted. Saving creates a new item with your changes; its attachments and passkey are not carried over.",
+  "No website": "No website"
 }
