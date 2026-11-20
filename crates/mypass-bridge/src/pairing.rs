@@ -500,6 +500,30 @@ impl PairingManager {
         Ok(())
     }
 
+    /// Revokes every browser in ONE store write plus one cache update, so an error can never leave
+    /// a partial reset: on failure nothing changed in memory and the previous list is put back into
+    /// the store. Returns the browsers that were removed.
+    pub fn clear_all(&self) -> Result<Vec<PairedBrowser>, PairingError> {
+        let removed = {
+            let _m = lock(&self.mutate);
+            let before = self.list();
+            if before.is_empty() {
+                return Ok(Vec::new());
+            }
+            if let Err(e) = self.store.save(&[]) {
+                let _ = self.store.save(&before);
+                return Err(e);
+            }
+            self.cache
+                .write()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clear();
+            before
+        };
+        self.notify();
+        Ok(removed)
+    }
+
     /// Changes the list: edits a copy of the in-memory list and persists the WHOLE copy (never a
     /// re-read of the store plus the change). On success the copy becomes the list. On failure the
     /// in-memory list stays as it was, one attempt is made to put the previous list back into the
@@ -1200,6 +1224,69 @@ mod tests {
         flaky.fail_set.store(true, Ordering::SeqCst);
         assert!(m.revoke(id).is_err());
         assert!(m.is_authorized(Some(&secret)));
+    }
+
+    fn pair_two(s: &ManualScheduler, m: &PairingManager) -> (String, String) {
+        let c = started(m);
+        let first = m.complete(&c.code).unwrap().unwrap();
+        s.advance(START_MIN_INTERVAL);
+        let c = started(m);
+        let second = m.complete(&c.code).unwrap().unwrap();
+        (first, second)
+    }
+
+    #[test]
+    fn clear_all_removes_every_browser_with_one_store_write() {
+        let mem = InMemorySecretStore::new();
+        let flaky = Flaky::new(mem.clone());
+        let sched = manual();
+        let m = PairingManager::new(PairedBrowserStore::new(flaky.clone()), sched.clone()).unwrap();
+        let (s1, s2) = pair_two(&sched, &m);
+        let notified = Arc::new(AtomicUsize::new(0));
+        let n = Arc::clone(&notified);
+        m.set_on_change(Arc::new(move || {
+            n.fetch_add(1, Ordering::SeqCst);
+        }));
+        let sets = flaky.sets.load(Ordering::SeqCst);
+        let removed = m.clear_all().unwrap();
+        assert_eq!(removed.len(), 2);
+        assert_eq!(flaky.sets.load(Ordering::SeqCst), sets + 1);
+        assert_eq!(notified.load(Ordering::SeqCst), 1);
+        assert!(!m.is_authorized(Some(&s1)));
+        assert!(!m.is_authorized(Some(&s2)));
+        assert!(m.list().is_empty());
+        assert!(PairedBrowserStore::new(mem).list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn clear_all_on_an_empty_list_writes_nothing() {
+        let mem = InMemorySecretStore::new();
+        let flaky = Flaky::new(mem);
+        let m = PairingManager::new(PairedBrowserStore::new(flaky.clone()), manual()).unwrap();
+        assert!(m.clear_all().unwrap().is_empty());
+        assert_eq!(flaky.sets.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn failed_clear_all_keeps_every_browser_in_memory_and_in_the_store() {
+        let mem = InMemorySecretStore::new();
+        let flaky = Flaky::new(mem.clone());
+        let sched = manual();
+        let m = PairingManager::new(PairedBrowserStore::new(flaky.clone()), sched.clone()).unwrap();
+        let (s1, s2) = pair_two(&sched, &m);
+        let notified = Arc::new(AtomicUsize::new(0));
+        let n = Arc::clone(&notified);
+        m.set_on_change(Arc::new(move || {
+            n.fetch_add(1, Ordering::SeqCst);
+        }));
+        flaky.fail_set.store(true, Ordering::SeqCst);
+        assert!(m.clear_all().is_err());
+        flaky.fail_set.store(false, Ordering::SeqCst);
+        assert_eq!(notified.load(Ordering::SeqCst), 0);
+        assert!(m.is_authorized(Some(&s1)));
+        assert!(m.is_authorized(Some(&s2)));
+        assert_eq!(m.list().len(), 2);
+        assert_eq!(PairedBrowserStore::new(mem).list().unwrap().len(), 2);
     }
 
     #[test]

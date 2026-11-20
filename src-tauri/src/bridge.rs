@@ -597,8 +597,8 @@ impl BridgeState {
     pub fn reset_pairings(&self) -> Result<(), PairingError> {
         let mut slot = lock(&self.0.slot);
         if let Some(handle) = slot.as_ref() {
-            for browser in handle.pairing.list() {
-                handle.pairing.revoke(browser.id)?;
+            // One store write: an error leaves every browser paired, never a partial reset.
+            for browser in handle.pairing.clear_all()? {
                 handle.diagnostics.remove(browser.id);
             }
             return Ok(());
@@ -1304,6 +1304,19 @@ mod tests {
         );
         assert!(!f.state.pairing_store_failed());
         assert!(f.handle().pairing.list().is_empty());
+    }
+
+    #[test]
+    fn reset_on_a_running_bridge_forgets_every_browser_in_one_step() {
+        let f = fixture(true);
+        let first = pair(&f);
+        let second = pair(&f);
+        assert_eq!(f.handle().pairing.list().len(), 2);
+        f.state.reset_pairings().unwrap();
+        let pairing = &f.handle().pairing;
+        assert!(pairing.list().is_empty());
+        assert!(!pairing.is_authorized(Some(&first)));
+        assert!(!pairing.is_authorized(Some(&second)));
     }
 
     #[test]

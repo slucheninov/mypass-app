@@ -58,8 +58,6 @@ Last updated: 2026-11-15
 - [ ] Manual: walk the Stage 3 checklist in `RUN.md` (registration, pairing, endpoint file, autofill,
   save flows, lock behaviour, crash and quit, other browsers, old-app guard) on a copy of the owner's
   vault and record the results in the PR.
-- [ ] `PairingManager`: add one atomic "clear all" (a single save plus the cache). `reset_pairings` on a
-  running bridge revokes one browser at a time, so an error midway leaves a partial reset.
 - [ ] Before any `connectNative` use: host handshake lazily on the first frame, reconnect with a fresh
   handshake, never resend a frame already written.
 - [ ] A failed `LoopbackServer::start` (for example a `secrets/shared` folder with group or other
