@@ -567,7 +567,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       return {
         id: null,
         entryType,
-        groupId: groupId ?? PERSONAL_GROUP_ID,
+        groupId: groupId ?? (locate(PERSONAL_GROUP_ID) ? PERSONAL_GROUP_ID : ROOT_GROUP_ID),
         title: "",
         favorite: false,
         username: "",
@@ -627,6 +627,16 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       found.summary.inRecycleBin = false;
       changed();
       return null;
+    },
+    // Like `editing::reveal_history`: one value of the version at `index` (newest first), never a
+    // one-time code; `entryHistory` itself carries no values.
+    entryHistoryReveal: ({ id, index, field }) => {
+      requireUnlocked();
+      const found = findEntry(id);
+      const version = found.history[found.history.length - 1 - index];
+      if (!version) throw apiError("notFound");
+      if (field.kind === "totp") throw apiError("invalidInput");
+      return secretOf({ ...found, model: version.model }, field);
     },
     entryReveal: ({ id, field }) => {
       requireUnlocked();

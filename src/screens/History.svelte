@@ -1,16 +1,20 @@
 <script lang="ts">
-  // The earlier versions of one entry, newest first. Only the date, the title and the NAMES of the
-  // fields that changed are shown: an old password or note never reaches the webview (there is no
-  // backend command that reveals a history value), so there is nothing to reveal, copy or clear.
-  // The owner closes it when the selection, the vault or the lock state changes.
+  // The earlier versions of one entry, newest first. The list shows only the date, the title and the
+  // NAMES of the fields that changed: `entry_history` never carries a value. An old value reaches
+  // the webview only through `entry_history_reveal`, one field of the selected version after an
+  // explicit click; it is hidden again when the selection or the list changes, the window hides,
+  // the modal closes or the vault locks (`createRevealGroup`). Nothing is copied or stored.
+  // The owner closes the modal when the selection, the vault or the lock state changes.
   import { onDestroy, onMount, tick } from "svelte";
   import { api, ApiFailure } from "../lib/api";
-  import { events, type HistoryItem } from "../lib/bindings";
+  import { events, type FieldRef, type HistoryItem } from "../lib/bindings";
   import { formatDate } from "../lib/i18n/format";
   import { t } from "../lib/i18n/index.svelte";
   import { lockGuard } from "../lib/lock-guard";
+  import { createRevealGroup } from "../lib/secret.svelte";
   import { toasts } from "../lib/stores/toasts.svelte";
   import Button from "../lib/ui/Button.svelte";
+  import IconButton from "../lib/ui/IconButton.svelte";
   import Modal from "../lib/ui/Modal.svelte";
 
   let { entryId, open, onclose }: { entryId: string; open: boolean; onclose: () => void } = $props();
@@ -59,6 +63,56 @@
         return key;
     }
   }
+
+  /** The backend reference for the old value of a changed field; `null` when it has none to show
+   *  (the title is on the row, a one-time secret, files and the app's own bookkeeping are not values). */
+  function valueRef(key: string): FieldRef | null {
+    switch (key) {
+      case "Password":
+        return { kind: "password" };
+      case "UserName":
+        return { kind: "username" };
+      case "URL":
+        return { kind: "url" };
+      case "Notes":
+      case "MyPass.NotesBody":
+        return { kind: "notesBody" };
+      case "MyPass.CardNumber":
+        return { kind: "cardNumber" };
+      case "MyPass.CVV":
+        return { kind: "cardCvv" };
+      case "Title":
+      case "otp":
+      case "Attachments":
+        return null;
+      default:
+        return key.startsWith("MyPass.") ? null : { kind: "custom", key };
+    }
+  }
+
+  /** The changed fields of a version whose old value can be revealed, without repeats. */
+  const revealable = (item: HistoryItem) =>
+    [...new Set(item.changedFields)].flatMap((key) => {
+      const ref = valueRef(key);
+      return ref ? [{ key, ref, label: fieldLabel(key) }] : [];
+    });
+
+  // One old value at a time, for the field named by `shownKey`.
+  const group = createRevealGroup();
+  const shown = group.create();
+  let shownKey = $state<string | null>(null);
+
+  const toggleValue = (item: HistoryItem, key: string, ref: FieldRef) =>
+    toasts.guard(async () => {
+      const id = `${item.index}:${key}`;
+      if (shownKey === id && shown.value !== null) {
+        shown.hide();
+        shownKey = null;
+        return;
+      }
+      shownKey = id;
+      await shown.reveal(() => api.entryHistoryReveal(entryId, item.index, ref));
+    });
 
   const changed = (item: HistoryItem): string =>
     [...new Set(item.changedFields.map(fieldLabel))].join(", ");
@@ -114,9 +168,17 @@
     generation++;
     items = null;
     confirming = null;
+    group.destroy();
   });
 
   const current = $derived(items?.[active] ?? null);
+  // A value belongs to one version of one list: another row, a reload or a restore hides it.
+  $effect(() => {
+    void current;
+    void items;
+    shown.hide();
+    shownKey = null;
+  });
 
   function move(to: number) {
     if (!items || items.length === 0) return;
@@ -205,6 +267,26 @@
         </div>
       {/each}
     </div>
+    {#if current}
+      {@const values = revealable(current)}
+      {#if values.length > 0}
+        <div class="values" role="group" aria-label={when(current)}>
+          {#each values as value (value.key)}
+            {@const id = `${current.index}:${value.key}`}
+            {@const text = shownKey === id ? shown.value : null}
+            <div class="value">
+              <span class="label">{value.label}</span>
+              <span class="secret" class:mono={text !== null}>{text ?? "••••••••"}</span>
+              <IconButton
+                icon={text === null ? "eye" : "eye-off"}
+                label={text === null ? t("Show %@", [value.label]) : t("Hide %@", [value.label])}
+                onclick={() => void toggleValue(current, value.key, value.ref)}
+              />
+            </div>
+          {/each}
+        </div>
+      {/if}
+    {/if}
   {/if}
   {#snippet footer()}
     <Button onclick={onclose}>{t("Close")}</Button>
@@ -252,6 +334,32 @@
   .fields {
     font-size: 12px;
     opacity: 0.85;
+  }
+  .values {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: var(--sep);
+  }
+  .value {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .value .label {
+    flex: 0 0 110px;
+    color: var(--text-2);
+    font-size: 12px;
+  }
+  .value .secret {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
   .note {
     margin: 0;

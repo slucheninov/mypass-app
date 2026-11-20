@@ -592,6 +592,17 @@ impl AppCore {
         self.read(|db| editing::reveal_at(db, parse_id(id)?, &field, now))
     }
 
+    /// One plain value of an earlier version of the entry (`index` as in `entry_history`), after
+    /// an explicit click. History listings never carry values; this is the only way one leaves.
+    pub fn entry_history_reveal(
+        &self,
+        id: &str,
+        index: u32,
+        field: FieldRef,
+    ) -> Result<String, ApiError> {
+        self.read(|db| editing::reveal_history(db, parse_id(id)?, index as usize, &field))
+    }
+
     /// Copies a field to the clipboard from Rust (cleared after the configured seconds); the
     /// value never leaves the backend.
     pub fn entry_copy(&self, id: &str, field: FieldRef) -> Result<(), ApiError> {
@@ -1453,6 +1464,7 @@ mod tests {
         call!("entry_touch", c, a => c.entry_touch(&a.entry));
         call!("entry_history", c, a => c.entry_history(&a.entry));
         call!("entry_history_restore", c, a => c.entry_history_restore(&a.entry, 0));
+        call!("entry_history_reveal", c, a => c.entry_history_reveal(&a.entry, 0, FieldRef::Password));
         call!("attachment_export", c, a => c.attachment_export(&a.entry, "a.txt", "/nonexistent/out.bin"));
         call!("group_create", c, a => c.group_create(None, "g", None));
         call!("group_update", c, a => c.group_update(&a.root, "g", None));

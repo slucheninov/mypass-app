@@ -40,6 +40,7 @@
     "allow-entry-get",
     "allow-entry-history",
     "allow-entry-history-restore",
+    "allow-entry-history-reveal",
     "allow-entry-list",
     "allow-entry-move",
     "allow-entry-new-model",

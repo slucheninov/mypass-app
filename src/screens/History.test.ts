@@ -150,6 +150,70 @@ describe("history list", () => {
   });
 });
 
+describe("reveal an old value", () => {
+  it("a_value_is_fetched_only_on_click_for_that_version_and_field", async () => {
+    const fake = backend();
+    const dialog = await openHistory(fake);
+    const user = userEvent.setup();
+    await user.click(options(dialog)[1]!);
+    expect(calls(fake, "entryHistoryReveal")).toHaveLength(0);
+    expect(document.body.textContent).not.toContain(MID_SECRET);
+    await user.click(within(dialog).getByRole("button", { name: "Show Password" }));
+    await waitFor(() => expect(within(dialog).queryByText(MID_SECRET)).not.toBeNull());
+    expect(calls(fake, "entryHistoryReveal")).toHaveLength(1);
+    expect(calls(fake, "entryHistoryReveal")[0]!.args).toEqual({
+      id: "e-router",
+      index: 1,
+      field: { kind: "password" },
+    });
+    expect(document.body.textContent).not.toContain(OLD_SECRET);
+    expect(document.body.textContent).not.toContain("current-secret");
+    await user.click(within(dialog).getByRole("button", { name: "Hide Password" }));
+    await waitFor(() => expect(within(dialog).queryByText(MID_SECRET)).toBeNull());
+  });
+
+  it("changing_the_selected_version_hides_the_value", async () => {
+    const fake = backend();
+    const dialog = await openHistory(fake);
+    const user = userEvent.setup();
+    await user.click(options(dialog)[1]!);
+    await user.click(within(dialog).getByRole("button", { name: "Show Password" }));
+    await waitFor(() => expect(within(dialog).queryByText(MID_SECRET)).not.toBeNull());
+    await user.click(options(dialog)[2]!);
+    expect(document.body.textContent).not.toContain(MID_SECRET);
+    await user.click(options(dialog)[1]!);
+    expect(document.body.textContent).not.toContain(MID_SECRET);
+  });
+
+  it("a_title_only_version_offers_nothing_to_reveal", async () => {
+    const fake = backend();
+    const dialog = await openHistory(fake);
+    await userEvent.setup().click(options(dialog)[2]!);
+    expect(within(dialog).queryByRole("button", { name: /^Show / })).toBeNull();
+  });
+
+  it("locking_closes_history_and_leaves_no_value_in_the_page", async () => {
+    const fake = backend();
+    const dialog = await openHistory(fake);
+    const user = userEvent.setup();
+    await user.click(options(dialog)[1]!);
+    await user.click(within(dialog).getByRole("button", { name: "Show Password" }));
+    await waitFor(() => expect(within(dialog).queryByText(MID_SECRET)).not.toBeNull());
+    await fake.emit("sessionChanged", sessionStatus("locked"));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "History" })).toBeNull());
+    expect(document.body.textContent).not.toContain(MID_SECRET);
+  });
+
+  it("a_revealed_value_passes_axe", async () => {
+    const dialog = await openHistory(backend());
+    const user = userEvent.setup();
+    await user.click(options(dialog)[1]!);
+    await user.click(within(dialog).getByRole("button", { name: "Show Password" }));
+    await waitFor(() => expect(within(dialog).queryByText(MID_SECRET)).not.toBeNull());
+    await expectNoAxeViolations(dialog);
+  });
+});
+
 describe("restore a version", () => {
   it("restore_asks_confirmation_then_calls_entry_history_restore_with_index", async () => {
     const fake = backend();

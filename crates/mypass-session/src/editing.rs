@@ -575,6 +575,16 @@ pub fn reveal_at(
     unix_secs: u64,
 ) -> Result<String, SessionError> {
     let entry = find_entry(db, id)?;
+    match field {
+        FieldRef::Totp => totp_now(db, id, unix_secs)
+            .map(|t| t.code)
+            .ok_or(SessionError::NotFound),
+        other => plain_value(entry, other),
+    }
+}
+
+/// The stored value of every field kind except `Totp` (a code is computed from the live entry).
+fn plain_value(entry: &Entry, field: &FieldRef) -> Result<String, SessionError> {
     let plain = |key: &str| Ok(field_or_empty(entry, key));
     match field {
         FieldRef::Username => plain("UserName"),
@@ -583,9 +593,9 @@ pub fn reveal_at(
         FieldRef::NotesBody => plain(notes_key(entry.entry_type())),
         FieldRef::CardNumber => plain(CARD_NUMBER),
         FieldRef::CardCvv => plain(CARD_CVV),
-        FieldRef::Totp => totp_now(db, id, unix_secs)
-            .map(|t| t.code)
-            .ok_or(SessionError::NotFound),
+        FieldRef::Totp => Err(SessionError::InvalidInput(
+            "a one-time code is computed from the current entry only".into(),
+        )),
         FieldRef::Custom { key } => {
             if Entry::is_reserved_key(key) {
                 return Err(SessionError::InvalidInput(format!(
@@ -598,6 +608,20 @@ pub fn reveal_at(
                 .ok_or(SessionError::NotFound)
         }
     }
+}
+
+/// One plain value of an earlier version of an entry (`index` 0 is the newest, as listed by
+/// [`history`]), after an explicit user action. This is the only way a history value leaves the
+/// backend: [`history`] itself carries titles and field names, never values. `Totp` is refused.
+pub fn reveal_history(
+    db: &Database,
+    id: Uuid,
+    index: usize,
+    field: &FieldRef,
+) -> Result<String, SessionError> {
+    let entry = find_entry(db, id)?;
+    let version = history_version(entry, index).ok_or(SessionError::NotFound)?;
+    plain_value(version, field)
 }
 
 // ---- entry operations ----
@@ -792,15 +816,20 @@ pub fn history(db: &Database, id: Uuid) -> Result<Vec<HistoryItem>, SessionError
         .collect())
 }
 
+/// Version `index` of an entry's history, newest first.
+fn history_version(entry: &Entry, index: usize) -> Option<&Entry> {
+    index
+        .checked_add(1)
+        .and_then(|n| entry.history.len().checked_sub(n))
+        .and_then(|pos| entry.history.get(pos))
+}
+
 /// Restores version `index` (newest first, as listed by [`history`]). The current state is
 /// snapshotted into history first, so the restore is itself undoable.
 pub fn restore_history(session: &VaultSession, id: Uuid, index: usize) -> Result<(), SessionError> {
     session.mutate(|db, now| {
         let entry = find_entry(db, id)?;
-        let old = index
-            .checked_add(1)
-            .and_then(|n| entry.history.len().checked_sub(n))
-            .and_then(|pos| entry.history.get(pos))
+        let old = history_version(entry, index)
             .cloned()
             .ok_or(SessionError::NotFound)?;
         db.update_entry(id, now, |entry| {
@@ -2025,6 +2054,63 @@ mod tests {
         assert_eq!(items[2].changed_fields, ["Password"]);
         assert_eq!(items[0].changed_fields, ["Title"]);
         assert_eq!(items.iter().map(|i| i.index).collect::<Vec<_>>(), [0, 1, 2]);
+    }
+
+    #[test]
+    fn reveal_history_returns_the_value_of_that_version_only() {
+        let f = fx();
+        let id = f.create(|m| {
+            m.title = "A".into();
+            m.username = "old-user".into();
+            m.password = "p1".into();
+        });
+        f.edit(id, |m| m.password = "p2".into());
+        f.edit(id, |m| {
+            m.password = "p3".into();
+            m.username = "new-user".into();
+        });
+        // Newest first: index 0 is the state before the last edit, index 1 the original.
+        let reveal = |index: usize, field: FieldRef| f.db(|d| reveal_history(d, id, index, &field));
+        assert_eq!(reveal(0, FieldRef::Password), Ok("p2".into()));
+        assert_eq!(reveal(1, FieldRef::Password), Ok("p1".into()));
+        assert_eq!(reveal(1, FieldRef::Username), Ok("old-user".into()));
+        // The live value is untouched and still comes from `reveal`.
+        assert_eq!(
+            f.db(|d| reveal_at(d, id, &FieldRef::Password, 0)),
+            Ok("p3".into())
+        );
+        assert_eq!(reveal(2, FieldRef::Password), Err(SessionError::NotFound));
+        assert_eq!(
+            f.db(|d| reveal_history(d, Uuid::new_v4(), 0, &FieldRef::Password)),
+            Err(SessionError::NotFound)
+        );
+    }
+
+    #[test]
+    fn reveal_history_refuses_a_code_and_reserved_custom_keys() {
+        let f = fx();
+        let id = f.create(|m| m.title = "A".into());
+        f.edit(id, |m| m.title = "B".into());
+        let refused = |field: FieldRef| {
+            matches!(
+                f.db(|d| reveal_history(d, id, 0, &field)),
+                Err(SessionError::InvalidInput(_))
+            )
+        };
+        assert!(refused(FieldRef::Totp));
+        assert!(refused(FieldRef::Custom {
+            key: "Password".into()
+        }));
+    }
+
+    #[test]
+    fn history_listing_never_carries_values() {
+        let f = fx();
+        let id = f.create(|m| m.password = "very-secret-old".into());
+        f.edit(id, |m| m.password = "very-secret-new".into());
+        let items = f.db(|d| history(d, id)).unwrap();
+        let wire = format!("{items:?}");
+        assert!(!wire.contains("very-secret"));
     }
 
     #[test]

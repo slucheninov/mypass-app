@@ -56,6 +56,11 @@ export const commands = {
 	entryGet: (id: string) => typedError<EntryDetailDto_Serialize, ApiError>(__TAURI_INVOKE("entry_get", { id })),
 	entryHistory: (id: string) => typedError<HistoryItem[], ApiError>(__TAURI_INVOKE("entry_history", { id })),
 	entryHistoryRestore: (id: string, index: number) => typedError<null, ApiError>(__TAURI_INVOKE("entry_history_restore", { id, index })),
+	/**
+	 *  Reveal command: one plain value of an earlier version of the entry, after the user's explicit
+	 *  click. `entry_history` never carries values.
+	 */
+	entryHistoryReveal: (id: string, index: number, field: FieldRef) => typedError<string, ApiError>(__TAURI_INVOKE("entry_history_reveal", { id, index, field })),
 	entryList: (query: EntryQuery) => typedError<EntrySummary[], ApiError>(__TAURI_INVOKE("entry_list", { query })),
 	entryMove: (id: string, groupId: string) => typedError<null, ApiError>(__TAURI_INVOKE("entry_move", { id, groupId })),
 	entryNewModel: (entryType: EntryTypeDto, groupId: string | null) => typedError<EntryEditModel_Serialize, ApiError>(__TAURI_INVOKE("entry_new_model", { entryType, groupId })),

@@ -123,6 +123,7 @@ export const api = {
   entryGet: wrap(commands.entryGet),
   entryHistory: wrap(commands.entryHistory),
   entryHistoryRestore: wrap(commands.entryHistoryRestore),
+  entryHistoryReveal: wrap(commands.entryHistoryReveal),
   entryList: wrap(commands.entryList),
   entryMove: wrap(commands.entryMove),
   entryNewModel: wrap(commands.entryNewModel),

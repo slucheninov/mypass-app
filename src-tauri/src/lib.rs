@@ -76,6 +76,7 @@ pub fn commands() -> Commands<tauri::Wry> {
         entry::entry_get,
         entry::entry_history,
         entry::entry_history_restore,
+        entry::entry_history_reveal,
         entry::entry_list,
         entry::entry_move,
         entry::entry_new_model,

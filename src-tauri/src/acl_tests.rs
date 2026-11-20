@@ -26,6 +26,7 @@ const MAIN: &[&str] = &[
     "entry_get",
     "entry_history",
     "entry_history_restore",
+    "entry_history_reveal",
     "entry_list",
     "entry_move",
     "entry_new_model",
