@@ -50,8 +50,6 @@ Last updated: 2026-11-15
 - [ ] CSV import error causes are matched by their English message; add separate error codes
   (`csvMissingColumn`, `csvNotUtf8`, `csvEmpty`) instead.
 - [ ] Prune unused legacy catalog keys (418 at the time of writing) once stage 3 has ported its screens.
-- [ ] npm dependencies are bumped by hand (exact pins); add an npm ecosystem with grouping to
-  Dependabot, with the same cooldown as cargo.
 
 ## Stage 3 extension bridge
 
@@ -115,8 +113,7 @@ Last updated: 2026-11-15
 
 ## Carried over from the Swift app
 
-- [ ] German localisation for the app, and extension `_locales` for any language (the extension copy
-  is English only).
+- [ ] German localisation for the app.
 - [ ] Passkey AAGUID registry: the upstream registry PR (`passkey-authenticator-aaguids`, which needs a
   vector icon) submitted and merged.
 - [ ] Google shows "MyPass" for newly created passkeys. Manual check; depends on Google ingesting

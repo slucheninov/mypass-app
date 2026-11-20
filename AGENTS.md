@@ -547,9 +547,9 @@ Pinned by `cyrillic_only_in_allowed_files`.
 Conventional Commits with a lowercase imperative subject and no trailing period, for example
 `feat(kdbx): read the outer header`. Scopes: `core`, `kdbx`, `ci`, `docs`, `repo`, `ui`, `i18n` (later stages add
 `bridge`, `platform`, `host`, `app`, `extension`). No AI-attribution footers and no co-author
-trailers on commits or pull request text. A dependency version bump is its own `chore(deps)` commit. Dependabot covers cargo and GitHub
-Actions only: the npm pins in `package.json` are bumped by hand, and the `@tauri-apps/*` packages
-move together with the Rust `tauri` family (the CLI rejects mismatched minors).
+trailers on commits or pull request text. A dependency version bump is its own `chore(deps)` commit. Dependabot covers cargo, npm and GitHub
+Actions: npm minor and patch bumps arrive as one grouped pull request and each major as its own, but the `@tauri-apps/*`
+packages are ignored there and bumped by hand together with the Rust `tauri` family (the CLI rejects mismatched minors).
 
 ## Rust rules
 
