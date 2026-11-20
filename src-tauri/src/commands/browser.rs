@@ -666,12 +666,50 @@ mod tests {
     }
 
     #[test]
+    fn a_start_worker_that_cannot_be_spawned_is_recorded_published_and_reported() {
+        let f = unstarted(false, None);
+        let before = f.events.count("bridge_changed");
+        // The production entry point with a spawner that refuses, like a failed thread spawn.
+        f.state
+            .start_in_background(|_job| Err(std::io::Error::other("no threads")));
+        assert_eq!(
+            f.state.start_failure(),
+            Some(crate::bridge::StartFailure::Worker)
+        );
+        assert_eq!(f.events.count("bridge_changed"), before + 1, "published");
+        let report = status(
+            None,
+            f.state.start_failure(),
+            f.w.core.platform().host_registrar.as_ref(),
+            None,
+        );
+        assert_eq!(
+            report.start_failure,
+            Some(BrowserStartFailure::WorkerUnavailable)
+        );
+        assert!(!report.listening);
+    }
+
+    #[test]
+    fn a_start_worker_that_runs_starts_the_bridge_and_publishes_once() {
+        let f = unstarted(false, None);
+        let before = f.events.count("bridge_changed");
+        f.state.start_in_background(|job| {
+            job();
+            Ok(())
+        });
+        assert!(f.state.start_failure().is_none());
+        assert!(f.state.handle().is_some());
+        assert!(f.events.count("bridge_changed") > before);
+    }
+
+    #[test]
     fn the_other_start_failures_have_their_own_reasons() {
         use crate::bridge::BridgeStartError;
         use mypass_bridge::server::ServerError;
         let f = unstarted(false, None);
         type Case = (fn() -> BridgeStartError, Option<BrowserStartFailure>, bool);
-        let cases: [Case; 4] = [
+        let cases: [Case; 5] = [
             (
                 || BridgeStartError::Server(ServerError::Bind("in use".into())),
                 Some(BrowserStartFailure::ListenerUnavailable),
@@ -679,6 +717,12 @@ mod tests {
             ),
             (
                 || BridgeStartError::Thread("no threads".into()),
+                Some(BrowserStartFailure::WorkerUnavailable),
+                false,
+            ),
+            (
+                // The accept thread of the server could not be spawned: not a listener failure.
+                || BridgeStartError::Server(ServerError::Worker("no threads".into())),
                 Some(BrowserStartFailure::WorkerUnavailable),
                 false,
             ),

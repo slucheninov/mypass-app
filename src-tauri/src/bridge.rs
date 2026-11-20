@@ -296,7 +296,7 @@ impl BridgeStartError {
                 StartFailure::EndpointStore
             }
             Self::Server(ServerError::Bind(_)) => StartFailure::Listener,
-            Self::Thread(_) => StartFailure::Worker,
+            Self::Server(ServerError::Worker(_)) | Self::Thread(_) => StartFailure::Worker,
         }
     }
 }
@@ -593,6 +593,26 @@ impl BridgeState {
         }
     }
 
+    /// Starts the bridge on a worker made by `spawn` (which runs the given job on a new thread)
+    /// and tells the webview when it is done. When no worker can be started, the failure is
+    /// recorded as a worker failure and published, so the Browser pane says why the bridge is down.
+    pub fn start_in_background(
+        &self,
+        spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<()>,
+    ) {
+        let state = self.clone();
+        let job: Box<dyn FnOnce() + Send> = Box::new(move || {
+            let _ = state.start();
+            state.0.events.bridge_changed();
+        });
+        if spawn(job).is_err() {
+            if lock(&self.0.slot).is_none() {
+                *lock(&self.0.failure) = Some(StartFailure::Worker);
+            }
+            self.0.events.bridge_changed();
+        }
+    }
+
     pub fn handle(&self) -> Option<Arc<BridgeHandle>> {
         lock(&self.0.slot).clone()
     }
@@ -630,13 +650,14 @@ impl BridgeState {
     pub fn reset_pairings(&self) -> Result<(), PairingError> {
         let mut slot = lock(&self.0.slot);
         if let Some(handle) = slot.as_ref() {
-            // One store write: an error leaves every browser paired, never a partial reset.
+            // One atomic store deletion: an error never leaves a partial reset (an unreadable
+            // store after it revokes every browser in memory, see `clear_all`).
             for browser in handle.pairing.clear_all()? {
                 handle.diagnostics.remove(browser.id);
             }
             return Ok(());
         }
-        PairedBrowserStore::new(Arc::clone(&self.0.secrets)).save(&[])?;
+        PairedBrowserStore::new(Arc::clone(&self.0.secrets)).clear()?;
         let _ = self.start_locked(&mut slot);
         drop(slot);
         self.0.events.bridge_changed();

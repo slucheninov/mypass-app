@@ -14,6 +14,9 @@ pub trait SecretStore: Send + Sync {
     fn set(&self, service: &str, account: &str, secret: &[u8]) -> PlatformResult<()>;
     /// Reads the secret; `Ok(None)` when there is none.
     fn get(&self, service: &str, account: &str) -> PlatformResult<Option<Vec<u8>>>;
-    /// Deletes the secret; deleting a missing secret is not an error.
+    /// Deletes the secret; deleting a missing secret is not an error. One atomic removal of one
+    /// item: on `Ok` the item is gone. On `Err` the caller cannot tell whether the removal
+    /// happened (an item is never half deleted, but a backend can fail after it acted), so a
+    /// caller that must know reads the item back before relying on either outcome.
     fn delete(&self, service: &str, account: &str) -> PlatformResult<()>;
 }

@@ -16,6 +16,7 @@
 //! set back does not reset a window, and it lives in memory: a restart clears it.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -187,6 +188,16 @@ impl PairedBrowserStore {
         self.write_all(all)
     }
 
+    /// Removes every browser by deleting the one item that holds the list: a single atomic store
+    /// operation (a missing item already reads as an empty list), never a delete-then-add. On an
+    /// error the outcome is unknown to the caller (see [`SecretStore::delete`]); read the list back.
+    pub fn clear(&self) -> Result<(), PairingError> {
+        let _guard = lock(&self.write);
+        self.secrets
+            .delete(PAIRING_SERVICE, PAIRING_ACCOUNT)
+            .map_err(|e| PairingError::Store(e.to_string()))
+    }
+
     fn write_all(&self, all: &[PairedBrowser]) -> Result<(), PairingError> {
         let bytes = Zeroizing::new(serde_json::to_vec(all).map_err(|_| PairingError::Corrupt)?);
         self.secrets
@@ -301,6 +312,10 @@ pub struct PairingManager {
     /// Serialises list changes (store write plus cache update).
     mutate: Mutex<()>,
     on_change: Mutex<Option<OnChange>>,
+    /// Set when a clear failed with an outcome that could not be reconciled: the cache was emptied
+    /// (fail closed) but the store may still hold browsers, so the next clear runs even on an
+    /// empty cache.
+    clear_unconfirmed: AtomicBool,
 }
 
 impl std::fmt::Debug for PairingManager {
@@ -324,6 +339,7 @@ impl PairingManager {
             cache: RwLock::new(cache),
             mutate: Mutex::new(()),
             on_change: Mutex::new(None),
+            clear_unconfirmed: AtomicBool::new(false),
         })
     }
 
@@ -500,24 +516,42 @@ impl PairingManager {
         Ok(())
     }
 
-    /// Revokes every browser in ONE store write plus one cache update, so an error can never leave
-    /// a partial reset: on failure nothing changed in memory and the previous list is put back into
-    /// the store. Returns the browsers that were removed.
+    /// Revokes every browser with ONE atomic store operation (deleting the item that holds the
+    /// list) plus one cache update, so an error can never leave a partial reset. Returns the
+    /// browsers that were removed.
+    ///
+    /// A failed delete has an unknown outcome, so the store is read back before anything is
+    /// authorized again:
+    /// - it reads empty: the delete had happened, the reset is complete (`Ok`);
+    /// - it still holds the list: nothing changed, the cache stays and the error is returned;
+    /// - it cannot be read: fail closed. The cache is emptied (no browser is accepted), the error
+    ///   is returned, and the next clear deletes again even though the cache is empty.
     pub fn clear_all(&self) -> Result<Vec<PairedBrowser>, PairingError> {
         let removed = {
             let _m = lock(&self.mutate);
             let before = self.list();
-            if before.is_empty() {
+            if before.is_empty() && !self.clear_unconfirmed.load(Ordering::SeqCst) {
                 return Ok(Vec::new());
             }
-            if let Err(e) = self.store.save(&[]) {
-                let _ = self.store.save(&before);
-                return Err(e);
-            }
+            let outcome = match self.store.clear() {
+                Ok(()) => Ok(()),
+                Err(e) => match self.store.list() {
+                    Ok(left) if left.is_empty() => Ok(()),
+                    Ok(_) => return Err(e),
+                    Err(_) => Err(e),
+                },
+            };
             self.cache
                 .write()
                 .unwrap_or_else(PoisonError::into_inner)
                 .clear();
+            self.clear_unconfirmed
+                .store(outcome.is_err(), Ordering::SeqCst);
+            if let Err(e) = outcome {
+                drop(_m);
+                self.notify();
+                return Err(e);
+            }
             before
         };
         self.notify();
@@ -625,6 +659,13 @@ mod tests {
         sets: AtomicUsize,
         fail_get: AtomicBool,
         fail_set: AtomicBool,
+        /// `delete` fails without touching the item.
+        fail_delete: AtomicBool,
+        /// `delete` removes the item and then fails (a backend that acted before reporting).
+        delete_then_fail: AtomicBool,
+        /// Every `get` after such a failed `delete` fails too (the store is unreadable).
+        break_reads_after_failed_delete: AtomicBool,
+        deletes: AtomicUsize,
     }
 
     impl Flaky {
@@ -635,6 +676,10 @@ mod tests {
                 sets: AtomicUsize::new(0),
                 fail_get: AtomicBool::new(false),
                 fail_set: AtomicBool::new(false),
+                fail_delete: AtomicBool::new(false),
+                delete_then_fail: AtomicBool::new(false),
+                break_reads_after_failed_delete: AtomicBool::new(false),
+                deletes: AtomicUsize::new(0),
             })
         }
     }
@@ -655,7 +700,21 @@ mod tests {
             self.inner.get(s, a)
         }
         fn delete(&self, s: &str, a: &str) -> mypass_platform::PlatformResult<()> {
-            self.inner.delete(s, a)
+            self.deletes.fetch_add(1, Ordering::SeqCst);
+            if self.fail_delete.load(Ordering::SeqCst) {
+                if self.break_reads_after_failed_delete.load(Ordering::SeqCst) {
+                    self.fail_get.store(true, Ordering::SeqCst);
+                }
+                return Err(PlatformError::Failed("denied".into()));
+            }
+            self.inner.delete(s, a)?;
+            if self.delete_then_fail.load(Ordering::SeqCst) {
+                if self.break_reads_after_failed_delete.load(Ordering::SeqCst) {
+                    self.fail_get.store(true, Ordering::SeqCst);
+                }
+                return Err(PlatformError::Failed("lost the reply".into()));
+            }
+            Ok(())
         }
     }
 
@@ -1236,7 +1295,7 @@ mod tests {
     }
 
     #[test]
-    fn clear_all_removes_every_browser_with_one_store_write() {
+    fn clear_all_removes_every_browser_with_one_atomic_delete() {
         let mem = InMemorySecretStore::new();
         let flaky = Flaky::new(mem.clone());
         let sched = manual();
@@ -1250,25 +1309,38 @@ mod tests {
         let sets = flaky.sets.load(Ordering::SeqCst);
         let removed = m.clear_all().unwrap();
         assert_eq!(removed.len(), 2);
-        assert_eq!(flaky.sets.load(Ordering::SeqCst), sets + 1);
+        assert_eq!(flaky.deletes.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            flaky.sets.load(Ordering::SeqCst),
+            sets,
+            "no delete-then-add rewrite"
+        );
         assert_eq!(notified.load(Ordering::SeqCst), 1);
         assert!(!m.is_authorized(Some(&s1)));
         assert!(!m.is_authorized(Some(&s2)));
         assert!(m.list().is_empty());
-        assert!(PairedBrowserStore::new(mem).list().unwrap().is_empty());
+        assert!(PairedBrowserStore::new(mem.clone())
+            .list()
+            .unwrap()
+            .is_empty());
+        assert!(PairingManager::new(PairedBrowserStore::new(mem), manual())
+            .unwrap()
+            .list()
+            .is_empty());
     }
 
     #[test]
-    fn clear_all_on_an_empty_list_writes_nothing() {
+    fn clear_all_on_an_empty_list_deletes_nothing() {
         let mem = InMemorySecretStore::new();
         let flaky = Flaky::new(mem);
         let m = PairingManager::new(PairedBrowserStore::new(flaky.clone()), manual()).unwrap();
         assert!(m.clear_all().unwrap().is_empty());
         assert_eq!(flaky.sets.load(Ordering::SeqCst), 0);
+        assert_eq!(flaky.deletes.load(Ordering::SeqCst), 0);
     }
 
     #[test]
-    fn failed_clear_all_keeps_every_browser_in_memory_and_in_the_store() {
+    fn a_clear_that_failed_before_changing_anything_keeps_every_browser() {
         let mem = InMemorySecretStore::new();
         let flaky = Flaky::new(mem.clone());
         let sched = manual();
@@ -1279,14 +1351,90 @@ mod tests {
         m.set_on_change(Arc::new(move || {
             n.fetch_add(1, Ordering::SeqCst);
         }));
-        flaky.fail_set.store(true, Ordering::SeqCst);
+        flaky.fail_delete.store(true, Ordering::SeqCst);
         assert!(m.clear_all().is_err());
-        flaky.fail_set.store(false, Ordering::SeqCst);
+        flaky.fail_delete.store(false, Ordering::SeqCst);
         assert_eq!(notified.load(Ordering::SeqCst), 0);
         assert!(m.is_authorized(Some(&s1)));
         assert!(m.is_authorized(Some(&s2)));
         assert_eq!(m.list().len(), 2);
-        assert_eq!(PairedBrowserStore::new(mem).list().unwrap().len(), 2);
+        // The store still holds both, for a manager built after the failure as well.
+        let fresh = PairingManager::new(PairedBrowserStore::new(mem), manual()).unwrap();
+        assert!(fresh.is_authorized(Some(&s1)) && fresh.is_authorized(Some(&s2)));
+    }
+
+    #[test]
+    fn a_delete_that_happened_but_reported_failure_is_reconciled_as_cleared() {
+        // The post-mutation failure: the item is gone, the backend still says Err.
+        let mem = InMemorySecretStore::new();
+        let flaky = Flaky::new(mem.clone());
+        let sched = manual();
+        let m = PairingManager::new(PairedBrowserStore::new(flaky.clone()), sched.clone()).unwrap();
+        let (s1, s2) = pair_two(&sched, &m);
+        flaky.delete_then_fail.store(true, Ordering::SeqCst);
+        let removed = m.clear_all().unwrap();
+        assert_eq!(removed.len(), 2);
+        // The running cache does not authorize a browser the store no longer has ...
+        assert!(!m.is_authorized(Some(&s1)) && !m.is_authorized(Some(&s2)));
+        // ... and neither does a manager constructed afterwards.
+        let fresh = PairingManager::new(PairedBrowserStore::new(mem), manual()).unwrap();
+        assert!(fresh.list().is_empty());
+        assert!(!fresh.is_authorized(Some(&s1)));
+    }
+
+    #[test]
+    fn a_failed_clear_with_an_unreadable_store_fails_closed_and_can_be_retried() {
+        let mem = InMemorySecretStore::new();
+        let flaky = Flaky::new(mem.clone());
+        let sched = manual();
+        let m = PairingManager::new(PairedBrowserStore::new(flaky.clone()), sched.clone()).unwrap();
+        let (s1, s2) = pair_two(&sched, &m);
+        let notified = Arc::new(AtomicUsize::new(0));
+        let n = Arc::clone(&notified);
+        m.set_on_change(Arc::new(move || {
+            n.fetch_add(1, Ordering::SeqCst);
+        }));
+        // The delete did NOT happen and the store cannot be read back: outcome unknown.
+        flaky.fail_delete.store(true, Ordering::SeqCst);
+        flaky
+            .break_reads_after_failed_delete
+            .store(true, Ordering::SeqCst);
+        assert!(m.clear_all().is_err());
+        assert_eq!(
+            notified.load(Ordering::SeqCst),
+            1,
+            "the revocation is published"
+        );
+        assert!(
+            !m.is_authorized(Some(&s1)) && !m.is_authorized(Some(&s2)),
+            "fail closed"
+        );
+        // The store really still holds both: a restart would read them (the user is told the
+        // reset failed).
+        let fresh = PairingManager::new(PairedBrowserStore::new(mem.clone()), manual()).unwrap();
+        assert_eq!(fresh.list().len(), 2);
+        // A retry deletes again although the cache is empty.
+        flaky.fail_delete.store(false, Ordering::SeqCst);
+        flaky.fail_get.store(false, Ordering::SeqCst);
+        assert!(m.clear_all().unwrap().is_empty());
+        assert!(PairedBrowserStore::new(mem).list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_delete_that_happened_with_an_unreadable_store_is_also_fail_closed() {
+        let mem = InMemorySecretStore::new();
+        let flaky = Flaky::new(mem.clone());
+        let sched = manual();
+        let m = PairingManager::new(PairedBrowserStore::new(flaky.clone()), sched.clone()).unwrap();
+        let (s1, _s2) = pair_two(&sched, &m);
+        flaky.delete_then_fail.store(true, Ordering::SeqCst);
+        flaky
+            .break_reads_after_failed_delete
+            .store(true, Ordering::SeqCst);
+        assert!(m.clear_all().is_err());
+        assert!(!m.is_authorized(Some(&s1)));
+        let fresh = PairingManager::new(PairedBrowserStore::new(mem), manual()).unwrap();
+        assert!(fresh.list().is_empty(), "the item was gone");
     }
 
     #[test]
