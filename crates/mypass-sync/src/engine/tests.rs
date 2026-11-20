@@ -334,14 +334,11 @@ fn wrong_password_remote_is_never_overwritten() {
 fn remote_kdf_above_limit_is_neither_adopted_nor_overwritten() {
     let fx = Fx::new();
     let local = fast_db("v");
-    let mut remote = local.clone();
-    let KdfParams::Argon2 { parallelism, .. } = &mut remote.settings.kdf else {
-        panic!("expected Argon2");
-    };
-    *parallelism = 9;
-    fx.external_write(&remote);
-
-    let before = fx.remote_bytes();
+    let before = mypass_kdbx::test_util::vault_header_only(&KdfParams::AesKdf {
+        seed: vec![0; 32],
+        rounds: 300_000_001,
+    });
+    fs::write(&fx.file, &before).unwrap();
     for push in [false, true] {
         assert!(matches!(
             run(&fx.engine, &local, push),
@@ -354,20 +351,26 @@ fn remote_kdf_above_limit_is_neither_adopted_nor_overwritten() {
 }
 
 #[test]
-fn sync_does_not_publish_a_copy_it_cannot_reopen() {
+fn sync_accepts_keepassxc_like_costs() {
     let fx = Fx::new();
-    let mut local = fast_db("v");
-    let KdfParams::Argon2 { parallelism, .. } = &mut local.settings.kdf else {
+    let local = fast_db("v");
+    let mut remote = local.clone();
+    let KdfParams::Argon2 {
+        parallelism,
+        iterations,
+        ..
+    } = &mut remote.settings.kdf
+    else {
         panic!("expected Argon2");
     };
-    *parallelism = 9;
+    *parallelism = 16;
+    *iterations = 20;
+    add(&mut remote, "remote entry");
+    fx.external_write(&remote);
 
-    assert!(matches!(
-        run(&fx.engine, &local, true),
-        Err(SyncError::Encode(_))
-    ));
-    assert!(!fx.file.exists());
-    assert_eq!(fx.probe.writes(), 0);
+    let result = run(&fx.engine, &local, false).unwrap();
+    let (merged, _) = result.into_parts();
+    assert_eq!(titles(&merged.unwrap()), ["remote entry"]);
 }
 
 #[test]

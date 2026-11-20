@@ -330,7 +330,7 @@ impl VaultFile {
         path: &Path,
         password: &SecretString,
     ) -> Result<(Self, Database)> {
-        Self::open_with_limits(io, path, password, KdfLimits::Local)
+        Self::open_with_limits(io, path, password, KdfLimits::LOCAL)
     }
 
     /// Open through an injected I/O backend using the selected KDF limits.
@@ -352,7 +352,7 @@ impl VaultFile {
         password: &SecretString,
         check: &dyn Fn() -> std::result::Result<(), E>,
     ) -> std::result::Result<(Self, Database), E> {
-        Self::open_with_limits_checked(io, path, password, KdfLimits::Local, check)
+        Self::open_with_limits_checked(io, path, password, KdfLimits::LOCAL, check)
     }
 
     /// Open with a withdrawal fence and the selected KDF limits.
@@ -363,50 +363,16 @@ impl VaultFile {
         limits: KdfLimits,
         check: &dyn Fn() -> std::result::Result<(), E>,
     ) -> std::result::Result<(Self, Database), E> {
-        Self::open_checked(io, path, check, |bytes| {
-            Database::open_with_limits(bytes, password, limits)
-        })
-    }
-
-    /// Reopen a local vault to reconcile kept edits. The previous authenticated content keeps
-    /// the local KDF limits. A replacement gets the remote limits, checked on the bytes opened.
-    pub fn open_for_recovery(
-        io: Arc<dyn FileIo>,
-        path: &Path,
-        password: &SecretString,
-        previous_hash: [u8; 32],
-    ) -> Result<(Self, Database)> {
-        Self::open_checked(io, path, &|| Ok(()), |bytes| {
-            let limits = if hash(bytes) == previous_hash {
-                KdfLimits::Local
-            } else {
-                KdfLimits::Remote
-            };
-            Database::open_with_limits(bytes, password, limits)
-        })
-    }
-
-    fn open_checked<E: From<KdbxError>>(
-        io: Arc<dyn FileIo>,
-        path: &Path,
-        check: &dyn Fn() -> std::result::Result<(), E>,
-        open: impl FnOnce(&[u8]) -> Result<Database>,
-    ) -> std::result::Result<(Self, Database), E> {
         check()?;
         // Path identity is resolved once; every later byte/metadata operation uses the seam.
         let path = resolve_vault_path(path).map_err(io_error)?;
         check()?;
         let bytes = io.read(&path)?;
         check()?;
-        let db = open(&bytes)?;
+        let db = Database::open_with_limits(&bytes, password, limits)?;
         check()?;
         let stamp = stamp(io.metadata(&path)?, &bytes);
         Ok((Self { path, stamp, io }, db))
-    }
-
-    /// Hash of the last authenticated or written vault bytes.
-    pub fn content_hash(&self) -> [u8; 32] {
-        self.stamp.sha256
     }
 
     /// Return the resolved vault path.
@@ -486,7 +452,7 @@ impl VaultFile {
     }
     /// Authenticate the current disk content and refresh the stamp only on success.
     pub fn reload(&mut self, password: &SecretString) -> Result<Database> {
-        self.reload_with_limits(password, KdfLimits::Local)
+        self.reload_with_limits(password, KdfLimits::LOCAL)
     }
 
     /// Reload using the selected KDF limits, refreshing the stamp only on success.
@@ -1297,34 +1263,6 @@ mod tests {
     fn io_kind<T: std::fmt::Debug>(result: crate::Result<T>, expected: ErrorKind) {
         assert!(matches!(result, Err(KdbxError::Io {kind, ..}) if kind == expected));
     }
-    #[test]
-    fn local_recovery_keeps_local_limits_only_for_the_same_ciphertext() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("vault.kdbx");
-        let mut db = Database::new("synthetic");
-        db.settings.kdf = crate::KdfParams::Argon2 {
-            variant: crate::Argon2Variant::Id,
-            memory_bytes: 128 * 1024,
-            parallelism: 9,
-            iterations: 1,
-            version: 0x13,
-            salt: vec![0; 32],
-        };
-        let pw = password();
-        fs::write(&path, db.save(&pw).unwrap()).unwrap();
-        let (file, expected) = VaultFile::open(&path, &pw).unwrap();
-        let reopen =
-            || VaultFile::open_for_recovery(file.io().clone(), &path, &pw, file.content_hash());
-        assert_eq!(reopen().unwrap().1, expected);
-
-        db.meta.database_name = "external edit".into();
-        fs::write(&path, db.save(&pw).unwrap()).unwrap();
-        assert!(matches!(
-            reopen(),
-            Err(KdbxError::RemoteKdfLimitExceeded("Argon2 parallelism"))
-        ));
-    }
-
     #[test]
     fn open_records_stamp_and_reports_unchanged() {
         let (_d, f, _) = fixture();

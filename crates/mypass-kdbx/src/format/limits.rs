@@ -5,6 +5,9 @@
 //! the KDF code and the writer all agree on one definition. Parsers return `Err` when a value is
 //! outside its range; they never clamp silently and never panic.
 
+use super::kdf::KdfParams;
+use crate::{KdbxError, Result};
+
 /// Smallest accepted Argon2 memory cost, in bytes (8 KiB). KDBX stores the `M` parameter in bytes.
 pub(crate) const ARGON2_MEMORY_MIN_BYTES: u64 = 8 * 1024;
 /// Largest accepted Argon2 memory cost, in bytes (4 GiB).
@@ -25,20 +28,71 @@ pub(crate) const AES_KDF_ROUNDS_MIN: u64 = 1;
 /// Largest accepted AES-KDF round count.
 pub(crate) const AES_KDF_ROUNDS_MAX: u64 = 1_000_000_000;
 
-/// Maximum costs for automatic reconciliation and opens from remote storage. The Argon2
-/// ceilings allow the app's 64 MiB, three-iteration, two-lane default with room for tuning.
-pub(crate) const REMOTE_ARGON2_MEMORY_MAX_BYTES: u64 = 128 * 1024 * 1024;
-pub(crate) const REMOTE_ARGON2_ITERATIONS_MAX: u64 = 6;
-pub(crate) const REMOTE_ARGON2_PARALLELISM_MAX: u32 = 8;
-pub(crate) const REMOTE_AES_KDF_ROUNDS_MAX: u64 = 10_000_000;
+/// Default automatic-open ceilings. Argon2 CPU work scales with memory times iterations.
+const REMOTE_ARGON2_MEMORY_MAX_BYTES: u64 = 1024 * 1024 * 1024;
+const REMOTE_ARGON2_WORK_MAX_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const REMOTE_AES_KDF_ROUNDS_MAX: u64 = 300_000_000;
 
-/// KDF cost limits for opening a vault.
+/// Additional cost ceilings for an automatic vault open. The local format limits always apply.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum KdfLimits {
-    /// The standard limits for a local open.
-    Local,
-    /// Lower ceilings for bytes from remote storage or external changes to a live vault.
-    Remote,
+pub struct KdfLimits(Option<KdfBudget>);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct KdfBudget {
+    argon2_memory: u64,
+    argon2_work: u64,
+    aes_rounds: u64,
+}
+
+impl KdfLimits {
+    /// Use the standard format limits for an explicit open.
+    pub const LOCAL: Self = Self(None);
+
+    /// Use the automatic-open ceilings, raised only by the corresponding cost of the
+    /// already authenticated vault. Each KDF family has its own independent budget.
+    pub fn remote(authenticated: Option<&KdfParams>) -> Self {
+        let mut budget = KdfBudget {
+            argon2_memory: REMOTE_ARGON2_MEMORY_MAX_BYTES,
+            argon2_work: REMOTE_ARGON2_WORK_MAX_BYTES,
+            aes_rounds: REMOTE_AES_KDF_ROUNDS_MAX,
+        };
+        match authenticated {
+            Some(KdfParams::Argon2 {
+                memory_bytes,
+                iterations,
+                ..
+            }) => {
+                budget.argon2_memory = budget.argon2_memory.max(*memory_bytes);
+                budget.argon2_work = budget
+                    .argon2_work
+                    .max(memory_bytes.saturating_mul(*iterations));
+            }
+            Some(KdfParams::AesKdf { rounds, .. }) => {
+                budget.aes_rounds = budget.aes_rounds.max(*rounds);
+            }
+            None => {}
+        }
+        Self(Some(budget))
+    }
+
+    pub(crate) fn check(self, kdf: &KdfParams) -> Result<()> {
+        let Some(budget) = self.0 else {
+            return Ok(());
+        };
+        let parameter = match kdf {
+            KdfParams::Argon2 { memory_bytes, .. } if *memory_bytes > budget.argon2_memory => {
+                "Argon2 memory"
+            }
+            KdfParams::Argon2 {
+                memory_bytes,
+                iterations,
+                ..
+            } if memory_bytes.saturating_mul(*iterations) > budget.argon2_work => "Argon2 work",
+            KdfParams::AesKdf { rounds, .. } if *rounds > budget.aes_rounds => "AES-KDF rounds",
+            _ => return Ok(()),
+        };
+        Err(KdbxError::RemoteKdfLimitExceeded(parameter))
+    }
 }
 
 /// Largest accepted length of one HMAC-protected payload block, in bytes (2^30).

@@ -30,7 +30,7 @@ use crate::storage::{
 };
 use crate::vault_files::{file_status, VaultFileStatus};
 use mypass_kdbx::{Database, FileIo, FileMeta, KdbxError, KdfLimits, Meta, Timestamp, VaultFile};
-use mypass_sync::icloud::merge_vault_bytes;
+use mypass_sync::icloud::merge_vault_bytes_with_limits;
 use secrecy::{ExposeSecret, SecretString};
 use serde::Serialize;
 use std::io::ErrorKind;
@@ -735,12 +735,14 @@ impl VaultSession {
         resolver: Option<&ConflictResolver>,
         path: &Path,
         password: &SecretString,
+        limits: KdfLimits,
     ) -> bool {
         let Some(resolver) = resolver else {
             return false;
         };
-        let mut merge =
-            |current: &[u8], version: &[u8]| merge_vault_bytes(current, version, password);
+        let mut merge = |current: &[u8], version: &[u8]| {
+            merge_vault_bytes_with_limits(current, version, password, limits)
+        };
         resolver(path, &mut merge).unwrap_or(false)
     }
 
@@ -947,9 +949,6 @@ impl VaultSession {
             return Err(SessionError::AlreadyExists);
         }
         let storage = self.resolve_storage(path);
-        if storage.kdf_limits() == KdfLimits::Remote {
-            db.settings.kdf.check_remote_limits()?;
-        }
         let bytes = db.save(&password)?;
         if let Some(icloud) = &storage.icloud {
             if let Err(e) = icloud.create_new(&bytes) {
@@ -967,8 +966,7 @@ impl VaultSession {
         } else {
             storage.io.write_atomic(path, &bytes)?;
         }
-        let (file, db) =
-            VaultFile::open_with_limits(storage.io.clone(), path, &password, storage.kdf_limits())?;
+        let (file, db) = VaultFile::open_with(storage.io.clone(), path, &password)?;
         self.finish_open(file, db, password, true, storage)
     }
 
@@ -1007,10 +1005,9 @@ impl VaultSession {
             let mut inner = self.wait_quiescent(lock(&self.0.inner));
             crate::saving::InFlight::recovery(self, &mut inner)
         });
-        Self::merge_conflicts_before_read(conflicts.as_ref(), path, &password);
+        Self::merge_conflicts_before_read(conflicts.as_ref(), path, &password, KdfLimits::LOCAL);
         let (file, db) =
-            VaultFile::open_with_limits(storage.io.clone(), path, &password, storage.kdf_limits())
-                .map_err(open_error)?;
+            VaultFile::open_with(storage.io.clone(), path, &password).map_err(open_error)?;
         self.finish_open_reserved(file, db, password, false, storage, operation)
     }
 
@@ -1084,7 +1081,7 @@ impl VaultSession {
         // The KDF runs without the session lock; a retry write that consumed the kept edits
         // meanwhile makes the loop start over with the new state.
         for _ in 0..3 {
-            let (path, pending, previous_hash, base, storage, operation) = {
+            let (path, pending, base, storage, operation) = {
                 let mut inner = self.wait_quiescent(lock(&self.0.inner));
                 if inner.quitting {
                     return Err(SessionError::Quitting);
@@ -1101,26 +1098,23 @@ impl VaultSession {
                 }
                 let path = inner.path.clone().ok_or(SessionError::NoVault)?;
                 let pending = inner.pending_bytes.clone();
-                let previous_hash = inner.pending_file.as_ref().map(VaultFile::content_hash);
                 let base = inner.disk_meta.clone();
                 let storage = inner.storage.clone();
                 let operation = self
                     .conflict_resolver_for(storage.as_ref())
                     .map(|_| crate::saving::InFlight::recovery(self, &mut inner));
-                (path, pending, previous_hash, base, storage, operation)
+                (path, pending, base, storage, operation)
             };
             let storage = storage.unwrap_or_else(|| self.resolve_storage(&path));
             let conflicts = self.conflict_resolver_for(Some(&storage));
-            Self::merge_conflicts_before_read(conflicts.as_ref(), &path, &password);
-            let (file, disk_db) = match (storage.kdf_limits(), previous_hash) {
-                (KdfLimits::Local, Some(hash)) => {
-                    VaultFile::open_for_recovery(storage.io.clone(), &path, &password, hash)
-                }
-                (limits, _) => {
-                    VaultFile::open_with_limits(storage.io.clone(), &path, &password, limits)
-                }
-            }
-            .map_err(open_error)?;
+            Self::merge_conflicts_before_read(
+                conflicts.as_ref(),
+                &path,
+                &password,
+                KdfLimits::LOCAL,
+            );
+            let (file, disk_db) =
+                VaultFile::open_with(storage.io.clone(), &path, &password).map_err(open_error)?;
             let restored = match &pending {
                 Some(bytes) => Some(crate::saving::reconcile(
                     &Database::open(bytes, &password)?,
@@ -1549,7 +1543,7 @@ impl VaultSession {
             storage.io.clone(),
             path,
             &snapshot.password,
-            KdfLimits::Remote,
+            KdfLimits::remote(Some(&snapshot.db.settings.kdf)),
             &|| {
                 if self.is_incarnation(snapshot.incarnation) {
                     Ok(())

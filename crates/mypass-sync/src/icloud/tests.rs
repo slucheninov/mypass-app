@@ -538,19 +538,17 @@ fn conflict_with_wrong_password_is_left_unresolved_and_reported() {
 #[test]
 fn icloud_conflict_merge_refuses_over_limit_kdf_on_either_side() {
     let password = SecretString::from("pw");
-    let mut db = fast_db("vault");
-    let good = db.save(&password).unwrap();
-    let KdfParams::Argon2 { parallelism, .. } = &mut db.settings.kdf else {
-        panic!("expected Argon2");
-    };
-    *parallelism = 9;
-    let expensive = db.save(&password).unwrap();
+    let good = fast_db("vault").save(&password).unwrap();
+    let expensive = mypass_kdbx::test_util::vault_header_only(&KdfParams::AesKdf {
+        seed: vec![0; 32],
+        rounds: 300_000_001,
+    });
 
     for (current, version) in [(&good, &expensive), (&expensive, &good)] {
         let error = merge_vault_bytes(current, version, &password).unwrap_err();
         assert_eq!(
             error.get_ref().and_then(|e| e.downcast_ref::<KdbxError>()),
-            Some(&KdbxError::RemoteKdfLimitExceeded("Argon2 parallelism")),
+            Some(&KdbxError::RemoteKdfLimitExceeded("AES-KDF rounds")),
         );
     }
 }

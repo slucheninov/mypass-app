@@ -190,30 +190,31 @@ impl Fx {
 }
 
 #[test]
-fn icloud_open_and_unlock_refuse_an_over_limit_copy() {
+fn explicit_icloud_open_and_unlock_accept_keepassxc_like_costs() {
     let fx = Fx::new();
-    let mac = fx.mac("A");
     let mut db = fx.base.clone();
-    let KdfParams::Argon2 { parallelism, .. } = &mut db.settings.kdf else {
+    let KdfParams::Argon2 {
+        parallelism,
+        iterations,
+        ..
+    } = &mut db.settings.kdf
+    else {
         panic!("expected Argon2");
     };
-    *parallelism = 9;
-    let expensive = db.save(&pw()).unwrap();
+    *parallelism = 16;
+    *iterations = 20;
+    let bytes = db.save(&pw()).unwrap();
 
+    let mac = fx.mac("A");
     mac.session.open_vault(&fx.vault, pw()).unwrap();
     mac.session.lock(LockReason::Manual);
-    fs::write(&fx.vault, &expensive).unwrap();
-    assert!(matches!(
-        mac.session.unlock(pw()),
-        Err(SessionError::LimitExceeded(_))
-    ));
+    fs::write(&fx.vault, &bytes).unwrap();
+    mac.session.unlock(pw()).unwrap();
 
     let other = fx.mac("B");
-    assert!(matches!(
-        other.session.open_vault(&fx.vault, pw()),
-        Err(SessionError::LimitExceeded(_))
-    ));
-    assert_eq!(fs::read(&fx.vault).unwrap(), expensive);
+    other.session.open_vault(&fx.vault, pw()).unwrap();
+    assert_eq!(mac.titles(), ["first"]);
+    assert_eq!(other.titles(), ["first"]);
 }
 
 #[test]

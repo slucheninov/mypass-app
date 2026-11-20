@@ -9,6 +9,29 @@ use std::{
     },
 };
 
+/// A structurally valid header with a checksum, an empty MAC, and no payload.
+/// Use when the supplied KDF must be rejected before any key derivation.
+pub fn vault_header_only(kdf: &crate::KdfParams) -> Vec<u8> {
+    use crate::format::{
+        header_auth,
+        outer_header::{Cipher, Compression, OuterHeader},
+        signature::Version,
+    };
+    let mut bytes = OuterHeader {
+        version: Version { major: 4, minor: 0 },
+        cipher: Cipher::Aes256Cbc,
+        compression: Compression::None,
+        master_seed: vec![0; 32],
+        encryption_iv: vec![0; 16],
+        kdf_parameters: kdf.to_variant(),
+        public_custom_data: None,
+    }
+    .serialize();
+    bytes.extend(header_auth::header_sha256(&bytes));
+    bytes.extend([0; 32]);
+    bytes
+}
+
 #[derive(Default)]
 struct Failures {
     read: Option<ErrorKind>,

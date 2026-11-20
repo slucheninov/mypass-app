@@ -492,7 +492,10 @@ impl VaultSession {
             match file.save(&w.db, &w.password) {
                 Ok(SaveOutcome::Saved) => WriteResult::Saved(w.gen),
                 Ok(SaveOutcome::ChangedOnDisk) => {
-                    match file.reload_with_limits(&w.password, KdfLimits::Remote) {
+                    match file.reload_with_limits(
+                        &w.password,
+                        KdfLimits::remote(Some(&w.db.settings.kdf)),
+                    ) {
                         Ok(remote) => WriteResult::Remote(Box::new(remote)),
                         Err(e) => WriteResult::Failed(e.into()),
                     }
@@ -885,7 +888,7 @@ impl VaultSession {
             Err(e) => return Err(e.into()),
         };
         self.flush()?;
-        let (mut guard, vault_id, limits) = {
+        let (mut guard, vault_id) = {
             let mut inner = self.wait_idle(lock(&self.0.inner));
             if inner.quitting {
                 return Err(SessionError::Quitting);
@@ -899,13 +902,6 @@ impl VaultSession {
                     "the vault changed while restoring; try again".into(),
                 ));
             }
-            let limits = inner.storage.as_ref().map_or(
-                KdfLimits::Local,
-                crate::storage::ResolvedStorage::kdf_limits,
-            );
-            if limits == KdfLimits::Remote {
-                backup_kdf.check_remote_limits()?;
-            }
             let Some(file) = inner.file.take() else {
                 return Err(file_unavailable());
             };
@@ -914,7 +910,6 @@ impl VaultSession {
             (
                 InFlight::begin(self, &mut inner, file, Slot::File),
                 vault_id,
-                limits,
             )
         };
         let now = self.now().0;
@@ -928,7 +923,7 @@ impl VaultSession {
             }
             file.io().write_atomic(file.path(), backup)?;
             written.store(true, std::sync::atomic::Ordering::SeqCst);
-            file.reload_with_limits(&password, limits)
+            file.reload_with_limits(&password, KdfLimits::remote(Some(&backup_kdf)))
         });
         let mut out = Outbox::default();
         let r = {
@@ -959,11 +954,12 @@ impl VaultSession {
     /// the rules). A reload that fails with `WrongPassword` (the password was changed elsewhere)
     /// is returned as such and leaves the session untouched.
     pub fn check_external_change(&self) -> Result<ExternalChange, SessionError> {
-        let (mut guard, password, conflicts) = {
+        let (mut guard, password, conflicts, limits) = {
             let mut inner = self.wait_idle(lock(&self.0.inner));
             let Some(password) = inner.password.clone() else {
                 return Err(inner.not_unlocked());
             };
+            let limits = KdfLimits::remote(inner.db.as_ref().map(|db| &db.settings.kdf));
             let Some(file) = inner.file.take() else {
                 return Err(inner.not_unlocked());
             };
@@ -972,17 +968,16 @@ impl VaultSession {
                 InFlight::begin(self, &mut inner, file, Slot::File),
                 password,
                 conflicts,
+                limits,
             )
         };
         let result = guard.run(|file| {
             // iCloud conflict versions and offline edits are merged into the file first, so the
             // check below sees (and applies) the merge, never a single side of it.
-            Self::merge_conflicts_before_read(conflicts.as_ref(), file.path(), &password);
+            Self::merge_conflicts_before_read(conflicts.as_ref(), file.path(), &password, limits);
             match file.has_changed_on_disk() {
                 Ok(false) => Ok(None),
-                Ok(true) => file
-                    .reload_with_limits(&password, KdfLimits::Remote)
-                    .map(Some),
+                Ok(true) => file.reload_with_limits(&password, limits).map(Some),
                 Err(e) => Err(e),
             }
         });
@@ -1414,15 +1409,15 @@ mod tests {
     #[test]
     fn external_kdf_above_remote_limit_is_neither_adopted_nor_overwritten() {
         let f = setup();
-        external_edit(&f.path, |db| {
-            let KdfParams::Argon2 { parallelism, .. } = &mut db.settings.kdf else {
-                panic!("expected Argon2");
-            };
-            *parallelism = 9;
-            db.root.entries[0].set_field("Title", "remote only", false);
+        let before = mypass_kdbx::test_util::vault_header_only(&KdfParams::Argon2 {
+            variant: mypass_kdbx::Argon2Variant::Id,
+            salt: vec![0; 32],
+            memory_bytes: 1024 * 1024,
+            iterations: 4097,
+            parallelism: 16,
+            version: 0x13,
         });
-        let before = std::fs::read(&f.path).unwrap();
-        assert_eq!(f.disk(), v(&["remote only"])); // Explicit local open still works.
+        std::fs::write(&f.path, &before).unwrap();
         assert!(matches!(
             f.session.check_external_change(),
             Err(SessionError::LimitExceeded(_))
@@ -1437,11 +1432,6 @@ mod tests {
         assert_eq!(std::fs::read(&f.path).unwrap(), before);
 
         f.session.lock(LockReason::Manual);
-        assert!(f.has_pending_bytes());
-        assert!(matches!(
-            f.session.unlock(pw("pw")),
-            Err(SessionError::LimitExceeded(_))
-        ));
         assert!(f.has_pending_bytes());
         assert_eq!(std::fs::read(&f.path).unwrap(), before);
     }

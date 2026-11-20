@@ -122,9 +122,10 @@ impl VaultMigrationService {
             .read()
             .map_err(|_| MigrationError::TargetUnreadable)?;
         check()?;
+        let limits = KdfLimits::remote(Some(&local.settings.kdf));
         if strategy == MigrationStrategy::AdoptRemote {
             let bytes = before.ok_or(MigrationError::TargetUnreadable)?;
-            let remote = open_target(&bytes, password)?;
+            let remote = open_target(&bytes, password, limits)?;
             return Ok(MigrationOutcome {
                 strategy,
                 adopted: Some(remote),
@@ -150,14 +151,11 @@ impl VaultMigrationService {
             // Even explicit overwrite refuses corrupt/unreadable/differently encrypted targets.
             if let Some(b) = &before {
                 check()?;
-                open_target(b, password)?;
+                open_target(b, password, limits)?;
             }
             check()?;
             let bytes = local
-                .settings
-                .kdf
-                .check_remote_limits()
-                .and_then(|()| local.save(password))
+                .save(password)
                 .map_err(|_| MigrationError::SourceInvalid)?;
             check()?;
             let verified =
@@ -184,7 +182,7 @@ impl VaultMigrationService {
             .map_err(|_| MigrationError::ValidationFailed)?
             .ok_or(MigrationError::ValidationFailed)?;
         check()?;
-        let verified = Database::open_with_limits(&bytes, password, KdfLimits::Remote)
+        let verified = Database::open_with_limits(&bytes, password, limits)
             .map_err(|_| MigrationError::ValidationFailed)?;
         if !crate::saving::equivalent_content(&expected, &verified) {
             return Err(MigrationError::ValidationFailed);
@@ -203,8 +201,12 @@ fn unique_ids(group: &mypass_kdbx::Group, ids: &mut std::collections::HashSet<uu
         && group.groups.iter().all(|group| unique_ids(group, ids))
 }
 
-fn open_target(bytes: &[u8], password: &SecretString) -> Result<Database, MigrationError> {
-    Database::open_with_limits(bytes, password, KdfLimits::Remote).map_err(|e| match e {
+fn open_target(
+    bytes: &[u8],
+    password: &SecretString,
+    limits: KdfLimits,
+) -> Result<Database, MigrationError> {
+    Database::open_with_limits(bytes, password, limits).map_err(|e| match e {
         KdbxError::RemoteKdfLimitExceeded(_) => MigrationError::ValidationFailed,
         KdbxError::WrongPassword => MigrationError::TargetPasswordMismatch,
         _ => MigrationError::TargetNotAVault,

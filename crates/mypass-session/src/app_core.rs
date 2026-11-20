@@ -1079,7 +1079,7 @@ impl AppCore {
             .read_limited(&snapshot.path, mypass_kdbx::MAX_VAULT_FILE_BYTES)
             .map_err(|_| migration_error(MigrationError::SourceInvalid))?;
         check()?;
-        Database::open_with_limits(&source, &snapshot.password, source_storage.kdf_limits())
+        Database::open(&source, &snapshot.password)
             .map_err(|_| migration_error(MigrationError::SourceInvalid))?;
         check()?;
         let backup_dir = self.backups.folder(&snapshot.vault_id)?;

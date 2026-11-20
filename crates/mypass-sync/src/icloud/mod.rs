@@ -384,10 +384,25 @@ pub fn merge_vault_bytes(
     version: &[u8],
     password: &SecretString,
 ) -> io::Result<Vec<u8>> {
-    let current =
-        Database::open_with_limits(current, password, KdfLimits::Remote).map_err(merge_error)?;
+    merge_vault_bytes_with_limits(current, version, password, KdfLimits::remote(None))
+}
+
+/// Bound automatic merges by the open vault's budget. During an explicit open the user-selected
+/// current file uses local limits, and only that authenticated file can raise the version budget.
+pub fn merge_vault_bytes_with_limits(
+    current: &[u8],
+    version: &[u8],
+    password: &SecretString,
+    limits: KdfLimits,
+) -> io::Result<Vec<u8>> {
+    let current = Database::open_with_limits(current, password, limits).map_err(merge_error)?;
+    let version_limits = if limits == KdfLimits::LOCAL {
+        KdfLimits::remote(Some(&current.settings.kdf))
+    } else {
+        limits
+    };
     let version =
-        Database::open_with_limits(version, password, KdfLimits::Remote).map_err(merge_error)?;
+        Database::open_with_limits(version, password, version_limits).map_err(merge_error)?;
     mypass_core::merge::merge(&current, &version)
         .save(password)
         .map_err(merge_error)
