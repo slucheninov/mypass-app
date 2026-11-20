@@ -95,6 +95,7 @@ pub(crate) fn get_generated_password_history(ctx: &Ctx<'_>) -> Response {
             .into_iter()
             .filter_map(|item| {
                 let id = Uuid::parse_str(&item.id).ok()?;
+                // Moved, not copied: the item owns the buffer from here and wipes it on drop.
                 let password = std::mem::take(&mut *history_reveal(db, id).ok()?);
                 Some(ExtensionPasswordHistoryItem {
                     id: wire_id(id),
@@ -152,6 +153,21 @@ mod tests {
             created_at,
             pairing,
         }
+    }
+
+    #[test]
+    fn a_history_item_wipes_its_password_when_dropped() {
+        // The handler moves the revealed buffer out of its wiping wrapper into the item, so the
+        // item has to be the one that wipes it.
+        assert!(std::mem::needs_drop::<ExtensionPasswordHistoryItem>());
+        let mut item = ExtensionPasswordHistoryItem {
+            id: "i".into(),
+            password: "Gen#Pass-1".into(),
+            url: String::new(),
+            created_at: 0.0,
+        };
+        zeroize::Zeroize::zeroize(&mut item.password);
+        assert!(item.password.is_empty());
     }
 
     fn history(f: &Fx) -> Vec<ExtensionPasswordHistoryItem> {

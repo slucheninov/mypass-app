@@ -85,7 +85,7 @@ pub fn browse_summary(entry: &Entry) -> ExtensionCredentialSummary {
     let mut row = summary(entry);
     let kind = entry.entry_type();
     if kind == EntryType::Address {
-        row.username = address_of(entry).full_name;
+        row.username = std::mem::take(&mut address_of(entry).full_name);
     }
     let url = entry.field("URL").unwrap_or("");
     row.url = (!url.is_empty()).then(|| url.to_owned());
@@ -96,23 +96,24 @@ pub fn browse_summary(entry: &Entry) -> ExtensionCredentialSummary {
 /// The address an entry carries, with its wire id.
 #[must_use]
 pub fn address(entry: &Entry) -> ExtensionAddress {
-    let a = address_of(entry);
+    // The fields are taken, not copied: the DTO is left with empty strings and wipes those on drop.
+    let mut a = address_of(entry);
     ExtensionAddress {
         id: wire_id(entry.uuid),
-        label: a.label,
-        full_name: a.full_name,
-        given_name: a.given_name,
-        family_name: a.family_name,
-        organization: a.organization,
-        address_line1: a.address_line1,
-        address_line2: a.address_line2,
-        city: a.city,
-        region: a.region,
-        postal_code: a.postal_code,
-        country_code: a.country_code,
-        country_name: a.country_name,
-        phone: a.phone,
-        email: a.email,
+        label: std::mem::take(&mut a.label),
+        full_name: std::mem::take(&mut a.full_name),
+        given_name: std::mem::take(&mut a.given_name),
+        family_name: std::mem::take(&mut a.family_name),
+        organization: std::mem::take(&mut a.organization),
+        address_line1: std::mem::take(&mut a.address_line1),
+        address_line2: std::mem::take(&mut a.address_line2),
+        city: std::mem::take(&mut a.city),
+        region: std::mem::take(&mut a.region),
+        postal_code: std::mem::take(&mut a.postal_code),
+        country_code: std::mem::take(&mut a.country_code),
+        country_name: std::mem::take(&mut a.country_name),
+        phone: std::mem::take(&mut a.phone),
+        email: std::mem::take(&mut a.email),
     }
 }
 
