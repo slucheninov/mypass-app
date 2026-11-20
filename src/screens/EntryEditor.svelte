@@ -5,16 +5,30 @@
   // and vault switch. Dirtiness is a comparison with a snapshot taken when the editor opened; the
   // snapshot is dropped with the component. Errors follow R15: `invalidInput` is one inline
   // message, `limitExceeded` goes to the Files form, everything else is a toast.
+  //
+  // The editor of an existing entry follows the vault underneath it (Empty Deleted, deleting a
+  // parent group, a sync). One rule, in two halves:
+  //   1. The entry is gone (`entryGet` answers `notFound`, e.g. Empty Deleted purged it): there is
+  //      nothing left to save into, so the editor closes at once with a notice and the draft is
+  //      dropped (the backend has already dropped its note drafts).
+  //   2. The entry still exists but what it would be saved into is removed: the group chosen in the
+  //      editor was deleted or purged, or the entry itself sits in the recycle bin. The editor stays
+  //      open and the draft is kept, an inline alert says why, and Save is refused (nothing is sent)
+  //      until the cause is gone: the user picks another live group (saving then moves the entry
+  //      there, out of the bin too) or cancels. The backend refuses a save into a removed group too
+  //      (`save_entry`).
+  import { events } from "../lib/bindings";
   import { onDestroy, onMount, tick, untrack } from "svelte";
   import { api, ApiFailure, errorMessage } from "../lib/api";
   import type { AddressDto, EntryEditModel_Serialize, EntryTypeDto } from "../lib/bindings";
-  import { findGroup } from "../lib/group-tree";
+  import { findGroup, isLiveGroup } from "../lib/group-tree";
   import { t } from "../lib/i18n/index.svelte";
   import { lockGuard } from "../lib/lock-guard";
   import { entries } from "../lib/stores/entries.svelte";
   import { navigation } from "../lib/stores/navigation.svelte";
   import { session } from "../lib/stores/session.svelte";
   import { toasts } from "../lib/stores/toasts.svelte";
+  import { quietly } from "../lib/unlisten";
   import Button from "../lib/ui/Button.svelte";
   import FieldRow from "../lib/ui/FieldRow.svelte";
   import Modal from "../lib/ui/Modal.svelte";
@@ -80,15 +94,62 @@
   };
   const heading = $derived(model.id === null ? headings[model.entryType]() : t("Edit"));
 
+  // Unknown until the sidebar has loaded; then a group that is not live was removed under the editor.
+  const groupRemoved = $derived(
+    entries.sidebar !== null && !isLiveGroup(entries.sidebar.groups, entries.sidebar.rootGroupId, model.groupId),
+  );
   const groupName = $derived(
     model.groupId === entries.sidebar?.rootGroupId
       ? t("Vault")
-      : (findGroup(entries.sidebar?.groups ?? [], model.groupId)?.name ?? ""),
+      : groupRemoved
+        ? t("Deleted")
+        : (findGroup(entries.sidebar?.groups ?? [], model.groupId)?.name ?? ""),
   );
+  /** The entry being edited is in the recycle bin (deleted under the editor). */
+  let entryInBin = $state(false);
+  // Choosing another group is the way out: saving there moves the entry (out of the bin too).
+  const groupAtOpen = untrack(() => model.groupId);
+  const blocked = $derived(
+    groupRemoved
+      ? t("The group of this item was deleted. Choose another group to save it.")
+      : entryInBin && model.groupId === groupAtOpen
+        ? t("This item is in Deleted. Restore it before saving your changes.")
+        : null,
+  );
+
+  /** Asks the backend whether the entry is still there and where it is (rule above, both halves). */
+  async function follow() {
+    const id = model.id;
+    if (id === null || saving) return;
+    const unchanged = lockGuard();
+    try {
+      const detail = await api.entryGet(id);
+      if (!unchanged() || model.id !== id) return;
+      entryInBin = detail.inRecycleBin;
+    } catch (e) {
+      if (!unchanged() || model.id !== id) return;
+      if (e instanceof ApiFailure && e.code === "notFound") {
+        toasts.push("info", t("This item was deleted, so its editor was closed."));
+        close();
+      }
+      // Any other failure keeps the editor as it is: the next change asks again.
+    }
+  }
 
   onMount(() => {
     if (model.id === null) titleInput?.focus();
     navigation.editorDirty = isDirty;
+    let off: (() => unknown) | null = null;
+    let gone = false;
+    if (model.id !== null) {
+      void events.vaultChanged
+        .listen(() => void follow())
+        .then((unlisten) => (gone ? quietly(unlisten) : (off = unlisten)));
+    }
+    return () => {
+      gone = true;
+      if (off) quietly(off);
+    };
   });
   // The backend's quit flow asks before it discards unsaved changes: report every change of the
   // dirty state (the snapshot inside `isDirty` tracks the whole model).
@@ -144,6 +205,11 @@
   async function save() {
     if (saving) return;
     titleError = formError = filesError = null;
+    if (blocked) {
+      // The alert is already on screen (it follows `blocked`); Save only moves focus to it.
+      void focusError();
+      return;
+    }
     const payload = $state.snapshot(model);
     payload.title = payload.title.trim();
     payload.urls = payload.urls.map((u) => u.trim()).filter((u) => u !== "");
@@ -221,6 +287,7 @@
     </div>
   {/if}
 
+  {#if blocked}<p class="form-error" role="alert" tabindex="-1">{blocked}</p>{/if}
   {#if formError}<p class="form-error" role="alert" tabindex="-1">{formError}</p>{/if}
 
   <div class="body">

@@ -503,6 +503,13 @@ fn apply(
 
 /// Creates the entry (`model.id` is `None`) or saves the edit. Attachment files are read before
 /// the vault is touched. Returns the entry id.
+///
+/// The target group must still be a live group: one that is gone answers `NotFound`, one that was
+/// deleted (it sits in the recycle bin) answers `InvalidInput`, and nothing is written. This is the
+/// backend half of the editor rule (see `EntryEditor.svelte`): the editor keeps its draft when the
+/// group it points at is removed and asks for another group instead of silently losing the item
+/// into the bin. An entry that already lives in that deleted group and is saved without moving is
+/// not refused.
 pub fn save_entry(session: &VaultSession, model: EntryEditModel) -> Result<Uuid, SessionError> {
     let id = model.id.as_deref().map(parse_id).transpose()?;
     let group = parse_id(&model.group_id)?;
@@ -510,6 +517,10 @@ pub fn save_entry(session: &VaultSession, model: EntryEditModel) -> Result<Uuid,
     let ops = resolve_ops(&model.attachment_ops)?;
     session.mutate_tracked(|db, now| {
         require_not_history(db, group)?;
+        let stays_put = id.is_some_and(|id| db.parent_of_entry(id) == Some(group));
+        if db.is_group_in_recycle_bin(group) && !stays_put {
+            return Err(SessionError::InvalidInput("the group was deleted".into()));
+        }
         match id {
             None => {
                 let mut entry = Entry::new(now);
@@ -2344,6 +2355,71 @@ mod tests {
             }
             assert_eq!(f.db(|d| d.parent_of_entry(id)), Some(f.root));
         }
+    }
+
+    #[test]
+    fn saving_into_a_removed_group_is_refused_and_changes_nothing() {
+        let f = fx();
+        let work = create_group(&f.session, f.root, "work", None).unwrap();
+        let id = f.create(|m| m.title = "x".into());
+        // Gone for good: NotFound, for an edit and for a new entry alike.
+        let gone = create_group(&f.session, f.root, "gone", None).unwrap();
+        f.session
+            .mutate(|db, now| {
+                db.purge_group(gone, now)?;
+                Ok(())
+            })
+            .unwrap();
+        let before = f.db(Clone::clone);
+        let mut edit = f.model(id);
+        edit.title = "changed".into();
+        edit.group_id = gone.simple().to_string();
+        assert_eq!(save_entry(&f.session, edit), Err(SessionError::NotFound));
+        let mut new = new_model(EntryTypeDto::Login, f.root);
+        new.title = "new".into();
+        new.group_id = gone.simple().to_string();
+        assert_eq!(save_entry(&f.session, new), Err(SessionError::NotFound));
+        assert!(f.db(|d| *d == before));
+        // Deleted (in the bin): InvalidInput.
+        delete_group(&f.session, work).unwrap();
+        let before = f.db(Clone::clone);
+        let mut edit = f.model(id);
+        edit.title = "changed".into();
+        edit.group_id = work.simple().to_string();
+        assert!(matches!(
+            save_entry(&f.session, edit),
+            Err(SessionError::InvalidInput(_))
+        ));
+        let mut new = new_model(EntryTypeDto::Login, f.root);
+        new.title = "new".into();
+        new.group_id = work.simple().to_string();
+        assert!(matches!(
+            save_entry(&f.session, new),
+            Err(SessionError::InvalidInput(_))
+        ));
+        assert!(f.db(|d| *d == before));
+        assert_eq!(f.db(|d| d.parent_of_entry(id)), Some(f.root));
+    }
+
+    #[test]
+    fn an_entry_already_in_a_deleted_group_can_be_saved_without_moving() {
+        let f = fx();
+        let work = create_group(&f.session, f.root, "work", None).unwrap();
+        let id = f.create(|m| {
+            m.title = "x".into();
+            m.group_id = work.simple().to_string();
+        });
+        delete_group(&f.session, work).unwrap();
+        // The model still names the deleted group (the editor kept its draft): no move, no refusal.
+        let mut m = f.model(id);
+        m.group_id = work.simple().to_string();
+        m.title = "kept".into();
+        save_entry(&f.session, m).unwrap();
+        assert_eq!(
+            f.db(|d| d.find_entry(id).map(|e| e.title().to_owned())),
+            Some("kept".into())
+        );
+        assert_eq!(f.db(|d| d.parent_of_entry(id)), Some(work));
     }
 
     #[test]

@@ -207,9 +207,12 @@ impl Database {
         }
         let origin = self.parent_of_entry(id);
         let recycled = self.enters_bin(origin, new_parent);
+        let leaves_bin = self.leaves_bin(origin, new_parent);
         let mut e = self.take_entry(id)?;
         if recycled {
             e.previous_parent = origin;
+        } else if leaves_bin {
+            e.previous_parent = None;
         }
         e.location_changed = now;
         self.find_group_mut(new_parent)
@@ -230,15 +233,9 @@ impl Database {
         self.move_entry(id, bin, now)
     }
     /// Moves an entry to a target group; rejects missing entry or target. The recorded origin is
-    /// consumed: it is cleared once the entry is out of the bin.
+    /// consumed by the move out of the bin.
     pub fn restore_entry(&mut self, id: Uuid, target_group: Uuid, now: Timestamp) -> Result<()> {
-        self.move_entry(id, target_group, now)?;
-        if !self.is_in_recycle_bin(id) {
-            if let Some(e) = self.find_entry_mut(id) {
-                e.previous_parent = None;
-            }
-        }
-        Ok(())
+        self.move_entry(id, target_group, now)
     }
     /// Where a recycled entry goes back to: its recorded `previous_parent` while that group still
     /// exists outside the recycle bin, otherwise the root. Never the bin itself or anything in it.
@@ -262,6 +259,11 @@ impl Database {
     /// True when a move from `origin` to `dest` carries something into the bin from outside it.
     fn enters_bin(&self, origin: Option<Uuid>, dest: Uuid) -> bool {
         self.is_bin_or_below(dest) && !origin.is_some_and(|o| self.is_bin_or_below(o))
+    }
+    /// True when a move from `origin` to `dest` takes something out of the bin: the recorded origin
+    /// is consumed then, whichever API moved it (restore, a save into another group, a drag).
+    fn leaves_bin(&self, origin: Option<Uuid>, dest: Uuid) -> bool {
+        origin.is_some_and(|o| self.is_bin_or_below(o)) && !self.is_bin_or_below(dest)
     }
     /// True for groups strictly below the configured, existing recycle bin.
     pub fn is_group_in_recycle_bin(&self, group_id: Uuid) -> bool {
@@ -307,9 +309,12 @@ impl Database {
         self.check_depth(new_parent, g)?;
         let origin = self.parent_of_group(id);
         let recycled = self.enters_bin(origin, new_parent);
+        let leaves_bin = self.leaves_bin(origin, new_parent);
         let mut g = self.take_group(id)?;
         if recycled {
             g.previous_parent = origin;
+        } else if leaves_bin {
+            g.previous_parent = None;
         }
         g.location_changed = now;
         self.find_group_mut(new_parent)
@@ -319,18 +324,12 @@ impl Database {
         Ok(())
     }
     /// Moves a recycled group (below the bin, not the bin itself) to `target`; rejects anything
-    /// else and every case [`Database::move_group`] rejects. The recorded origin is cleared.
+    /// else and every case [`Database::move_group`] rejects. The recorded origin is consumed.
     pub fn restore_group(&mut self, id: Uuid, target: Uuid, now: Timestamp) -> Result<()> {
         if !self.is_group_in_recycle_bin(id) {
             return Err(invalid("group is not in the recycle bin"));
         }
-        self.move_group(id, target, now)?;
-        if !self.is_group_in_recycle_bin(id) {
-            if let Some(g) = self.find_group_mut(id) {
-                g.previous_parent = None;
-            }
-        }
-        Ok(())
+        self.move_group(id, target, now)
     }
     /// Recycles a group or purges it; rejects root, the bin itself, missing groups or depth overflow.
     pub fn delete_group(&mut self, id: Uuid, now: Timestamp) -> Result<()> {

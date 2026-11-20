@@ -642,6 +642,15 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         state.saveFailure = null;
         throw apiError(code);
       }
+      // Like `save_entry`: a group that is gone is `notFound`; one that was deleted (below the bin)
+      // is `invalidInput` unless the entry already lives there.
+      if (model.groupId !== ROOT_GROUP_ID) {
+        const target = locate(model.groupId);
+        if (!target) throw apiError("notFound");
+        const bin = state.groups.find((g) => g.isRecycleBin);
+        const deleted = bin !== undefined && bin.id !== model.groupId && locate(model.groupId, bin.children) !== null;
+        if (deleted && (!model.id || findEntry(model.id).summary.groupId !== model.groupId)) throw apiError("invalidInput");
+      }
       let attachments: AttachmentMeta[] = structuredClone(model.attachments);
       for (const op of model.attachmentOps) {
         if (op.kind === "remove") {

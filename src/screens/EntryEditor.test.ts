@@ -8,7 +8,7 @@ import { navigation } from "../lib/stores/navigation.svelte";
 import { toasts } from "../lib/stores/toasts.svelte";
 import { expectNoAxeViolations } from "../test/axe";
 import { backendWith, openEdit, openNew, user } from "../test/editorHelpers";
-import { WORK_GROUP_ID, sessionStatus } from "../test/fixtures";
+import { PERSONAL_GROUP_ID, WORK_GROUP_ID, sessionStatus } from "../test/fixtures";
 import { calls, renderMainApp } from "../test/mainApp";
 import LoginFormHarness from "../test/LoginFormHarness.svelte";
 import { renderWithBackend } from "../test/render";
@@ -499,5 +499,77 @@ describe("list actions on the entry open in the editor", () => {
     await fireEvent.contextMenu(row());
     await user().click(screen.getByRole("menuitem", { name: "Delete" }));
     await waitFor(() => expect(calls(fake, "entryDelete")).toHaveLength(1));
+  });
+});
+
+// What the editor does when the vault changes under it: it closes when its entry is gone, and keeps
+// the draft but refuses to save when only the group it would be saved into was removed.
+describe("the vault changing under the editor", () => {
+  async function editingInWork() {
+    const fake = backendWith([{ id: "e-bank", title: "Bank", groupId: WORK_GROUP_ID, modified: 1 }]);
+    await openEdit(fake, "e-bank");
+    await user().type(field("Title"), " draft");
+    return fake;
+  }
+  const alertText = () => screen.queryByRole("alert")?.textContent ?? null;
+  const GROUP_GONE = "The group of this item was deleted. Choose another group to save it.";
+  const ITEM_DELETED = "This item is in Deleted. Restore it before saving your changes.";
+
+  it("an_entry_that_is_gone_closes_the_editor_with_a_notice", async () => {
+    const fake = await editingInWork();
+    await fake.handlers.entryDelete({ id: "e-bank" });
+    await fake.handlers.entryEmptyBin({});
+    await waitFor(() => expect(navigation.editModel).toBeNull());
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(toasts.items.map((x) => x.text)).toContain("This item was deleted, so its editor was closed.");
+    expect(calls(fake, "entrySave")).toHaveLength(0);
+  });
+
+  it("a_deleted_group_keeps_the_draft_and_refuses_to_save_until_another_group_is_chosen", async () => {
+    const fake = await editingInWork();
+    await fake.handlers.groupDelete({ id: WORK_GROUP_ID });
+    await waitFor(() => expect(alertText()).toBe(GROUP_GONE));
+    expect(field("Title").value).toBe("Bank draft");
+    expect(navigation.editModel).not.toBeNull();
+    await user().click(screen.getByRole("button", { name: "Save" }));
+    expect(calls(fake, "entrySave")).toHaveLength(0);
+    expect(navigation.editModel?.title).toBe("Bank draft");
+    // Choosing a live group lifts the refusal and the save moves the entry out of the bin.
+    await user().click(screen.getByRole("button", { name: "Deleted" }));
+    const picker = await screen.findByRole("dialog", { name: "Group" });
+    await user().click(picker.querySelector(`[role="treeitem"][data-id="${PERSONAL_GROUP_ID}"]`)!);
+    await waitFor(() => expect(alertText()).toBeNull());
+    await user().click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(calls(fake, "entrySave")).toHaveLength(1));
+    expect(savedModel(fake)).toMatchObject({ title: "Bank draft", groupId: PERSONAL_GROUP_ID });
+    const saved = fake.state.entries.find((e) => e.summary.id === "e-bank")!;
+    expect(saved.summary.inRecycleBin).toBe(false);
+  });
+
+  it("an_entry_deleted_under_the_editor_is_not_silently_restored_by_save", async () => {
+    const fake = await editingInWork();
+    await fake.handlers.entryDelete({ id: "e-bank" });
+    await waitFor(() => expect(alertText()).toBe(ITEM_DELETED));
+    await user().click(screen.getByRole("button", { name: "Save" }));
+    expect(calls(fake, "entrySave")).toHaveLength(0);
+    expect(field("Title").value).toBe("Bank draft");
+  });
+
+  it("the_backend_refuses_a_save_into_a_removed_group_as_well", async () => {
+    const fake = await editingInWork();
+    await fake.handlers.groupDelete({ id: WORK_GROUP_ID });
+    const model = { ...structuredClone(fake.state.entries[0]!.model), groupId: WORK_GROUP_ID };
+    await expect(Promise.resolve().then(() => fake.handlers.entrySave({ model }))).rejects.toMatchObject({ code: "notFound" });
+  });
+
+  it("a_new_entry_aimed_at_a_deleted_group_is_refused_too", async () => {
+    const fake = backendWith();
+    await openNew(fake, "login", WORK_GROUP_ID);
+    await user().type(field("Title"), "Fresh");
+    await fake.handlers.groupDelete({ id: WORK_GROUP_ID });
+    await waitFor(() => expect(alertText()).toBe(GROUP_GONE));
+    await user().click(screen.getByRole("button", { name: "Save" }));
+    expect(calls(fake, "entrySave")).toHaveLength(0);
+    expect(field("Title").value).toBe("Fresh");
   });
 });
