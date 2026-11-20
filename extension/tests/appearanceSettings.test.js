@@ -21,8 +21,8 @@ assert.strictEqual(
 
 const root = path.join(__dirname, '..');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
-assert.strictEqual(manifest.commands._execute_action.description, 'Open MyPass');
-assert.strictEqual(manifest.commands['lock-vault'].description, 'Lock MyPass');
+assert.strictEqual(manifest.commands._execute_action.description, '__MSG_commandOpen__');
+assert.strictEqual(manifest.commands['lock-vault'].description, '__MSG_commandLock__');
 assert.strictEqual(manifest.commands['lock-vault'].suggested_key.mac, 'Command+Shift+L');
 assert.ok(!manifest.content_scripts.some((entry) => (entry.js || []).includes('shared/theme.js')));
 

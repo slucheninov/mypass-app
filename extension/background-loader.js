@@ -7,6 +7,7 @@
 //
 // Node tests require background.js directly and have no importScripts, so
 // the shared helper is loaded there with require().
+importScripts('shared/i18n.js');
 importScripts('shared/url-match.js');
 importScripts('shared/password-generator.js');
 importScripts('shared/security-watch.js');

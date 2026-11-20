@@ -3,12 +3,17 @@
 // suggestions" is what the in-page Generate button and the popup's one-click
 // Generate use when the chosen type is not Smart.
 
+const i18n = typeof require === 'function'
+  ? require('./shared/i18n.js')
+  : window.mypassI18n;
+
 if (typeof document !== 'undefined') {
+  i18n.apply(document);
   const TYPE_LABELS = {
-    smart: 'Smart password',
-    random: 'Random password',
-    memorable: 'Memorable password',
-    pin: 'PIN'
+    smart: i18n.t('typeSmart'),
+    random: i18n.t('typeRandom'),
+    memorable: i18n.t('typeMemorable'),
+    pin: i18n.t('typePin')
   };
   const params = new URLSearchParams(location.search);
   const purpose = params.get('purpose') === 'insert' ? 'insert' : 'autofill';
@@ -50,10 +55,10 @@ if (typeof document !== 'undefined') {
   const historyList = document.getElementById('history-list');
 
   const canFillSite = /^https?:\/\//i.test(pageUrl);
-  if (purpose === 'insert') autofillBtn.textContent = 'Use password';
+  if (purpose === 'insert') autofillBtn.textContent = i18n.t('usePassword');
   else if (!canFillSite) {
     autofillBtn.disabled = true;
-    autofillBtn.title = 'Open a website to fill this password.';
+    autofillBtn.title = i18n.t('openSiteToFill');
   }
 
   function pageDomain() {
@@ -118,8 +123,8 @@ if (typeof document !== 'undefined') {
         if (!response || response.type !== 'generatedPassword' || !response.password) {
           showPassword('');
           setError(response && response.type === 'locked'
-            ? 'MyPass is locked.'
-            : ((response && response.message) || 'Could not generate a password.'));
+            ? i18n.t('myPassLockedSentence')
+            : ((response && response.message) || i18n.t('couldNotGeneratePassword')));
           return;
         }
         showPassword(response.password);
@@ -145,7 +150,7 @@ if (typeof document !== 'undefined') {
     pinOptions.hidden = state.type !== 'pin';
     const host = pageDomain();
     smartHint.hidden = state.type !== 'smart' || !host;
-    smartHint.textContent = host ? 'MyPass suggests a password that matches this site.' : '';
+    smartHint.textContent = host ? i18n.t('smartHint') : '';
   }
 
   function selectType(type) {
@@ -192,8 +197,8 @@ if (typeof document !== 'undefined') {
     if (!text) return;
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(() => {
-        copyBtn.textContent = 'Copied';
-        setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1200);
+        copyBtn.textContent = i18n.t('copied');
+        setTimeout(() => { copyBtn.textContent = i18n.t('copy'); }, 1200);
       }).catch(() => {});
     }
   }
@@ -206,7 +211,7 @@ if (typeof document !== 'undefined') {
       empty.className = 'history-empty';
       empty.textContent = historyNotice
         ? historyNotice
-        : (historySearch.value.trim() ? 'No matching passwords.' : 'No generated passwords yet.');
+        : i18n.t(historySearch.value.trim() ? 'noMatchingPasswords' : 'noGeneratedPasswords');
       historyList.appendChild(empty);
       return;
     }
@@ -234,7 +239,7 @@ if (typeof document !== 'undefined') {
     show.type = 'button';
     show.className = 'history-show';
     const isShown = revealed.has(entry.id);
-    show.textContent = isShown ? 'Hide' : 'Show';
+    show.textContent = i18n.t(isShown ? 'hide' : 'show');
     show.addEventListener('click', () => {
       if (revealed.has(entry.id)) revealed.delete(entry.id);
       else revealed.add(entry.id);
@@ -243,14 +248,14 @@ if (typeof document !== 'undefined') {
     const menuBtn = document.createElement('button');
     menuBtn.type = 'button';
     menuBtn.className = 'history-menu-btn';
-    menuBtn.setAttribute('aria-label', 'Password actions');
+    menuBtn.setAttribute('aria-label', i18n.t('passwordActions'));
     menuBtn.textContent = '▾';
     const menu = document.createElement('div');
     menu.className = 'history-menu';
     menu.hidden = openMenuId !== entry.id;
     const copy = document.createElement('button');
     copy.type = 'button';
-    copy.textContent = 'Copy';
+    copy.textContent = i18n.t('copy');
     copy.addEventListener('click', () => {
       copyText(entry.password);
       openMenuId = null;
@@ -258,7 +263,7 @@ if (typeof document !== 'undefined') {
     });
     const remove = document.createElement('button');
     remove.type = 'button';
-    remove.textContent = 'Delete';
+    remove.textContent = i18n.t('delete');
     remove.addEventListener('click', () => {
       chrome.runtime.sendMessage({ type: 'deleteGeneratedPassword', id: entry.id }, () => {
         latestEntries = latestEntries.filter((item) => item.id !== entry.id);
@@ -292,8 +297,8 @@ if (typeof document !== 'undefined') {
       if (!response || response.type !== 'generatedPasswordHistory') {
         latestEntries = [];
         historyNotice = response && response.type === 'locked'
-          ? 'Unlock MyPass to see password history.'
-          : 'MyPass is unavailable.';
+          ? i18n.t('unlockForHistory')
+          : i18n.t('myPassUnavailable');
         renderHistory(latestEntries);
         return;
       }

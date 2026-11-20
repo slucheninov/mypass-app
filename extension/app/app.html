@@ -3,41 +3,41 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MyPass</title>
+  <title data-i18n="extName"></title>
   <link rel="stylesheet" href="../shared/ui.css">
   <link rel="stylesheet" href="app.css">
 </head>
 <body>
   <main>
     <section id="page-settings" hidden>
-      <nav id="settings-nav" aria-label="Settings sections">
-        <button type="button" data-section="general">General</button>
-        <button type="button" data-section="security">Security</button>
-        <button type="button" data-section="autofill">Autofill and save</button>
-        <button type="button" data-section="notifications">Notifications</button>
-        <button type="button" data-section="appearance">Appearance and shortcuts</button>
+      <nav id="settings-nav" data-i18n-aria-label="settingsSections">
+        <button type="button" data-section="general" data-i18n="sectionGeneral"></button>
+        <button type="button" data-section="security" data-i18n="sectionSecurity"></button>
+        <button type="button" data-section="autofill" data-i18n="sectionAutofill"></button>
+        <button type="button" data-section="notifications" data-i18n="sectionNotifications"></button>
+        <button type="button" data-section="appearance" data-i18n="sectionAppearance"></button>
       </nav>
       <div id="settings-panes">
       <section id="settings-general" class="settings-section" hidden>
-        <h2>General</h2>
+        <h2 data-i18n="sectionGeneral"></h2>
         <div class="settings-section-body">
-          <p class="panel-helper">Check this browser for other password managers, or open the MyPass app settings.</p>
-          <button id="check-browser-managers-btn" type="button" class="btn-secondary">Check this browser</button>
-          <button id="open-settings-btn" type="button" class="btn-secondary">MyPass settings</button>
+          <p class="panel-helper" data-i18n="generalHelper"></p>
+          <button id="check-browser-managers-btn" type="button" class="btn-secondary" data-i18n="checkThisBrowser"></button>
+          <button id="open-settings-btn" type="button" class="btn-secondary" data-i18n="myPassSettings"></button>
           <p id="settings-open-error" class="panel-helper" role="status" hidden></p>
         </div>
       </section>
       <section id="settings-security" class="settings-section" hidden>
-        <h2>Security</h2>
+        <h2 data-i18n="sectionSecurity"></h2>
         <div class="settings-section-body">
-          <p class="panel-helper">Review security settings in the MyPass app.</p>
-          <button id="open-mypass-app-btn" type="button" class="btn-secondary">Open MyPass</button>
+          <p class="panel-helper" data-i18n="securityHelper"></p>
+          <button id="open-mypass-app-btn" type="button" class="btn-secondary" data-i18n="openMyPass"></button>
           <p id="open-mypass-app-error" class="panel-helper" role="status" hidden></p>
-          <p class="security-heading">Phishing prevention</p>
+          <p class="security-heading" data-i18n="phishingPrevention"></p>
           <label class="security-row">
             <span class="security-copy">
-              <strong>Warn when pasting on an unrecognized website</strong>
-              <p>Show a warning when a saved password is pasted on a site that is not saved with that item.</p>
+              <strong data-i18n="warnPasteTitle"></strong>
+              <p data-i18n="warnPasteHelper"></p>
             </span>
             <span class="security-switch">
               <input id="warn-unrecognized-paste" type="checkbox" checked>
@@ -46,8 +46,8 @@
           </label>
           <label class="security-row">
             <span class="security-copy">
-              <strong>Warn when copying on an unrecognized website</strong>
-              <p>Show a warning when a saved login or password is copied on a site that is not saved with that item.</p>
+              <strong data-i18n="warnCopyTitle"></strong>
+              <p data-i18n="warnCopyHelper"></p>
             </span>
             <span class="security-switch">
               <input id="warn-unrecognized-copy" type="checkbox" checked>
@@ -57,13 +57,13 @@
         </div>
       </section>
       <section id="settings-autofill" class="settings-section" hidden>
-        <h2>Autofill and save</h2>
+        <h2 data-i18n="sectionAutofill"></h2>
         <div class="settings-section-body">
-          <p class="panel-helper">These settings stay in this browser. Passkeys follow the switch in the MyPass app.</p>
+          <p class="panel-helper" data-i18n="autofillHelper"></p>
           <label class="security-row">
             <span class="security-copy">
-              <strong>Offer to save new logins</strong>
-              <p>Ask to save a login after you submit a form on a site that has no saved item.</p>
+              <strong data-i18n="offerSaveLoginTitle"></strong>
+              <p data-i18n="offerSaveLoginHelper"></p>
             </span>
             <span class="security-switch">
               <input id="offer-save-login" type="checkbox" checked>
@@ -72,8 +72,8 @@
           </label>
           <label class="security-row">
             <span class="security-copy">
-              <strong>Offer to save a 2FA code</strong>
-              <p>Ask to save a code when a site shows a setup key.</p>
+              <strong data-i18n="offerSaveTotpTitle"></strong>
+              <p data-i18n="offerSaveTotpHelper"></p>
             </span>
             <span class="security-switch">
               <input id="offer-save-totp" type="checkbox" checked>
@@ -82,8 +82,8 @@
           </label>
           <label class="security-row">
             <span class="security-copy">
-              <strong>Show the MyPass icon in fields</strong>
-              <p>Put the icon in username, password, and one-time code fields.</p>
+              <strong data-i18n="showFieldIconTitle"></strong>
+              <p data-i18n="showFieldIconHelper"></p>
             </span>
             <span class="security-switch">
               <input id="show-field-icon" type="checkbox" checked>
@@ -92,8 +92,8 @@
           </label>
           <label class="security-row">
             <span class="security-copy">
-              <strong>Sign in after filling</strong>
-              <p>Click the form's sign-in button after MyPass fills a login and password. A generated password is not submitted.</p>
+              <strong data-i18n="autoSubmitTitle"></strong>
+              <p data-i18n="autoSubmitHelper"></p>
             </span>
             <span class="security-switch">
               <input id="autofill-auto-submit" type="checkbox">
@@ -102,8 +102,8 @@
           </label>
           <label class="security-row">
             <span class="security-copy">
-              <strong>Offer to sign in with a passkey</strong>
-              <p>Uses the passkey switch in the MyPass app. Unlock MyPass to change it.</p>
+              <strong data-i18n="passkeyOfferTitle"></strong>
+              <p data-i18n="passkeyOfferHelper"></p>
             </span>
             <span class="security-switch">
               <input id="autofill-passkey-signin" type="checkbox">
@@ -111,11 +111,11 @@
             </span>
           </label>
           <p id="autofill-passkey-error" class="panel-helper" role="status" hidden></p>
-          <p class="security-heading">Suggestions</p>
+          <p class="security-heading" data-i18n="suggestions"></p>
           <label class="security-row">
             <span class="security-copy">
-              <strong>Show logins</strong>
-              <p>Include saved logins in the menu on a field.</p>
+              <strong data-i18n="showLoginsTitle"></strong>
+              <p data-i18n="showLoginsHelper"></p>
             </span>
             <span class="security-switch">
               <input id="suggest-logins" type="checkbox" checked>
@@ -124,8 +124,8 @@
           </label>
           <label class="security-row">
             <span class="security-copy">
-              <strong>Show cards</strong>
-              <p>Include saved cards in the menu on a field.</p>
+              <strong data-i18n="showCardsTitle"></strong>
+              <p data-i18n="showCardsHelper"></p>
             </span>
             <span class="security-switch">
               <input id="suggest-cards" type="checkbox" checked>
@@ -134,8 +134,8 @@
           </label>
           <label class="security-row">
             <span class="security-copy">
-              <strong>Show addresses</strong>
-              <p>Include saved addresses when you fill a form from the popup.</p>
+              <strong data-i18n="showAddressesTitle"></strong>
+              <p data-i18n="showAddressesHelper"></p>
             </span>
             <span class="security-switch">
               <input id="suggest-addresses" type="checkbox" checked>
@@ -145,13 +145,13 @@
         </div>
       </section>
       <section id="settings-notifications" class="settings-section" hidden>
-        <h2>Notifications</h2>
+        <h2 data-i18n="sectionNotifications"></h2>
         <div class="settings-section-body">
-          <p class="panel-helper">These notifications stay in this browser.</p>
+          <p class="panel-helper" data-i18n="notificationsHelper"></p>
           <label class="security-row">
             <span class="security-copy">
-              <strong>Notify when a passkey needs confirmation</strong>
-              <p>Show a system notification when Chrome is in the background and a site asks MyPass to confirm a passkey.</p>
+              <strong data-i18n="notifyPasskeyTitle"></strong>
+              <p data-i18n="notifyPasskeyHelper"></p>
             </span>
             <span class="security-switch">
               <input id="notify-passkey-confirmation" type="checkbox" checked>
@@ -160,8 +160,8 @@
           </label>
           <label class="security-row">
             <span class="security-copy">
-              <strong>Notify when MyPass is unlocked</strong>
-              <p>Show a system notification when the vault changes from locked to unlocked.</p>
+              <strong data-i18n="notifyUnlockedTitle"></strong>
+              <p data-i18n="notifyUnlockedHelper"></p>
             </span>
             <span class="security-switch">
               <input id="notify-vault-unlocked" type="checkbox" checked>
@@ -171,33 +171,34 @@
         </div>
       </section>
       <section id="settings-appearance" class="settings-section" hidden>
-        <h2>Appearance and shortcuts</h2>
+        <h2 data-i18n="sectionAppearance"></h2>
         <div class="settings-section-body">
-          <p class="panel-helper">Theme and shortcuts stay in this browser.</p>
+          <p class="panel-helper" data-i18n="appearanceHelper"></p>
           <label class="appearance-row">
-            <span>Theme</span>
+            <span data-i18n="theme"></span>
             <select id="appearance-theme">
-              <option value="system" selected>Match system</option>
-              <option value="light">Light</option>
-              <option value="dark">Dark</option>
+              <option value="system" selected data-i18n="themeSystem"></option>
+              <option value="light" data-i18n="themeLight"></option>
+              <option value="dark" data-i18n="themeDark"></option>
             </select>
           </label>
-          <p class="security-heading">Shortcuts</p>
+          <p class="security-heading" data-i18n="shortcuts"></p>
           <div class="appearance-row">
-            <span>Open MyPass</span>
-            <kbd id="shortcut-open">Not set</kbd>
+            <span data-i18n="commandOpen"></span>
+            <kbd id="shortcut-open" data-i18n="shortcutNotSet"></kbd>
           </div>
           <div class="appearance-row">
-            <span>Lock MyPass</span>
-            <kbd id="shortcut-lock">Not set</kbd>
+            <span data-i18n="commandLock"></span>
+            <kbd id="shortcut-lock" data-i18n="shortcutNotSet"></kbd>
           </div>
-          <p class="panel-helper">Change shortcuts on the <button id="open-shortcut-settings" type="button" class="appearance-link">Chrome shortcuts page</button>.</p>
+          <p class="panel-helper"><span data-i18n="shortcutsHelper"></span> <button id="open-shortcut-settings" type="button" class="appearance-link" data-i18n="chromeShortcutsPage"></button></p>
         </div>
       </section>
       </div>
     </section>
-    <section id="page-not-found" hidden><p>Page not found.</p></section>
+    <section id="page-not-found" hidden><p data-i18n="pageNotFound"></p></section>
   </main>
+  <script src="../shared/i18n.js"></script>
   <script src="../shared/autofill-settings.js"></script>
   <script src="../shared/notification-settings.js"></script>
   <script src="../shared/security-watch.js"></script>

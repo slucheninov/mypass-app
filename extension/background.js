@@ -156,6 +156,9 @@ const autofillSettings = typeof require === 'function'
 const promptRecords = typeof require === 'function'
   ? require('./shared/prompt-record.js')
   : mypassPromptRecord;
+// i18n.js is importScripts'd first too; user-visible text is looked up when it is shown, so the
+// browser UI language applies.
+const i18n = typeof require === 'function' ? require('./shared/i18n.js') : mypassI18n;
 
 // Pure decision function so the branch selection is unit-testable without a chrome.tabs
 // mock. `manifest.json` grants only `activeTab` (no `host_permissions`), and Chrome only
@@ -579,7 +582,7 @@ async function observeVaultUnlock(status) {
   try {
     const settings = await readNotificationSettings();
     if (!settings.vaultUnlocked) return;
-    showBasicNotification("mypass-unlocked", "MyPass is unlocked.");
+    showBasicNotification("mypass-unlocked", i18n.t("notifyUnlocked"));
   } catch (_) {}
 }
 
@@ -760,7 +763,7 @@ function openPasskeyPopup() {
       if (!settings.passkeyConfirmation) return;
       showBasicNotification(
         "mypass-passkey",
-        "Passkey confirmation needed. Open the MyPass extension to continue."
+        i18n.t("notifyPasskeyConfirm")
       );
     }).catch(() => {});
   };
@@ -790,9 +793,7 @@ async function completePasskeyRequest(kind, details) {
   } catch (_) {
     completionError = {
       name: "OperationError",
-      message: kind === "create"
-        ? "The browser could not finish passkey registration. A passkey may already be saved in MyPass. Cancel the website request and retry; check the website before replacing the local key."
-        : "The browser could not finish passkey sign-in. Cancel the website request and try again."
+      message: i18n.t(kind === "create" ? "passkeyFailureNoticeCreate" : "passkeyFailureNoticeGet")
     };
     await withPasskeyState(async () => {
       const pending = await readPending();
@@ -1449,11 +1450,11 @@ async function consumePrompt(message, sender) {
     await writePrompts(taken.rest);
     return taken.record;
   });
-  if (!record) return { type: "error", code: "prompt_gone", message: "This prompt is no longer available." };
+  if (!record) return { type: "error", code: "prompt_gone", message: i18n.t("promptGone") };
   if (message.action === "dismiss" || record.kind === "settings") return { type: "ok" };
 
   if (!(await verifyPromptPage(record))) {
-    return { type: "error", code: "prompt_page_changed", message: "This page changed. Try again." };
+    return { type: "error", code: "prompt_page_changed", message: i18n.t("promptPageChangedRetry") };
   }
 
   let nativeMessage;
@@ -1476,14 +1477,14 @@ async function consumePrompt(message, sender) {
     if (typeof message.entryId === "string") {
       if (!accounts.some((account) => account.id === message.entryId)) {
         await restorePrompt(record);
-        return { type: "error", code: "prompt_bad_choice", message: "Choose one of the listed accounts." };
+        return { type: "error", code: "prompt_bad_choice", message: i18n.t("promptBadChoice") };
       }
       entryId = message.entryId;
     } else if (accounts.length === 1) {
       entryId = accounts[0].id;
     } else if (accounts.length > 1) {
       await restorePrompt(record);
-      return { type: "error", code: "prompt_choice_required", message: "Choose an account." };
+      return { type: "error", code: "prompt_choice_required", message: i18n.t("promptChoiceRequired") };
     }
     nativeMessage = { type: "proposeSaveTotp", url: record.pageUrl, otpauthOrSecret: record.payload.otpauthOrSecret };
     if (entryId !== undefined) nativeMessage.entryId = entryId;
@@ -1665,9 +1666,9 @@ function handleRuntimeMessage(message, sender, sendResponse) {
     migrateLocalPasswordHistory()
       .then(() => sendNativeMessageWithPairing({ type: "getGeneratedPasswordHistory" }))
       .then((response) => {
-        sendResponse(response && response.type ? response : { type: "error", message: "MyPass is unavailable." });
+        sendResponse(response && response.type ? response : { type: "error", message: i18n.t("myPassUnavailable") });
       })
-      .catch(() => sendResponse({ type: "error", message: "MyPass is unavailable." }));
+      .catch(() => sendResponse({ type: "error", message: i18n.t("myPassUnavailable") }));
     return true;
   }
 

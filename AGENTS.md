@@ -31,7 +31,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `src-tauri` (package `mypass-app`, lib `mypass_app_lib`) | implemented | The Tauri 2 app shell: the typed commands and events (`tauri-specta`), capabilities, native file dialogs, plugins, tray, global hotkeys, single instance, quit flow, native-side i18n; a workspace member listed explicitly |
 | `mypass-bridge` | implemented | Browser bridge protocol, codec, endpoint, relay and loopback server (`server` feature, off for the host); the passkey service (`passkeys`) |
 | `mypass-host` | implemented | Native messaging host binary; never links the session, core or KDBX crates |
-| `extension/` | implemented | The Chromium extension (Manifest V3 JavaScript, vendored `vendor/jsQR.js`), with its 41 Node suites in `extension/tests/`, run by `scripts/test-extension.sh` |
+| `extension/` | implemented | The Chromium extension (Manifest V3 JavaScript, vendored `vendor/jsQR.js`), with its 42 Node suites in `extension/tests/`, run by `scripts/test-extension.sh`; its text lives in `extension/_locales/{en,uk,ru,de}/messages.json` (`chrome.i18n`, read through `shared/i18n.js`, `en` is the default locale), pinned by `tests/locales.test.js` |
 
 ## Repo layout
 
@@ -536,7 +536,8 @@ as `\u{..}` escapes, in `*.xcstrings` and in the root `RUN.md` (the Ukrainian ma
 never translated). Literal Cyrillic is also allowed in the extension files `extension/shared/{form-detection,page-identifier}.js` and `extension/tests/{formDetection,inlineIcon,pageIdentifier}.test.js` (localized keyword lists and their tests; the extension is vendored as copied), and in the translation files
 `src/lib/i18n/locales/{uk,ru}.json` and `src-tauri/resources/macos/{uk,ru}.lproj/InfoPlist.strings`
 (exactly these four of the translation files; the English files stay Cyrillic-free, and the Node tests read their expectations
-from the catalogs), in `crates/mypass-kdbx/tests/unicode.rs`,
+from the catalogs), in the extension's `chrome.i18n` catalogs `extension/_locales/{uk,ru}/messages.json` (the `en` and `de`
+catalogs stay Cyrillic-free), in `crates/mypass-kdbx/tests/unicode.rs`,
 vendored upstream data under `crates/mypass-core/resources/`, and opaque binary fixtures
 `crates/mypass-kdbx/tests/fixtures/*.kdbx` (fixture README and generator files follow the text rules).
 Pinned by `cyrillic_only_in_allowed_files`.

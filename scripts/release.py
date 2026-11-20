@@ -166,7 +166,12 @@ def verify_zip(path, ver, extension=None):
             p = Path(name)
             require(not p.is_absolute() and '..' not in p.parts and '\\' not in name, 'extension zip unsafe path')
             require('tests' not in p.parts and p.name not in ('package.json', '.DS_Store') and not name.endswith('.test.js'), f'extension zip development file: {name}')
-        require(json.loads(archive.read('manifest.json'))['version'] == ver, 'extension zip version mismatch')
+        manifest = json.loads(archive.read('manifest.json'))
+        require(manifest['version'] == ver, 'extension zip version mismatch')
+        # The manifest's __MSG_*__ strings resolve against the default locale, so a ZIP without
+        # that catalog installs with a broken name and description.
+        require(f"_locales/{manifest.get('default_locale')}/messages.json" in names,
+                'extension zip missing the default locale catalog')
         if extension:
             files = {}
             for p in sorted(extension.rglob('*')):

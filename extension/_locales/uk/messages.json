@@ -1,0 +1,1059 @@
+{
+  "extName": {
+    "message": "MyPass"
+  },
+  "extDescription": {
+    "message": "Автозаповнення та збереження логінів із MyPass"
+  },
+  "commandOpen": {
+    "message": "Відкрити MyPass"
+  },
+  "commandLock": {
+    "message": "Заблокувати MyPass"
+  },
+  "search": {
+    "message": "Пошук"
+  },
+  "close": {
+    "message": "Закрити"
+  },
+  "cancel": {
+    "message": "Скасувати"
+  },
+  "save": {
+    "message": "Зберегти"
+  },
+  "add": {
+    "message": "Додати"
+  },
+  "retry": {
+    "message": "Повторити"
+  },
+  "copy": {
+    "message": "Скопіювати"
+  },
+  "copied": {
+    "message": "Скопійовано"
+  },
+  "show": {
+    "message": "Показати"
+  },
+  "hide": {
+    "message": "Сховати"
+  },
+  "remove": {
+    "message": "Вилучити"
+  },
+  "delete": {
+    "message": "Видалити"
+  },
+  "replace": {
+    "message": "Замінити"
+  },
+  "back": {
+    "message": "Назад"
+  },
+  "done": {
+    "message": "Готово"
+  },
+  "title": {
+    "message": "Назва"
+  },
+  "username": {
+    "message": "Ім’я користувача"
+  },
+  "password": {
+    "message": "Пароль"
+  },
+  "loading": {
+    "message": "Завантаження…"
+  },
+  "unlockMyPass": {
+    "message": "Розблокувати MyPass"
+  },
+  "openMyPass": {
+    "message": "Відкрити MyPass"
+  },
+  "lockMyPass": {
+    "message": "Заблокувати MyPass"
+  },
+  "myPassLocked": {
+    "message": "MyPass заблоковано"
+  },
+  "myPassLockedSentence": {
+    "message": "MyPass заблоковано."
+  },
+  "myPassUnavailable": {
+    "message": "MyPass недоступний."
+  },
+  "couldntReachMyPass": {
+    "message": "Не вдалося зв’язатися з MyPass"
+  },
+  "couldntReachMyPassSentence": {
+    "message": "Не вдалося зв’язатися з MyPass."
+  },
+  "unlockMyPassFirst": {
+    "message": "Спершу розблокуйте MyPass"
+  },
+  "connectToMyPassFirst": {
+    "message": "Спершу підключіться до MyPass"
+  },
+  "connectMyPassFirstSentence": {
+    "message": "Спершу підключіть MyPass."
+  },
+  "connectBrowserFirst": {
+    "message": "Спершу підключіть цей браузер до MyPass."
+  },
+  "appUnavailableStatus": {
+    "message": "Не вдається підключитися до MyPass. Переконайтеся, що програму відкрито, і натисніть «Повторити»."
+  },
+  "hostUnavailableStatus": {
+    "message": "Конектор браузера MyPass не знайдено. Завершіть налаштування браузера й натисніть «Повторити»."
+  },
+  "appUnavailableOpenHelper": {
+    "message": "Відкрийте MyPass із теки «Програми» або з Dock. За потреби розблокуйте сховище й натисніть «Повторити»."
+  },
+  "lockedHelper": {
+    "message": "Відкрийте MyPass і розблокуйте сховище"
+  },
+  "unlockUnreachable": {
+    "message": "Не вдалося зв’язатися з MyPass. Відкрийте програму й спробуйте ще раз."
+  },
+  "emptyListTitle": {
+    "message": "Немає збережених логінів для цього сайту"
+  },
+  "listHeader": {
+    "message": "Виберіть запис для автозаповнення:"
+  },
+  "noFavorites": {
+    "message": "Немає вибраного"
+  },
+  "noItems": {
+    "message": "Немає записів"
+  },
+  "noMatches": {
+    "message": "Нічого не знайдено"
+  },
+  "categoryThisSite": {
+    "message": "Цей сайт"
+  },
+  "categoryFavorites": {
+    "message": "Вибране"
+  },
+  "categoryAll": {
+    "message": "Усі"
+  },
+  "categoryLogins": {
+    "message": "Логіни"
+  },
+  "categoryPasskeys": {
+    "message": "Ключі доступу"
+  },
+  "categoryCodes": {
+    "message": "Коди"
+  },
+  "categoryCards": {
+    "message": "Картки"
+  },
+  "categoryAddresses": {
+    "message": "Адреси"
+  },
+  "categoryNotes": {
+    "message": "Нотатки"
+  },
+  "passkeysOff": {
+    "message": "Ключі доступу вимкнено. Увімкніть їх у параметрах MyPass."
+  },
+  "passkeysBlocked": {
+    "message": "Ключі доступу, імовірно, блокує інший постачальник. Відкрийте параметри MyPass, щоб дізнатися більше."
+  },
+  "browserPasswordSaving": {
+    "message": "Збереження паролів у браузері"
+  },
+  "alsoEnabled": {
+    "message": "Також увімкнено: $P1$. Перегляньте в параметрах MyPass.",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "pairingPanelTitle": {
+    "message": "Підключити розширення браузера"
+  },
+  "waitingForUnlock": {
+    "message": "Очікуємо, поки ви розблокуєте MyPass…"
+  },
+  "passkeyBadge": {
+    "message": "Ключ доступу"
+  },
+  "totpCircleLabel": {
+    "message": "Показати або скопіювати код підтвердження"
+  },
+  "openedInMyPass": {
+    "message": "Відкрито в MyPass"
+  },
+  "passkeyUnknownOriginLower": {
+    "message": "невідоме джерело"
+  },
+  "passkeyNewEntryFor": {
+    "message": "Новий запис для $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "passkeySignInAs": {
+    "message": "Увійти як $P1$?",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "passkeyReplaceIn": {
+    "message": "Замінити ключ доступу в $P1$?",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "passkeySaveTo": {
+    "message": "Зберегти ключ доступу в $P1$?",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "iconFor": {
+    "message": "Піктограма для «$P1$»",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "iconForUntitled": {
+    "message": "Піктограма для запису без назви"
+  },
+  "addressNoForm": {
+    "message": "На цій сторінці немає підтримуваної форми адреси. Відкрийте форму зі стандартними полями автозаповнення адреси. Заповнення адреси доступне лише на головній сторінці."
+  },
+  "addressPageChanged": {
+    "message": "Сторінку або вибрану вкладку змінено. Поверніться до форми адреси й виберіть адресу ще раз."
+  },
+  "addressFormChanged": {
+    "message": "Форму адреси змінено. Перевірте вже заповнені поля й виберіть адресу ще раз."
+  },
+  "addressNoValues": {
+    "message": "Жодне збережене значення адреси не відповідає полям цієї форми. Змініть цю адресу в MyPass."
+  },
+  "addressFillFailed": {
+    "message": "Не вдалося заповнити адресу. Переконайтеся, що MyPass розблоковано, і виберіть адресу ще раз."
+  },
+  "addressChecking": {
+    "message": "Перевірка форм адреси…"
+  },
+  "addressBack": {
+    "message": "Назад до адрес"
+  },
+  "addressNotFilled": {
+    "message": "Адресу не заповнено"
+  },
+  "addressFillHeader": {
+    "message": "Заповнити адресу"
+  },
+  "addressSendTo": {
+    "message": "Надіслати «$P1$» на $P2$. Виберіть форму для заповнення:",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      },
+      "p2": {
+        "content": "$2"
+      }
+    }
+  },
+  "addressFillOption": {
+    "message": "Заповнити: $P1$ (полів: $P2$)",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      },
+      "p2": {
+        "content": "$2"
+      }
+    }
+  },
+  "addressFormShipping": {
+    "message": "форма доставки $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "addressFormBilling": {
+    "message": "форма платіжної адреси $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "addressFormGeneric": {
+    "message": "форма адреси $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "addressFilling": {
+    "message": "Заповнення адреси…"
+  },
+  "addressFilled": {
+    "message": "Заповнено полів: $P1$. Перевірте форму перед надсиланням.",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "addressFillAria": {
+    "message": "Заповнити адресу: $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "addressSuggestionsOff": {
+    "message": "Підказки адрес вимкнено"
+  },
+  "addressTurnOn": {
+    "message": "Увімкніть «Показувати адреси» в розділі «Автозаповнення і збереження», а потім виберіть адресу ще раз."
+  },
+  "pairingStartFailed": {
+    "message": "Не вдалося почати підключення. MyPass запущено й розблоковано?"
+  },
+  "pairingInvalidCode": {
+    "message": "Недійсний код. Натисніть «Підключити», щоб спробувати ще раз."
+  },
+  "pairingCompleteFailed": {
+    "message": "Не вдалося завершити підключення. MyPass запущено й розблоковано?"
+  },
+  "openSiteHint": {
+    "message": "Виберіть запис, щоб відкрити його вебсайт."
+  },
+  "noAddressesHint": {
+    "message": "Немає адрес. Додайте адресу в MyPass через «Додати» > «Адреса»."
+  },
+  "newLogin": {
+    "message": "Новий логін"
+  },
+  "newCard": {
+    "message": "Нова картка"
+  },
+  "newNote": {
+    "message": "Нова нотатка"
+  },
+  "totpInvalid": {
+    "message": "Введіть дійсну URL-адресу автентифікатора або секретний ключ"
+  },
+  "passkeyFailureGet": {
+    "message": "Браузер не зміг завершити вхід. Скасуйте запит вебсайту й спробуйте ще раз."
+  },
+  "passkeyFailureCreate": {
+    "message": "Браузер не зміг завершити збереження цього ключа доступу. Скасуйте запит вебсайту й спробуйте ще раз. Локальний ключ доступу може вже існувати; перевірте вебсайт, перш ніж його замінювати."
+  },
+  "detailEntry": {
+    "message": "Запис"
+  },
+  "detailAccount": {
+    "message": "Обліковий запис"
+  },
+  "detailWebsite": {
+    "message": "Вебсайт"
+  },
+  "detailOrigin": {
+    "message": "Джерело"
+  },
+  "notProvided": {
+    "message": "Не вказано"
+  },
+  "unknownWebsite": {
+    "message": "Невідомий вебсайт"
+  },
+  "unknownOrigin": {
+    "message": "Невідоме джерело"
+  },
+  "passkeyNewEntryNote": {
+    "message": "Буде створено новий запис."
+  },
+  "passkeyCompleting": {
+    "message": "Завершення запиту ключа доступу"
+  },
+  "passkeyPreparing": {
+    "message": "Підготовка запиту ключа доступу"
+  },
+  "passkeyWaitingBrowser": {
+    "message": "Очікуємо, поки браузер завершить. Не закривайте вебсайт."
+  },
+  "passkeyWaitingMyPass": {
+    "message": "Очікуємо MyPass. Перш ніж ключ доступу буде збережено або використано, вас попросять підтвердити дію."
+  },
+  "identifierOfferText": {
+    "message": "$P1$ не збережено для цього сайту. Додайте його до наявного запису або створіть новий.",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "addToItem": {
+    "message": "Додати до «$P1$»",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "addToUntitledItem": {
+    "message": "Додати до запису"
+  },
+  "newItem": {
+    "message": "Новий запис"
+  },
+  "identifierAddFailed": {
+    "message": "Не вдалося додати це до запису. Відкрийте MyPass і спробуйте ще раз."
+  },
+  "noPageDomain": {
+    "message": "Не вдалося визначити домен цієї сторінки"
+  },
+  "lockFailed": {
+    "message": "Не вдалося заблокувати MyPass. Відкрийте програму й спробуйте ще раз."
+  },
+  "more": {
+    "message": "Більше"
+  },
+  "passwordGenerator": {
+    "message": "Генератор паролів"
+  },
+  "addItem": {
+    "message": "Додати запис"
+  },
+  "connect": {
+    "message": "Підключити"
+  },
+  "submit": {
+    "message": "Надіслати"
+  },
+  "pairingCodeHint": {
+    "message": "Введіть код, показаний у MyPass"
+  },
+  "passkeyFailureTitle": {
+    "message": "Запит ключа доступу не завершено"
+  },
+  "passkeySaveTitle": {
+    "message": "Зберегти ключ доступу"
+  },
+  "passkeyReplaceTitle": {
+    "message": "Замінити ключ доступу?"
+  },
+  "passkeyReplaceHelper": {
+    "message": "Цей запис уже має ключ доступу. Заміна вилучить ключ доступу, який зараз використовує цей сайт. Деякі сайти (наприклад, Google) активують новий ключ доступу лише із затримкою, тож до того часу вхід може не вдаватися. Попередній ключ доступу зберігається в історії запису."
+  },
+  "passkeyUseTitle": {
+    "message": "Використати ключ доступу"
+  },
+  "approve": {
+    "message": "Підтвердити"
+  },
+  "chooseEntry": {
+    "message": "Виберіть запис"
+  },
+  "newPasswordFieldHint": {
+    "message": "На цій сторінці є поле для нового пароля"
+  },
+  "generatePassword": {
+    "message": "Згенерувати пароль"
+  },
+  "totpPasteHint": {
+    "message": "Вставте URL otpauth:// або секретний ключ"
+  },
+  "help": {
+    "message": "Довідка"
+  },
+  "helpBack": {
+    "message": "‹ Довідка"
+  },
+  "helpText": {
+    "message": "MyPass зберігає сховище на цьому Mac. Розблоковуйте, підключайте цей браузер і змінюйте параметри сховища в програмі. Це меню стосується лише розширення в цьому профілі браузера."
+  },
+  "settingsSections": {
+    "message": "Розділи параметрів"
+  },
+  "sectionGeneral": {
+    "message": "Загальні"
+  },
+  "sectionSecurity": {
+    "message": "Безпека"
+  },
+  "sectionAutofill": {
+    "message": "Автозаповнення і збереження"
+  },
+  "sectionNotifications": {
+    "message": "Сповіщення"
+  },
+  "sectionAppearance": {
+    "message": "Вигляд і комбінації клавіш"
+  },
+  "generalHelper": {
+    "message": "Перевірте цей браузер на наявність інших менеджерів паролів або відкрийте параметри програми MyPass."
+  },
+  "checkThisBrowser": {
+    "message": "Перевірити цей браузер"
+  },
+  "myPassSettings": {
+    "message": "Параметри MyPass"
+  },
+  "securityHelper": {
+    "message": "Перегляньте параметри безпеки в програмі MyPass."
+  },
+  "phishingPrevention": {
+    "message": "Захист від фішингу"
+  },
+  "warnPasteTitle": {
+    "message": "Попереджати про вставлення на нерозпізнаному вебсайті"
+  },
+  "warnPasteHelper": {
+    "message": "Показувати попередження, коли збережений пароль вставляють на сайті, не збереженому в цьому записі."
+  },
+  "warnCopyTitle": {
+    "message": "Попереджати про копіювання на нерозпізнаному вебсайті"
+  },
+  "warnCopyHelper": {
+    "message": "Показувати попередження, коли збережений логін або пароль копіюють на сайті, не збереженому в цьому записі."
+  },
+  "autofillHelper": {
+    "message": "Ці параметри зберігаються в цьому браузері. Ключі доступу відповідають перемикачу в програмі MyPass."
+  },
+  "offerSaveLoginTitle": {
+    "message": "Пропонувати зберігати нові логіни"
+  },
+  "offerSaveLoginHelper": {
+    "message": "Пропонувати зберегти логін після надсилання форми на сайті, якого немає у збережених записах."
+  },
+  "offerSaveTotpTitle": {
+    "message": "Пропонувати зберегти код 2FA"
+  },
+  "offerSaveTotpHelper": {
+    "message": "Пропонувати зберегти код, коли сайт показує ключ налаштування."
+  },
+  "showFieldIconTitle": {
+    "message": "Показувати піктограму MyPass у полях"
+  },
+  "showFieldIconHelper": {
+    "message": "Розміщувати піктограму в полях імені користувача, пароля й одноразового коду."
+  },
+  "autoSubmitTitle": {
+    "message": "Входити після заповнення"
+  },
+  "autoSubmitHelper": {
+    "message": "Натискати кнопку входу у формі після того, як MyPass заповнить логін і пароль. Згенерований пароль не надсилається."
+  },
+  "passkeyOfferTitle": {
+    "message": "Пропонувати вхід за допомогою ключа доступу"
+  },
+  "passkeyOfferHelper": {
+    "message": "Використовує перемикач ключів доступу в програмі MyPass. Щоб змінити його, розблокуйте MyPass."
+  },
+  "suggestions": {
+    "message": "Підказки"
+  },
+  "showLoginsTitle": {
+    "message": "Показувати логіни"
+  },
+  "showLoginsHelper": {
+    "message": "Додавати збережені логіни до меню в полі."
+  },
+  "showCardsTitle": {
+    "message": "Показувати картки"
+  },
+  "showCardsHelper": {
+    "message": "Додавати збережені картки до меню в полі."
+  },
+  "showAddressesTitle": {
+    "message": "Показувати адреси"
+  },
+  "showAddressesHelper": {
+    "message": "Додавати збережені адреси, коли ви заповнюєте форму зі спливного вікна."
+  },
+  "notificationsHelper": {
+    "message": "Ці сповіщення зберігаються в цьому браузері."
+  },
+  "notifyPasskeyTitle": {
+    "message": "Сповіщати, коли ключ доступу потребує підтвердження"
+  },
+  "notifyPasskeyHelper": {
+    "message": "Показувати системне сповіщення, коли Chrome працює у фоновому режимі, а сайт просить MyPass підтвердити ключ доступу."
+  },
+  "notifyUnlockedTitle": {
+    "message": "Сповіщати, коли MyPass розблоковано"
+  },
+  "notifyUnlockedHelper": {
+    "message": "Показувати системне сповіщення, коли сховище переходить зі стану «заблоковано» в «розблоковано»."
+  },
+  "appearanceHelper": {
+    "message": "Тема й комбінації клавіш зберігаються в цьому браузері."
+  },
+  "theme": {
+    "message": "Тема"
+  },
+  "themeSystem": {
+    "message": "Як у системі"
+  },
+  "themeLight": {
+    "message": "Світла"
+  },
+  "themeDark": {
+    "message": "Темна"
+  },
+  "shortcuts": {
+    "message": "Комбінації клавіш"
+  },
+  "shortcutNotSet": {
+    "message": "Не задано"
+  },
+  "shortcutsHelper": {
+    "message": "Змінити комбінації клавіш:"
+  },
+  "chromeShortcutsPage": {
+    "message": "Сторінка комбінацій клавіш Chrome"
+  },
+  "pageNotFound": {
+    "message": "Сторінку не знайдено."
+  },
+  "openSettingsPairing": {
+    "message": "Спершу підключіть цей браузер до MyPass, а потім відкрийте параметри."
+  },
+  "openSettingsFailed": {
+    "message": "Не вдалося відкрити параметри. Відкрийте MyPass, а потім виберіть «Параметри» → «Браузер»."
+  },
+  "openAppFailed": {
+    "message": "Не вдалося відкрити MyPass. Відкрийте програму й спробуйте ще раз."
+  },
+  "passkeyChangeLocked": {
+    "message": "Розблокуйте MyPass, а потім змініть параметр ключів доступу."
+  },
+  "passkeyChangeFailed": {
+    "message": "Не вдалося змінити параметр ключів доступу. Відкрийте MyPass і спробуйте ще раз."
+  },
+  "browserCheckTitle": {
+    "message": "Перевірка цього браузера"
+  },
+  "browserCheckIntro": {
+    "message": "Перевірте цей профіль на наявність інших менеджерів паролів і надішліть результати до параметрів MyPass."
+  },
+  "browserCheckPermissionNote": {
+    "message": "Chrome запитає дозвіл, щоб MyPass міг читати параметри конфіденційності браузера та ваші встановлені розширення. Ця перевірка не змінює параметри й не вимикає розширення."
+  },
+  "allowAndCheck": {
+    "message": "Дозволити й перевірити"
+  },
+  "checkAgain": {
+    "message": "Перевірити ще раз"
+  },
+  "openMyPassSettings": {
+    "message": "Відкрити параметри MyPass"
+  },
+  "permissionNotRequested": {
+    "message": "Дозвіл ще не запитано."
+  },
+  "otherManagerExtensions": {
+    "message": "Розширення інших менеджерів"
+  },
+  "browserCheckLimits": {
+    "message": "Ця перевірка не може перевірити ключі доступу Менеджера паролів Google, автозаповнення чи постачальників macOS. Скористайтеся довідкою в MyPass → «Параметри» → «Браузер», щоб перевірити їх окремо."
+  },
+  "browserPasswordSettings": {
+    "message": "Параметри паролів браузера"
+  },
+  "browserExtensions": {
+    "message": "Розширення браузера"
+  },
+  "checkPermissionsUnreadable": {
+    "message": "Не вдалося прочитати дозволи браузера. Повторіть перевірку."
+  },
+  "checkPermissionDenied": {
+    "message": "Дозвіл не надано. Виберіть «Дозволити й перевірити», щоб спробувати ще раз."
+  },
+  "checkResultsSent": {
+    "message": "Результати надіслано до MyPass → «Параметри» → «Браузер»."
+  },
+  "checkResultsLocal": {
+    "message": "Результати показано нижче. Відкрийте MyPass і підключіть його, а потім перевірте ще раз, щоб надіслати їх до програми."
+  },
+  "passwordSavingOn": {
+    "message": "Увімкнено — можуть з’являтися дубльовані пропозиції зберегти"
+  },
+  "passwordSavingOff": {
+    "message": "Вимкнено — ключі доступу й автозаповнення все одно потрібно перевірити вручну"
+  },
+  "couldNotBeRead": {
+    "message": "Не вдалося прочитати"
+  },
+  "couldNotBeChecked": {
+    "message": "Не вдалося перевірити"
+  },
+  "noCompetingExtensions": {
+    "message": "Відомих конкурентних розширень не виявлено"
+  },
+  "settingsOpenFailed": {
+    "message": "Не вдалося відкрити параметри. Відкрийте MyPass і підключіть цей браузер, а потім виберіть «Параметри» → «Браузер»."
+  },
+  "matchHelpRegistrableDomain": {
+    "message": "Збігається з example.com і будь-яким піддоменом, наприклад login.example.com."
+  },
+  "matchHelpHost": {
+    "message": "Збігається лише з точно таким іменем хоста та портом. Інший піддомен не збігатиметься."
+  },
+  "matchHelpStartsWith": {
+    "message": "Збігається з будь-якою сторінкою на тому самому сайті, що й ця адреса: схема й хост мають бути однаковими, тому схожий домен, як-от example.com.attacker.com, ніколи не збігатиметься, навіть якщо починається з того самого тексту. Усередині цього сайту збігів може бути більше, ніж потрібно: example.com/app збігається і з example.com/app-legacy, бо обидві адреси починаються однаково."
+  },
+  "matchHelpExact": {
+    "message": "Збігається лише з цією точною адресою сторінки, зокрема зі шляхом і запитом."
+  },
+  "matchHelpNever": {
+    "message": "Приховує цей запис лише від розширення браузера — у MyPass він залишається повністю видимим і придатним до використання."
+  },
+  "couldNotSave": {
+    "message": "Не вдалося зберегти."
+  },
+  "titleRequired": {
+    "message": "Потрібно вказати назву."
+  },
+  "newEntryTitle": {
+    "message": "Новий запис"
+  },
+  "newCardTitle": {
+    "message": "Нова картка"
+  },
+  "newNoteTitle": {
+    "message": "Нова нотатка"
+  },
+  "untitled": {
+    "message": "(без назви)"
+  },
+  "addToFavorites": {
+    "message": "Додати до вибраного"
+  },
+  "removeFromFavorites": {
+    "message": "Вилучити з вибраного"
+  },
+  "showPassword": {
+    "message": "Показати пароль"
+  },
+  "hidePassword": {
+    "message": "Приховати пароль"
+  },
+  "showCardNumber": {
+    "message": "Показати номер картки"
+  },
+  "hideCardNumber": {
+    "message": "Приховати номер картки"
+  },
+  "showCvv": {
+    "message": "Показати CVV"
+  },
+  "hideCvv": {
+    "message": "Приховати CVV"
+  },
+  "generate": {
+    "message": "Згенерувати"
+  },
+  "urlPlaceholder": {
+    "message": "URL-адреса"
+  },
+  "match": {
+    "message": "Збіг"
+  },
+  "matchRegistrableDomain": {
+    "message": "Реєстрований домен (рекомендовано)"
+  },
+  "matchHost": {
+    "message": "Точний хост"
+  },
+  "matchStartsWith": {
+    "message": "Починається з"
+  },
+  "matchExact": {
+    "message": "Точна адреса"
+  },
+  "matchNever": {
+    "message": "Ніколи (приховати від розширення)"
+  },
+  "notes": {
+    "message": "Нотатки"
+  },
+  "addOneTimePassword": {
+    "message": "+ Додати одноразовий пароль"
+  },
+  "otpPlaceholder": {
+    "message": "otpauth:// або секрет"
+  },
+  "cardNumber": {
+    "message": "Номер картки"
+  },
+  "cardholderName": {
+    "message": "Ім’я власника картки"
+  },
+  "cardExpiry": {
+    "message": "Термін дії (ММ/РР)"
+  },
+  "bold": {
+    "message": "Жирний"
+  },
+  "italic": {
+    "message": "Курсив"
+  },
+  "code": {
+    "message": "Код"
+  },
+  "note": {
+    "message": "Нотатка"
+  },
+  "typeLabel": {
+    "message": "Тип"
+  },
+  "typeSmart": {
+    "message": "Розумний пароль"
+  },
+  "typeRandom": {
+    "message": "Випадковий пароль"
+  },
+  "typeMemorable": {
+    "message": "Запам’ятовуваний пароль"
+  },
+  "typePin": {
+    "message": "PIN-код"
+  },
+  "characters": {
+    "message": "Символи"
+  },
+  "digits": {
+    "message": "Цифри"
+  },
+  "symbols": {
+    "message": "Символи"
+  },
+  "words": {
+    "message": "Слова"
+  },
+  "separator": {
+    "message": "Роздільник"
+  },
+  "separatorHyphen": {
+    "message": "Дефіси"
+  },
+  "separatorSpace": {
+    "message": "Пробіли"
+  },
+  "separatorPeriod": {
+    "message": "Крапки"
+  },
+  "separatorComma": {
+    "message": "Коми"
+  },
+  "separatorUnderscore": {
+    "message": "Підкреслення"
+  },
+  "capitalize": {
+    "message": "З великої літери"
+  },
+  "fullWords": {
+    "message": "Повні слова"
+  },
+  "useByDefault": {
+    "message": "Використовувати за замовчуванням для підказок"
+  },
+  "passwordGeneratorHistory": {
+    "message": "Історія генератора паролів"
+  },
+  "generatorHistory": {
+    "message": "Історія генератора"
+  },
+  "searchHistory": {
+    "message": "Пошук в історії"
+  },
+  "regenerate": {
+    "message": "Згенерувати знову"
+  },
+  "autofill": {
+    "message": "Автозаповнення"
+  },
+  "usePassword": {
+    "message": "Використати пароль"
+  },
+  "openSiteToFill": {
+    "message": "Відкрийте вебсайт, щоб заповнити цим паролем."
+  },
+  "couldNotGeneratePassword": {
+    "message": "Не вдалося згенерувати пароль."
+  },
+  "smartHint": {
+    "message": "MyPass пропонує пароль, що відповідає вимогам цього сайту."
+  },
+  "noMatchingPasswords": {
+    "message": "Немає відповідних паролів."
+  },
+  "noGeneratedPasswords": {
+    "message": "Згенерованих паролів ще немає."
+  },
+  "passwordActions": {
+    "message": "Дії з паролем"
+  },
+  "unlockForHistory": {
+    "message": "Розблокуйте MyPass, щоб переглянути історію паролів."
+  },
+  "promptNothingToConfirm": {
+    "message": "Нічого підтверджувати. Можливо, запит застарів; викличте його на сторінці ще раз."
+  },
+  "promptOfferSaveLogin": {
+    "message": "Пропонувати зберігати паролі"
+  },
+  "promptOfferSaveTotp": {
+    "message": "Пропонувати зберігати коди 2FA"
+  },
+  "promptShowFieldIcon": {
+    "message": "Показувати піктограму MyPass у полях"
+  },
+  "promptShowLogins": {
+    "message": "Пропонувати логіни"
+  },
+  "promptShowCards": {
+    "message": "Пропонувати картки"
+  },
+  "promptShowAddresses": {
+    "message": "Пропонувати адреси"
+  },
+  "promptAutoSubmit": {
+    "message": "Надсилати після заповнення логіна"
+  },
+  "promptLocked": {
+    "message": "MyPass заблоковано. Розблокуйте його й спробуйте ще раз."
+  },
+  "promptNotPaired": {
+    "message": "Цей браузер ще не підключено до MyPass. Натисніть кнопку MyPass на панелі інструментів, щоб підключити його, і спробуйте ще раз."
+  },
+  "promptExpired": {
+    "message": "Цей запит застарів. Виконайте дію на сторінці ще раз."
+  },
+  "promptPageChanged": {
+    "message": "Сторінку змінено, тож нічого не збережено."
+  },
+  "promptAutofillSettings": {
+    "message": "Параметри автозаповнення MyPass"
+  },
+  "promptSavePassword": {
+    "message": "Зберегти пароль?"
+  },
+  "promptAdd2fa": {
+    "message": "Додати код 2FA?"
+  },
+  "promptSite": {
+    "message": "Сайт"
+  },
+  "promptNone": {
+    "message": "(немає)"
+  },
+  "promptNoSavedLogin": {
+    "message": "Для цього сайту немає збереженого логіна. Буде створено новий запис."
+  },
+  "promptAddToOnly": {
+    "message": "Додати до «$P1$».",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "promptAddToOnlyWithUser": {
+    "message": "Додати до «$P1$» ($P2$).",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      },
+      "p2": {
+        "content": "$2"
+      }
+    }
+  },
+  "promptChooseAccount": {
+    "message": "Виберіть обліковий запис, до якого додати:"
+  },
+  "tryAgain": {
+    "message": "Спробувати ще раз"
+  },
+  "notNow": {
+    "message": "Не зараз"
+  },
+  "dismiss": {
+    "message": "Відхилити"
+  },
+  "fillFromMyPass": {
+    "message": "Заповнити з MyPass"
+  },
+  "panelEmpty": {
+    "message": "Немає записів для цього сайту"
+  },
+  "panelPairingRequired": {
+    "message": "Підключіть MyPass, щоб користуватися ним тут"
+  },
+  "panelUnavailable": {
+    "message": "MyPass не запущено"
+  },
+  "securityWarningPassword": {
+    "message": "Цей сайт не збережено разом із цим паролем MyPass."
+  },
+  "securityWarningLogin": {
+    "message": "Цей сайт не збережено разом із цим логіном MyPass."
+  },
+  "notifyUnlocked": {
+    "message": "MyPass розблоковано."
+  },
+  "notifyPasskeyConfirm": {
+    "message": "Потрібне підтвердження ключа доступу. Відкрийте розширення MyPass, щоб продовжити."
+  },
+  "promptGone": {
+    "message": "Цей запит більше недоступний."
+  },
+  "promptPageChangedRetry": {
+    "message": "Цю сторінку змінено. Спробуйте ще раз."
+  },
+  "promptBadChoice": {
+    "message": "Виберіть один зі вказаних облікових записів."
+  },
+  "promptChoiceRequired": {
+    "message": "Виберіть обліковий запис."
+  },
+  "passkeyFailureNoticeCreate": {
+    "message": "Браузер не зміг завершити реєстрацію ключа доступу. Ключ доступу, можливо, уже збережено в MyPass. Скасуйте запит вебсайту й повторіть спробу; перевірте вебсайт, перш ніж замінювати локальний ключ."
+  },
+  "passkeyFailureNoticeGet": {
+    "message": "Браузер не зміг завершити вхід за допомогою ключа доступу. Скасуйте запит вебсайту й спробуйте ще раз."
+  },
+  "addressUnlockAgain": {
+    "message": "Розблокуйте MyPass, а потім виберіть адресу ще раз."
+  },
+  "addressConnectAgain": {
+    "message": "Підключіть цей браузер до MyPass і спробуйте ще раз."
+  },
+  "cvv": {
+    "message": "CVV"
+  }
+}
