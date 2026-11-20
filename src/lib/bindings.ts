@@ -100,13 +100,7 @@ export const commands = {
 	sidebarGet: () => typedError<Sidebar_Serialize, ApiError>(__TAURI_INVOKE("sidebar_get")),
 	syncConnectSecondary: (folderToken: string, strategy: MigrationStrategy) => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_connect_secondary", { folderToken, strategy })),
 	syncDisconnectSecondary: () => typedError<null, ApiError>(__TAURI_INVOKE("sync_disconnect_secondary")),
-	/**
-	 *  Deletes every kept competing copy next to the open vault and its secondary copy. Takes no
-	 *  path: the webview never names a file. The Settings pane calls it only after the user
-	 *  confirmed.
-	 */
-	syncDisplacedDeleteAll: () => typedError<DisplacedCopies, ApiError>(__TAURI_INVOKE("sync_displaced_delete_all")),
-	/**  The kept competing vault copies, for display. Lists, never deletes. */
+	/**  The kept competing vault copies, for display. Read-only: MyPass never deletes them. */
 	syncDisplacedStatus: () => typedError<DisplacedCopies, ApiError>(__TAURI_INVOKE("sync_displaced_status")),
 	syncNow: () => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_now")),
 	syncStatus: () => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_status")),
@@ -457,12 +451,14 @@ export type DeviceUnlockStatus_Serialize = {
 export type DisplacedCopies = {
 	count: number,
 	copies: DisplacedCopyInfo[],
+	/**  Locations whose folder could not be read: their copies are unknown, not absent. */
+	unavailable: DisplacedLocation[],
 };
 
-/**  One kept competing copy. `path` is for display only. */
+/**  One kept competing copy. `name` is the file name only, for display. */
 export type DisplacedCopyInfo = {
 	location: DisplacedLocation,
-	path: string,
+	name: string,
 	/**  Length in bytes. */
 	bytes: number | null,
 };

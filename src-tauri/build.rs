@@ -106,7 +106,6 @@ fn main() {
         "sidebar_get",
         "sync_connect_secondary",
         "sync_disconnect_secondary",
-        "sync_displaced_delete_all",
         "sync_displaced_status",
         "sync_now",
         "sync_status",

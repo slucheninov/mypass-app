@@ -176,7 +176,7 @@ export interface FakeState {
   touched: string[];
   /** What `sync_status` answers; `sync_now` and `sync_disconnect_secondary` edit it. */
   sync: SecondaryStatus_Serialize;
-  /** What `sync_displaced_status` answers; `sync_displaced_delete_all` empties it. */
+  /** What `sync_displaced_status` answers (read-only: there is no delete command). */
   displaced: DisplacedCopies;
 }
 
@@ -245,7 +245,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     touched: [],
     shortcutConflicts: [],
     sync: { state: "off" },
-    displaced: { count: 0, copies: [] },
+    displaced: { count: 0, copies: [], unavailable: [] },
   };
   /** Like the Rust grant: set by a successful preview, spent by the next commit. */
   let csvRemembered: CsvPreview | null = null;
@@ -953,12 +953,6 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     updateOpenRelease: () => null,
     syncStatus: () => structuredClone(state.sync),
     syncDisplacedStatus: () => structuredClone(state.displaced),
-    // Like Rust: takes no path, needs an open vault, removes every kept copy and reports what is left.
-    syncDisplacedDeleteAll: () => {
-      if (state.session.state === "noVault") throw apiError("noVault");
-      state.displaced = { count: 0, copies: [] };
-      return structuredClone(state.displaced);
-    },
     // Like Rust: forgets the folder (the copy in it stays) and reports `off`.
     syncDisconnectSecondary: () => {
       state.settings.secondaryFolder = null;

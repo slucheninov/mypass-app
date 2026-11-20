@@ -198,11 +198,11 @@ impl FileIo for PlainFileIo {
     /// - **Move aside, then a no-replace link: volumes without the exchange that have hard
     ///   links (Windows NTFS and ReFS; SMB, NFS and other mounts that refuse the swap but
     ///   allow `link`).** After the final check, a probe link proves that hard links work
-    ///   here; the current file is then renamed to the fresh `.displaced` name (it captures
+    ///   here; the current file is then renamed to the fresh `.aside` working name (it captures
     ///   whatever is at the path at that instant, overwriting nothing) and the new file is
     ///   linked in at the path, which fails rather than replaces when another writer created
     ///   the file in between. The moved-aside file is removed only when it proves to be the
-    ///   expected content; otherwise it is kept and returned as `Displaced`. While the path
+    ///   expected content; otherwise it is renamed to `.displaced`, kept and returned as `Displaced`. While the path
     ///   is briefly absent, a reader sees no file (a racing creator wins, and our bytes are
     ///   then not installed: `Displaced` when a foreign version was moved aside, else
     ///   `Conflict`).
@@ -615,8 +615,13 @@ const SIBLING_STEM_MAX: usize = 96;
 struct SiblingNames {
     /// The new bytes, written and synced before anything is renamed.
     temp: PathBuf,
-    /// Where a file that may hold another writer's vault is kept.
+    /// Where a file that may hold another writer's vault is kept for good (a finalized
+    /// competing copy; only [`displaced_copies`] lists names of this kind).
     displaced: PathBuf,
+    /// Where the current target waits while the move-aside path installs the replacement. It is
+    /// the rollback source and may be deleted when it proves to be the expected content, so it
+    /// has its own suffix and is never mistaken for a kept competing copy.
+    aside: PathBuf,
     /// A probe link proving that this volume has hard links (move-aside path).
     probe: PathBuf,
 }
@@ -637,6 +642,7 @@ impl SiblingNames {
         Ok(Self {
             temp: parent.join(format!("{token}.tmp")),
             displaced: parent.join(format!("{token}.displaced")),
+            aside: parent.join(format!("{token}.aside")),
             probe: parent.join(format!("{token}.link.tmp")),
         })
     }
@@ -661,8 +667,13 @@ pub struct DisplacedCopy {
     pub len: u64,
 }
 
-/// True for exactly the names [`SiblingNames`] gives a kept competing copy of the file called
+/// True for the names [`SiblingNames`] gives a kept competing copy of the file called
 /// `target_name`: `.<stem>.<pid>.<nanos>.<n>.displaced` with three all-digit counters.
+///
+/// The match is by shape, not by ownership. Two limits follow, both harmless because the list is
+/// read-only and nothing is ever deleted from it: a target name longer than
+/// [`SIBLING_STEM_MAX`] bytes shares its stem (and so its listing) with every other name that has
+/// the same first bytes, and a file somebody created by hand with such a name is listed too.
 fn is_displaced_name(target_name: &str, candidate: &str) -> bool {
     let Some(rest) = candidate
         .strip_prefix('.')
@@ -680,19 +691,35 @@ fn is_displaced_name(target_name: &str, candidate: &str) -> bool {
             .all(|p| p.is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())))
 }
 
-fn displaced_candidates(target: &Path) -> Result<Vec<DisplacedCopy>> {
+/// The finalized competing copies kept next to `target` (a vault path), sorted by path. Only
+/// `.displaced` names are listed: a file still being moved aside by a running replacement carries
+/// the `.aside` suffix and is never one of them. A folder that does not exist has none; any other
+/// failure to read the folder or one of its entries is returned, never reported as an empty
+/// list. Nothing here changes anything on disk.
+pub fn displaced_copies(target: &Path) -> Result<Vec<DisplacedCopy>> {
     let (parent, name) = split_target(target)?;
     let name = name.to_string_lossy();
+    let entries = match fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(io_error(e)),
+    };
     let mut found = Vec::new();
-    for entry in fs::read_dir(parent).map_err(io_error)? {
-        let Ok(entry) = entry else { continue };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(io_error(e)),
+        };
         let candidate = entry.file_name();
         if !is_displaced_name(&name, &candidate.to_string_lossy()) {
             continue;
         }
-        // A symbolic link or anything but a regular file is not ours: never listed or removed.
-        let Ok(meta) = fs::symlink_metadata(entry.path()) else {
-            continue;
+        // A symbolic link or anything but a regular file is not a kept copy: never listed.
+        let meta = match fs::symlink_metadata(entry.path()) {
+            Ok(meta) => meta,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(io_error(e)),
         };
         if meta.is_file() {
             found.push(DisplacedCopy {
@@ -703,35 +730,6 @@ fn displaced_candidates(target: &Path) -> Result<Vec<DisplacedCopy>> {
     }
     found.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(found)
-}
-
-/// The competing copies kept next to `target` (a vault path), sorted by path. A missing or
-/// unreadable folder has none. Nothing here deletes anything.
-#[must_use]
-pub fn displaced_copies(target: &Path) -> Vec<DisplacedCopy> {
-    displaced_candidates(target).unwrap_or_default()
-}
-
-/// What [`remove_displaced_copies`] did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct DisplacedRemoval {
-    pub removed: usize,
-    pub failed: usize,
-}
-
-/// Deletes the competing copies kept next to `target`. The caller names the vault, never a copy:
-/// the copies are found again here by their exact generated names, so no other file can be
-/// removed. Only an explicit user action may call this; nothing in the engine does.
-pub fn remove_displaced_copies(target: &Path) -> DisplacedRemoval {
-    let mut done = DisplacedRemoval::default();
-    for copy in displaced_copies(target) {
-        match fs::remove_file(&copy.path) {
-            Ok(()) => done.removed += 1,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(_) => done.failed += 1,
-        }
-    }
-    done
 }
 
 /// Writes `bytes` to the fresh file `temp` next to `target` and syncs it. The returned guard
@@ -1024,13 +1022,12 @@ fn replace_expected(
     }
     // Move-aside path. Nothing has been renamed yet; without hard links refuse here.
     probe_links(names, seams)?;
-    // Moving the current file to our fresh `.displaced` name overwrites nothing and captures
+    // Moving the current file to our fresh `.aside` name overwrites nothing and captures
     // whatever is at the path at this instant, so a writer racing the final check (or a
-    // sharing-violation retry) is moved aside, not destroyed.
-    let moved = retry_rename(
-        || (seams.rename)(target, &names.displaced),
-        &mut *seams.sleep,
-    );
+    // sharing-violation retry) is moved aside, not destroyed. The file keeps the working
+    // `.aside` name until the replacement is settled and only then becomes a `.displaced` copy
+    // (or is removed as the expected content), so a competing-copy listing never sees it.
+    let moved = retry_rename(|| (seams.rename)(target, &names.aside), &mut *seams.sleep);
     match moved {
         Ok(()) => {}
         // The file vanished (a writer is mid-replace, or deleted it): nothing was moved.
@@ -1042,7 +1039,7 @@ fn replace_expected(
     match linked {
         // Our bytes are at the path; the temp name is a second link `cleanup` removes.
         Ok(()) => Ok(judge_swapped_out(
-            &names.displaced,
+            &names.aside,
             names,
             expected,
             max_len,
@@ -1052,7 +1049,7 @@ fn replace_expected(
         // Another writer created the file while the path was empty: theirs stays, ours is not
         // installed. What we moved aside is judged like a swapped-out file.
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(judge_swapped_out(
-            &names.displaced,
+            &names.aside,
             names,
             expected,
             max_len,
@@ -1061,9 +1058,13 @@ fn replace_expected(
         )),
         Err(e) => {
             // Ours is not installed and the path may be empty. Put the moved-aside file back
-            // without replacing anything (best effort) and keep its `.displaced` name as well:
-            // nothing is deleted on a failure path.
-            let _ = (seams.link)(&names.displaced, target);
+            // without replacing anything (best effort). It keeps a name as well: nothing is
+            // deleted on a failure path. When it could not be put back it may be the only copy
+            // of the vault, so it is promoted to a kept `.displaced` copy, which the
+            // competing-copy listing shows.
+            if (seams.link)(&names.aside, target).is_err() {
+                let _ = fs::rename(&names.aside, &names.displaced);
+            }
             drop(cleanup);
             Err(io_error(e))
         }
@@ -1071,10 +1072,10 @@ fn replace_expected(
 }
 
 /// Judges the file that was at the target the instant ours went in (`at`: the temp name after
-/// an exchange, the `.displaced` name after a move aside). Only a file read back and proved to
+/// an exchange, the `.aside` name after a move aside). Only a file read back and proved to
 /// be the expected content is removed; anything else (another writer's version, or a file that
 /// cannot be read) is kept and returned as `Displaced`. Never fails: a file that cannot be
-/// renamed to the `.displaced` name stays where it is. `installed` tells whether our bytes are
+/// renamed to the `.displaced` name stays where it is (under its temp or `.aside` name). `installed` tells whether our bytes are
 /// at the path (`false`: another writer created it meanwhile).
 fn judge_swapped_out(
     at: &Path,
@@ -1097,14 +1098,11 @@ fn judge_swapped_out(
             ReplaceOutcome::Conflict
         };
     }
-    let kept = if at == names.displaced.as_path() {
-        names.displaced.clone()
-    } else {
-        match (seams.rename)(at, &names.displaced) {
-            Ok(()) => names.displaced.clone(),
-            // Keep it under its current, recognisable name rather than lose it.
-            Err(_) => at.to_path_buf(),
-        }
+    // Settled: the file is kept for good, so it takes the finalized `.displaced` name.
+    let kept = match (seams.rename)(at, &names.displaced) {
+        Ok(()) => names.displaced.clone(),
+        // Keep it under its current, recognisable name rather than lose it.
+        Err(_) => at.to_path_buf(),
     };
     ReplaceOutcome::Displaced {
         bytes: content.unwrap_or_default(),
@@ -1925,7 +1923,7 @@ mod tests {
         }
     }
     #[test]
-    fn a_real_displaced_copy_is_listed_and_only_it_is_removed() {
+    fn a_real_displaced_copy_is_listed_and_nothing_is_removed() {
         for exchange in modes() {
             let d = tempfile::tempdir().unwrap();
             let p = d.path().join("vault.kdbx");
@@ -1941,27 +1939,18 @@ mod tests {
             let ReplaceOutcome::Displaced { kept, .. } = outcome else {
                 panic!("expected Displaced, got {outcome:?}");
             };
-            // Unrelated neighbours: another vault, a look-alike, a temp file.
+            // Unrelated neighbours: another vault, a look-alike, a temp file, a working name.
             fs::write(d.path().join("other.kdbx"), b"x").unwrap();
             fs::write(d.path().join(".other.kdbx.1.2.3.displaced"), b"x").unwrap();
             fs::write(d.path().join(".vault.kdbx.1.2.3.tmp"), b"x").unwrap();
-            let listed = displaced_copies(&p);
+            fs::write(d.path().join(".vault.kdbx.1.2.3.aside"), b"x").unwrap();
+            let before = listing(d.path());
+            let listed = displaced_copies(&p).unwrap();
             assert_eq!(listed.len(), 1, "exchange={exchange}");
             assert_eq!(listed[0].path.file_name(), kept.file_name());
             assert_eq!(listed[0].len, 6);
-            let done = remove_displaced_copies(&p);
-            assert_eq!(
-                done,
-                DisplacedRemoval {
-                    removed: 1,
-                    failed: 0
-                }
-            );
-            assert!(displaced_copies(&p).is_empty());
-            assert_eq!(fs::read(&p).unwrap(), b"new", "the vault is untouched");
-            assert!(d.path().join("other.kdbx").exists());
-            assert!(d.path().join(".other.kdbx.1.2.3.displaced").exists());
-            assert!(d.path().join(".vault.kdbx.1.2.3.tmp").exists());
+            assert_eq!(listing(d.path()), before, "listing changes nothing");
+            assert_eq!(fs::read(&p).unwrap(), b"new");
         }
     }
     #[test]
@@ -1977,29 +1966,56 @@ mod tests {
             ".v.kdbx2.12.345.6.displaced",
             ".w.kdbx.12.345.6.displaced",
             ".v.kdbx.12.345.6.tmp",
+            ".v.kdbx.12.345.6.aside",
         ] {
             assert!(!is_displaced_name("v.kdbx", bad), "{bad}");
         }
-        // A name longer than the stem limit matches by its cut prefix, like it is generated.
+        // A name longer than the stem limit matches by its cut prefix, like it is generated:
+        // two long names with the same first bytes share the listing (documented limit).
         let long = "é".repeat(80);
         let cut = sibling_stem(&long);
         assert!(cut.len() <= SIBLING_STEM_MAX && long.starts_with(cut));
         assert!(is_displaced_name(&long, &format!(".{cut}.1.2.3.displaced")));
+        let other = format!("{long}-other");
+        assert!(is_displaced_name(
+            &other,
+            &format!(".{cut}.1.2.3.displaced")
+        ));
     }
     #[test]
-    fn a_missing_folder_or_name_lists_nothing_and_removes_nothing() {
+    fn a_missing_folder_lists_nothing_and_an_unreadable_one_is_an_error() {
         let d = tempfile::tempdir().unwrap();
         let missing = d.path().join("nope").join("vault.kdbx");
-        assert!(displaced_copies(&missing).is_empty());
-        assert_eq!(
-            remove_displaced_copies(&missing),
-            DisplacedRemoval::default()
-        );
-        assert!(displaced_copies(Path::new("/")).is_empty());
+        assert_eq!(displaced_copies(&missing).unwrap(), Vec::new());
+        // A folder name that is a file cannot be read: not an empty list.
+        let file = d.path().join("plain");
+        fs::write(&file, b"x").unwrap();
+        assert!(displaced_copies(&file.join("vault.kdbx")).is_err());
+        // A target without a file name cannot be resolved either.
+        assert!(displaced_copies(Path::new("/")).is_err());
     }
     #[cfg(unix)]
     #[test]
-    fn a_symlink_with_a_displaced_name_is_neither_listed_nor_removed() {
+    fn a_folder_that_cannot_be_read_is_an_error_not_an_empty_list() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("locked");
+        fs::create_dir(&dir).unwrap();
+        let p = dir.join("vault.kdbx");
+        fs::write(&p, b"v").unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o000)).unwrap();
+        let denied = fs::read_dir(&dir).is_err();
+        let result = displaced_copies(&p);
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+        // Running as root reads the folder anyway; then there is nothing to assert.
+        if denied {
+            assert!(result.is_err());
+        }
+        assert_eq!(displaced_copies(&p).unwrap(), Vec::new());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_with_a_displaced_name_is_not_listed() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("vault.kdbx");
         fs::write(&p, b"v").unwrap();
@@ -2007,10 +2023,53 @@ mod tests {
         fs::write(&outside, b"keep").unwrap();
         let link = d.path().join(".vault.kdbx.1.2.3.displaced");
         std::os::unix::fs::symlink(&outside, &link).unwrap();
-        assert!(displaced_copies(&p).is_empty());
-        assert_eq!(remove_displaced_copies(&p), DisplacedRemoval::default());
+        assert!(displaced_copies(&p).unwrap().is_empty());
         assert!(fs::symlink_metadata(&link).is_ok());
-        assert_eq!(fs::read(&outside).unwrap(), b"keep");
+    }
+    #[test]
+    fn a_file_in_flight_on_the_move_aside_path_is_never_listed() {
+        // While the replacement is installed (the `after_aside` seam) the moved-aside file has
+        // its working name and no competing copy is listed; once the writer is done it is.
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("vault.kdbx");
+        fs::write(&p, b"old").unwrap();
+        let racer = p.clone();
+        let probe = p.clone();
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let sink = seen.clone();
+        let mut race = Race::new(false);
+        race.before = Box::new(move || write_atomic(&racer, b"theirs").unwrap());
+        race.after_aside = Box::new(move || {
+            *sink.borrow_mut() = Some(displaced_copies(&probe).unwrap());
+        });
+        let outcome = race.run(&p, Some(b"old"), b"new").unwrap();
+        drop(race);
+        assert!(matches!(outcome, ReplaceOutcome::Displaced { .. }));
+        assert_eq!(seen.borrow().as_ref().map(Vec::len), Some(0), "in flight");
+        assert_eq!(displaced_copies(&p).unwrap().len(), 1, "settled");
+        assert_eq!(fs::read(&p).unwrap(), b"new");
+    }
+    #[test]
+    fn a_failed_install_that_cannot_restore_keeps_the_only_copy_as_displaced() {
+        // The install link and the restoring link both fail: the moved-aside vault may be the
+        // only copy, so it is promoted to a listed `.displaced` copy instead of being lost.
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("vault.kdbx");
+        fs::write(&p, b"old").unwrap();
+        let mut race = Race::new(false);
+        let mut calls = 0;
+        race.link = Box::new(move |a: &Path, b: &Path| {
+            calls += 1;
+            if calls >= 2 {
+                return Err(Error::other("injected link failure"));
+            }
+            fs::hard_link(a, b)
+        });
+        io_kind(race.run(&p, Some(b"old"), b"new"), ErrorKind::Other);
+        let listed = displaced_copies(&p).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(fs::read(&listed[0].path).unwrap(), b"old");
+        assert!(!p.exists());
     }
     #[cfg(unix)]
     #[test]
@@ -2223,7 +2282,8 @@ mod tests {
     #[test]
     fn a_failed_link_after_the_move_aside_restores_and_keeps_the_copy() {
         // The probe link works, the install link fails: the moved-aside file is linked back at
-        // the path and its `.displaced` name kept; nothing is deleted on the failure path.
+        // the path and its working `.aside` name kept (not a listed competing copy); nothing is
+        // deleted on the failure path.
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("vault");
         fs::write(&p, b"old").unwrap();
@@ -2242,7 +2302,8 @@ mod tests {
         assert_eq!(fs::read(&p).unwrap(), b"theirs", "restored at the path");
         let names: Vec<_> = listing(d.path()).into_iter().map(|(n, _)| n).collect();
         assert_eq!(names.len(), 2, "{names:?}");
-        assert!(names.iter().any(|n| n.ends_with(".displaced")), "{names:?}");
+        assert!(names.iter().any(|n| n.ends_with(".aside")), "{names:?}");
+        assert!(displaced_copies(&p).unwrap().is_empty());
         assert!(!holds(d.path(), b"new"), "our temp file is removed");
     }
     #[cfg(unix)]

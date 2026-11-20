@@ -34,7 +34,6 @@
     "allow-settings-update",
     "allow-sync-connect-secondary",
     "allow-sync-disconnect-secondary",
-    "allow-sync-displaced-delete-all",
     "allow-sync-displaced-status",
     "allow-sync-now",
     "allow-sync-status",

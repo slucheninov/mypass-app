@@ -26,7 +26,7 @@ pub async fn sync_disconnect_secondary(state: State<'_, AppState>) -> Result<(),
     blocking(move || core.sync_disconnect_secondary()).await
 }
 
-/// The kept competing vault copies, for display. Lists, never deletes.
+/// The kept competing vault copies, for display. Read-only: MyPass never deletes them.
 #[tauri::command]
 #[specta::specta]
 pub async fn sync_displaced_status(
@@ -34,18 +34,6 @@ pub async fn sync_displaced_status(
 ) -> Result<DisplacedCopies, ApiError> {
     let core = state.0.clone();
     blocking(move || core.sync_displaced_status()).await
-}
-
-/// Deletes every kept competing copy next to the open vault and its secondary copy. Takes no
-/// path: the webview never names a file. The Settings pane calls it only after the user
-/// confirmed.
-#[tauri::command]
-#[specta::specta]
-pub async fn sync_displaced_delete_all(
-    state: State<'_, AppState>,
-) -> Result<DisplacedCopies, ApiError> {
-    let core = state.0.clone();
-    blocking(move || core.sync_displaced_delete_all()).await
 }
 
 #[tauri::command]

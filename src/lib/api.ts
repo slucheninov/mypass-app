@@ -155,7 +155,6 @@ export const api = {
   sidebarGet: wrap(commands.sidebarGet),
   syncDisconnectSecondary: wrap(commands.syncDisconnectSecondary),
   syncConnectSecondary: wrap(commands.syncConnectSecondary),
-  syncDisplacedDeleteAll: wrap(commands.syncDisplacedDeleteAll),
   syncDisplacedStatus: wrap(commands.syncDisplacedStatus),
   syncNow: wrap(commands.syncNow),
   syncStatus: wrap(commands.syncStatus),

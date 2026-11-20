@@ -161,9 +161,10 @@ describe("competing copies", () => {
   const COPIES: DisplacedCopies = {
     count: 2,
     copies: [
-      { location: "primary", path: "/v/.vault.kdbx.1.2.3.displaced", bytes: 2048 },
-      { location: "secondary", path: "/s/.vault.kdbx.4.5.6.displaced", bytes: null },
+      { location: "primary", name: ".vault.kdbx.1.2.3.displaced", bytes: 2048 },
+      { location: "secondary", name: ".vault.kdbx.4.5.6.displaced", bytes: 12 },
     ],
+    unavailable: [],
   };
   const withCopies = (fake: FakeBackend) => void (fake.state.displaced = structuredClone(COPIES));
 
@@ -174,32 +175,37 @@ describe("competing copies", () => {
     expect(screen.queryByTestId("displaced-copies")).toBeNull();
   });
 
-  it("lists_the_copies_for_display_and_deletes_nothing_by_itself", async () => {
-    const { fake } = await open({}, withCopies);
+  it("lists_the_copies_by_name_and_says_they_are_never_deleted_automatically", async () => {
+    await open({}, withCopies);
     const section = await screen.findByTestId("displaced-copies");
     expect(within(section).getByText("Competing copies kept: 2")).toBeTruthy();
-    expect(within(section).getByText("/v/.vault.kdbx.1.2.3.displaced")).toBeTruthy();
-    expect(within(section).getByText("/s/.vault.kdbx.4.5.6.displaced")).toBeTruthy();
+    expect(within(section).getByText(".vault.kdbx.1.2.3.displaced")).toBeTruthy();
+    expect(within(section).getByText(".vault.kdbx.4.5.6.displaced")).toBeTruthy();
     expect(within(section).getByText("Vault folder")).toBeTruthy();
     expect(within(section).getByText("Sync folder")).toBeTruthy();
     expect(within(section).getByText("2 KB")).toBeTruthy();
-    expect(calls(fake, "syncDisplacedDeleteAll")).toHaveLength(0);
+    expect(within(section).getByText(/never deletes them automatically/)).toBeTruthy();
+    expect(within(section).getByText(/remove them yourself in the vault folder/)).toBeTruthy();
+    // Read-only: no way to delete from here.
+    expect(within(section).queryByRole("button")).toBeNull();
   });
 
-  it("delete_needs_a_confirmation_and_sends_no_path", async () => {
-    const user = userEvent.setup();
-    const { fake } = await open({}, withCopies);
+  it("an_unreadable_folder_is_reported_not_shown_as_no_copies", async () => {
+    await open({}, (fake) => {
+      fake.state.displaced = { count: 0, copies: [], unavailable: ["secondary"] };
+    });
     const section = await screen.findByTestId("displaced-copies");
-    await user.click(within(section).getByRole("button", { name: "Delete competing copies…" }));
-    const dialog = await screen.findByRole("dialog", { name: "Delete competing copies?" });
-    expect(calls(fake, "syncDisplacedDeleteAll")).toHaveLength(0);
-    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    expect(calls(fake, "syncDisplacedDeleteAll")).toHaveLength(0);
-    expect(screen.getByTestId("displaced-copies")).toBeTruthy();
-    await user.click(within(section).getByRole("button", { name: "Delete competing copies…" }));
-    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
-    await waitFor(() => expect(calls(fake, "syncDisplacedDeleteAll")).toHaveLength(1));
-    expect(calls(fake, "syncDisplacedDeleteAll")[0]?.args).toEqual({});
-    await waitFor(() => expect(screen.queryByTestId("displaced-copies")).toBeNull());
+    expect(within(section).getByRole("alert").textContent).toBe("Competing copies could not be checked in: Sync folder");
+    expect(within(section).queryByText(/Competing copies kept/)).toBeNull();
+  });
+
+  it("a_failed_status_read_is_reported", async () => {
+    await open({}, (fake) => {
+      fake.handlers.syncDisplacedStatus = () => {
+        throw new Error("boom");
+      };
+    });
+    const section = await screen.findByTestId("displaced-copies");
+    expect(within(section).getByRole("alert").textContent).toBe("Competing copies could not be checked.");
   });
 });

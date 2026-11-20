@@ -888,14 +888,6 @@ const FILE_MUTATIONS: &[(&str, &str, usize)] = &[
         1,
     ),
     ("crates/mypass-kdbx/src/file.rs", "remove_file(at)", 1),
-    // The one explicit user action "delete competing copies" (`remove_displaced_copies`): the
-    // caller names the vault, never a file; only regular files with the exact generated
-    // `.<stem>.<pid>.<nanos>.<n>.displaced` name next to it are removed, never a symlink.
-    (
-        "crates/mypass-kdbx/src/file.rs",
-        "remove_file(&copy.path)",
-        1,
-    ),
     // Existing backup retention and failure marker; not an active primary or secondary vault.
     (
         "crates/mypass-session/src/backups.rs",

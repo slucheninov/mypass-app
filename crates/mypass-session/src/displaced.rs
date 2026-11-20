@@ -2,15 +2,14 @@
 //!
 //! A replacement that loses a last-instant race against another writer keeps the other writer's
 //! file next to the vault as `.<name>.<pid>.<nanos>.<n>.displaced` (see
-//! `mypass_kdbx::ReplaceOutcome::Displaced`). The engine never deletes one: it may be the only
-//! copy of someone's edit. This module lists them for the Settings sync pane and removes them
-//! only on the explicit user command `sync_displaced_delete_all`.
+//! `mypass_kdbx::ReplaceOutcome::Displaced`). MyPass never deletes one: it may be the only copy
+//! of someone's edit. This module only lists them, read-only, for the Settings vault pane; the
+//! user reviews and removes them by hand in the vault folder.
 //!
-//! The webview never names a file. Paths in the status are display-only; deletion takes no
-//! argument at all and re-finds the copies next to the open vault and next to its secondary copy
-//! by their exact generated names (`mypass_kdbx::remove_displaced_copies`).
+//! The status carries file names only (no folder), a location marker and, for a folder that
+//! could not be read, an `unavailable` marker: a failed scan is never reported as "no copies".
 
-use mypass_kdbx::{displaced_copies, remove_displaced_copies};
+use mypass_kdbx::displaced_copies;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -24,12 +23,12 @@ pub enum DisplacedLocation {
     Secondary,
 }
 
-/// One kept competing copy. `path` is for display only.
+/// One kept competing copy. `name` is the file name only, for display.
 #[derive(Serialize, specta::Type, Clone, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct DisplacedCopyInfo {
     pub location: DisplacedLocation,
-    pub path: String,
+    pub name: String,
     /// Length in bytes.
     pub bytes: f64,
 }
@@ -40,6 +39,8 @@ pub struct DisplacedCopyInfo {
 pub struct DisplacedCopies {
     pub count: u32,
     pub copies: Vec<DisplacedCopyInfo>,
+    /// Locations whose folder could not be read: their copies are unknown, not absent.
+    pub unavailable: Vec<DisplacedLocation>,
 }
 
 /// The vault files whose neighbours are searched: the open vault and, when a secondary folder is
@@ -64,30 +65,29 @@ pub(crate) fn targets(
 
 #[allow(clippy::cast_precision_loss)] // a vault file is far below 2^53 bytes
 pub(crate) fn list(targets: &[(DisplacedLocation, PathBuf)]) -> DisplacedCopies {
-    let copies: Vec<DisplacedCopyInfo> = targets
-        .iter()
-        .flat_map(|(location, target)| {
-            displaced_copies(target)
-                .into_iter()
-                .map(move |copy| DisplacedCopyInfo {
+    let mut copies = Vec::new();
+    let mut unavailable = Vec::new();
+    for (location, target) in targets {
+        match displaced_copies(target) {
+            Ok(found) => copies.extend(found.into_iter().map(|copy| {
+                DisplacedCopyInfo {
                     location: *location,
-                    path: copy.path.display().to_string(),
+                    name: copy
+                        .path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
                     bytes: copy.len as f64,
-                })
-        })
-        .collect();
+                }
+            })),
+            Err(_) => unavailable.push(*location),
+        }
+    }
     DisplacedCopies {
         count: u32::try_from(copies.len()).unwrap_or(u32::MAX),
         copies,
+        unavailable,
     }
-}
-
-/// Deletes every displaced copy next to `targets`; the number that could not be removed.
-pub(crate) fn delete_all(targets: &[(DisplacedLocation, PathBuf)]) -> usize {
-    targets
-        .iter()
-        .map(|(_, target)| remove_displaced_copies(target).failed)
-        .sum()
 }
 
 #[cfg(test)]
@@ -123,7 +123,7 @@ mod tests {
     }
 
     #[test]
-    fn list_reports_count_location_and_size_and_delete_all_removes_only_those() {
+    fn list_reports_count_location_name_and_size_and_deletes_nothing() {
         let d = tempfile::tempdir().unwrap();
         let primary_dir = d.path().join("a");
         let secondary_dir = d.path().join("b");
@@ -134,20 +134,31 @@ mod tests {
         fs::write(secondary_dir.join("v.kdbx"), b"copy").unwrap();
         let one = displaced(&primary_dir, "v.kdbx", "1.2.3");
         let two = displaced(&secondary_dir, "v.kdbx", "4.5.6");
-        let bystander = primary_dir.join("notes.txt");
-        fs::write(&bystander, b"mine").unwrap();
-        let all = targets(Some(primary.clone()), secondary_dir.to_str());
-        let before = list(&all);
-        assert_eq!(before.count, 2);
-        assert_eq!(before.copies[0].location, DisplacedLocation::Primary);
-        assert_eq!(before.copies[1].location, DisplacedLocation::Secondary);
-        assert!((before.copies[0].bytes - 9.0).abs() < f64::EPSILON);
-        // Listing never deletes.
+        let all = targets(Some(primary), secondary_dir.to_str());
+        let status = list(&all);
+        assert_eq!(status.count, 2);
+        assert_eq!(status.copies[0].location, DisplacedLocation::Primary);
+        assert_eq!(status.copies[0].name, ".v.kdbx.1.2.3.displaced");
+        assert_eq!(status.copies[1].location, DisplacedLocation::Secondary);
+        assert!((status.copies[0].bytes - 9.0).abs() < f64::EPSILON);
+        assert!(status.unavailable.is_empty());
+        assert!(!status.copies.iter().any(|c| c.name.contains('/')));
         assert!(one.exists() && two.exists());
-        assert_eq!(delete_all(&all), 0);
-        assert_eq!(list(&all), DisplacedCopies::default());
-        assert!(!one.exists() && !two.exists());
-        assert!(primary.exists() && bystander.exists());
-        assert!(secondary_dir.join("v.kdbx").exists());
+    }
+
+    #[test]
+    fn an_unreadable_location_is_unavailable_not_empty() {
+        let d = tempfile::tempdir().unwrap();
+        let primary = d.path().join("v.kdbx");
+        fs::write(&primary, b"vault").unwrap();
+        let kept = displaced(d.path(), "v.kdbx", "1.2.3");
+        // The secondary "folder" is a plain file, so its directory cannot be read.
+        let blocker = d.path().join("blocker");
+        fs::write(&blocker, b"x").unwrap();
+        let all = targets(Some(primary), blocker.to_str());
+        let status = list(&all);
+        assert_eq!(status.count, 1);
+        assert_eq!(status.unavailable, vec![DisplacedLocation::Secondary]);
+        assert!(kept.exists());
     }
 }

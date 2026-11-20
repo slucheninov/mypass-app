@@ -1170,32 +1170,11 @@ impl AppCore {
         self.secondary.sync_now()
     }
 
-    /// The competing vault copies kept next to the open vault and its secondary copy. Display
-    /// only; nothing is deleted. No vault open means none.
+    /// The competing vault copies kept next to the open vault and its secondary copy. Read-only:
+    /// MyPass never deletes them. A folder that could not be read is reported as unavailable.
+    /// No vault open means none.
     pub fn sync_displaced_status(&self) -> Result<crate::displaced::DisplacedCopies, ApiError> {
         Ok(crate::displaced::list(&self.displaced_targets()))
-    }
-
-    /// Deletes every kept competing copy. Only an explicit user action calls this (the webview
-    /// supplies no path: the copies are found again by their generated names). Returns what is
-    /// left; `Io` when some copy could not be removed.
-    pub fn sync_displaced_delete_all(&self) -> Result<crate::displaced::DisplacedCopies, ApiError> {
-        let _gate = self
-            .migration_gate
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let targets = self.displaced_targets();
-        if targets.is_empty() {
-            return Err(ApiError::new(ErrorCode::NoVault, "no vault is open"));
-        }
-        let failed = crate::displaced::delete_all(&targets);
-        if failed > 0 {
-            return Err(ApiError::new(
-                ErrorCode::Io,
-                "some competing copies could not be deleted",
-            ));
-        }
-        Ok(crate::displaced::list(&targets))
     }
 
     fn displaced_targets(&self) -> Vec<(crate::displaced::DisplacedLocation, PathBuf)> {
@@ -2617,7 +2596,7 @@ mod tests {
     }
 
     #[test]
-    fn displaced_copies_are_listed_and_deleted_only_on_the_explicit_command() {
+    fn displaced_copies_are_listed_and_never_deleted() {
         let f = fx_open();
         assert_eq!(
             f.core.sync_displaced_status().unwrap(),
@@ -2639,23 +2618,14 @@ mod tests {
         let status = f.core.sync_displaced_status().unwrap();
         assert_eq!(status.count, 2);
         assert_eq!(status.copies.len(), 2);
-        assert!(primary_copy.exists() && secondary_copy.exists());
-        // The explicit command removes exactly those, and reports what is left.
-        let left = f.core.sync_displaced_delete_all().unwrap();
-        assert_eq!(left.count, 0);
-        assert!(!primary_copy.exists() && !secondary_copy.exists());
-        assert!(other.exists(), "another vault's copy is not ours to delete");
-        assert!(f.path.exists() && folder.join(&name).exists());
+        assert!(status.unavailable.is_empty());
+        assert!(primary_copy.exists() && secondary_copy.exists() && other.exists());
     }
 
     #[test]
-    fn deleting_displaced_copies_without_a_vault_is_no_vault() {
+    fn displaced_status_without_a_vault_is_empty() {
         let f = fx();
         assert_eq!(f.core.sync_displaced_status().unwrap().count, 0);
-        assert_eq!(
-            f.core.sync_displaced_delete_all().unwrap_err().code,
-            ErrorCode::NoVault
-        );
     }
 
     #[test]

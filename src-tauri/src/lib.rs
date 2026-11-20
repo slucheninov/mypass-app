@@ -109,7 +109,6 @@ pub fn commands() -> Commands<tauri::Wry> {
         sidebar::sidebar_get,
         sync::sync_connect_secondary,
         sync::sync_disconnect_secondary,
-        sync::sync_displaced_delete_all,
         sync::sync_displaced_status,
         sync::sync_now,
         sync::sync_status,
