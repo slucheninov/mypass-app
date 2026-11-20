@@ -33,8 +33,6 @@ Last updated: 2026-11-15
   custom dialog would let Cancel be the default.
 - [ ] Manual: confirm that Cmd+Q and logout/restart raise `ExitRequested` on macOS, and session end
   on Windows (checklist in `RUN.md`).
-- [ ] macOS tray panel position still uses the panel window's scale factor; use the scale factor
-  of the monitor that holds the tray icon (Windows now uses destination-monitor scale/work area).
 
 ## Stage 2b UI follow-ups
 

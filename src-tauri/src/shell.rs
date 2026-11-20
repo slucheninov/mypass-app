@@ -356,6 +356,103 @@ pub fn panel_position(
     (x, y)
 }
 
+/// A monitor as the runtime reports it: physical origin and size, and its own scale factor.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MonitorFrame {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    pub scale: f64,
+}
+
+impl MonitorFrame {
+    /// The monitor in logical points (physical divided by its own scale), the space a macOS
+    /// window is positioned in.
+    fn logical(&self) -> PanelRect {
+        let scale = if self.scale > 0.0 { self.scale } else { 1.0 };
+        PanelRect {
+            x: self.x / scale,
+            y: self.y / scale,
+            w: self.w / scale,
+            h: self.h / scale,
+        }
+    }
+
+    fn scale(&self) -> f64 {
+        if self.scale > 0.0 {
+            self.scale
+        } else {
+            1.0
+        }
+    }
+}
+
+/// The tray icon rectangle exactly as the tray event delivered it, with its unit.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TrayRect {
+    Physical(PanelRect),
+    Logical(PanelRect),
+}
+
+fn contains(frame: PanelRect, px: f64, py: f64) -> bool {
+    px >= frame.x && px < frame.x + frame.w && py >= frame.y && py < frame.y + frame.h
+}
+
+fn scaled(rect: PanelRect, factor: f64) -> PanelRect {
+    PanelRect {
+        x: rect.x * factor,
+        y: rect.y * factor,
+        w: rect.w * factor,
+        h: rect.h * factor,
+    }
+}
+
+/// Top-left of the tray panel in logical points (the unit macOS positions windows in).
+///
+/// The tray icon lives on exactly one monitor, and that monitor's scale factor (never the panel
+/// window's, which belongs to wherever the panel was last shown) converts the icon between
+/// physical pixels and logical points. A physical icon rectangle is matched against the physical
+/// monitor frames, a logical one against the logical frames (physical divided by each monitor's own
+/// scale). When no monitor holds the icon, `fallback` (the primary monitor's index) is used with
+/// its scale; `None` only when there is no monitor at all. `panel` is the panel size in logical
+/// points.
+pub fn tray_panel_origin(
+    tray: TrayRect,
+    monitors: &[MonitorFrame],
+    fallback: Option<usize>,
+    panel: (f64, f64),
+) -> Option<(f64, f64)> {
+    let holder = monitors.iter().position(|m| match tray {
+        TrayRect::Physical(r) => contains(
+            PanelRect {
+                x: m.x,
+                y: m.y,
+                w: m.w,
+                h: m.h,
+            },
+            r.x + r.w / 2.0,
+            r.y + r.h / 2.0,
+        ),
+        TrayRect::Logical(r) => contains(m.logical(), r.x + r.w / 2.0, r.y + r.h / 2.0),
+    });
+    let index = holder
+        .or(fallback)
+        .filter(|i| *i < monitors.len())
+        .or(if monitors.is_empty() { None } else { Some(0) })?;
+    let monitor = monitors.get(index)?;
+    let logical_tray = match tray {
+        TrayRect::Physical(r) => scaled(r, 1.0 / monitor.scale()),
+        TrayRect::Logical(r) => r,
+    };
+    Some(panel_position(
+        logical_tray,
+        monitor.logical(),
+        panel.0,
+        panel.1,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -634,6 +731,112 @@ mod tests {
             420.0,
         );
         assert_eq!(pos.0, 8.0);
+    }
+
+    fn frame(x: f64, y: f64, w: f64, h: f64, scale: f64) -> MonitorFrame {
+        MonitorFrame { x, y, w, h, scale }
+    }
+
+    /// A retina laptop (scale 2, 1440x900 points) with a 1920x1080 scale-1 monitor to its right,
+    /// the way tao reports them: the origin is the logical origin times the monitor's own scale.
+    fn mixed_monitors() -> [MonitorFrame; 2] {
+        [
+            frame(0.0, 0.0, 2880.0, 1800.0, 2.0),
+            frame(1440.0, 0.0, 1920.0, 1080.0, 1.0),
+        ]
+    }
+
+    #[test]
+    fn tray_panel_uses_the_scale_of_the_monitor_holding_a_logical_icon() {
+        // The icon sits on the scale-1 monitor (logical x 2000); the panel window last lived on
+        // the scale-2 one. The icon is already logical, and its monitor decides the frame.
+        let origin = tray_panel_origin(
+            TrayRect::Logical(rect(2000.0, 0.0, 24.0, 24.0)),
+            &mixed_monitors(),
+            Some(0),
+            (320.0, 420.0),
+        )
+        .unwrap();
+        assert_eq!(origin, (1852.0, 32.0));
+    }
+
+    #[test]
+    fn tray_panel_converts_a_physical_icon_with_its_own_monitors_scale() {
+        // Physical x 3000 is on the scale-1 monitor: logical 3000. On the scale-2 monitor the same
+        // pixel count would be logical 1500, so the wrong scale lands 1500 points away.
+        let on_scale_one = tray_panel_origin(
+            TrayRect::Physical(rect(3000.0, 0.0, 24.0, 24.0)),
+            &mixed_monitors(),
+            Some(0),
+            (320.0, 420.0),
+        )
+        .unwrap();
+        assert_eq!(on_scale_one, (2852.0, 32.0));
+        // Physical x 2000 is on the scale-2 monitor: logical 1000.
+        let on_scale_two = tray_panel_origin(
+            TrayRect::Physical(rect(2000.0, 0.0, 48.0, 48.0)),
+            &mixed_monitors(),
+            Some(1),
+            (320.0, 420.0),
+        )
+        .unwrap();
+        assert_eq!(on_scale_two, (852.0, 32.0));
+    }
+
+    #[test]
+    fn tray_panel_clamps_inside_the_holding_monitor_not_the_whole_desktop() {
+        // An icon at the far right of the scale-2 monitor stays inside that monitor's 1440 points.
+        let (x, _) = tray_panel_origin(
+            TrayRect::Logical(rect(1410.0, 0.0, 24.0, 24.0)),
+            &mixed_monitors(),
+            Some(0),
+            (320.0, 420.0),
+        )
+        .unwrap();
+        assert_eq!(x, 1440.0 - 320.0 - 8.0);
+    }
+
+    #[test]
+    fn tray_panel_falls_back_to_the_primary_monitor_and_its_scale() {
+        let origin = tray_panel_origin(
+            TrayRect::Physical(rect(5000.0, 0.0, 48.0, 48.0)),
+            &mixed_monitors(),
+            Some(0),
+            (320.0, 420.0),
+        )
+        .unwrap();
+        // Converted with the primary monitor's scale 2, then clamped into its 1440 points.
+        assert_eq!(origin, (1112.0, 32.0));
+        // An out-of-range fallback index uses the first monitor.
+        assert!(tray_panel_origin(
+            TrayRect::Logical(rect(9999.0, 0.0, 24.0, 24.0)),
+            &mixed_monitors(),
+            Some(7),
+            (320.0, 420.0),
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn tray_panel_has_no_origin_without_monitors_and_survives_a_zero_scale() {
+        assert_eq!(
+            tray_panel_origin(
+                TrayRect::Logical(rect(0.0, 0.0, 24.0, 24.0)),
+                &[],
+                None,
+                (320.0, 420.0)
+            ),
+            None
+        );
+        let broken = [frame(0.0, 0.0, 1440.0, 900.0, 0.0)];
+        let origin = tray_panel_origin(
+            TrayRect::Physical(rect(1000.0, 0.0, 24.0, 24.0)),
+            &broken,
+            None,
+            (320.0, 420.0),
+        )
+        .unwrap();
+        assert_eq!(origin, (852.0, 32.0));
     }
 
     #[test]

@@ -18,8 +18,6 @@ use crate::lifecycle::{
     sync_login_item_report, ExitGate, ExitOutcome, ExitRequest, ExternalWatcher, QuitPort,
     QuitWorkerGuard, ShellTarget, TrayRefresher, EXTERNAL_POLL,
 };
-#[cfg(not(windows))]
-use crate::shell::panel_position;
 use crate::shell::{close_action, current_os, show_main, CloseAction, PanelRect};
 use crate::state::{AppState, EditorDirty, ShellState};
 use crate::tray::{
@@ -177,7 +175,18 @@ fn toggle_panel(app: &AppHandle, tray: tauri::Rect) {
         let _ = panel.hide();
         return;
     }
-    // Tray events are physical on Windows. A logical event elsewhere uses the current scale.
+    #[cfg(windows)]
+    place_panel_windows(app, &panel, tray);
+    #[cfg(not(windows))]
+    place_panel(app, &panel, tray);
+    let _ = panel.show();
+    let _ = panel.set_focus();
+}
+
+/// Windows: tray events are physical; the panel is placed in the destination monitor's work area
+/// with that monitor's scale.
+#[cfg(windows)]
+fn place_panel_windows(app: &AppHandle, panel: &tauri::WebviewWindow, tray: tauri::Rect) {
     let scale = panel.scale_factor().unwrap_or(1.0);
     let at = tray.position.to_physical::<f64>(scale);
     let size = tray.size.to_physical::<f64>(scale);
@@ -187,8 +196,19 @@ fn toggle_panel(app: &AppHandle, tray: tauri::Rect) {
         .flatten()
         .or_else(|| app.primary_monitor().ok().flatten());
     if let (Some(monitor), Ok(panel_size)) = (monitor, panel.outer_size()) {
-        #[cfg(not(windows))]
-        let (x, y) = panel_position(
+        let scale = monitor.scale_factor();
+        let work = monitor.work_area();
+        let (width, height) = panel
+            .outer_size()
+            .ok()
+            .map(|size| {
+                let logical = size.to_logical::<f64>(panel.scale_factor().unwrap_or(scale));
+                (logical.width * scale, logical.height * scale)
+            })
+            .unwrap_or((f64::from(panel_size.width), f64::from(panel_size.height)));
+        let width = width.min((f64::from(work.size.width) - 16.0 * scale).max(1.0));
+        let height = height.min((f64::from(work.size.height) - 16.0 * scale).max(1.0));
+        let (x, y) = crate::shell::panel_position_windows(
             PanelRect {
                 x: at.x,
                 y: at.y,
@@ -196,56 +216,83 @@ fn toggle_panel(app: &AppHandle, tray: tauri::Rect) {
                 h: size.height,
             },
             PanelRect {
-                x: f64::from(monitor.position().x),
-                y: f64::from(monitor.position().y),
-                w: f64::from(monitor.size().width),
-                h: f64::from(monitor.size().height),
+                x: f64::from(work.position.x),
+                y: f64::from(work.position.y),
+                w: f64::from(work.size.width),
+                h: f64::from(work.size.height),
             },
-            f64::from(panel_size.width),
-            f64::from(panel_size.height),
+            width,
+            height,
+            scale,
         );
-        #[cfg(windows)]
-        let (x, y, width, height) = {
-            let scale = monitor.scale_factor();
-            let work = monitor.work_area();
-            let (width, height) = panel
-                .outer_size()
-                .ok()
-                .map(|size| {
-                    let logical = size.to_logical::<f64>(panel.scale_factor().unwrap_or(scale));
-                    (logical.width * scale, logical.height * scale)
-                })
-                .unwrap_or((f64::from(panel_size.width), f64::from(panel_size.height)));
-            let width = width.min((f64::from(work.size.width) - 16.0 * scale).max(1.0));
-            let height = height.min((f64::from(work.size.height) - 16.0 * scale).max(1.0));
-            let (x, y) = crate::shell::panel_position_windows(
-                PanelRect {
-                    x: at.x,
-                    y: at.y,
-                    w: size.width,
-                    h: size.height,
-                },
-                PanelRect {
-                    x: f64::from(work.position.x),
-                    y: f64::from(work.position.y),
-                    w: f64::from(work.size.width),
-                    h: f64::from(work.size.height),
-                },
-                width,
-                height,
-                scale,
-            );
-            (x, y, width, height)
-        };
         let _ = panel.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
-        #[cfg(windows)]
         let _ = panel.set_size(tauri::PhysicalSize::new(
             width.round() as u32,
             height.round() as u32,
         ));
     }
-    let _ = panel.show();
-    let _ = panel.set_focus();
+}
+
+/// macOS (and any non-Windows desktop): the panel goes under the icon in logical points. The
+/// monitor that holds the icon, not the panel window, supplies the scale factor, so a panel last
+/// shown on another display is not misplaced (`shell::tray_panel_origin` decides).
+#[cfg(not(windows))]
+fn place_panel(app: &AppHandle, panel: &tauri::WebviewWindow, tray: tauri::Rect) {
+    use crate::shell::{tray_panel_origin, MonitorFrame, TrayRect};
+    use tauri::{LogicalPosition, Position, Size};
+    let to_frame = |m: &tauri::Monitor| MonitorFrame {
+        x: f64::from(m.position().x),
+        y: f64::from(m.position().y),
+        w: f64::from(m.size().width),
+        h: f64::from(m.size().height),
+        scale: m.scale_factor(),
+    };
+    let monitors = app.available_monitors().unwrap_or_default();
+    let frames: Vec<MonitorFrame> = monitors.iter().map(to_frame).collect();
+    let primary = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| to_frame(&m))
+        .and_then(|p| frames.iter().position(|f| *f == p));
+    // Only the panel's own size is converted with the panel's scale: it is a size, not a place.
+    let panel_scale = panel.scale_factor().unwrap_or(1.0);
+    let Ok(panel_size) = panel.outer_size() else {
+        return;
+    };
+    let panel_size = panel_size.to_logical::<f64>(panel_scale);
+    let rect = |position: PhysicalPosition<f64>, size: tauri::PhysicalSize<f64>| PanelRect {
+        x: position.x,
+        y: position.y,
+        w: size.width,
+        h: size.height,
+    };
+    let tray_rect = match (&tray.position, &tray.size) {
+        (Position::Physical(p), Size::Physical(s)) => TrayRect::Physical(rect(
+            PhysicalPosition::new(f64::from(p.x), f64::from(p.y)),
+            tauri::PhysicalSize::new(f64::from(s.width), f64::from(s.height)),
+        )),
+        // A logical (or mixed) event is already in points; a stray physical half is read with
+        // the panel's scale, the best guess left.
+        (position, size) => {
+            let p = position.to_logical::<f64>(panel_scale);
+            let s = size.to_logical::<f64>(panel_scale);
+            TrayRect::Logical(PanelRect {
+                x: p.x,
+                y: p.y,
+                w: s.width,
+                h: s.height,
+            })
+        }
+    };
+    if let Some((x, y)) = tray_panel_origin(
+        tray_rect,
+        &frames,
+        primary,
+        (panel_size.width, panel_size.height),
+    ) {
+        let _ = panel.set_position(LogicalPosition::new(x, y));
+    }
 }
 
 /// Hides the tray panel (blur, lock).
