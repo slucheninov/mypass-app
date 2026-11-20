@@ -844,32 +844,37 @@ fn revision_salt() -> &'static [u8; 32] {
     })
 }
 
-/// The opaque name of one history version: a salted digest of everything that makes the version
-/// what it is (date, every field with its flag), so two versions share a name only when they
-/// are identical, and a name never points at another version after a sync or merge.
+/// The opaque name of one history version: a salted digest of its date and the
+/// content restored by [`restore_history`]. Frame each field and include collection
+/// counts so an item cannot be mistaken for a member of a neighbouring collection.
 fn revision_of(version: &Entry) -> String {
     use sha2::{Digest, Sha256};
     let mut hash = Sha256::new();
     hash.update(revision_salt());
-    hash.update(version.modified.0.to_be_bytes());
     let mut part = |bytes: &[u8]| {
         hash.update((bytes.len() as u64).to_be_bytes());
         hash.update(bytes);
     };
+    part(&version.modified.0.to_be_bytes());
+    part(&(version.fields.len() as u64).to_be_bytes());
     for field in &version.fields {
         part(field.key.as_bytes());
         part(field.value().as_bytes());
         part(&[u8::from(field.protected)]);
     }
+    part(&(version.string_arrays.len() as u64).to_be_bytes());
     for array in &version.string_arrays {
         part(array.key.as_bytes());
+        part(&(array.values.len() as u64).to_be_bytes());
         for value in &array.values {
             part(value.as_bytes());
         }
     }
+    part(&(version.attachments.len() as u64).to_be_bytes());
     for attachment in &version.attachments {
         part(attachment.name.as_bytes());
-        part(&(attachment.data.len() as u64).to_be_bytes());
+        part(&attachment.data);
+        part(&[u8::from(attachment.protected)]);
     }
     hash.finalize()
         .iter()
@@ -2451,6 +2456,44 @@ mod tests {
         assert!(f.entry(id).attachments.is_empty());
         restore_history(&f.session, id, &revision(&f, id, 0)).unwrap();
         assert_eq!(f.entry(id).attachments.len(), 1);
+    }
+
+    #[test]
+    fn restore_history_distinguishes_same_second_attachments() {
+        let f = fx();
+        let id = f.create(|m| m.title = "A".into());
+        f.session
+            .mutate(|db, _| {
+                let entry = db.find_entry_mut(id).unwrap();
+                for (data, protected) in [(b"one", false), (b"two", false), (b"two", true)] {
+                    let mut version = entry.clone();
+                    version.history.clear();
+                    version.attachments = vec![Attachment {
+                        name: "a.txt".into(),
+                        data: data.to_vec(),
+                        protected,
+                    }];
+                    entry.history.push(version);
+                }
+                Ok(())
+            })
+            .unwrap();
+
+        let revisions = [
+            revision(&f, id, 2),
+            revision(&f, id, 1),
+            revision(&f, id, 0),
+        ];
+        for (revision, (data, protected)) in
+            revisions
+                .iter()
+                .zip([(b"one", false), (b"two", false), (b"two", true)])
+        {
+            restore_history(&f.session, id, revision).unwrap();
+            let restored = f.entry(id);
+            assert_eq!(restored.attachments[0].data, data);
+            assert_eq!(restored.attachments[0].protected, protected);
+        }
     }
 
     #[test]
