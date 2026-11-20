@@ -110,8 +110,16 @@ export const commands = {
 	sidebarGet: () => typedError<Sidebar_Serialize, ApiError>(__TAURI_INVOKE("sidebar_get")),
 	syncConnectSecondary: (folderToken: string, strategy: MigrationStrategy) => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_connect_secondary", { folderToken, strategy })),
 	syncDisconnectSecondary: () => typedError<null, ApiError>(__TAURI_INVOKE("sync_disconnect_secondary")),
-	/**  The kept vault copies, for display. Read-only: MyPass never deletes them. */
-	syncDisplacedStatus: () => typedError<DisplacedCopies, ApiError>(__TAURI_INVOKE("sync_displaced_status")),
+	/**
+	 *  Deletes the one retained vault copy the user confirmed, by the id of the current listing,
+	 *  after re-verifying it; returns the refreshed list. Refused while locked.
+	 */
+	syncDisplacedDelete: (id: string) => typedError<DisplacedCopies_Serialize, ApiError>(__TAURI_INVOKE("sync_displaced_delete", { id })),
+	/**
+	 *  The kept vault copies, for display. Listing deletes nothing; while the vault is unlocked
+	 *  each copy that may be deleted carries an opaque id for `sync_displaced_delete`.
+	 */
+	syncDisplacedStatus: () => typedError<DisplacedCopies_Serialize, ApiError>(__TAURI_INVOKE("sync_displaced_status")),
 	syncNow: () => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_now")),
 	syncStatus: () => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_status")),
 	vaultCreate: (path: string, password: string, name: string) => typedError<SessionStatus_Serialize, ApiError>(__TAURI_INVOKE("vault_create", { path, password, name })),
@@ -458,20 +466,55 @@ export type DeviceUnlockStatus_Serialize = {
 };
 
 /**  The retained copies of the open vault. */
-export type DisplacedCopies = {
+export type DisplacedCopies = DisplacedCopies_Serialize | DisplacedCopies_Deserialize;
+
+/**  The retained copies of the open vault. */
+export type DisplacedCopies_Deserialize = {
 	count: number,
-	copies: DisplacedCopyInfo[],
+	copies: DisplacedCopyInfo_Deserialize[],
+	/**  Locations whose folder could not be read: their copies are unknown, not absent. */
+	unavailable: DisplacedLocation[],
+};
+
+/**  The retained copies of the open vault. */
+export type DisplacedCopies_Serialize = {
+	count: number,
+	copies: DisplacedCopyInfo_Serialize[],
 	/**  Locations whose folder could not be read: their copies are unknown, not absent. */
 	unavailable: DisplacedLocation[],
 };
 
 /**  One retained copy. `name` is the file name only, for display. */
-export type DisplacedCopyInfo = {
+export type DisplacedCopyInfo = DisplacedCopyInfo_Serialize | DisplacedCopyInfo_Deserialize;
+
+/**  One retained copy. `name` is the file name only, for display. */
+export type DisplacedCopyInfo_Deserialize = {
 	location: DisplacedLocation,
 	kind: RetainedCopyKind,
 	name: string,
 	/**  Length in bytes. */
 	bytes: number | null,
+	/**
+	 *  The opaque id `sync_displaced_delete` takes. `None` when this copy may not be deleted
+	 *  (the vault is locked, it could not be verified, it may belong to another vault or to a
+	 *  replacement still in progress).
+	 */
+	id?: string | null,
+};
+
+/**  One retained copy. `name` is the file name only, for display. */
+export type DisplacedCopyInfo_Serialize = {
+	location: DisplacedLocation,
+	kind: RetainedCopyKind,
+	name: string,
+	/**  Length in bytes. */
+	bytes: number | null,
+	/**
+	 *  The opaque id `sync_displaced_delete` takes. `None` when this copy may not be deleted
+	 *  (the vault is locked, it could not be verified, it may belong to another vault or to a
+	 *  replacement still in progress).
+	 */
+	id: string | null,
 };
 
 /**  Which copy of the vault the displaced file sits next to. */
@@ -676,7 +719,12 @@ export type ErrorCode = "locked" | "noVault" | "wrongPassword" | "alreadyExists"
 /**  The CSV is not valid UTF-8 text. */
 "csvNotUtf8" | 
 /**  The CSV file has no content. */
-"csvEmpty" | "cancelled" | "lockout" | "invalidated" | "notEnrolledOnDevice" | "deviceUnlockUnavailable" | "migrationLocked" | "migrationTargetUnreadable" | "migrationTargetNotAVault" | "migrationTargetPasswordMismatch" | "migrationTargetWriteFailed" | "migrationSourceInvalid" | "migrationSameFile" | "migrationValidationFailed" | "internal";
+"csvEmpty" | "cancelled" | "lockout" | "invalidated" | "notEnrolledOnDevice" | "deviceUnlockUnavailable" | "migrationLocked" | "migrationTargetUnreadable" | "migrationTargetNotAVault" | "migrationTargetPasswordMismatch" | "migrationTargetWriteFailed" | "migrationSourceInvalid" | "migrationSameFile" | "migrationValidationFailed" | 
+/**
+ *  A retained vault copy was not deleted: the id is stale, or the copy no longer verifies
+ *  (`message` names the reason, such as `changed`, `liveVaultMissing` or `staleId`).
+ */
+"retainedCopyRefused" | "internal";
 
 /**  A single field to reveal or copy. `Totp` resolves to the current code. */
 export type FieldRef = { kind: "username" } | { kind: "password" } | { kind: "url" } | { kind: "notesBody" } | { kind: "cardNumber" } | { kind: "cardCvv" } | { kind: "totp" } | { kind: "custom"; key: string };

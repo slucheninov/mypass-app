@@ -1,8 +1,9 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DisplacedCopies } from "../../lib/bindings";
-import type { FakeBackend } from "../../test/fakeBackend";
+import type { DisplacedCopies_Serialize as DisplacedCopies } from "../../lib/bindings";
+import { toasts } from "../../lib/stores/toasts.svelte";
+import { apiError, type FakeBackend } from "../../test/fakeBackend";
 import { calls } from "../../test/mainApp";
 import { renderSettingsApp } from "../../test/settingsApp";
 
@@ -161,8 +162,8 @@ describe("retained vault copies", () => {
   const COPIES: DisplacedCopies = {
     count: 2,
     copies: [
-      { location: "primary", kind: "displaced", name: ".vault.kdbx.1.2.3.displaced", bytes: 2048 },
-      { location: "secondary", kind: "displaced", name: ".vault.kdbx.4.5.6.displaced", bytes: 12 },
+      { location: "primary", kind: "displaced", name: ".vault.kdbx.1.2.3.displaced", bytes: 2048, id: null },
+      { location: "secondary", kind: "displaced", name: ".vault.kdbx.4.5.6.displaced", bytes: 12, id: null },
     ],
     unavailable: [],
   };
@@ -186,7 +187,7 @@ describe("retained vault copies", () => {
     expect(within(section).getByText("2 KB")).toBeTruthy();
     expect(within(section).getByText(/never deletes competing copies automatically/)).toBeTruthy();
     expect(within(section).getByText(/Review these copies in the folder shown/)).toBeTruthy();
-    // Read-only: no way to delete from here.
+    // Copies the backend gives no id cannot be deleted from here.
     expect(within(section).queryByRole("button")).toBeNull();
   });
 
@@ -196,7 +197,7 @@ describe("retained vault copies", () => {
       f.state.sync = { state: "idle", lastSync: 5000, recoveryFile: name };
       f.state.displaced = {
         count: 1,
-        copies: [{ location: "secondary", kind: "aside", name, bytes: 1024 }],
+        copies: [{ location: "secondary", kind: "aside", name, bytes: 1024, id: null }],
         unavailable: [],
       };
     });
@@ -217,7 +218,7 @@ describe("retained vault copies", () => {
   it("labels_a_retained_exchange_copy_as_a_replacement_working_copy", async () => {
     const name = ".vault.kdbx.1.2.3.exchanged";
     await open({}, (f) => {
-      f.state.displaced = { count: 1, copies: [{ location: "primary", kind: "exchanged", name, bytes: 10 }], unavailable: [] };
+      f.state.displaced = { count: 1, copies: [{ location: "primary", kind: "exchanged", name, bytes: 10, id: null }], unavailable: [] };
     });
     const section = await screen.findByTestId("displaced-copies");
     expect(within(section).getByText("Replacement working copy")).toBeTruthy();
@@ -273,5 +274,76 @@ describe("retained vault copies", () => {
     await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("Retained copies could not be checked."));
     expect(screen.queryByText(".vault.kdbx.1.2.3.displaced")).toBeNull();
     expect(screen.queryByText(/Retained copies:/)).toBeNull();
+  });
+
+  const DELETABLE: DisplacedCopies = {
+    count: 2,
+    copies: [
+      { location: "primary", kind: "displaced", name: ".vault.kdbx.1.2.3.displaced", bytes: 2048, id: "id-1" },
+      { location: "secondary", kind: "aside", name: ".vault.kdbx.4.5.6.aside", bytes: 12, id: null },
+    ],
+    unavailable: [],
+  };
+  const withDeletable = (fake: FakeBackend) => void (fake.state.displaced = structuredClone(DELETABLE));
+  const askToDelete = async () => {
+    const section = await screen.findByTestId("displaced-copies");
+    await userEvent.click(within(section).getByRole("button", { name: "Delete: .vault.kdbx.1.2.3.displaced" }));
+    return screen.findByTestId("displaced-delete-confirm");
+  };
+
+  it("offers_delete_only_for_copies_with_an_id_and_names_the_file_before_deleting", async () => {
+    const { fake } = await open({}, withDeletable);
+    const section = await screen.findByTestId("displaced-copies");
+    expect(within(section).getAllByRole("button", { name: /^Delete/ })).toHaveLength(1);
+    const confirm = await askToDelete();
+    expect(confirm.textContent).toContain(".vault.kdbx.1.2.3.displaced");
+    expect(confirm.textContent).toContain("cannot be undone");
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByTestId("displaced-delete-confirm")).toBeNull());
+    expect(calls(fake, "syncDisplacedDelete")).toEqual([]);
+    expect(within(section).getByText(".vault.kdbx.1.2.3.displaced")).toBeTruthy();
+  });
+
+  it("deletes_the_confirmed_copy_by_its_id_and_refreshes_the_list", async () => {
+    const { fake } = await open({}, withDeletable);
+    await askToDelete();
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(calls(fake, "syncDisplacedDelete").map((c) => c.args)).toEqual([{ id: "id-1" }]));
+    await waitFor(() => expect(screen.queryByText(".vault.kdbx.1.2.3.displaced")).toBeNull());
+    expect(screen.getByText(".vault.kdbx.4.5.6.aside")).toBeTruthy();
+    expect(screen.getByText("Retained copies: 1")).toBeTruthy();
+    expect(screen.queryByTestId("displaced-delete-confirm")).toBeNull();
+  });
+
+  it("a_refused_delete_says_nothing_was_deleted_and_lists_again", async () => {
+    const { fake } = await open({}, (f) => {
+      withDeletable(f);
+      f.handlers.syncDisplacedDelete = () => {
+        throw apiError("retainedCopyRefused", "changed");
+      };
+    });
+    await askToDelete();
+    const before = calls(fake, "syncDisplacedStatus").length;
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() =>
+      expect(toasts.items.map((toast) => toast.text)).toContain(
+        "The copy changed or could not be verified, so it was not deleted. The list was refreshed.",
+      ),
+    );
+    await waitFor(() => expect(calls(fake, "syncDisplacedStatus").length).toBeGreaterThan(before));
+    expect(screen.getByText(".vault.kdbx.1.2.3.displaced")).toBeTruthy();
+  });
+
+  it("a_lock_while_confirming_closes_the_confirmation_without_deleting", async () => {
+    const { fake } = await open({}, withDeletable);
+    await askToDelete();
+    // Locked: the backend offers no ids any more.
+    fake.state.displaced = {
+      ...structuredClone(DELETABLE),
+      copies: DELETABLE.copies.map((copy) => ({ ...copy, id: null })),
+    };
+    await fake.emit("sessionChanged", { ...fake.state.session, state: "locked" });
+    await waitFor(() => expect(screen.queryByTestId("displaced-delete-confirm")).toBeNull());
+    expect(calls(fake, "syncDisplacedDelete")).toEqual([]);
   });
 });

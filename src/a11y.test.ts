@@ -376,6 +376,14 @@ const SCENARIOS: Record<string, Scenario> = {
     await click(user, opener);
     return { dialog: "Restore this backup?", opener };
   },
+  "src/screens/DisplacedCopiesSection.svelte#Delete retained copy?": async (user) => {
+    const name = ".vault.kdbx.1.2.3.displaced";
+    const copy = { location: "primary" as const, kind: "displaced" as const, name, bytes: 2048, id: "id-1" };
+    await renderSettingsApp({}, { pane: "Vault", prepare: (f) => (f.state.displaced = { count: 1, copies: [copy], unavailable: [] }) });
+    const opener = await screen.findByRole("button", { name: `Delete: ${name}` });
+    await click(user, opener);
+    return { dialog: "Delete retained copy?", opener };
+  },
 };
 
 /** The balanced `{...}` starting at `from` (string literals skipped). */

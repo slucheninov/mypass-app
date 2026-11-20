@@ -220,7 +220,9 @@ impl From<KdbxError> for SessionError {
             } => Self::Downloading,
             KdbxError::Io { message, .. } => Self::Io(message),
             KdbxError::InvalidOperation(m) => Self::InvalidInput(m),
-            e @ (KdbxError::Random | KdbxError::VaultRetained { .. }) => Self::Io(e.to_string()),
+            e @ (KdbxError::Random
+            | KdbxError::VaultRetained { .. }
+            | KdbxError::RetainedCopyRefused(_)) => Self::Io(e.to_string()),
         }
     }
 }
@@ -289,6 +291,14 @@ impl FileIo for SwitchIo {
         max_len: u64,
     ) -> mypass_kdbx::Result<mypass_kdbx::ReplaceOutcome> {
         self.get().replace_if(path, expected, bytes, max_len)
+    }
+
+    fn remove_retained(
+        &self,
+        removal: &mypass_kdbx::RetainedRemoval,
+        known: &[mypass_kdbx::RetainedIdentity],
+    ) -> mypass_kdbx::Result<()> {
+        self.get().remove_retained(removal, known)
     }
 
     fn read(&self, path: &Path) -> mypass_kdbx::Result<Vec<u8>> {
@@ -1600,6 +1610,11 @@ impl VaultSession {
     /// Swaps the IO seam for the next open or save.
     pub fn set_file_io(&self, io: Arc<dyn FileIo>) {
         self.0.io.set(io);
+    }
+
+    /// The IO seam of the vault file (follows [`VaultSession::set_file_io`]).
+    pub(crate) fn file_io(&self) -> Arc<dyn FileIo> {
+        self.0.io.clone()
     }
 
     /// Replaces the hook called when a save or an external-change check merged or reloaded
