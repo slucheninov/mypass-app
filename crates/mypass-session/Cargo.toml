@@ -23,6 +23,7 @@ mypass-update = { path = "../mypass-update" }
 mypass-sync = { path = "../mypass-sync" }
 base64.workspace = true
 chacha20poly1305.workspace = true
+hmac.workspace = true
 rand.workspace = true
 secrecy.workspace = true
 serde.workspace = true

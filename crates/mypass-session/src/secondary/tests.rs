@@ -1598,10 +1598,11 @@ fn a_successful_retry_keeps_the_stranded_vault_visible_until_it_is_removed() {
     );
 
     let settings_listing = || {
-        crate::displaced::list(&crate::displaced::targets(
-            Some(w.primary.clone()),
-            w.folder.to_str(),
-        ))
+        crate::displaced::list(
+            &crate::displaced::targets(Some(w.primary.clone()), w.folder.to_str()),
+            &[],
+            None,
+        )
     };
     let listed = settings_listing();
     assert_eq!(listed.count, 1);

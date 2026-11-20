@@ -539,5 +539,9 @@
   "Restore and save": "Wiederherstellen und speichern",
   "This item is in Deleted. Saving restores it to the selected group.": "Dieser Eintrag befindet sich im Papierkorb. Beim Speichern wird er in der ausgewählten Gruppe wiederhergestellt.",
   "This item was permanently deleted. Saving creates a new item with your changes; its attachments and passkey are not carried over.": "Dieser Eintrag wurde endgültig gelöscht. Beim Speichern wird ein neuer Eintrag mit deinen Änderungen erstellt; seine Anhänge und sein Passkey werden nicht übernommen.",
-  "No website": "Keine Website"
+  "No website": "Keine Website",
+  "Delete retained copy?": "Aufbewahrte Kopie löschen?",
+  "Delete %@? MyPass checks that the file is unchanged before deleting it. This cannot be undone.": "{0} löschen? MyPass prüft vor dem Löschen, dass die Datei unverändert ist. Das kann nicht rückgängig gemacht werden.",
+  "The copy changed or could not be verified, so it was not deleted. The list was refreshed.": "Die Kopie wurde geändert oder konnte nicht geprüft werden und wurde daher nicht gelöscht. Die Liste wurde aktualisiert.",
+  "Could not delete this copy. Try again.": "Diese Kopie konnte nicht gelöscht werden. Versuche es noch einmal."
 }

@@ -539,5 +539,9 @@
   "Restore and save": "Восстановить и сохранить",
   "This item is in Deleted. Saving restores it to the selected group.": "Эта запись в разделе «Удалено». Сохранение восстановит её в выбранной группе.",
   "This item was permanently deleted. Saving creates a new item with your changes; its attachments and passkey are not carried over.": "Эта запись удалена навсегда. Сохранение создаст новую запись с вашими изменениями; её вложения и ключ доступа не будут перенесены.",
-  "No website": "Без веб-сайта"
+  "No website": "Без веб-сайта",
+  "Delete retained copy?": "Удалить сохранённую копию?",
+  "Delete %@? MyPass checks that the file is unchanged before deleting it. This cannot be undone.": "Удалить {0}? MyPass проверит, что файл не изменился, прежде чем удалить его. Это действие нельзя отменить.",
+  "The copy changed or could not be verified, so it was not deleted. The list was refreshed.": "Копия изменилась или её не удалось проверить, поэтому она не удалена. Список обновлён.",
+  "Could not delete this copy. Try again.": "Не удалось удалить эту копию. Повторите попытку."
 }

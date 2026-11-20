@@ -1,14 +1,19 @@
 <script lang="ts">
-  // The read-only list names retained files and identifies which folder to check. It
-  // refreshes on mount, a vault change, a sync status change and a settled save.
+  // The list names retained files and identifies which folder to check. It refreshes on mount,
+  // a vault change, a sync status change and a settled save. A copy the backend marked deletable
+  // (it carries an id, only while the vault is unlocked) can be deleted one at a time, after a
+  // confirmation that names the file; the backend re-verifies that exact copy before deleting.
   import { untrack } from "svelte";
-  import { api } from "../lib/api";
-  import type { DisplacedCopies } from "../lib/bindings";
+  import { api, ApiFailure } from "../lib/api";
+  import type { DisplacedCopies, DisplacedCopyInfo } from "../lib/bindings";
   import { formatBytes } from "../lib/i18n/format";
   import { t } from "../lib/i18n/index.svelte";
   import { session } from "../lib/stores/session.svelte";
   import { sync } from "../lib/stores/sync.svelte";
   import { settings } from "../lib/stores/settings.svelte";
+  import { toasts } from "../lib/stores/toasts.svelte";
+  import Button from "../lib/ui/Button.svelte";
+  import Modal from "../lib/ui/Modal.svelte";
 
   let found = $state<DisplacedCopies>({ count: 0, copies: [], unavailable: [] });
   let failed = $state(false);
@@ -60,6 +65,40 @@
   });
 
   const place = (location: "primary" | "secondary") => (location === "primary" ? t("Vault folder") : t("Sync folder"));
+
+  // The copy whose deletion is being confirmed; the confirmation is bound to its id.
+  let deleting = $state<DisplacedCopyInfo | null>(null);
+  let busy = $state(false);
+
+  // A vault switch, a lock or a refresh that no longer offers the copy closes the confirmation.
+  $effect(() => {
+    const pending = deleting;
+    if (pending && !found.copies.some((copy) => copy.id && copy.id === pending.id)) {
+      untrack(() => (deleting = null));
+    }
+  });
+
+  async function remove() {
+    const target = deleting;
+    if (!target?.id || busy) return;
+    busy = true;
+    try {
+      await api.syncDisplacedDelete(target.id);
+    } catch (e) {
+      toasts.push(
+        "error",
+        e instanceof ApiFailure && e.code === "retainedCopyRefused"
+          ? t("The copy changed or could not be verified, so it was not deleted. The list was refreshed.")
+          : t("Could not delete this copy. Try again."),
+      );
+    } finally {
+      busy = false;
+      deleting = null;
+    }
+    // A listing started after the delete settled: a refresh already in flight can never put
+    // the deleted copy back on screen.
+    await load(vaultKey);
+  }
 </script>
 
 {#if found.count > 0 || found.unavailable.length > 0 || failed}
@@ -78,6 +117,11 @@
             <span>{copy.kind === "displaced" ? t("Competing copy") : t("Replacement working copy")}</span>
             <span class="name">{copy.name}</span>
             {#if copy.bytes !== null}<span class="size">{formatBytes(copy.bytes)}</span>{/if}
+            {#if copy.id}
+              <Button variant="danger" aria-label={`${t("Delete")}: ${copy.name}`} disabled={busy} onclick={() => (deleting = copy)}>
+                {t("Delete")}
+              </Button>
+            {/if}
           </li>
         {/each}
       </ul>
@@ -86,6 +130,16 @@
       <p role="alert" data-testid="displaced-unavailable">{t("Retained copies could not be checked in: %@", [found.unavailable.map(place).join(", ")])}</p>
     {/if}
   </section>
+{/if}
+
+{#if deleting}
+  <Modal open={true} title={t("Delete retained copy?")} onclose={() => (deleting = null)}>
+    <p data-testid="displaced-delete-confirm">{t("Delete %@? MyPass checks that the file is unchanged before deleting it. This cannot be undone.", [deleting.name])}</p>
+    {#snippet footer()}
+      <Button onclick={() => (deleting = null)}>{t("Cancel")}</Button>
+      <Button variant="danger" disabled={busy} onclick={() => void remove()}>{t("Delete")}</Button>
+    {/snippet}
+  </Modal>
 {/if}
 
 <style>

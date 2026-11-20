@@ -142,6 +142,21 @@ impl FileIo for FailingFileIo {
         }
         self.inner.replace_if(path, expected, bytes, max_len)
     }
+    fn remove_retained(
+        &self,
+        removal: &crate::RetainedRemoval,
+        known: &[crate::RetainedIdentity],
+    ) -> Result<()> {
+        self.writes.fetch_add(1, Ordering::Relaxed);
+        let failure = {
+            let failures = self.failures();
+            failures.write.or(failures.read)
+        };
+        if let Some(kind) = failure {
+            return Err(io_error(kind.into()));
+        }
+        self.inner.remove_retained(removal, known)
+    }
     fn write_atomic(&self, path: &Path, bytes: &[u8]) -> Result<()> {
         self.writes.fetch_add(1, Ordering::Relaxed);
         let failure = self.failures().write;

@@ -899,6 +899,15 @@ const FILE_MUTATIONS: &[(&str, &str, usize)] = &[
         1,
     ),
     ("crates/mypass-kdbx/src/file.rs", "remove_file(at)", 1),
+    // Explicit deletion of one user-confirmed retained copy: only after name, no-follow type,
+    // single link, full hash, vault identity and live-vault checks, and only under the fresh
+    // private name it was just moved to and proved to be the verified file (or our own empty
+    // placeholder for that name after a failed move).
+    (
+        "crates/mypass-kdbx/src/file/retained.rs",
+        "remove_file(private)",
+        1,
+    ),
     // Existing backup retention and failure marker; not an active primary or secondary vault.
     (
         "crates/mypass-session/src/backups.rs",
