@@ -161,4 +161,17 @@ mod tests {
         assert_eq!(status.unavailable, vec![DisplacedLocation::Secondary]);
         assert!(kept.exists());
     }
+
+    #[test]
+    fn a_missing_or_unplugged_folder_is_unavailable_not_empty() {
+        let d = tempfile::tempdir().unwrap();
+        let primary = d.path().join("v.kdbx");
+        fs::write(&primary, b"vault").unwrap();
+        // The sync folder was removed or its volume unplugged: its directory does not exist.
+        let gone = d.path().join("unplugged").join("sync.kdbx");
+        let all = targets(Some(primary), gone.to_str());
+        let status = list(&all);
+        assert_eq!(status.count, 0);
+        assert_eq!(status.unavailable, vec![DisplacedLocation::Secondary]);
+    }
 }
