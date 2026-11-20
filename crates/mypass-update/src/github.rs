@@ -5,7 +5,11 @@
 //! `User-Agent` header that GitHub requires. TLS is the operating system's (Security.framework on
 //! macOS, SChannel on Windows) and trusts the OS root store; no CA list is bundled.
 
-use crate::feed::{parse_release_payload, ReleaseFeed, ReleaseFeedError, ReleaseInfo, REPOSITORY};
+use crate::feed::{
+    parse_release_list, parse_release_payload, ReleaseFeed, ReleaseFeedError, ReleaseInfo,
+    REPOSITORY,
+};
+use crate::SemanticVersion;
 use std::time::Duration;
 use ureq::config::Config;
 use ureq::tls::{RootCerts, TlsConfig, TlsProvider};
@@ -24,6 +28,7 @@ const API_VERSION: &str = "2022-11-28";
 pub struct GitHubReleaseClient {
     agent: Agent,
     endpoint: String,
+    include_prereleases: bool,
 }
 
 impl std::fmt::Debug for GitHubReleaseClient {
@@ -35,18 +40,22 @@ impl std::fmt::Debug for GitHubReleaseClient {
 }
 
 impl GitHubReleaseClient {
-    /// The client for `https://api.github.com/repos/slucheninov/mypass-app/releases/latest`.
+    /// Stable builds use GitHub's latest release. Prerelease builds rank a bounded page of
+    /// recent releases by version so they can discover later prereleases and stables.
     /// `app_version` goes into `User-Agent: MyPass/<version>`. HTTPS only, no redirects, no
     /// cookies, no cache, a [`REQUEST_TIMEOUT`] deadline.
     pub fn new(app_version: &str) -> Self {
-        Self::build(
-            format!("{API_HOST}/repos/{REPOSITORY}/releases/latest"),
-            app_version,
-            Settings::production(),
-        )
+        Self::build(API_HOST, app_version, Settings::production())
     }
 
-    fn build(endpoint: String, app_version: &str, settings: Settings) -> Self {
+    fn build(base_url: &str, app_version: &str, settings: Settings) -> Self {
+        let include_prereleases =
+            SemanticVersion::parse(app_version).is_ok_and(SemanticVersion::is_prerelease);
+        let suffix = if include_prereleases {
+            "?per_page=20"
+        } else {
+            "/latest"
+        };
         let tls = TlsConfig::builder()
             .provider(TlsProvider::NativeTls)
             // The OS trust store. The `WebPki` default (a bundled list) is not compiled in.
@@ -70,7 +79,8 @@ impl GitHubReleaseClient {
         let config: Config = builder.build();
         Self {
             agent: Agent::new_with_config(config),
-            endpoint,
+            endpoint: format!("{base_url}/repos/{REPOSITORY}/releases{suffix}"),
+            include_prereleases,
         }
     }
 
@@ -84,7 +94,7 @@ impl GitHubReleaseClient {
     #[cfg(test)]
     fn with_base_url_and_timeout(base_url: &str, app_version: &str, timeout: Duration) -> Self {
         Self::build(
-            format!("{base_url}/repos/{REPOSITORY}/releases/latest"),
+            base_url,
             app_version,
             Settings {
                 https_only: false,
@@ -142,7 +152,11 @@ impl ReleaseFeed for GitHubReleaseClient {
             .limit(MAX_BODY_BYTES)
             .read_to_vec()
             .map_err(map_error)?;
-        parse_release_payload(&body)
+        if self.include_prereleases {
+            parse_release_list(&body)
+        } else {
+            parse_release_payload(&body)
+        }
     }
 }
 
@@ -226,6 +240,44 @@ mod tests {
             head.starts_with("GET /repos/slucheninov/mypass-app/releases/latest HTTP/1.1\r\n"),
             "{head}"
         );
+    }
+
+    #[test]
+    fn prerelease_builds_rank_published_releases_by_semver() {
+        for stable in [false, true] {
+            let payload = |tag: &str, draft: bool| {
+                serde_json::json!({
+                    "tag_name": tag,
+                    "html_url": format!("https://github.com/{REPOSITORY}/releases/tag/{tag}"),
+                    "draft": draft,
+                })
+            };
+            let mut releases = vec![
+                payload("v0.7.1-alpha.2", false),
+                payload("v9.0.0", true),
+                payload("v0.7.1-alpha.10", false),
+                payload("v0.7.0", false),
+                payload("nightly", false),
+            ];
+            if stable {
+                releases.push(payload("v0.7.1", false));
+            }
+            let (base, request) = serve(http(
+                "200 OK",
+                "application/json",
+                &serde_json::json!(releases).to_string(),
+            ));
+            let release = GitHubReleaseClient::with_base_url(&base, "0.7.1-alpha.1")
+                .latest()
+                .unwrap();
+            assert_eq!(
+                release.tag,
+                if stable { "v0.7.1" } else { "v0.7.1-alpha.10" }
+            );
+            assert!(request.recv().unwrap().starts_with(
+                "GET /repos/slucheninov/mypass-app/releases?per_page=20 HTTP/1.1\r\n"
+            ));
+        }
     }
 
     #[test]
@@ -446,7 +498,7 @@ mod tests {
         listener.set_nonblocking(true).unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let client = GitHubReleaseClient::build(
-            format!("{base}/repos/{REPOSITORY}/releases/latest"),
+            &base,
             "0.7.0",
             Settings {
                 use_system_proxy: false,

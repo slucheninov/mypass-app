@@ -33,7 +33,7 @@ class Fixture(unittest.TestCase):
         for name in ('Cargo.toml', 'Cargo.lock', 'package.json'):
             shutil.copy2(ROOT / name, self.root / name)
         self.version = tomllib.loads((self.root / 'src-tauri/Cargo.toml').read_text())['package']['version']
-        major, minor, patch_version = map(int, self.version.split('.'))
+        major, minor, patch_version = map(int, self.version.split('-', 1)[0].split('.'))
         self.next_version = f'{major}.{minor}.{patch_version + 1}'
         bin_dir = self.root / 'stub-bin'
         bin_dir.mkdir()
@@ -57,6 +57,9 @@ class Fixture(unittest.TestCase):
 class VersionTests(Fixture):
     def test_check_version_names_disagreeing_file_and_tag(self):
         self.run_script('check-version.sh', self.version)
+        self.run_script('check-version.sh', '--tag', f'v{self.version}')
+        self.run_script('check-version.sh', '--tag', self.version, ok=False)
+        self.run_script('check-version.sh', '--tag', f'v{self.next_version}', ok=False)
         self.run_script('check-version.sh', self.next_version, ok=False)
         path = self.root / 'extension/manifest.json'
         data = json.loads(path.read_text()); data['version'] = self.next_version
@@ -71,6 +74,23 @@ class VersionTests(Fixture):
         self.assertIn(f'name = "mypass-app"\nversion = "{self.next_version}"', lock)
         for version in (self.next_version, self.version, 'bad', '1.2', '01.2.3'):
             self.run_script('bump-version.sh', version, ok=False)
+
+    def test_prerelease_bump_preserves_order_and_platform_metadata(self):
+        base = self.next_version
+        manifest_path = self.root / 'extension/manifest.json'
+        plist_path = self.root / 'src-tauri/Info.plist'
+        self.run_script('bump-version.sh', f'{base}-alpha.01', ok=False)
+        for suffix in ('-alpha.2', '-alpha.10', '-beta.1', '-rc.1', ''):
+            ver = base + suffix
+            self.run_script('bump-version.sh', ver)
+            self.run_script('check-version.sh', '--tag', f'v{ver}')
+            manifest = json.loads(manifest_path.read_text())
+            self.assertEqual(manifest['version'], base)
+            self.assertEqual(manifest.get('version_name'), ver if suffix else None)
+            plist = plistlib.loads(plist_path.read_bytes())
+            self.assertEqual(plist['CFBundleVersion'], base)
+            self.assertEqual(plist['CFBundleShortVersionString'], base)
+        self.run_script('bump-version.sh', f'{base}-rc.2', ok=False)
 
     def test_bump_uses_the_resolved_cargo_launcher(self):
         spec = importlib.util.spec_from_file_location('release', ROOT / 'scripts/release.py')
@@ -88,7 +108,7 @@ class VersionTests(Fixture):
         resolve.assert_called_once_with('cargo')
 
     def test_bump_rolls_back_when_cargo_fails(self):
-        paths = ['src-tauri/Cargo.toml', 'Cargo.lock', 'package.json', 'extension/manifest.json']
+        paths = ['src-tauri/Cargo.toml', 'Cargo.lock', 'package.json', 'extension/manifest.json', 'src-tauri/Info.plist']
         before = {p: (self.root / p).read_bytes() for p in paths}
         self.env['CARGO_TEST_EXIT'] = '1'
         self.run_script('bump-version.sh', self.next_version, ok=False)
@@ -193,7 +213,8 @@ class VerifyTests(Fixture):
         self.app = self.root / 'MyPass.app'
         self.resources = self.app / 'Contents/Resources'
         self.resources.mkdir(parents=True)
-        info = {'CFBundleIdentifier': 'com.mypass.app', 'CFBundleShortVersionString': self.version,
+        base = self.release.numeric_version(self.version)
+        info = {'CFBundleIdentifier': 'com.mypass.app', 'CFBundleShortVersionString': base, 'CFBundleVersion': base,
                 'LSMinimumSystemVersion': '14.0', 'CFBundleDevelopmentRegion': 'en',
                 'CFBundleLocalizations': ['en', 'uk', 'ru', 'de']}
         (self.app / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
@@ -284,7 +305,7 @@ class VersionAgnosticTests(Fixture):
     def test_release_suites_pass_after_a_version_bump(self):
         # Exercise the real scripts and copied suites, not just version helpers. Explicit class
         # selection prevents recursively invoking this regression in the disposable copy.
-        bumped = self.next_version
+        bumped = f'{self.next_version}-alpha.1'
         self.run_script('bump-version.sh', bumped)
         self.run_script('check-version.sh', bumped)
         result = subprocess.run([sys.executable, 'scripts/tests/release-tests.py',

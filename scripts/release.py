@@ -25,6 +25,8 @@ ROOT = Path(__file__).resolve().parent.parent
 TEAM = 'W645B93PPQ'
 APP_ID = 'com.mypass.app'
 HOST_ID = 'com.mypass.chromehost'
+PRERELEASE_ORDER = {'alpha': 0, 'beta': 1, 'rc': 2, None: 3}
+BUNDLE_VERSION_KEYS = ('CFBundleShortVersionString', 'CFBundleVersion')
 
 
 def require(condition, message):
@@ -33,9 +35,25 @@ def require(condition, message):
 
 
 def semver(value):
-    require(re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', value), 'expected X.Y.Z without leading zeros')
-    require(all(int(n) <= 65535 for n in value.split('.')), 'version exceeds Chrome component limit')
-    return tuple(map(int, value.split('.')))
+    number = r'(0|[1-9][0-9]*)'
+    match = re.fullmatch(rf'{number}\.{number}\.{number}(?:-(alpha|beta|rc)\.{number})?', value)
+    require(match is not None, 'expected X.Y.Z or X.Y.Z-{alpha,beta,rc}.N without leading zeros')
+    major, minor, patch = map(int, match.groups()[:3])
+    require(any((major, minor, patch)) and max(major, minor, patch) <= 65535,
+            'numeric version must be nonzero and within Chrome component limits')
+    channel, sequence = match.groups()[3:]
+    return major, minor, patch, PRERELEASE_ORDER[channel], int(sequence or 0)
+
+
+def numeric_version(ver):
+    return ver.split('-', 1)[0]
+
+
+def check_extension_version(manifest, ver):
+    base = numeric_version(ver)
+    require(manifest.get('version') == base and
+            manifest.get('version_name') == (ver if ver != base else None),
+            f'extension version mismatch: expected {ver}')
 
 
 def version():
@@ -44,7 +62,7 @@ def version():
 
 def versions():
     found = {'src-tauri/Cargo.toml': version()}
-    for name in ('package.json', 'extension/manifest.json', 'extension/package.json'):
+    for name in ('package.json', 'extension/package.json'):
         data = json.loads((ROOT / name).read_text())
         if 'version' in data:
             found[name] = data['version']
@@ -55,18 +73,27 @@ def versions():
 
 
 def check_version(expected=None):
-    expected = expected or version()
+    if expected is None:
+        expected = version()
     semver(expected)
     for path, actual in versions().items():
         require(actual == expected, f'{path}: version {actual}, expected {expected}')
+    manifest = json.loads((ROOT / 'extension/manifest.json').read_text())
+    try:
+        check_extension_version(manifest, expected)
+    except ValueError as error:
+        raise ValueError(f'extension/manifest.json: {error}') from error
+    info = plistlib.loads((ROOT / 'src-tauri/Info.plist').read_bytes())
+    check_bundle_version(info, expected)
     return expected
 
 
 def bump(new):
     target = semver(new)
+    check_version()
     current = versions()
     require(all(target > semver(v) for v in current.values()), 'new version must be greater than every current version')
-    paths = [ROOT / p for p in current]
+    paths = [ROOT / p for p in (*current, 'extension/manifest.json', 'src-tauri/Info.plist')]
     for path in paths:
         require(path.stat().st_mode & stat.S_IWUSR and os.access(path, os.W_OK), f'{path}: not writable')
         require(not path.is_symlink(), f'{path}: symlink refused')
@@ -74,7 +101,19 @@ def bump(new):
     updates = {}
     for path in paths:
         text = originals[path].decode()
-        if path.name == 'Cargo.lock':
+        if path.name == 'Info.plist':
+            info = plistlib.loads(originals[path])
+            for key in BUNDLE_VERSION_KEYS:
+                info[key] = numeric_version(new)
+            updates[path] = plistlib.dumps(info, sort_keys=False)
+            continue
+        if path.name == 'manifest.json':
+            base = numeric_version(new)
+            version_fields = f'  "version": "{base}",'
+            if new != base:
+                version_fields += f'\n  "version_name": "{new}",'
+            text, count = re.subn(r'(?m)^  "version": "[^"]+",(?:\n  "version_name": "[^"]+",)?$', version_fields, text)
+        elif path.name == 'Cargo.lock':
             text, count = re.subn(r'(\[\[package\]\]\nname = "mypass-app"\nversion = ")[^"]+("\n)', rf'\g<1>{new}\2', text)
         elif path.suffix == '.toml':
             text, count = re.subn(r'(?m)^version = "[^"]+"$', f'version = "{new}"', text)
@@ -167,7 +206,7 @@ def verify_zip(path, ver, extension=None):
             require(not p.is_absolute() and '..' not in p.parts and '\\' not in name, 'extension zip unsafe path')
             require('tests' not in p.parts and p.name not in ('package.json', '.DS_Store') and not name.endswith('.test.js'), f'extension zip development file: {name}')
         manifest = json.loads(archive.read('manifest.json'))
-        require(manifest['version'] == ver, 'extension zip version mismatch')
+        check_extension_version(manifest, ver)
         # The manifest's __MSG_*__ strings resolve against the default locale, so a ZIP without
         # that catalog installs with a broken name and description.
         require(f"_locales/{manifest.get('default_locale')}/messages.json" in names,
@@ -195,8 +234,15 @@ def requirement(identifier):
     return f'identifier "{identifier}" and anchor apple generic and certificate leaf[subject.OU] = "{TEAM}"'
 
 
+def check_bundle_version(info, ver):
+    for key in BUNDLE_VERSION_KEYS:
+        require(info.get(key) == numeric_version(ver), f'Info.plist {key}: expected {numeric_version(ver)}')
+
+
 def verify_bundle(app, host_source, zip_path, allow_unsigned):
+    ver = check_version()
     info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
+    check_bundle_version(info, ver)
     for key, value in {'CFBundleIdentifier': APP_ID, 'LSMinimumSystemVersion': '14.0', 'CFBundleDevelopmentRegion': 'en', 'CFBundleLocalizations': ['en', 'uk', 'ru', 'de']}.items():
         require(info.get(key) == value, f'Info.plist {key}: expected {value}')
     resources = app / 'Contents/Resources'
@@ -204,7 +250,7 @@ def verify_bundle(app, host_source, zip_path, allow_unsigned):
         require((resources / f'{lang}.lproj/InfoPlist.strings').stat().st_size > 0, f'{lang}: empty InfoPlist.strings')
     require({p.name for p in resources.glob('*.lproj')} == {'en.lproj', 'uk.lproj', 'ru.lproj', 'de.lproj'}, 'unexpected bundle localizations')
     require((resources / 'LICENSE').is_file() and (resources / 'THIRD_PARTY_NOTICES.md').is_file(), 'missing bundled notices')
-    verify_zip(zip_path, info['CFBundleShortVersionString'], resources / 'extension')
+    verify_zip(zip_path, ver, resources / 'extension')
     host = app / 'Contents/MacOS/mypass-native-host'
     require(host.read_bytes() == host_source.read_bytes(), 'bundled host differs from staged cargo sidecar')
     # A linker-only seal is expected on unsigned arm64 builds. Never accept it in release mode.
@@ -289,7 +335,9 @@ PLATFORM_MODES = {'macos': ('macos-arm64',), 'windows': ('windows-x64',),
 def main():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest='mode', required=True)
-    sub.add_parser('version').add_argument('expected', nargs='?')
+    version_args = sub.add_parser('version').add_mutually_exclusive_group()
+    version_args.add_argument('expected', nargs='?')
+    version_args.add_argument('--tag')
     sub.add_parser('bump').add_argument('version')
     assets = sub.add_parser('assets'); assets.add_argument('version')
     assets.add_argument('--platform', choices=PLATFORM_MODES, default='macos')
@@ -299,7 +347,10 @@ def main():
     ext = sub.add_parser('extension'); ext.add_argument('--out', type=Path, default=ROOT / 'release'); ext.add_argument('--stage-dir', type=Path)
     verify = sub.add_parser('verify'); verify.add_argument('app', type=Path); verify.add_argument('--host-source', required=True, type=Path); verify.add_argument('--extension-zip', required=True, type=Path); verify.add_argument('--allow-unsigned', action='store_true')
     args = parser.parse_args()
-    if args.mode == 'version': print(check_version(args.expected))
+    if args.mode == 'version':
+        if args.tag is not None:
+            require(args.tag.startswith('v'), 'expected a v-prefixed release tag')
+        print(check_version(args.tag[1:] if args.tag is not None else args.expected))
     elif args.mode == 'bump': bump(args.version)
     elif args.mode == 'assets': print('\n'.join(expected_release_assets(args.version, PLATFORM_MODES[args.platform])))
     elif args.mode == 'notes':

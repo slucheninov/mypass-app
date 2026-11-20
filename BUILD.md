@@ -92,13 +92,17 @@ substitute.
 The release tools and their offline script tests require Python 3.11 or newer
 (`tomllib` from the standard library); CI selects Python 3.12 explicitly.
 
-The app version comes from `src-tauri/Cargo.toml`; Tauri's configuration omits
-`version`. `scripts/check-version.sh [X.Y.Z]` checks the app, npm package, extension
-manifest (and extension package if versioned), and the app's Cargo.lock entry.
-The first release is 0.7.0. Other workspace crates keep their internal versions.
+The app version comes from `src-tauri/Cargo.toml`. Tauri's configuration omits
+`version`. The release scripts accept `X.Y.Z` and `X.Y.Z-alpha.N`, `-beta.N` or
+`-rc.N`. `scripts/check-version.sh [VERSION]` checks the app, npm package, extension
+manifest (and extension package if versioned), macOS plist and Cargo.lock entry.
+The app and release filenames show full SemVer. Both macOS bundle version fields
+and Chromium's manifest `version` use the numeric core. Chromium displays the
+full prerelease through `version_name` when the extension is loaded for manual
+testing. Other workspace crates keep their internal versions.
 
 ```bash
-bash scripts/bump-version.sh 0.7.1  # validates, refreshes Cargo.lock offline; never commits or tags
+bash scripts/bump-version.sh 0.7.1-alpha.1  # validates and refreshes Cargo.lock offline
 bash scripts/check-version.sh
 bash scripts/package-macos.sh --allow-unsigned --dry-run
 bash scripts/package-macos.sh --allow-unsigned --out /path/to/empty-output
@@ -172,6 +176,21 @@ that the committed table matches Cargo metadata without editing it.
 Before a release, run `bash scripts/check-version.sh`, commit the version change,
 merge it through the normal review process, then create and push `vX.Y.Z` when
 publishing is authorized. The workflow has no manual-dispatch release path.
+For the first alpha, run these commands from the approved commit containing
+the `0.7.1-alpha.1` bump:
+
+```bash
+bash scripts/check-version.sh --tag v0.7.1-alpha.1
+git tag v0.7.1-alpha.1 && git push origin v0.7.1-alpha.1
+```
+
+The workflow publishes alpha, beta and release candidate tags as GitHub
+prereleases without setting Latest. The macOS job requires the three Apple
+secrets listed above. Windows ships an unsigned ZIP and requires no signing
+secrets. Stable builds check GitHub's latest stable release. Prerelease builds
+rank the first 20 GitHub release entries by SemVer, ignoring drafts, and can
+offer a newer prerelease or stable.
+
 Signed installation, certificate renewal, quarantine removal, release failure
 paths and cutover remain owner checks in `RUN.md`; local script tests do not
 establish Gatekeeper acceptance or real Keychain behavior.

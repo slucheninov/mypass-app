@@ -1,5 +1,5 @@
 //! The release feed seam: what the checker asks ("what is the latest release?"), the answer, and
-//! the pure parsing and validation of GitHub's `releases/latest` payload.
+//! the pure parsing and validation of GitHub release payloads.
 //!
 //! The HTTP client itself is behind the `github` feature (`github.rs`); everything here is plain
 //! data and string handling, so it is tested without a network and linked by every host.
@@ -42,7 +42,7 @@ pub enum ReleaseFeedError {
     /// that is too large).
     #[error("the release feed answer is malformed")]
     Malformed,
-    /// The release tag is not a plain `MAJOR.MINOR.PATCH` version.
+    /// The release tag is not a supported release version.
     #[error("the release tag {0:?} is not a version")]
     UnparsableVersion(String),
 }
@@ -145,12 +145,31 @@ struct Payload {
     html_url: String,
     #[serde(default)]
     assets: Vec<ReleaseAsset>,
+    #[serde(default)]
+    draft: bool,
 }
 
-/// Turns the body of a `200` answer into a [`ReleaseInfo`]. `releases/latest` already excludes
-/// drafts and pre-releases, so no filtering happens here.
+/// Turns the body from `releases/latest` into a [`ReleaseInfo`].
 pub fn parse_release_payload(body: &[u8]) -> Result<ReleaseInfo, ReleaseFeedError> {
     let payload: Payload = serde_json::from_slice(body).map_err(|_| ReleaseFeedError::Malformed)?;
+    parse_payload(payload)
+}
+
+#[cfg(feature = "github")]
+pub(crate) fn parse_release_list(body: &[u8]) -> Result<ReleaseInfo, ReleaseFeedError> {
+    let releases: Vec<Payload> =
+        serde_json::from_slice(body).map_err(|_| ReleaseFeedError::Malformed)?;
+    releases
+        .into_iter()
+        .filter_map(|payload| parse_payload(payload).ok())
+        .max_by_key(|release| release.version)
+        .ok_or(ReleaseFeedError::BadStatus(404))
+}
+
+fn parse_payload(payload: Payload) -> Result<ReleaseInfo, ReleaseFeedError> {
+    if payload.draft {
+        return Err(ReleaseFeedError::Malformed);
+    }
     let version = SemanticVersion::parse(&payload.tag_name)
         .map_err(|_| ReleaseFeedError::UnparsableVersion(payload.tag_name.clone()))?;
     let url = validate_release_url(&payload.html_url).ok_or(ReleaseFeedError::Malformed)?;

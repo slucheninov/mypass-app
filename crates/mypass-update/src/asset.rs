@@ -44,13 +44,14 @@ pub fn checksum_asset_for<'a>(
     assets: &'a [ReleaseAsset],
 ) -> Option<&'a ReleaseAsset> {
     let rest = asset.name.strip_prefix("MyPass-")?;
-    let (version, platform) = rest.split_once('-')?;
-    let version = SemanticVersion::parse(version).ok()?;
-    let platform = match platform {
-        "macos-arm64.dmg" => ReleasePlatform::MacosArm64,
-        "windows-x64.zip" => ReleasePlatform::WindowsX64,
-        _ => return None,
+    let (version, platform) = match rest.strip_suffix("-macos-arm64.dmg") {
+        Some(version) => (version, ReleasePlatform::MacosArm64),
+        None => (
+            rest.strip_suffix("-windows-x64.zip")?,
+            ReleasePlatform::WindowsX64,
+        ),
     };
+    let version = SemanticVersion::parse(version).ok()?;
     // Reuse exact selection so lookalike/noncanonical names cannot acquire a checksum.
     select_asset(std::slice::from_ref(asset), platform, &version)?;
     let name = match platform {
