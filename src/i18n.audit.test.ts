@@ -4,13 +4,14 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import de from "./lib/i18n/locales/de.json";
 import en from "./lib/i18n/locales/en.json";
 import ru from "./lib/i18n/locales/ru.json";
 import uk from "./lib/i18n/locales/uk.json";
 import { sourceFiles } from "./test/sourceScan";
 import { UNTRANSLATED_TEXT_ALLOW_LIST, untranslatedFindings } from "./test/textScan";
 
-const catalogs = { en, uk, ru } as Record<string, Record<string, string>>;
+const catalogs = { en, uk, ru, de } as Record<string, Record<string, string>>;
 
 // Only `t("literal")` calls are seen. That is complete by construction: `every_t_call_takes_a_string_literal_key`
 // (i18n.test.ts) fails on any other first argument, so a key cannot reach `t()` through a variable.
@@ -64,6 +65,12 @@ function rustSources(dir: string, out: string[] = []): string[] {
 // Proper names and the like that read the same in every language.
 const SAME_IN_EVERY_LANGUAGE = new Set(["MyPass", "URL", "English", "Bitwarden", "1Password", "iCloud Passwords", "iCloud Drive"]);
 
+// German shares these loanwords and proper names with English, so identical text is correct there.
+const SAME_IN_GERMAN = new Set([
+  "%lld s", "Browser", "Code", "Codes", "Details", "Emoji", "Link", "OK", "Optional: macOS AutoFill", "Passkey", "Passkeys",
+  "Region", "System", "Version %@", "Website", "Websites",
+]);
+
 describe("string audit", () => {
   it("no_literal_user_text_survives_in_svelte_files", () => {
     // The same scan as `no_untranslated_text_nodes_in_svelte_files`, run here with nothing exempted.
@@ -78,13 +85,13 @@ describe("string audit", () => {
     expect(bad).toEqual({});
   });
 
-  it("every_key_used_in_source_is_translated_in_uk_and_ru", () => {
+  it("every_key_used_in_source_is_translated_in_every_language", () => {
     const offenders: string[] = [];
     for (const key of usedKeys()) {
-      for (const lang of ["en", "uk", "ru"]) {
+      for (const lang of ["en", "uk", "ru", "de"]) {
         const value = catalogs[lang]?.[key];
         if (typeof value !== "string" || value === "") offenders.push(`${lang}: ${key}`);
-        else if (lang !== "en" && value === en[key as keyof typeof en] && !SAME_IN_EVERY_LANGUAGE.has(key) && /[A-Za-z]{3,}/.test(key)) {
+        else if (lang !== "en" && value === en[key as keyof typeof en] && !SAME_IN_EVERY_LANGUAGE.has(key) && !(lang === "de" && SAME_IN_GERMAN.has(key)) && /[A-Za-z]{3,}/.test(key)) {
           offenders.push(`${lang} (still English): ${key}`);
         }
       }
@@ -117,6 +124,7 @@ describe("string audit", () => {
       en: ["one", "other"],
       uk: ["few", "many", "one", "other"],
       ru: ["few", "many", "one", "other"],
+      de: ["one", "other"],
     };
     const bad: string[] = [];
     for (const [lang, catalog] of Object.entries(catalogs)) {

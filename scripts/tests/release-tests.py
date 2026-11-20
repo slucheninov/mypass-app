@@ -193,9 +193,9 @@ class VerifyTests(Fixture):
         self.resources.mkdir(parents=True)
         info = {'CFBundleIdentifier': 'com.mypass.app', 'CFBundleShortVersionString': self.version,
                 'LSMinimumSystemVersion': '14.0', 'CFBundleDevelopmentRegion': 'en',
-                'CFBundleLocalizations': ['en', 'uk', 'ru']}
+                'CFBundleLocalizations': ['en', 'uk', 'ru', 'de']}
         (self.app / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
-        for lang in ('en', 'uk', 'ru'):
+        for lang in ('en', 'uk', 'ru', 'de'):
             path = self.resources / f'{lang}.lproj/InfoPlist.strings'
             path.parent.mkdir(); path.write_text('strings')
         for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):

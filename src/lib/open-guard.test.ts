@@ -71,8 +71,8 @@ describe("open guard", () => {
     expect(screen.queryByText(/iCloud/)).toBeNull();
   });
 
-  it("i18n_icloud_warning_keys_removed_from_all_three_locales", () => {
-    for (const locale of ["en", "uk", "ru"]) {
+  it("i18n_icloud_warning_keys_removed_from_every_locale", () => {
+    for (const locale of ["en", "uk", "ru", "de"]) {
       const catalog = JSON.parse(readFileSync(resolve(process.cwd(), `src/lib/i18n/locales/${locale}.json`), "utf8")) as Record<string, string>;
       expect(catalog["This vault is in iCloud Drive"]).toBeUndefined();
       expect(Object.keys(catalog).some((k) => k.startsWith("iCloud Drive can sync a vault file"))).toBe(false);

@@ -27,6 +27,7 @@
     { value: "en", label: t("English") },
     { value: "uk", label: t("Ukrainian") },
     { value: "ru", label: t("Russian") },
+    { value: "de", label: t("German") },
   ]);
 
   async function send(patch: SettingsPatch_Deserialize): Promise<boolean> {

@@ -1,4 +1,4 @@
-// Completeness checks over the committed catalogs: src/lib/i18n/locales/{en,uk,ru}.json and
+// Completeness checks over the committed catalogs: src/lib/i18n/locales/{en,uk,ru,de}.json and
 // src-tauri/resources/macos/*.lproj/InfoPlist.strings. Literal Cyrillic is not allowed in test
 // files, so nothing here spells a translation out; expectations are read from the catalogs.
 import { test } from 'node:test';
@@ -13,6 +13,8 @@ const load = (lang) =>
 const en = load('en');
 const uk = load('uk');
 const ru = load('ru');
+const de = load('de');
+const TRANSLATIONS = [['uk', uk], ['ru', ru], ['de', de]];
 const CYRILLIC = /[\u0400-\u052F\u1C80-\u1C8F\u2DE0-\u2DFF\uA640-\uA69F]/;
 
 const list = (keys) => keys.slice(0, 20).map((k) => JSON.stringify(k)).join(', ');
@@ -27,15 +29,15 @@ function placeholders(message) {
   return [...names].sort().join(',');
 }
 
-test('every_key_has_uk_and_ru', () => {
-  for (const [name, catalog] of [['uk', uk], ['ru', ru]]) {
+test('every_key_has_a_translation_in_every_language', () => {
+  for (const [name, catalog] of TRANSLATIONS) {
     const missing = Object.keys(en).filter((k) => !catalog[k]);
     assert.deepEqual(missing, [], `${name} is missing ${missing.length} keys, e.g. ${list(missing)}`);
   }
 });
 
 test('no_extra_keys_in_translations', () => {
-  for (const [name, catalog] of [['uk', uk], ['ru', ru]]) {
+  for (const [name, catalog] of TRANSLATIONS) {
     const extra = Object.keys(catalog).filter((k) => !(k in en));
     assert.deepEqual(extra, [], `${name} has ${extra.length} keys that en lacks, e.g. ${list(extra)}`);
   }
@@ -43,13 +45,13 @@ test('no_extra_keys_in_translations', () => {
 
 test('placeholder_sets_match_across_languages', () => {
   const bad = Object.keys(en).filter(
-    (k) => placeholders(en[k]) !== placeholders(uk[k] ?? '') || placeholders(en[k]) !== placeholders(ru[k] ?? ''),
+    (k) => TRANSLATIONS.some(([, catalog]) => placeholders(en[k]) !== placeholders(catalog[k] ?? '')),
   );
   assert.deepEqual(bad, [], `placeholder mismatch in ${bad.length} keys, e.g. ${list(bad)}`);
 });
 
 test('plural_other_branch_always_present', () => {
-  for (const [name, catalog] of [['en', en], ['uk', uk], ['ru', ru]]) {
+  for (const [name, catalog] of [['en', en], ...TRANSLATIONS]) {
     const bad = Object.keys(catalog).filter(
       (k) => /\{\w+,\s*plural,/.test(catalog[k]) && !/\bother\s*\{/.test(catalog[k]),
     );
@@ -61,10 +63,14 @@ test('catalog_has_expected_scale', () => {
   assert.ok(Object.keys(en).length >= 450, `en has only ${Object.keys(en).length} keys`);
 });
 
-test('no_cyrillic_in_english_catalog', () => {
-  const bad = Object.entries(en).filter(([k, v]) => CYRILLIC.test(k) || CYRILLIC.test(v));
-  assert.deepEqual(bad.map(([k]) => k), []);
+test('no_cyrillic_in_english_and_german_catalogs', () => {
+  for (const [name, catalog] of [['en', en], ['de', de]]) {
+    const bad = Object.entries(catalog).filter(([k, v]) => CYRILLIC.test(k) || CYRILLIC.test(v));
+    assert.deepEqual(bad.map(([k]) => `${name}:${k}`), []);
+  }
 });
+
+const GERMAN_SAME = new Set(['Codes', 'Passkeys', 'Browser']);
 
 test('translations_are_not_identical_to_english_for_ui_words', () => {
   const words = [
@@ -75,7 +81,9 @@ test('translations_are_not_identical_to_english_for_ui_words', () => {
   const same = [];
   for (const word of words) {
     assert.ok(word in en, `spot-list key ${word} is missing from en`);
-    for (const [name, catalog] of [['uk', uk], ['ru', ru]]) {
+    for (const [name, catalog] of TRANSLATIONS) {
+      // German spells these loanwords like English.
+      if (name === 'de' && GERMAN_SAME.has(word)) continue;
       if (catalog[word] === en[word]) same.push(`${name}:${word}`);
     }
   }
@@ -84,7 +92,7 @@ test('translations_are_not_identical_to_english_for_ui_words', () => {
 
 test('tray_and_dialog_keys_exist_in_all_languages', () => {
   const keys = ['Unlock', 'Lock', 'Open MyPass', 'Settings…', 'Quit', 'Quit Anyway', 'Cancel'];
-  for (const [name, catalog] of [['en', en], ['uk', uk], ['ru', ru]]) {
+  for (const [name, catalog] of [['en', en], ...TRANSLATIONS]) {
     const missing = keys.filter((k) => !catalog[k]);
     assert.deepEqual(missing, [], `${name} lacks tray keys`);
   }
@@ -102,11 +110,15 @@ function parseStrings(lang) {
   return entries;
 }
 
-test('infoplist_strings_exist_for_en_uk_ru_and_include_face_id_description', () => {
-  const sets = ['en', 'uk', 'ru'].map(parseStrings);
+test('infoplist_strings_exist_for_every_language_and_include_face_id_description', () => {
+  const sets = ['en', 'uk', 'ru', 'de'].map(parseStrings);
   for (const entries of sets) {
     assert.ok(entries.NSFaceIDUsageDescription?.length > 0, 'NSFaceIDUsageDescription missing');
   }
   const keySets = sets.map((s) => Object.keys(s).sort().join('|'));
   assert.equal(new Set(keySets).size, 1, 'key sets differ across languages');
+});
+
+test('german_infoplist_strings_have_no_cyrillic', () => {
+  for (const value of Object.values(parseStrings('de'))) assert.ok(!CYRILLIC.test(value));
 });

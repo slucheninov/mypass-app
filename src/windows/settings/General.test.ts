@@ -13,7 +13,7 @@ const patches = (fake: Parameters<typeof calls>[0]) => calls(fake, "settingsUpda
 const stepper = (name: string) => screen.getByRole("spinbutton", { name }) as HTMLInputElement;
 
 describe("language", () => {
-  it("offers System, English, Ukrainian and Russian", async () => {
+  it("offers System, English, Ukrainian, Russian and German", async () => {
     await renderSettingsApp();
     const select = screen.getByRole("combobox", { name: "Language" });
     expect(within(select).getAllByRole("option").map((o) => (o as HTMLOptionElement).value)).toEqual([
@@ -21,12 +21,14 @@ describe("language", () => {
       "en",
       "uk",
       "ru",
+      "de",
     ]);
     expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual([
       "System",
       "English",
       "Ukrainian",
       "Russian",
+      "German",
     ]);
   });
 });

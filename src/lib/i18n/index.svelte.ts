@@ -1,23 +1,25 @@
 import { IntlMessageFormat } from "intl-messageformat";
+import de from "./locales/de.json";
 import en from "./locales/en.json";
 import ru from "./locales/ru.json";
 import uk from "./locales/uk.json";
 
-export type Lang = "en" | "uk" | "ru";
+export type Lang = "en" | "uk" | "ru" | "de";
 
 /** Reactive language state: any component whose render calls `t` re-renders when `lang` changes. */
 export const i18n: { lang: Lang } = $state({ lang: "en" });
 
-const original: Record<Lang, Record<string, string>> = { en, uk, ru };
-let catalogs: Record<Lang, Record<string, string>> = { en, uk, ru };
+const original: Record<Lang, Record<string, string>> = { en, uk, ru, de };
+let catalogs: Record<Lang, Record<string, string>> = { en, uk, ru, de };
 const formatters = new Map<string, IntlMessageFormat | null>();
 const warned = new Set<string>();
 
-/** `uk*` -> uk, `ru*` -> ru, anything else (or an empty list) -> en; the first entry decides. */
+/** `uk*` -> uk, `ru*` -> ru, `de*` (de-DE, de-AT, de-CH, ...) -> de, anything else (or an empty list) -> en; the first entry decides. */
 export function resolveSystemLanguage(languages: readonly string[]): Lang {
   const first = (languages[0] ?? "").toLowerCase();
   if (first.startsWith("uk")) return "uk";
   if (first.startsWith("ru")) return "ru";
+  if (first.startsWith("de")) return "de";
   return "en";
 }
 
