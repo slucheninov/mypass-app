@@ -60,7 +60,7 @@ export const commands = {
 	 *  Reveal command: one plain value of an earlier version of the entry, after the user's explicit
 	 *  click. `entry_history` never carries values.
 	 */
-	entryHistoryReveal: (id: string, index: number, field: FieldRef) => typedError<string, ApiError>(__TAURI_INVOKE("entry_history_reveal", { id, index, field })),
+	entryHistoryReveal: (id: string, revision: string, field: FieldRef) => typedError<string, ApiError>(__TAURI_INVOKE("entry_history_reveal", { id, revision, field })),
 	entryList: (query: EntryQuery) => typedError<EntrySummary[], ApiError>(__TAURI_INVOKE("entry_list", { query })),
 	entryMove: (id: string, groupId: string) => typedError<null, ApiError>(__TAURI_INVOKE("entry_move", { id, groupId })),
 	entryNewModel: (entryType: EntryTypeDto, groupId: string | null) => typedError<EntryEditModel_Serialize, ApiError>(__TAURI_INVOKE("entry_new_model", { entryType, groupId })),
@@ -766,11 +766,36 @@ export type GroupNode_Serialize = {
  *  newer version (or the current entry) changed relative to this one.
  */
 export type HistoryItem = {
+	/**
+	 *  The position in the list, for restoring. It shifts whenever a version is added or dropped,
+	 *  so a value is revealed by `revision`, never by this.
+	 */
 	index: number,
+	/**
+	 *  An opaque, stable name of this exact version (the same one across reloads while the version
+	 *  exists, a different one for a different version even with equal title and date). It is
+	 *  derived with a per-run secret, so it reveals nothing about the values it covers.
+	 */
+	revision: string,
 	/**  Unix milliseconds. */
 	modified: number | null,
 	title: string,
 	changedFields: string[],
+	/**
+	 *  The changed fields whose old value this version still holds and that can be revealed, in
+	 *  the order of `changed_fields`. Reserved values (the code, passkey material, attachment
+	 *  bytes, the app's own bookkeeping) are never listed.
+	 */
+	revealable: HistoryReveal[],
+};
+
+/**
+ *  One revealable field of a history version: `key` is the changed-field name from
+ *  `HistoryItem::changed_fields`, `field` what to pass to `entry_history_reveal`.
+ */
+export type HistoryReveal = {
+	key: string,
+	field: FieldRef,
 };
 
 /**  Auto-lock after this much inactivity. */

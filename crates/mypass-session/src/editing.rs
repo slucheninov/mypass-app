@@ -15,7 +15,7 @@
 
 use crate::dto::{
     timestamp_ms, AddressDto, AttachmentMeta, AttachmentOp, CardEdit, CustomFieldEdit,
-    EntryEditModel, EntryTypeDto, FieldRef, HistoryItem,
+    EntryEditModel, EntryTypeDto, FieldRef, HistoryItem, HistoryReveal,
 };
 use crate::fields::{
     bin_id, require_not_history, EntryFields, ADDRESS_FIELDS, ADDRESS_LABELS, ADDRESS_PREFIX,
@@ -620,17 +620,19 @@ fn plain_value(entry: &Entry, field: &FieldRef) -> Result<String, SessionError> 
     }
 }
 
-/// One plain value of an earlier version of an entry (`index` 0 is the newest, as listed by
-/// [`history`]), after an explicit user action. This is the only way a history value leaves the
-/// backend: [`history`] itself carries titles and field names, never values. `Totp` is refused.
+/// One plain value of an earlier version of an entry, named by the `revision` that [`history`]
+/// listed (never by position: a sync can add a version between the listing and the click, and a
+/// position would then name another password). A version that is gone is `NotFound`. This is the
+/// only way a history value leaves the backend: [`history`] itself carries titles and field
+/// names, never values. `Totp` is refused.
 pub fn reveal_history(
     db: &Database,
     id: Uuid,
-    index: usize,
+    revision: &str,
     field: &FieldRef,
 ) -> Result<String, SessionError> {
     let entry = find_entry(db, id)?;
-    let version = history_version(entry, index).ok_or(SessionError::NotFound)?;
+    let version = history_revision(entry, revision).ok_or(SessionError::NotFound)?;
     plain_value(version, field)
 }
 
@@ -816,14 +818,101 @@ pub fn history(db: &Database, id: Uuid) -> Result<Vec<HistoryItem>, SessionError
         .enumerate()
         .map(|(index, (pos, old))| {
             let newer = versions.get(pos.saturating_add(1)).unwrap_or(entry);
+            let changed = changed_fields(old, newer);
             HistoryItem {
                 index: count_u32(index),
+                revision: revision_of(old),
                 modified: timestamp_ms(old.modified),
                 title: old.title().to_owned(),
-                changed_fields: changed_fields(old, newer),
+                revealable: revealable_fields(old, &changed),
+                changed_fields: changed,
             }
         })
         .collect())
+}
+
+/// A per-run secret that keeps revision names from revealing (or letting anyone test guesses
+/// against) the values they cover.
+fn revision_salt() -> &'static [u8; 32] {
+    static SALT: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
+    SALT.get_or_init(|| {
+        let mut salt = [0u8; 32];
+        let (a, b) = salt.split_at_mut(16);
+        a.copy_from_slice(Uuid::new_v4().as_bytes());
+        b.copy_from_slice(Uuid::new_v4().as_bytes());
+        salt
+    })
+}
+
+/// The opaque name of one history version: a salted digest of everything that makes the version
+/// what it is (date, every field with its flag), so two versions share a name only when they
+/// are identical, and a name never points at another version after a sync or merge.
+fn revision_of(version: &Entry) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    hash.update(revision_salt());
+    hash.update(version.modified.0.to_be_bytes());
+    let mut part = |bytes: &[u8]| {
+        hash.update((bytes.len() as u64).to_be_bytes());
+        hash.update(bytes);
+    };
+    for field in &version.fields {
+        part(field.key.as_bytes());
+        part(field.value.as_bytes());
+        part(&[u8::from(field.protected)]);
+    }
+    for array in &version.string_arrays {
+        part(array.key.as_bytes());
+        for value in &array.values {
+            part(value.as_bytes());
+        }
+    }
+    for attachment in &version.attachments {
+        part(attachment.name.as_bytes());
+        part(&(attachment.data.len() as u64).to_be_bytes());
+    }
+    hash.finalize()
+        .iter()
+        .take(16)
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// The version of an entry's history with this revision name.
+fn history_revision<'a>(entry: &'a Entry, revision: &str) -> Option<&'a Entry> {
+    entry.history.iter().find(|v| revision_of(v) == revision)
+}
+
+/// What can be revealed of `version` among the fields that `changed` names: only a field the
+/// version actually holds, only a kind [`plain_value`] serves (never the code, passkey material or
+/// the app's reserved keys), once per kind.
+fn revealable_fields(version: &Entry, changed: &[String]) -> Vec<HistoryReveal> {
+    let mut out: Vec<HistoryReveal> = Vec::new();
+    for key in changed {
+        let field = match key.as_str() {
+            "UserName" => version.field("UserName").map(|_| FieldRef::Username),
+            "Password" => version.field("Password").map(|_| FieldRef::Password),
+            "URL" => (!version.urls().is_empty()).then_some(FieldRef::Url),
+            "Notes" | NOTES_BODY => version
+                .field(notes_key(version.entry_type()))
+                .map(|_| FieldRef::NotesBody),
+            CARD_NUMBER => version.field(CARD_NUMBER).map(|_| FieldRef::CardNumber),
+            CARD_CVV => version.field(CARD_CVV).map(|_| FieldRef::CardCvv),
+            other if Entry::is_reserved_key(other) => None,
+            other => version.field(other).map(|_| FieldRef::Custom {
+                key: other.to_owned(),
+            }),
+        };
+        if let Some(field) = field {
+            if !out.iter().any(|r| r.field == field) {
+                out.push(HistoryReveal {
+                    key: key.clone(),
+                    field,
+                });
+            }
+        }
+    }
+    out
 }
 
 /// Version `index` of an entry's history, newest first.
@@ -2066,6 +2155,10 @@ mod tests {
         assert_eq!(items.iter().map(|i| i.index).collect::<Vec<_>>(), [0, 1, 2]);
     }
 
+    fn revision(f: &Fx, id: Uuid, index: usize) -> String {
+        f.db(|d| history(d, id)).unwrap()[index].revision.clone()
+    }
+
     #[test]
     fn reveal_history_returns_the_value_of_that_version_only() {
         let f = fx();
@@ -2080,20 +2173,86 @@ mod tests {
             m.username = "new-user".into();
         });
         // Newest first: index 0 is the state before the last edit, index 1 the original.
-        let reveal = |index: usize, field: FieldRef| f.db(|d| reveal_history(d, id, index, &field));
-        assert_eq!(reveal(0, FieldRef::Password), Ok("p2".into()));
-        assert_eq!(reveal(1, FieldRef::Password), Ok("p1".into()));
-        assert_eq!(reveal(1, FieldRef::Username), Ok("old-user".into()));
+        let newest = revision(&f, id, 0);
+        let oldest = revision(&f, id, 1);
+        assert_ne!(newest, oldest);
+        let reveal = |rev: &str, field: FieldRef| f.db(|d| reveal_history(d, id, rev, &field));
+        assert_eq!(reveal(&newest, FieldRef::Password), Ok("p2".into()));
+        assert_eq!(reveal(&oldest, FieldRef::Password), Ok("p1".into()));
+        assert_eq!(reveal(&oldest, FieldRef::Username), Ok("old-user".into()));
         // The live value is untouched and still comes from `reveal`.
         assert_eq!(
             f.db(|d| reveal_at(d, id, &FieldRef::Password, 0)),
             Ok("p3".into())
         );
-        assert_eq!(reveal(2, FieldRef::Password), Err(SessionError::NotFound));
         assert_eq!(
-            f.db(|d| reveal_history(d, Uuid::new_v4(), 0, &FieldRef::Password)),
+            reveal("no-such-revision", FieldRef::Password),
             Err(SessionError::NotFound)
         );
+        assert_eq!(
+            f.db(|d| reveal_history(d, Uuid::new_v4(), &newest, &FieldRef::Password)),
+            Err(SessionError::NotFound)
+        );
+    }
+
+    #[test]
+    fn a_revision_names_the_same_version_after_one_is_prepended() {
+        let f = fx();
+        let id = f.create(|m| {
+            m.title = "Same".into();
+            m.password = "first".into();
+        });
+        // Same title every time: only the password tells the versions apart.
+        f.edit(id, |m| m.password = "second".into());
+        f.edit(id, |m| m.password = "third".into());
+        let listed = f.db(|d| history(d, id)).unwrap();
+        assert_eq!(listed[0].title, listed[1].title);
+        assert_ne!(listed[0].revision, listed[1].revision);
+        let second = listed[0].revision.clone();
+        // A sync or edit lands a newer version between the listing and the click: the old index
+        // 0 now names another version, the revision still names the one the user looked at.
+        f.edit(id, |m| m.password = "fourth".into());
+        let now = f.db(|d| history(d, id)).unwrap();
+        assert_ne!(now[0].revision, second);
+        assert_eq!(now[1].revision, second);
+        assert_eq!(
+            f.db(|d| reveal_history(d, id, &second, &FieldRef::Password)),
+            Ok("second".into())
+        );
+        // A version that was trimmed away answers NotFound instead of another password.
+        f.session
+            .mutate(|db, _| {
+                if let Some(entry) = db.find_entry_mut(id) {
+                    entry
+                        .history
+                        .retain(|v| v.field("Password") != Some("second"));
+                }
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            f.db(|d| reveal_history(d, id, &second, &FieldRef::Password)),
+            Err(SessionError::NotFound)
+        );
+    }
+
+    #[test]
+    fn identical_versions_share_a_revision_and_the_name_is_not_a_digest_of_the_value() {
+        let f = fx();
+        let id = f.create(|m| m.password = "hunter2".into());
+        f.edit(id, |m| m.password = "next".into());
+        let rev = revision(&f, id, 0);
+        assert_eq!(rev.len(), 32);
+        // Salted: guessing the password and hashing it does not reproduce the revision.
+        use sha2::{Digest, Sha256};
+        let guess: String = Sha256::digest(b"hunter2")
+            .iter()
+            .take(16)
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_ne!(rev, guess);
+        // Stable for the same version across listings.
+        assert_eq!(revision(&f, id, 0), rev);
     }
 
     #[test]
@@ -2101,9 +2260,10 @@ mod tests {
         let f = fx();
         let id = f.create(|m| m.title = "A".into());
         f.edit(id, |m| m.title = "B".into());
+        let rev = revision(&f, id, 0);
         let refused = |field: FieldRef| {
             matches!(
-                f.db(|d| reveal_history(d, id, 0, &field)),
+                f.db(|d| reveal_history(d, id, &rev, &field)),
                 Err(SessionError::InvalidInput(_))
             )
         };
@@ -2111,6 +2271,85 @@ mod tests {
         assert!(refused(FieldRef::Custom {
             key: "Password".into()
         }));
+    }
+
+    #[test]
+    fn history_lists_exactly_the_fields_a_version_can_reveal() {
+        let f = fx();
+        let id = f.create(|m| {
+            m.title = "A".into();
+            m.password = "p1".into();
+            m.custom_fields = vec![CustomFieldEdit {
+                key: "MyPass.Project".into(),
+                value: "alpha".into(),
+                protected: false,
+            }];
+        });
+        f.session
+            .mutate(|db, _| {
+                crate::testing::add_test_passkey(db.find_entry_mut(id).unwrap(), true);
+                Ok(())
+            })
+            .unwrap();
+        // The newest snapshot holds the password, the project and a passkey; the edit changes
+        // the password and project, adds a field the snapshot never had and removes the passkey.
+        f.edit(id, |m| {
+            m.password = "p2".into();
+            m.custom_fields = vec![
+                CustomFieldEdit {
+                    key: "MyPass.Project".into(),
+                    value: "beta".into(),
+                    protected: false,
+                },
+                CustomFieldEdit {
+                    key: "Brand new".into(),
+                    value: "v".into(),
+                    protected: false,
+                },
+            ];
+            m.remove_passkey = true;
+        });
+        let items = f.db(|d| history(d, id)).unwrap();
+        let newest = &items[0];
+        assert!(newest.changed_fields.iter().any(|k| k == "Brand new"));
+        assert!(newest
+            .changed_fields
+            .iter()
+            .any(|k| k.starts_with("KPEX_PASSKEY")));
+        let keys: Vec<&str> = newest.revealable.iter().map(|r| r.key.as_str()).collect();
+        // The old snapshot held the password and the project; it never held "Brand new", and
+        // passkey material is never offered.
+        assert_eq!(keys.len(), 2, "{keys:?}");
+        assert!(newest.revealable.iter().any(|r| r.field
+            == FieldRef::Custom {
+                key: "MyPass.Project".into()
+            }));
+        assert!(newest
+            .revealable
+            .iter()
+            .any(|r| r.field == FieldRef::Password));
+        assert!(!newest.revealable.iter().any(|r| r.key == "Brand new"));
+        assert!(!newest
+            .revealable
+            .iter()
+            .any(|r| r.key.starts_with("KPEX_PASSKEY")));
+        // Every descriptor is accepted by the reveal command, with the value of that snapshot.
+        for r in &newest.revealable {
+            assert!(f
+                .db(|d| reveal_history(d, id, &newest.revision, &r.field))
+                .is_ok());
+        }
+        assert_eq!(
+            f.db(|d| reveal_history(
+                d,
+                id,
+                &newest.revision,
+                &FieldRef::Custom {
+                    key: "MyPass.Project".into()
+                }
+            )),
+            Ok("alpha".into())
+        );
     }
 
     #[test]

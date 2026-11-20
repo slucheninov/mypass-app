@@ -194,10 +194,10 @@ pub fn entry_touch(state: State<'_, AppState>, id: String) -> Result<(), ApiErro
 pub fn entry_history_reveal(
     state: State<'_, AppState>,
     id: String,
-    index: u32,
+    revision: String,
     field: FieldRef,
 ) -> Result<String, ApiError> {
-    state.0.entry_history_reveal(&id, index, field)
+    state.0.entry_history_reveal(&id, &revision, field)
 }
 
 #[tauri::command]
