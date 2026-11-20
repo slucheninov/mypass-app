@@ -1164,6 +1164,43 @@ fn a_lowered_kdf_still_syncs_the_older_costlier_copy_it_verified() {
 }
 
 #[test]
+fn unchanged_sync_records_the_cost_from_a_legacy_checkpoint() {
+    for mode in [SyncMode::Pull, SyncMode::PushIfChanged] {
+        let fx = Fx::new();
+        let local = with_memory(fast_db("v"), 16 * MIB);
+        let bytes = local.save(&pw()).unwrap();
+        fs::write(&fx.file, &bytes).unwrap();
+        let legacy = SyncCheckpoint::of_bytes(&bytes, None).for_vault(local.root.uuid.to_string());
+        fx.store.save(Some(&legacy)).unwrap();
+        let result = fx.engine.sync(&local, &pw(), mode).unwrap();
+        assert!(matches!(result, SyncResult::Unchanged(_)));
+        fx.engine
+            .commit(result.into_parts().1.expect("new verified cost"))
+            .unwrap();
+        assert_eq!(recorded_memory(&fx, &local), 16 * MIB);
+        assert_eq!(fx.remote_bytes(), bytes);
+        assert_eq!(fx.probe.writes(), 0);
+    }
+}
+
+#[test]
+fn unchanged_pull_records_the_secondary_cost_without_persisting_the_primary_budget() {
+    let fx = Fx::new();
+    let secondary = fast_db("v");
+    let bytes = secondary.save(&pw()).unwrap();
+    let legacy = SyncCheckpoint::of_bytes(&bytes, None).for_vault(secondary.root.uuid.to_string());
+    fs::write(&fx.file, &bytes).unwrap();
+    fx.store.save(Some(&legacy)).unwrap();
+    let local = with_memory(secondary, 16 * MIB);
+
+    let result = fx.engine.sync(&local, &pw(), SyncMode::Pull).unwrap();
+    assert!(matches!(result, SyncResult::Unchanged(_)));
+    fx.engine.commit(result.into_parts().1.unwrap()).unwrap();
+    assert_eq!(recorded_memory(&fx, &local), 8 * MIB);
+    assert_eq!(fx.remote_bytes(), bytes);
+}
+
+#[test]
 fn an_unverified_costly_file_is_refused_and_never_recorded() {
     let mut fx = Fx::new();
     fx.engine.ceiling = tight_ceiling();

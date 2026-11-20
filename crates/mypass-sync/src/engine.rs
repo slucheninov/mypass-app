@@ -112,8 +112,8 @@ pub enum SyncMode {
 pub enum SyncResult {
     /// The remote was missing; the local vault was written there.
     UploadedInitial(PendingCheckpoint),
-    /// Nothing written: the remote is what this device last wrote (no checkpoint to record), or
-    /// local and remote already hold the same vault content.
+    /// Nothing written: local and remote already hold the same vault content. A checkpoint is
+    /// pending if the content stamp or the verified KDF cost needs updating.
     Unchanged(Option<PendingCheckpoint>),
     /// The local vault was written over a remote that held nothing new for it.
     UploadedLocal(PendingCheckpoint),
@@ -328,14 +328,13 @@ impl SyncEngine {
         // The local vault's own cost, plus the highest cost recorded for this remote. A store
         // that cannot be read lends nothing (the narrower budget fails closed); the attempt
         // below reports a checkpoint failure where it needs the checkpoint itself.
-        let recorded = self
+        let mut verified = self
             .checkpoints
             .load()
             .ok()
             .flatten()
             .map(|cp| cp.verified_kdf_for(&vault))
             .unwrap_or_default();
-        let mut verified = KdfCost::of(&local.settings.kdf).max(recorded);
         let mut rebased: Option<Database> = None;
         for _ in 0..MAX_SYNC_ATTEMPTS {
             let step = self.attempt(
@@ -365,9 +364,14 @@ impl SyncEngine {
             .map_err(checkpoint_error)
     }
 
-    /// The automatic budget for a remote open: the ceiling raised by what was verified.
-    fn limits(&self, verified: KdfCost) -> KdfLimits {
-        KdfLimits::within(self.ceiling.max(verified))
+    /// The primary's own cost raises the budget for this run. Only costs verified for the
+    /// secondary are carried in its checkpoint.
+    fn limits(&self, local: &Database, verified: KdfCost) -> KdfLimits {
+        KdfLimits::within(
+            self.ceiling
+                .max(KdfCost::of(&local.settings.kdf))
+                .max(verified),
+        )
     }
 
     #[allow(clippy::too_many_arguments)] // one attempt's whole context, as `install` takes it
@@ -404,22 +408,25 @@ impl SyncEngine {
         if !still_current() {
             return Err(SyncError::Cancelled);
         }
-        let (remote_db, needs_rekey) =
-            match Database::open_with_limits(&remote_bytes, password, self.limits(*verified)) {
-                Ok(db) => (db, false),
-                Err(KdbxError::WrongPassword) => {
-                    // Only exact, previously verified ciphertext can use the retained content.
-                    // A persisted checkpoint is insufficient after a restart: fail closed then.
-                    let cached = self.verified.lock().unwrap_or_else(PoisonError::into_inner);
-                    let db = cached
-                        .as_ref()
-                        .filter(|(hash, _)| *hash == digest(&remote_bytes))
-                        .map(|(_, db)| db.clone())
-                        .ok_or(SyncError::RemotePasswordMismatch)?;
-                    (db, true)
-                }
-                Err(e) => return Err(remote_open_error(e)),
-            };
+        let (remote_db, needs_rekey) = match Database::open_with_limits(
+            &remote_bytes,
+            password,
+            self.limits(local, *verified),
+        ) {
+            Ok(db) => (db, false),
+            Err(KdbxError::WrongPassword) => {
+                // Only exact, previously verified ciphertext can use the retained content.
+                // A persisted checkpoint is insufficient after a restart: fail closed then.
+                let cached = self.verified.lock().unwrap_or_else(PoisonError::into_inner);
+                let db = cached
+                    .as_ref()
+                    .filter(|(hash, _)| *hash == digest(&remote_bytes))
+                    .map(|(_, db)| db.clone())
+                    .ok_or(SyncError::RemotePasswordMismatch)?;
+                (db, true)
+            }
+            Err(e) => return Err(remote_open_error(e)),
+        };
         if remote_db.root.uuid != local.root.uuid {
             return Err(SyncError::RemoteIsDifferentVault);
         }
@@ -432,15 +439,21 @@ impl SyncEngine {
         // compared in its canonical (self-merged) form: equal exactly when it lacks nothing.
         let remote_has_all = merged == merge(&remote_db, &remote_db);
         let local_has_all = merged == merge(local, local);
+        let unchanged = || {
+            let pending = checkpoint
+                .filter(|cp| cp.verified_kdf.is_none() || cp.verified_kdf_for(vault) != *verified)
+                .map(|cp| PendingCheckpoint(cp.with_verified_kdf(*verified)));
+            Ok(Attempt::Done(SyncResult::Unchanged(pending)))
+        };
         if ours && local_has_all && mode == SyncMode::Pull {
-            return Ok(Attempt::Done(SyncResult::Unchanged(None)));
+            return unchanged();
         }
         if ours && remote_has_all && local_has_all {
             if mode == SyncMode::PushIfChanged
                 && !needs_rekey
                 && same_format(&remote_db.settings, &local.settings)
             {
-                return Ok(Attempt::Done(SyncResult::Unchanged(None)));
+                return unchanged();
             }
             if !still_current() {
                 return Err(SyncError::Cancelled);
@@ -514,13 +527,16 @@ impl SyncEngine {
                     |path: Option<_>| path.map_or(SyncError::ConcurrentCopyKept, kept);
                 // Our bytes are on the remote, but they displaced a version another writer
                 // committed in the last instant: merge it back on the next attempt.
-                let theirs = Database::open_with_limits(&theirs, password, self.limits(*verified))
-                    .map_err(|e| match e {
-                        KdbxError::RemoteKdfLimitExceeded(_) => SyncError::SyncKdfLimitExceeded {
-                            recovery_file: hidden.clone(),
-                        },
-                        _ => kept_or_displaced(hidden.clone()),
-                    })?;
+                let theirs =
+                    Database::open_with_limits(&theirs, password, self.limits(local, *verified))
+                        .map_err(|e| match e {
+                            KdbxError::RemoteKdfLimitExceeded(_) => {
+                                SyncError::SyncKdfLimitExceeded {
+                                    recovery_file: hidden.clone(),
+                                }
+                            }
+                            _ => kept_or_displaced(hidden.clone()),
+                        })?;
                 if theirs.root.uuid != local.root.uuid {
                     return Err(kept_or_displaced(hidden));
                 }

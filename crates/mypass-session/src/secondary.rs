@@ -38,8 +38,8 @@
 //!   before the commit only costs an idempotent re-merge on the next run, never a blind push
 //!   over remote-only changes. A primary that cannot be written leaves the checkpoint as it was
 //!   and retries after [`SECONDARY_RETRY`].
-//! - **Checkpoints are per vault and primary file.** Two copies of one vault (same root UUID) at
-//!   different paths keep separate checkpoints, because the promise is about one primary file.
+//! - **Checkpoints are per vault, primary file and secondary location.** A different primary
+//!   path, secondary path or secondary directory identity starts with a fresh checkpoint.
 //! - **Reconciling without rewriting.** Arming and the retry timer use `SyncMode::PushIfChanged`:
 //!   an unlock with nothing new for the copy writes nothing. A completed save and `sync_now`
 //!   push, a watcher event only pulls.
@@ -119,11 +119,27 @@ pub const SYNC_STATE_DIR: &str = "sync";
 /// the next run.
 const DURABLE_TRIES: usize = 3;
 
-/// The checkpoint file of the secondary folder for one primary file, in
-/// `<data_dir>/sync/<vault_id>/`: `secondary-<first 16 hex digits of SHA-256(primary path)>.json`.
-pub fn secondary_checkpoint_file(primary: &Path) -> String {
-    let digest = Sha256::digest(primary.as_os_str().as_encoded_bytes());
-    let hex: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
+/// Checkpoint names bind both paths and the secondary directory's filesystem identity.
+fn secondary_checkpoint_file(
+    primary: &Path,
+    secondary: &Path,
+    folder: mypass_platform::FileIdentity,
+) -> String {
+    let mut digest = Sha256::new();
+    for path in [primary, secondary] {
+        let bytes = path.as_os_str().as_encoded_bytes();
+        digest.update(bytes.len().to_le_bytes());
+        digest.update(bytes);
+    }
+    let (volume, file_id) = folder.parts();
+    digest.update(volume.to_le_bytes());
+    digest.update(file_id);
+    let hex: String = digest
+        .finalize()
+        .iter()
+        .take(16)
+        .map(|b| format!("{b:02x}"))
+        .collect();
     format!("secondary-{hex}.json")
 }
 
@@ -830,18 +846,20 @@ impl SecondarySync {
 
     /// Stops syncing, retaining the remote copy and clearing its checkpoint best-effort.
     pub fn disconnect(&self) -> Result<(), ApiError> {
+        let folder = self.0.settings.get().secondary_folder;
         self.0.settings.set_secondary_folder(None)?;
         self.rearm();
         let _gate = lock(&self.0.run_gate);
-        if let (Some(vault_id), Some(primary)) =
-            (self.0.session.vault_id(), self.0.session.vault_path())
-        {
-            let path = self.checkpoint_path(&vault_id, &primary);
-            if path.exists() {
-                // Best effort: a stale checkpoint only allows writing over a copy that is exactly
-                // what this device wrote last.
-                let _ = FileCheckpointStore::new(path).save(None);
-            }
+        let checkpoint = || {
+            let vault_id = self.0.session.vault_id()?;
+            let primary = self.0.session.vault_path()?;
+            let secondary = Path::new(folder.as_deref()?).join(primary.file_name()?);
+            self.checkpoint_path(&vault_id, &primary, &secondary).ok()
+        };
+        if let Some(path) = checkpoint().filter(|path| path.exists()) {
+            // Best effort: a stale checkpoint only allows writing over a copy that is exactly
+            // what this device wrote last.
+            let _ = FileCheckpointStore::new(path).save(None);
         }
         Ok(())
     }
@@ -924,11 +942,32 @@ impl SecondarySync {
         }
     }
 
-    fn checkpoint_path(&self, vault_id: &str, primary: &Path) -> PathBuf {
-        self.0
+    fn checkpoint_path(
+        &self,
+        vault_id: &str,
+        primary: &Path,
+        secondary: &Path,
+    ) -> Result<PathBuf, SecondaryUnavailable> {
+        let parent = secondary
+            .parent()
+            .ok_or(SecondaryUnavailable::InvalidFolder)?;
+        let dir = fs::canonicalize(parent).map_err(folder_error)?;
+        let secondary = match fs::canonicalize(secondary) {
+            Ok(resolved) => resolved,
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                let name = secondary
+                    .file_name()
+                    .ok_or(SecondaryUnavailable::InvalidFolder)?;
+                dir.join(name)
+            }
+            Err(e) => return Err(identity_error(e)),
+        };
+        let folder = mypass_platform::file_identity(&dir).map_err(identity_error)?;
+        Ok(self
+            .0
             .sync_root
             .join(vault_id)
-            .join(secondary_checkpoint_file(primary))
+            .join(secondary_checkpoint_file(primary, &secondary, folder)))
     }
 
     fn on_session_event(&self, event: &SessionEvent) {
@@ -1102,9 +1141,11 @@ impl SecondarySync {
         };
         #[cfg(test)]
         self.0.probe.engine_runs.fetch_add(1, Ordering::SeqCst);
-        let checkpoints = Arc::new(FileCheckpointStore::new(
-            self.checkpoint_path(&key.vault_id, &key.primary),
-        ));
+        let checkpoint = match self.checkpoint_path(&key.vault_id, &key.primary, backend.path()) {
+            Ok(path) => path,
+            Err(reason) => return self.finish(epoch, Outcome::Unavailable(reason)),
+        };
+        let checkpoints = Arc::new(FileCheckpointStore::new(checkpoint));
         #[cfg(test)]
         let backend: Arc<dyn StorageBackend> = match lock(&self.0.probe.io).clone() {
             Some(io) => Arc::new(mypass_sync::FileIoBackend::new(io, backend.path())),
