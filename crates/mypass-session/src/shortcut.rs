@@ -55,15 +55,37 @@ impl ParsedShortcut {
         parts.join("+")
     }
 
-    /// Whether the system owns this combination on macOS (`macos`) or elsewhere.
+    /// The combination the platform registers: on macOS the plugin's parser reads `Super` and
+    /// `CommandOrControl` as the same Cmd modifier, so a reserved check on the spelling alone
+    /// would let `Super+Q` through. Elsewhere `Super` is the Windows key and stays distinct.
+    fn effective(&self, macos: bool) -> (Vec<ShortcutModifier>, &str) {
+        let mut modifiers: Vec<ShortcutModifier> = self
+            .modifiers
+            .iter()
+            .map(|m| match m {
+                ShortcutModifier::Super if macos => ShortcutModifier::CommandOrControl,
+                other => *other,
+            })
+            .collect();
+        modifiers.sort();
+        modifiers.dedup();
+        (modifiers, self.key.as_str())
+    }
+
+    /// Whether the system owns this combination on macOS (`macos`) or elsewhere, compared by what
+    /// the platform would register (see `effective`), not by how it is spelled.
     pub fn is_reserved(&self, macos: bool) -> bool {
-        let canonical = self.canonical();
         let own: &[&str] = if macos {
             RESERVED_MACOS
         } else {
             RESERVED_OTHER
         };
-        RESERVED_EVERYWHERE.contains(&canonical.as_str()) || own.contains(&canonical.as_str())
+        let mine = self.effective(macos);
+        RESERVED_EVERYWHERE
+            .iter()
+            .chain(own)
+            .filter_map(|reserved| parse_shortcut(reserved).ok())
+            .any(|reserved| reserved.effective(macos) == mine)
     }
 }
 
@@ -259,6 +281,16 @@ mod tests {
             canonical_for("cmd+shift+l", true).unwrap(),
             "CommandOrControl+Shift+L"
         );
+        // The platform's own reading counts: on macOS `Super` is Cmd, elsewhere it is the Windows key.
+        for s in ["super+q", "Cmd+Super+w", "super+tab"] {
+            assert_eq!(canonical_for(s, true), Err(ShortcutError::Reserved), "{s}");
+            assert!(canonical_for(s, false).is_ok(), "{s}");
+        }
+        assert_eq!(
+            canonical_for("super+space", true),
+            Err(ShortcutError::Reserved)
+        );
+        assert!(canonical_for("super+alt+q", true).is_ok());
         // Syntax errors keep their own kind.
         assert_eq!(canonical_for("cmd", true), Err(ShortcutError::NoKey));
     }

@@ -1119,6 +1119,16 @@ mod tests {
             }),
             Err(SettingsError::InvalidValue("shortcutShow"))
         );
+        // The platform's reading counts: on macOS `Super` is Cmd, so `Super+Q` is Cmd+Q.
+        if cfg!(target_os = "macos") {
+            assert_eq!(
+                store.update(SettingsPatch {
+                    shortcut_lock: Some("Super+Q".into()),
+                    ..SettingsPatch::default()
+                }),
+                Err(SettingsError::InvalidValue("shortcutLock"))
+            );
+        }
         // Empty means "no shortcut" and is accepted.
         let s = store
             .update(SettingsPatch {
