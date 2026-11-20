@@ -17,6 +17,25 @@ updates:
           - "tauri-*"
           - "specta"
           - "tauri-specta"
+  - package-ecosystem: "npm"
+    cooldown:
+      default-days: 7
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    # Every minor and patch bump lands in one pull request; a major bump is never grouped, so it
+    # arrives as its own pull request to review and merge on its own.
+    groups:
+      npm-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    # The `@tauri-apps/*` packages move together with the Rust `tauri` family (the CLI rejects
+    # mismatched minors), and the cargo `tauri` group above owns that bump: a lone npm pull
+    # request would break the pairing, so they stay a manual change next to the crates.
+    ignore:
+      - dependency-name: "@tauri-apps/*"
   - package-ecosystem: "github-actions"
     cooldown:
       default-days: 7
