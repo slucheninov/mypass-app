@@ -1200,7 +1200,7 @@ impl AppCore {
             self.session
                 .publish_if_current(
                     snapshot.incarnation,
-                    || true,
+                    |_| true,
                     || {
                         self.settings.set_secondary_folder(
                             target.parent().map(|p| p.to_string_lossy().into_owned()),
@@ -1240,8 +1240,9 @@ impl AppCore {
     }
 
     /// Deletes the one retained copy `id` names, then lists again. The id must come from the
-    /// current listing of this unlocked session; the copy is re-listed, re-hashed and re-verified
-    /// (and the live vault checked) before anything is unlinked, and any mismatch refuses with
+    /// current listing of this unlocked session. The copy is re-listed, re-hashed, authenticated
+    /// against the unlocked vault's key and root UUID, then re-verified along with the live vault.
+    /// Any mismatch refuses with
     /// `RetainedCopyRefused` and deletes nothing. `Locked` / `NoVault` unless a vault is unlocked.
     pub fn sync_displaced_delete(
         &self,
@@ -1254,23 +1255,20 @@ impl AppCore {
             .filter(|key| key.incarnation == incarnation)
             .ok_or_else(|| ApiError::from(SessionError::Locked))?;
         let known = self.retained_registry.all();
-        let session_io = self.session.file_io();
         let deleted =
-            crate::displaced::delete(&self.retained_listing, &key, id, &known, |at| match at {
-                crate::displaced::DisplacedLocation::Primary => session_io.clone(),
-                crate::displaced::DisplacedLocation::Secondary => Arc::new(PlainFileIo),
-            })
-            .map_err(|e| match e {
-                crate::displaced::DeleteError::StaleId => {
-                    ApiError::new(ErrorCode::RetainedCopyRefused, "staleId")
-                }
-                crate::displaced::DeleteError::Refused(KdbxError::RetainedCopyRefused(reason)) => {
-                    ApiError::new(ErrorCode::RetainedCopyRefused, reason.as_str())
-                }
-                crate::displaced::DeleteError::Refused(other) => {
-                    ApiError::from(SessionError::from(other))
-                }
-            })?;
+            crate::displaced::delete(&self.retained_listing, &key, id, &known, &self.session)
+                .map_err(|e| match e {
+                    crate::displaced::DeleteError::StaleId => {
+                        ApiError::new(ErrorCode::RetainedCopyRefused, "staleId")
+                    }
+                    crate::displaced::DeleteError::Session(error) => ApiError::from(error),
+                    crate::displaced::DeleteError::Refused(KdbxError::RetainedCopyRefused(
+                        reason,
+                    )) => ApiError::new(ErrorCode::RetainedCopyRefused, reason.as_str()),
+                    crate::displaced::DeleteError::Refused(other) => {
+                        ApiError::from(SessionError::from(other))
+                    }
+                })?;
         self.retained_registry.forget(&deleted);
         self.sync_displaced_status()
     }
@@ -2833,7 +2831,8 @@ mod tests {
     /// A competing copy next to the open vault and the id the current listing gives it.
     fn listed_copy(f: &Fx) -> (PathBuf, String) {
         let name = f.path.file_name().unwrap().to_string_lossy().into_owned();
-        let copy = put_displaced(f.path.parent().unwrap(), &name, "1.2.3");
+        let copy = f.path.with_file_name(format!(".{name}.1.2.3.displaced"));
+        std::fs::copy(&f.path, &copy).unwrap();
         let status = f.core.sync_displaced_status().unwrap();
         assert_eq!(status.count, 1);
         let id = status.copies[0]
@@ -2852,13 +2851,95 @@ mod tests {
     #[test]
     fn a_confirmed_copy_is_deleted_and_the_list_refreshed() {
         let f = fx_open();
-        let (copy, id) = listed_copy(&f);
-        let after = f.core.sync_displaced_delete(&id).unwrap();
+        let copy = f.path.with_file_name(".v.kdbx.1.2.3.displaced");
+        let live = std::fs::read(&f.path).unwrap();
+        let mut db = Database::open(&live, &pw("pw")).unwrap();
+        db.meta.database_name = "Matching vault with a competing edit".to_owned();
+        std::fs::write(&copy, db.save(&pw("pw")).unwrap()).unwrap();
+        let status = f.core.sync_displaced_status().unwrap();
+        let id = status.copies[0].id.as_ref().unwrap();
+        let after = f.core.sync_displaced_delete(id).unwrap();
         assert_eq!(after.count, 0);
         assert!(!copy.exists());
-        assert!(f.path.is_file(), "the live vault is untouched");
+        assert_eq!(std::fs::read(&f.path).unwrap(), live);
         // The same id never deletes twice.
-        assert_eq!(refusal(f.core.sync_displaced_delete(&id)), "staleId");
+        assert_eq!(refusal(f.core.sync_displaced_delete(id)), "staleId");
+    }
+
+    #[test]
+    fn a_copy_of_another_vault_previously_at_the_same_path_is_refused() {
+        let f = fx();
+        let old = fast_database("Previous vault");
+        let bytes = old.save(&pw("pw")).unwrap();
+        std::fs::write(&f.path, &bytes).unwrap();
+        let parent = std::fs::canonicalize(f.path.parent().unwrap()).unwrap();
+        let copy = parent.join(".v.kdbx.1.2.3.displaced");
+        std::fs::rename(&f.path, &copy).unwrap();
+        f.core
+            .retained_registry
+            .add(&[mypass_kdbx::RetainedIdentity {
+                target: parent.join("v.kdbx"),
+                path: copy.clone(),
+                len: bytes.len() as u64,
+                sha256: Sha256::digest(&bytes).into(),
+            }]);
+        let new = fast_database("New vault");
+        assert_ne!(old.root_id(), new.root_id());
+        f.core
+            .session
+            .create_vault_with(&f.path, pw("pw"), new)
+            .unwrap();
+
+        let listed = f.core.sync_displaced_status().unwrap();
+        let id = listed.copies[0]
+            .id
+            .as_ref()
+            .expect("authentication waits for deletion");
+        assert_eq!(refusal(f.core.sync_displaced_delete(id)), "otherVault");
+        assert_eq!(std::fs::read(copy).unwrap(), bytes);
+    }
+
+    #[test]
+    fn a_copy_that_cannot_be_authenticated_is_refused() {
+        let f = fx_open();
+        let live = std::fs::read(&f.path).unwrap();
+        let db = Database::open(&live, &pw("pw")).unwrap();
+        let copy = f.path.with_file_name(".v.kdbx.1.2.3.displaced");
+        let over_limit =
+            mypass_kdbx::test_util::vault_header_only(&mypass_kdbx::KdfParams::AesKdf {
+                seed: vec![0; 32],
+                rounds: 1_000_000_001,
+            });
+        assert!(matches!(
+            Database::open(&over_limit, &pw("pw")),
+            Err(KdbxError::InvalidKdfParameters(_))
+        ));
+        for bytes in [
+            db.save(&pw("other password")).unwrap(),
+            b"invalid kdbx".to_vec(),
+            over_limit,
+        ] {
+            std::fs::write(&copy, &bytes).unwrap();
+            let listed = f.core.sync_displaced_status().unwrap();
+            let id = listed.copies[0]
+                .id
+                .as_ref()
+                .expect("authentication waits for deletion");
+            assert_eq!(refusal(f.core.sync_displaced_delete(id)), "unverifiedVault");
+            assert_eq!(std::fs::read(&copy).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn an_unreadable_copy_is_refused_without_deleting_it() {
+        let f = fx_open();
+        let (copy, id) = listed_copy(&f);
+        let bytes = std::fs::read(&copy).unwrap();
+        let io = Arc::new(FailingFileIo::new(Arc::new(PlainFileIo)));
+        f.core.session.set_file_io(io.clone());
+        io.fail_read(std::io::ErrorKind::PermissionDenied);
+        assert_eq!(refusal(f.core.sync_displaced_delete(&id)), "unreadable");
+        assert_eq!(std::fs::read(copy).unwrap(), bytes);
     }
 
     #[test]
@@ -2871,7 +2952,7 @@ mod tests {
             refusal(f.core.sync_displaced_delete(&id)),
             "liveVaultMissing"
         );
-        assert_eq!(std::fs::read(&copy).unwrap(), b"competing");
+        assert_eq!(std::fs::read(&copy).unwrap(), live);
         std::fs::write(&f.path, live).unwrap();
     }
 
@@ -2965,11 +3046,12 @@ mod tests {
     fn an_io_failure_leaves_the_copy_in_place() {
         let f = fx_open();
         let (copy, id) = listed_copy(&f);
+        let bytes = std::fs::read(&copy).unwrap();
         let io = Arc::new(FailingFileIo::new(Arc::new(PlainFileIo)));
         f.core.session.set_file_io(io.clone());
         io.fail_write_atomic(std::io::ErrorKind::PermissionDenied);
         assert_eq!(code(f.core.sync_displaced_delete(&id)), ErrorCode::Io);
-        assert_eq!(std::fs::read(&copy).unwrap(), b"competing");
+        assert_eq!(std::fs::read(&copy).unwrap(), bytes);
         assert!(f.path.is_file());
         // Healed, the same listing still deletes exactly that copy.
         io.heal();

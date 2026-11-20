@@ -18,15 +18,17 @@
 //! one an opaque id, `HMAC(salt, location, path, sha256, length)`, with a salt drawn once per app
 //! run, and remembers it together with the vault id and the unlock incarnation. A delete takes
 //! only that id: the id must come from the current listing of the same unlocked session, the copy
-//! is listed and hashed again and must give the same id, and the file layer then re-verifies the
-//! name, type, link count, bytes, vault identity and the live vault before it unlinks anything
+//! is listed and hashed again and must give the same id. The file layer authenticates the exact
+//! copy with the unlocked vault's key and compares its root UUID. It then re-verifies the name,
+//! type, link count, bytes, provenance and the live vault before it unlinks anything
 //! (`mypass_kdbx::remove_retained_copy`). An id from an earlier listing of another vault, another
 //! unlock or another app run matches nothing and deletes nothing.
 
+use crate::session::{SessionError, VaultSession};
 use hmac::{Hmac, KeyInit, Mac};
 use mypass_kdbx::{
     inspect_retained_copies, recorded_retained_copies, DisplacedCopyKind, FileIo, KdbxError,
-    RetainedIdentity, RetainedRemoval,
+    PlainFileIo, RetainedIdentity, RetainedRemoval,
 };
 use rand::{rand_core::UnwrapErr, rngs::SysRng, Rng};
 use serde::{Deserialize, Serialize};
@@ -260,30 +262,30 @@ pub(crate) fn list(
 pub(crate) enum DeleteError {
     /// The id is not one of the current listing of this unlocked session.
     StaleId,
+    /// The unlocked key is no longer available.
+    Session(SessionError),
     /// The copy no longer verifies (or the file layer refused); see the inner error.
     Refused(KdbxError),
 }
 
 /// Deletes the copy `id` names, after re-listing and re-hashing it (see the module docs).
-/// `io_for` gives the file layer of a location; `key` is the listing key of the current session.
+/// `key` is the listing key of the current session.
 pub(crate) fn delete(
     listing: &RetainedListing,
     key: &ListingKey,
     id: &str,
     known: &[RetainedIdentity],
-    io_for: impl Fn(DisplacedLocation) -> Arc<dyn FileIo>,
+    session: &VaultSession,
 ) -> Result<PathBuf, DeleteError> {
-    let mut guard = listing.listed();
-    let listed = match guard.as_ref() {
-        Some(listed) if listed.key == *key => listed,
-        _ => return Err(DeleteError::StaleId),
+    let copy = {
+        let guard = listing.listed();
+        guard
+            .as_ref()
+            .filter(|listed| listed.key == *key)
+            .and_then(|listed| listed.copies.iter().find(|copy| copy.id == id))
+            .cloned()
+            .ok_or(DeleteError::StaleId)?
     };
-    let copy = listed
-        .copies
-        .iter()
-        .find(|c| c.id == id)
-        .cloned()
-        .ok_or(DeleteError::StaleId)?;
     // Listed and hashed again now: the same file name must still verify to the same id.
     let now = inspect_retained_copies(&copy.target, known).map_err(DeleteError::Refused)?;
     let check =
@@ -305,17 +307,44 @@ pub(crate) fn delete(
         )));
     }
     let removal = RetainedRemoval {
-        target: copy.target.clone(),
-        name: copy.name.clone(),
+        target: copy.target,
+        name: copy.name,
         len: copy.len,
         sha256: copy.sha256,
     };
-    io_for(copy.location)
-        .remove_retained(&removal, known)
+    let (root, password) = session
+        .with_db_and_password(|db, password| (db.root_id(), password.clone()))
+        .map_err(DeleteError::Session)?;
+    let io: Arc<dyn FileIo> = match copy.location {
+        DisplacedLocation::Primary => session.file_io(),
+        DisplacedLocation::Secondary => Arc::new(PlainFileIo),
+    };
+    let authenticated = io
+        .authenticate_retained(removal, &password, root)
         .map_err(DeleteError::Refused)?;
-    if let Some(listed) = guard.as_mut() {
-        listed.copies.retain(|c| c.id != id);
+    drop(password);
+    if authenticated.target() != now.target {
+        return Err(DeleteError::Refused(KdbxError::RetainedCopyRefused(
+            mypass_kdbx::RetainedRefusal::Changed,
+        )));
     }
+
+    // The KDF can take time. Require both the listing and the unlocked incarnation to still
+    // match, and fence session invalidation only for the final filesystem operation.
+    let mut guard = listing.listed();
+    let listed = guard
+        .as_mut()
+        .filter(|listed| listed.key == *key && listed.copies.iter().any(|copy| copy.id == id))
+        .ok_or(DeleteError::StaleId)?;
+    session
+        .publish_if_current(
+            key.incarnation,
+            |db| db.root_id() == root,
+            || io.remove_retained(&authenticated, known),
+        )
+        .ok_or(DeleteError::StaleId)?
+        .map_err(DeleteError::Refused)?;
+    listed.copies.retain(|copy| copy.id != id);
     Ok(copy.path)
 }
 

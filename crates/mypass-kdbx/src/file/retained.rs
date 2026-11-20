@@ -14,7 +14,8 @@
 //!   one listing. A copy with a record belongs to the recorded vault and to no other. A copy
 //!   without one (written before records existed, or by a process that crashed before the record
 //!   was persisted) is accepted only where a longer name cannot truncate to the same stem.
-//!   Header bytes never decide vault identity: every vault with the same settings shares them.
+//!   These checks establish listing provenance. On deletion, the exact bytes must also open
+//!   with the unlocked vault's key and have its root UUID ([`authenticate_retained_copy`]).
 //! - **Removal re-verifies everything** ([`remove_retained_copy`]): the name must still be a
 //!   retained name of this vault, opened without following a symbolic link, a regular file with
 //!   one link, with the exact length and full SHA-256 the caller confirmed; the live vault must
@@ -32,7 +33,8 @@ use super::{
     resolve_using, split_target, sync_directory, ActiveAside, DisplacedCopyKind, ReplaceOutcome,
     SiblingNames, SIBLING_STEM_MAX,
 };
-use crate::{KdbxError, Result, MAX_VAULT_FILE_BYTES};
+use crate::{Database, KdbxError, Result, MAX_VAULT_FILE_BYTES};
+use secrecy::SecretString;
 use sha2::{Digest, Sha256};
 use std::{
     ffi::{OsStr, OsString},
@@ -42,6 +44,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock},
     time::{Duration, SystemTime},
 };
+use uuid::Uuid;
 
 /// A working file may still be a replacement's rollback source during this grace period.
 /// On Unix it starts at the last inode change (including a rename). Stable Windows Rust only
@@ -107,9 +110,9 @@ pub enum RetainedRefusal {
     Changed,
     /// A symbolic link, a reparse point, a directory, a device or a file with several links.
     NotRegularFile,
-    /// The record says the copy was kept for another vault.
+    /// The record names another vault, or the authenticated copy has a different root UUID.
     OtherVault,
-    /// No record, and the name match cannot tell this vault from another (a truncated stem).
+    /// The unrecorded stem is ambiguous, or the copy could not be authenticated and opened.
     UnverifiedVault,
     /// The live vault is missing, unreadable or not a KDBX file: the copy may be the only one.
     LiveVaultMissing,
@@ -206,6 +209,21 @@ impl fmt::Debug for RetainedRemoval {
             .field("name", &self.name)
             .field("len", &self.len)
             .finish_non_exhaustive()
+    }
+}
+
+/// Proof that the confirmed retained bytes opened with the live vault's key and root UUID.
+/// The file layer re-verifies the path and bytes before unlinking.
+#[derive(Debug)]
+pub struct AuthenticatedRetainedRemoval {
+    request: RetainedRemoval,
+    target: PathBuf,
+}
+
+impl AuthenticatedRetainedRemoval {
+    /// The resolved vault path whose neighbouring copy was authenticated.
+    pub fn target(&self) -> &Path {
+        &self.target
     }
 }
 
@@ -314,12 +332,11 @@ struct Verified {
     _file: fs::File,
 }
 
-/// Opens `path` without following a link, checks it is a regular single-link file (and, with
-/// `expected_len`, exactly that long), and hashes all of its bytes.
-fn verify_copy(
+/// Opens `path` without following a link and checks its type, link count and expected length.
+fn open_copy(
     path: &Path,
     expected_len: Option<u64>,
-) -> std::result::Result<Verified, RetainedRefusal> {
+) -> std::result::Result<(fs::File, fs::Metadata), RetainedRefusal> {
     let (file, meta) = open_no_follow(path).map_err(|e| match e.kind() {
         io::ErrorKind::NotFound => RetainedRefusal::NotRetainedCopy,
         _ if is_link_refusal(&e) => RetainedRefusal::NotRegularFile,
@@ -331,6 +348,15 @@ fn verify_copy(
     if expected_len.is_some_and(|len| len != meta.len()) {
         return Err(RetainedRefusal::Changed);
     }
+    Ok((file, meta))
+}
+
+/// Opens a retained copy and hashes all of its bytes.
+fn verify_copy(
+    path: &Path,
+    expected_len: Option<u64>,
+) -> std::result::Result<Verified, RetainedRefusal> {
+    let (file, meta) = open_copy(path, expected_len)?;
     let max = expected_len.unwrap_or(MAX_VAULT_FILE_BYTES);
     let (len, sha256) = hash_open(&file, max).map_err(|e| match e.kind() {
         io::ErrorKind::FileTooLarge => RetainedRefusal::Changed,
@@ -414,9 +440,52 @@ fn stem_is_exact(target: &Path) -> bool {
     })
 }
 
+/// Authenticates the confirmed bytes under the local KDF limits and checks the root UUID.
+/// Read-only, and only used at delete time so listing never runs a KDF.
+pub fn authenticate_retained_copy(
+    request: RetainedRemoval,
+    password: &SecretString,
+    root: Uuid,
+) -> Result<AuthenticatedRetainedRemoval> {
+    let target = resolve_using(|| resolve_target(&request.target), std::thread::sleep)
+        .map_err(|_| refused(RetainedRefusal::Unreadable))?;
+    let (parent, target_name) = split_target(&target)?;
+    let name = bare_name(&request.name).ok_or(refused(RetainedRefusal::NotRetainedCopy))?;
+    displaced_kind(&target_name.to_string_lossy(), &name.to_string_lossy())
+        .ok_or(refused(RetainedRefusal::NotRetainedCopy))?;
+    let (file, meta) = open_copy(&parent.join(name), Some(request.len)).map_err(refused)?;
+    if !is_retained_file(name, &meta) {
+        return Err(refused(RetainedRefusal::NotRetainedCopy));
+    }
+    let bytes = super::read_opened(
+        super::OpenedFile::new(Box::new(file), true, meta.len()),
+        request.len.min(MAX_VAULT_FILE_BYTES),
+    )
+    .map_err(|err| match err {
+        KdbxError::Io {
+            kind: io::ErrorKind::FileTooLarge,
+            ..
+        } => refused(RetainedRefusal::Changed),
+        _ => refused(RetainedRefusal::Unreadable),
+    })?;
+    let sha256: [u8; 32] = Sha256::digest(&bytes).into();
+    if u64::try_from(bytes.len()).ok() != Some(request.len) || sha256 != request.sha256 {
+        return Err(refused(RetainedRefusal::Changed));
+    }
+    let db =
+        Database::open(&bytes, password).map_err(|_| refused(RetainedRefusal::UnverifiedVault))?;
+    if db.root_id() != root {
+        return Err(refused(RetainedRefusal::OtherVault));
+    }
+    Ok(AuthenticatedRetainedRemoval { request, target })
+}
+
 /// Deletes one retained copy of `removal.target` after re-verifying it (see the module docs).
 /// `known` holds the persisted write-time records.
-pub fn remove_retained_copy(removal: &RetainedRemoval, known: &[RetainedIdentity]) -> Result<()> {
+pub fn remove_retained_copy(
+    removal: &AuthenticatedRetainedRemoval,
+    known: &[RetainedIdentity],
+) -> Result<()> {
     remove_with(
         removal,
         known,
@@ -442,13 +511,17 @@ fn remove_private_name(private: &Path) -> io::Result<()> {
 }
 
 pub(super) fn remove_with(
-    removal: &RetainedRemoval,
+    authenticated: &AuthenticatedRetainedRemoval,
     known: &[RetainedIdentity],
     now: SystemTime,
     seams: &mut RemoveSeams<'_>,
 ) -> Result<()> {
+    let removal = &authenticated.request;
     let target =
         resolve_using(|| resolve_target(&removal.target), std::thread::sleep).map_err(io_error)?;
+    if target != authenticated.target {
+        return Err(refused(RetainedRefusal::Changed));
+    }
     let (parent, target_name) = split_target(&target)?;
     let name = bare_name(&removal.name).ok_or(refused(RetainedRefusal::NotRetainedCopy))?;
     let kind = displaced_kind(&target_name.to_string_lossy(), &name.to_string_lossy())

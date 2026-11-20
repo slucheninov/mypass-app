@@ -62,6 +62,28 @@ fn no_seams() -> (impl FnMut(), impl FnMut(&Path) -> io::Result<()>) {
     (|| {}, remove_private_name)
 }
 
+// The filesystem guard tests use opaque bytes to exercise removal independently of the KDF.
+fn unchecked(removal: &RetainedRemoval) -> AuthenticatedRetainedRemoval {
+    let target = resolve_target(&removal.target).unwrap();
+    AuthenticatedRetainedRemoval {
+        request: removal.clone(),
+        target,
+    }
+}
+
+fn remove_retained_copy(removal: &RetainedRemoval, known: &[RetainedIdentity]) -> Result<()> {
+    super::remove_retained_copy(&unchecked(removal), known)
+}
+
+fn remove_with(
+    removal: &RetainedRemoval,
+    known: &[RetainedIdentity],
+    now: SystemTime,
+    seams: &mut RemoveSeams<'_>,
+) -> Result<()> {
+    super::remove_with(&unchecked(removal), known, now, seams)
+}
+
 #[test]
 fn a_verified_copy_is_deleted_and_nothing_else_is_touched() {
     let f = fx();

@@ -293,9 +293,18 @@ impl FileIo for SwitchIo {
         self.get().replace_if(path, expected, bytes, max_len)
     }
 
+    fn authenticate_retained(
+        &self,
+        request: mypass_kdbx::RetainedRemoval,
+        password: &SecretString,
+        root: uuid::Uuid,
+    ) -> mypass_kdbx::Result<mypass_kdbx::AuthenticatedRetainedRemoval> {
+        self.get().authenticate_retained(request, password, root)
+    }
+
     fn remove_retained(
         &self,
-        removal: &mypass_kdbx::RetainedRemoval,
+        removal: &mypass_kdbx::AuthenticatedRetainedRemoval,
         known: &[mypass_kdbx::RetainedIdentity],
     ) -> mypass_kdbx::Result<()> {
         self.get().remove_retained(removal, known)
@@ -1400,25 +1409,22 @@ impl VaultSession {
 
     /// Runs `publish` (a local side effect describing the vault of `incarnation`, such as the
     /// secondary sync's checkpoint) only while the session still holds that vault unlocked and
-    /// is not quitting, and while `still` (the caller's own identity check, asked under the
-    /// session lock) holds; `None` when anything changed. The check is atomic with every
-    /// invalidation: `publish` runs outside the session lock (it does file I/O), but while it
+    /// is not quitting, and while `still` (the caller's own identity check on the current
+    /// database, asked under the session lock) holds; `None` when a check fails. The check is
+    /// atomic with session invalidation: `publish` runs outside the session lock, but while it
     /// runs every incarnation bump, `begin_quit` and [`VaultSession::while_unpublished`] wait
     /// for it, so a lock, switch, relocation, quit or arm change either happens before the
     /// check (nothing is published) or after the publication completed.
     pub(crate) fn publish_if_current<R>(
         &self,
         incarnation: u64,
-        still: impl FnOnce() -> bool,
+        still: impl FnOnce(&Database) -> bool,
         publish: impl FnOnce() -> R,
     ) -> Option<R> {
         {
             let mut inner = lock(&self.0.inner);
-            if inner.recovering
-                || inner.quitting
-                || inner.db.is_none()
-                || inner.incarnation != incarnation
-                || !still()
+            let db = inner.db.as_ref()?;
+            if inner.recovering || inner.quitting || inner.incarnation != incarnation || !still(db)
             {
                 return None;
             }
@@ -2185,7 +2191,7 @@ mod tests {
         let f = fx();
         f.created();
         let current = lock(&f.session.0.inner).incarnation;
-        let publish = |inc: u64, still: bool| f.session.publish_if_current(inc, || still, || 7);
+        let publish = |inc: u64, still: bool| f.session.publish_if_current(inc, |_| still, || 7);
         assert_eq!(publish(current, true), Some(7));
         assert_eq!(publish(current, false), None, "the caller's own check");
         assert_eq!(publish(current.wrapping_add(1), true), None);
@@ -2202,7 +2208,7 @@ mod tests {
         f.session.cancel_quit();
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             f.session
-                .publish_if_current(unlocked, || true, || panic!("publication failed"))
+                .publish_if_current(unlocked, |_| true, || panic!("publication failed"))
         }));
         assert!(panicked.is_err());
         assert_eq!(lock(&f.session.0.inner).publishing, 0);
@@ -2210,6 +2216,25 @@ mod tests {
         assert!(
             !f.session.is_unlocked(),
             "a lock never hangs after a failed publication"
+        );
+    }
+
+    #[test]
+    fn publication_can_require_the_current_root_after_a_same_path_reload() {
+        let f = fx();
+        let path = f.created();
+        let incarnation = f.session.unlocked_incarnation().unwrap();
+        let old_root = f.session.with_db(Database::root_id).unwrap();
+        let new = fast_database("Another vault");
+        assert_ne!(new.root_id(), old_root);
+        mypass_kdbx::write_atomic(&path, &new.save(&pw("pw")).unwrap()).unwrap();
+        f.session.check_external_change().unwrap();
+        assert_eq!(f.session.unlocked_incarnation().unwrap(), incarnation);
+        assert_eq!(f.session.with_db(Database::root_id).unwrap(), new.root_id());
+        assert_eq!(
+            f.session
+                .publish_if_current(incarnation, |db| db.root_id() == old_root, || 7),
+            None
         );
     }
 

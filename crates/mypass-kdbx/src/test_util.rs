@@ -162,9 +162,22 @@ impl FileIo for FailingFileIo {
         }
         self.inner.replace_if(path, expected, bytes, max_len)
     }
+    fn authenticate_retained(
+        &self,
+        request: crate::RetainedRemoval,
+        password: &secrecy::SecretString,
+        root: uuid::Uuid,
+    ) -> Result<crate::AuthenticatedRetainedRemoval> {
+        if self.failures().read.is_some() {
+            return Err(crate::KdbxError::RetainedCopyRefused(
+                crate::RetainedRefusal::Unreadable,
+            ));
+        }
+        self.inner.authenticate_retained(request, password, root)
+    }
     fn remove_retained(
         &self,
-        removal: &crate::RetainedRemoval,
+        removal: &crate::AuthenticatedRetainedRemoval,
         known: &[crate::RetainedIdentity],
     ) -> Result<()> {
         self.writes.fetch_add(1, Ordering::Relaxed);

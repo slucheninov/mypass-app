@@ -717,14 +717,14 @@ fn recovery_reservation_rejects_checkpoint_publication_until_install() {
     assert_eq!(
         session.publish_if_current(
             incarnation,
-            || true,
+            |_| true,
             || panic!("stale publication admitted")
         ),
         None::<()>
     );
     drop(reservation.finish_unpublished());
     assert_eq!(
-        session.publish_if_current(incarnation, || true, || 7),
+        session.publish_if_current(incarnation, |_| true, || 7),
         Some(7)
     );
 }

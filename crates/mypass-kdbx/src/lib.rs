@@ -31,9 +31,10 @@ mod ops;
 
 mod file;
 pub use file::{
-    displaced_copies, inspect_retained_copies, recorded_retained_copies, remove_retained_copy,
-    set_retained_copy_listener, write_atomic, DisplacedCopy, DisplacedCopyKind, FileIo, FileMeta,
-    FileStamp, OpenedFile, PlainFileIo, ReplaceOutcome, RetainedCopyCheck, RetainedCopyListener,
+    authenticate_retained_copy, displaced_copies, inspect_retained_copies,
+    recorded_retained_copies, remove_retained_copy, set_retained_copy_listener, write_atomic,
+    AuthenticatedRetainedRemoval, DisplacedCopy, DisplacedCopyKind, FileIo, FileMeta, FileStamp,
+    OpenedFile, PlainFileIo, ReplaceOutcome, RetainedCopyCheck, RetainedCopyListener,
     RetainedIdentity, RetainedInspection, RetainedProvenance, RetainedRefusal, RetainedRemoval,
     SaveOutcome, VaultFile, RETAINED_IN_FLIGHT_GRACE,
 };

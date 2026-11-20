@@ -1243,7 +1243,7 @@ impl SecondarySync {
         run_hook(&self.0.probe.before_commit);
         let published = self.0.session.publish_if_current(
             snapshot.incarnation,
-            || self.arm_is(epoch),
+            |_| self.arm_is(epoch),
             || {
                 #[cfg(test)]
                 run_hook(&self.0.probe.during_publish);
