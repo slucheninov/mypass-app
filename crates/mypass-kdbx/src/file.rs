@@ -231,21 +231,16 @@ impl FileIo for PlainFileIo {
     ///
     /// - **Atomic exchange: Unix where `renameat2(RENAME_EXCHANGE)` (Linux: ext4, xfs, btrfs,
     ///   tmpfs) or `renamex_np(RENAME_SWAP)` (macOS: APFS, HFS+) works.** The new file is
-    ///   swapped in and whatever was at the path at that instant comes back under our temp
-    ///   name, which from then on is never deleted unless it holds the expected content. It
-    ///   is moved at once, by a rename that never replaces, to `.<name>.<pid>.<nanos>.<n>.exchanged`
-    ///   (a name only that move creates, so a listed retained exchange copy is never an
-    ///   uninstalled candidate, which temp names can hold).
-    ///   Anything else is published under `.<name>.<pid>.<nanos>.<n>.displaced` by a no-replace
-    ///   hard link (a fresh name is drawn when that one is taken, so no other file is ever
-    ///   overwritten) and returned as [`ReplaceOutcome::Displaced`]; if even that fails it stays
-    ///   under that `.exchanged` name, or under the temp name `.<name>.<pid>.<nanos>.<n>.tmp`
-    ///   when even the move failed (still returned as `Displaced`, `kept` names it).
+    ///   swapped in and whatever was at the path at that instant comes back under an
+    ///   exchange working name that records our candidate's inode. A scan can distinguish
+    ///   a stranded other writer's file from our uninstalled candidate even after a crash.
+    ///   A competing copy is published under a fresh `.displaced` name with a no-replace
+    ///   hard link. If publication fails, the outcome names the listed working copy.
     /// - **Move aside, then a no-replace link: volumes without the exchange that have hard
     ///   links (Windows NTFS and ReFS; SMB, NFS and other mounts that refuse the swap but
     ///   allow `link`).** After the final check, a probe link proves that hard links work
-    ///   here. The current file is moved to a fresh `.aside` working name with a rename that
-    ///   never replaces a file already there (see `move_aside`), and the new file
+    ///   here. The current file is moved to a fresh `.aside` working name without replacing
+    ///   a file already there (see `move_aside`), and the new file
     ///   is linked at the target unless a racing creator wins. The moved-aside file is removed
     ///   only when it proves to be the expected content. A competing version is published as
     ///   `.displaced`, when possible, and returned as [`ReplaceOutcome::Displaced`].
@@ -259,7 +254,9 @@ impl FileIo for PlainFileIo {
     /// Remaining window (documented residual): a writer that rewrites the old file **in
     /// place** (truncate and write on the same inode) after we read the swapped-out or
     /// moved-aside file back and judged it to be the expected content. Atomic writers (temp
-    /// file plus rename: this app, KeePassXC, sync clients) are not affected.
+    /// file plus rename: this app, KeePassXC, sync clients) are unaffected by that window.
+    /// The Unix hard-link fallback also cannot atomically couple its source identity check
+    /// with unlink. A path replacement in that final interval is outside its protection.
     ///
     /// A missing file (`expected` is `None`) is created without ever replacing one that appeared:
     /// `RENAME_NOREPLACE`/`RENAME_EXCL`, else a hard link (fails on an existing name), else the
@@ -712,11 +709,7 @@ struct SiblingNames {
     /// the rollback source and may be deleted when it proves to be the expected content, so it
     /// has its own suffix and is listed separately from kept competing copies.
     aside: PathBuf,
-    /// Where the file swapped out by an atomic exchange is moved right after the swap. Only
-    /// that rename ever creates this name, so unlike the temp name (which holds our uninstalled
-    /// candidate before the swap) it never holds anything but a file that was at the target:
-    /// a retained exchange copy can be listed without listing candidates. (The exchange is
-    /// Unix-only.)
+    /// Where the file swapped out by an atomic exchange is moved right after the swap.
     #[cfg(unix)]
     exchanged: PathBuf,
     /// A probe link proving that this volume has hard links (move-aside path).
@@ -767,7 +760,7 @@ fn sibling_stem(name: &str) -> &str {
 
 // A generated name is unique within this process, even across directories. Track it by
 // name so scans of the same directory through an alias also skip an in-flight move-aside or
-// exchange working file (and the empty placeholder that reserves an `.aside` name).
+// exchange working file.
 struct ActiveAside(OsString);
 
 impl ActiveAside {
@@ -825,7 +818,12 @@ fn displaced_kind(target_name: &str, candidate: &str) -> Option<DisplacedCopyKin
         .strip_prefix(sibling_stem(target_name))?
         .strip_prefix('.')?;
     let (counters, suffix) = rest.rsplit_once('.')?;
-    if counters.split('.').count() != 3
+    let count = if suffix == "exchanging" && cfg!(unix) {
+        4
+    } else {
+        3
+    };
+    if counters.split('.').count() != count
         || !counters
             .split('.')
             .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
@@ -836,14 +834,37 @@ fn displaced_kind(target_name: &str, candidate: &str) -> Option<DisplacedCopyKin
         "displaced" => Some(DisplacedCopyKind::Displaced),
         "aside" => Some(DisplacedCopyKind::Aside),
         "exchanged" => Some(DisplacedCopyKind::Exchanged),
+        "exchanging" if cfg!(unix) => Some(DisplacedCopyKind::Exchanged),
         _ => None,
     }
 }
 
+/// Whether this name and metadata can represent a retained vault. An exchange working
+/// name encodes the inode of the candidate. While it still names that inode, it contains
+/// only the uninstalled candidate, even after a crash. Ignore old empty reservations too.
+fn is_retained_file(name: &OsStr, meta: &fs::Metadata) -> bool {
+    if !meta.is_file() || meta.len() == 0 {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Some(candidate_inode) = name
+            .to_str()
+            .and_then(|name| name.strip_suffix(".exchanging"))
+            .and_then(|stem| stem.rsplit_once('.'))
+            .and_then(|(_, inode)| inode.parse::<u64>().ok())
+        {
+            return meta.ino() != candidate_inode;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = name;
+    true
+}
+
 /// The competing copies, move-aside files and retained exchange copies next to a vault, sorted
-/// by path. This skips our active working names. A scan can still observe working files from
-/// another process. Temp names are excluded because they can hold uninstalled candidates (a
-/// file swapped out by an exchange is moved to its own `.exchanged` name instead). An unreadable
+/// by path. Active working names and uninstalled candidates are excluded. An unreadable
 /// folder or entry is an error. A vanished entry is skipped. The scan is read-only.
 pub fn displaced_copies(target: &Path) -> Result<Vec<DisplacedCopy>> {
     // Resolved exactly as the writer resolves it, so a vault reached through a symlink is
@@ -872,7 +893,7 @@ pub fn displaced_copies(target: &Path) -> Result<Vec<DisplacedCopy>> {
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
             Err(e) => return Err(io_error(e)),
         };
-        if meta.is_file() {
+        if is_retained_file(&candidate, &meta) {
             found.push(DisplacedCopy {
                 path: entry.path(),
                 len: meta.len(),
@@ -887,6 +908,12 @@ pub fn displaced_copies(target: &Path) -> Result<Vec<DisplacedCopy>> {
 /// Writes `bytes` to the fresh file `temp` next to `target` and syncs it. The returned guard
 /// deletes the temp file on drop until it is disarmed (after a rename handed the name over).
 fn write_temp_sibling(temp: PathBuf, target: &Path, bytes: &[u8]) -> Result<TempCleanup> {
+    let (file, cleanup) = create_temp_sibling(temp)?;
+    finish_temp_write(file, target, bytes)?;
+    Ok(cleanup)
+}
+
+fn create_temp_sibling(temp: PathBuf) -> Result<(fs::File, TempCleanup)> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -900,8 +927,10 @@ fn write_temp_sibling(temp: PathBuf, target: &Path, bytes: &[u8]) -> Result<Temp
         path: temp,
         armed: true,
     };
-    // Drop the open handle before cleanup on all pre-rename failure paths.
-    let mut file = file;
+    Ok((file, cleanup))
+}
+
+fn finish_temp_write(mut file: fs::File, target: &Path, bytes: &[u8]) -> Result<()> {
     file.write_all(bytes).map_err(io_error)?;
     #[cfg(unix)]
     {
@@ -920,9 +949,7 @@ fn write_temp_sibling(temp: PathBuf, target: &Path, bytes: &[u8]) -> Result<Temp
     // Only the Unix permission carry-over reads the target.
     #[cfg(not(unix))]
     let _ = target;
-    file.sync_all().map_err(io_error)?;
-    drop(file);
-    Ok(cleanup)
+    file.sync_all().map_err(io_error)
 }
 fn finish_directory_sync(result: io::Result<()>) -> Result<()> {
     match result {
@@ -1017,23 +1044,16 @@ struct Seams<'a> {
     /// `Unsupported` where the platform or volume has no such rename (move aside, and the
     /// swapped-out file after an exchange).
     noreplace: &'a mut dyn FnMut(&Path, &Path) -> io::Result<()>,
-    /// A plain rename onto the empty placeholder that reserves a fresh `.aside` name (the
-    /// move aside where [`Seams::noreplace`] is unsupported).
-    rename: &'a mut dyn FnMut(&Path, &Path) -> io::Result<()>,
     /// A hard link, failing on an existing name (the no-replace install).
     link: &'a mut dyn FnMut(&Path, &Path) -> io::Result<()>,
     /// Drops a name of a file whose data stays reachable under another name (the working name
-    /// after a publication, the verified expected content), or our own empty placeholder.
+    /// after a publication, or the verified expected content).
     unlink: &'a mut dyn FnMut(&Path) -> io::Result<()>,
     /// Syncs the folder after the replacement committed.
     sync_dir: &'a mut dyn FnMut(&Path) -> io::Result<()>,
     /// Sleeps between the retries of a rename or link that hit a sharing violation.
     sleep: &'a mut dyn FnMut(Duration),
 }
-fn rename_sibling(from: &Path, to: &Path) -> io::Result<()> {
-    fs::rename(from, to)
-}
-
 /// `renameat2(RENAME_NOREPLACE)` (Linux) or `renamex_np(RENAME_EXCL)` (macOS): one atomic step
 /// that fails with `EEXIST` instead of replacing a name that is taken. `std` has no such
 /// rename, so it comes from `rustix`. A volume without the flag answers `Unsupported`.
@@ -1064,16 +1084,12 @@ fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
         Err(e) => Err(e.into()),
     }
 }
-/// Windows: the safe standard library only offers a replacing rename (`MoveFileExW` with
-/// `MOVEFILE_REPLACE_EXISTING`) and this crate forbids `unsafe`, so the no-replace move is
-/// reported unsupported and [`move_aside`] reserves the name with an exclusive create instead.
-#[cfg(not(unix))]
-fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
-    let _ = (from, to);
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "no-replace rename unsupported",
-    ))
+#[cfg(windows)]
+use mypass_platform::windows::rename_noreplace;
+
+#[cfg(not(any(windows, unix)))]
+fn rename_noreplace(_from: &Path, _to: &Path) -> io::Result<()> {
+    Err(io::ErrorKind::Unsupported.into())
 }
 
 /// [`replace_if_with`] over the real system calls.
@@ -1093,7 +1109,6 @@ fn replace_if_production(
         after_aside: &mut after_aside,
         exchange: true,
         noreplace: &mut rename_noreplace,
-        rename: &mut rename_sibling,
         link: &mut link,
         unlink: &mut unlink,
         sync_dir: &mut sync_dir,
@@ -1102,27 +1117,46 @@ fn replace_if_production(
     replace_if_with(path, expected, bytes, max_len, &mut seams)
 }
 
-/// Exercise the real move-aside failure path with the install, restore and publication
-/// links failing after the probe has confirmed link support.
+/// Inject a move-aside race or strand the moved copy by failing install and recovery links.
 #[cfg(feature = "test-util")]
-pub(crate) fn replace_if_stranded(
+pub(crate) fn replace_if_injected(
     path: &Path,
     expected: &[u8; 32],
     bytes: &[u8],
     max_len: u64,
+    strand: bool,
+    mut before_aside: Option<crate::test_util::AsideHook>,
 ) -> Result<ReplaceOutcome> {
     let mut first_link = true;
+    #[cfg(unix)]
+    let force_link_aside = before_aside.is_some();
     let mut seams = Seams {
         before_install: &mut || {},
         after_aside: &mut || {},
         exchange: false,
-        noreplace: &mut rename_noreplace,
-        rename: &mut rename_sibling,
+        noreplace: &mut |from, to| {
+            #[cfg(unix)]
+            if force_link_aside {
+                return Err(io::ErrorKind::Unsupported.into());
+            }
+            #[cfg(not(unix))]
+            if let Some(hook) = before_aside.take() {
+                hook(to);
+            }
+            rename_noreplace(from, to)
+        },
         link: &mut |from, to| {
-            if std::mem::take(&mut first_link) {
-                fs::hard_link(from, to)
-            } else {
+            let probe = std::mem::take(&mut first_link);
+            #[cfg(unix)]
+            if to.extension().is_some_and(|ext| ext == "aside") {
+                if let Some(hook) = before_aside.take() {
+                    hook(to);
+                }
+            }
+            if strand && !probe {
                 Err(io::Error::other("injected link failure"))
+            } else {
+                fs::hard_link(from, to)
             }
         },
         unlink: &mut drop_name,
@@ -1158,14 +1192,34 @@ fn replace_resolved(
     let target = target.to_path_buf();
     let (parent, name) = split_target(&target)?;
     let names = SiblingNames::new(parent, name)?;
+    #[cfg(unix)]
+    let mut names = names;
     // The exchange flag is only read where `renameat_with` exists.
     #[cfg(not(unix))]
     let _ = seams.exchange;
-    // The slow part (writing and syncing the new bytes) happens before the final check.
-    let cleanup = write_temp_sibling(names.temp.clone(), &target, bytes)?;
+    let (file, cleanup) = create_temp_sibling(names.temp.clone())?;
+    #[cfg(unix)]
+    let mut cleanup = cleanup;
+    #[cfg(unix)]
+    let exchange_working = if seams.exchange && expected.is_some() {
+        prepare_exchange(&mut names, &mut cleanup, &file)?
+    } else {
+        None
+    };
+    // Write and sync the candidate under its working name before the final check.
+    finish_temp_write(file, &target, bytes)?;
     let outcome = match expected {
         None => install_new(&target, &names, cleanup, seams)?,
-        Some(expected) => replace_expected(&target, &names, cleanup, expected, max_len, seams)?,
+        Some(expected) => replace_expected(
+            &target,
+            &names,
+            cleanup,
+            expected,
+            max_len,
+            seams,
+            #[cfg(unix)]
+            exchange_working.is_some(),
+        )?,
     };
     if outcome != ReplaceOutcome::Conflict {
         // A failure here comes after the replacement committed; when a retained file sits under
@@ -1178,6 +1232,31 @@ fn replace_resolved(
         })?;
     }
     Ok(outcome)
+}
+
+/// Tag the candidate before writing, so the exchange working name is recognizable even
+/// if a crash interrupts the write or the exchange.
+#[cfg(unix)]
+fn prepare_exchange(
+    names: &mut SiblingNames,
+    cleanup: &mut TempCleanup,
+    file: &fs::File,
+) -> Result<Option<ActiveAside>> {
+    use std::os::unix::fs::MetadataExt;
+    let inode = file.metadata().map_err(io_error)?.ino();
+    let working = names.temp.with_extension(format!("{inode}.exchanging"));
+    let active = ActiveAside::begin(&working);
+    match rename_noreplace(&names.temp, &working) {
+        Ok(()) => {
+            cleanup.path = working.clone();
+            names.temp = working;
+            Ok(Some(active))
+        }
+        // The volume does not support the flag. Leave the candidate under its temp
+        // name and continue through the move-aside path.
+        Err(e) if e.kind() == io::ErrorKind::Unsupported => Ok(None),
+        Err(e) => Err(io_error(e)),
+    }
 }
 
 /// Only confirmed missing filesystem primitives are permanent capability failures.
@@ -1254,6 +1333,7 @@ fn replace_expected(
     expected: &[u8; 32],
     max_len: u64,
     seams: &mut Seams<'_>,
+    #[cfg(unix)] exchange_working: bool,
 ) -> Result<ReplaceOutcome> {
     // The final check: exactly the expected content, read on the opened handle.
     let Some(current) = read_current(target, max_len)? else {
@@ -1264,10 +1344,10 @@ fn replace_expected(
     }
     (seams.before_install)();
     #[cfg(unix)]
-    if seams.exchange {
+    if exchange_working {
         match rename_with(&names.temp, target, rustix::fs::RenameFlags::EXCHANGE)? {
             Swap::Done => {
-                // The temp name now holds whatever was at the target at the instant of the swap,
+                // The exchange working name now holds whatever was at the target at the instant of the swap,
                 // possibly another writer's vault: it is no longer ours to delete.
                 cleanup.disarm();
                 // Moved to its own `.exchanged` name, hidden from scans until it settles.
@@ -1329,16 +1409,9 @@ const PUBLISH_ATTEMPTS: usize = 8;
 /// `Ok(None)`: the target vanished and nothing was moved. A taken name draws a fresh one; when
 /// no name can be had, nothing is moved and the replacement fails closed.
 ///
-/// Why two ways: the atomic no-replace rename ([`Seams::noreplace`]) is the exact primitive
-/// and is used wherever the volume has it. `link` plus `unlink` is NOT a substitute: dropping
-/// the target name afterwards would delete a file another writer renamed onto the target in
-/// between. Where the no-replace rename is unsupported (Windows, where the safe standard
-/// library only has a replacing rename, and volumes without the flag), the name is reserved
-/// first with an exclusive create (`create_new`, `O_EXCL`): a planted file makes the create
-/// fail, and the plain rename then replaces only our own empty placeholder. Residual: a program
-/// that deliberately replaces that freshly created, unpredictably named placeholder in the
-/// instant before our rename loses its file to the rename. A placeholder left by a failed
-/// rename is removed only while it is still an empty file of ours.
+/// Prefer the atomic no-replace move. Unix volumes without it can use an exclusive hard
+/// link followed by unlink, with a source identity check before unlink. Without hard links
+/// the earlier probe fails closed.
 fn move_aside(
     target: &Path,
     names: &SiblingNames,
@@ -1357,21 +1430,20 @@ fn move_aside(
             Err(e) if e.kind() == io::ErrorKind::Unsupported => {}
             Err(e) => return Err(io_error(e)),
         }
-        match reserve_name(&candidate) {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(io_error(e)),
-        }
-        match retry_rename(|| (seams.rename)(target, &candidate), &mut *seams.sleep) {
+        #[cfg(not(unix))]
+        return Err(unsupported("no-replace move unavailable"));
+        #[cfg(unix)]
+        match link_aside(target, &candidate, seams) {
             Ok(()) => return Ok(Some((candidate, active))),
-            Err(e) => {
-                release_placeholder(&candidate, seams);
-                return if e.kind() == io::ErrorKind::NotFound {
-                    Ok(None)
-                } else {
-                    Err(io_error(e))
-                };
-            }
+            Err(KdbxError::Io {
+                kind: io::ErrorKind::AlreadyExists,
+                ..
+            }) => continue,
+            Err(KdbxError::Io {
+                kind: io::ErrorKind::NotFound,
+                ..
+            }) => return Ok(None),
+            Err(e) => return Err(e),
         }
     }
     Err(io_error(io::Error::new(
@@ -1380,32 +1452,32 @@ fn move_aside(
     )))
 }
 
-/// Creates `at` as a new empty file, failing with `AlreadyExists` when the name is taken.
-fn reserve_name(at: &Path) -> io::Result<()> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    options.open(at).map(drop)
+/// Link the source without replacing the destination. Check the identity of both names
+/// before unlinking the source: an atomic writer may have replaced either one while linking.
+#[cfg(unix)]
+fn link_aside(target: &Path, candidate: &Path, seams: &mut Seams<'_>) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    retry_rename(|| (seams.link)(target, candidate), &mut *seams.sleep).map_err(link_failure)?;
+    let mut unlink_source = || {
+        let linked = fs::symlink_metadata(candidate)?;
+        let source = fs::symlink_metadata(target)?;
+        if !linked.is_file()
+            || !source.is_file()
+            || source.dev() != linked.dev()
+            || source.ino() != linked.ino()
+        {
+            return Err(io::Error::other(
+                "source or working copy changed after linking",
+            ));
+        }
+        (seams.unlink)(target)
+    };
+    // After a successful link, never retry elsewhere or clean up the working file on error.
+    unlink_source().map_err(|e| retained_error(&e, candidate))
 }
 
-/// Drops our placeholder after a failed move, but only while it is still an empty regular
-/// file: anything else may be another program's file and is left alone (it is then listed).
-fn release_placeholder(at: &Path, seams: &mut Seams<'_>) {
-    let empty = fs::symlink_metadata(at).is_ok_and(|m| m.is_file() && m.len() == 0);
-    if empty {
-        let _ = (seams.unlink)(at);
-    }
-}
-
-/// Moves the file an exchange swapped out from the temp name (which also names uninstalled
-/// candidates and is never listed) to the `.exchanged` name, with a rename that never replaces.
-/// Returns where the file is now, with the guard that hides it from scans until it settles:
-/// the temp name when no `.exchanged` name could be had (a residual: it then stays unlisted,
-/// but the outcome still names it).
+/// Move the swapped-out file to the ordinary `.exchanged` name without replacing anything.
+/// If this fails, the original exchange working name already makes the copy discoverable.
 #[cfg(unix)]
 fn settle_exchanged(names: &SiblingNames, seams: &mut Seams<'_>) -> (PathBuf, Option<ActiveAside>) {
     let mut candidate = names.exchanged.clone();
@@ -1492,7 +1564,7 @@ fn with_retained_path(e: KdbxError, path: &Path) -> KdbxError {
 }
 
 /// Judges the file that was at the target the instant ours went in (`at`: the `.exchanged` name,
-/// or the temp name when it could not be moved there, after an exchange; the `.aside` name
+/// or the exchange working name when it could not be moved there; the `.aside` name
 /// after a move aside). Only a file read back and proved to
 /// be the expected content is removed; anything else (another writer's version, or a file that
 /// cannot be read) is kept and returned as `Displaced`. Never fails: a file that cannot be
@@ -2189,7 +2261,6 @@ mod tests {
         before: Hook<'a>,
         after_aside: Hook<'a>,
         noreplace: Call<'a>,
-        rename: Call<'a>,
         link: Call<'a>,
         unlink: Call1<'a>,
         sync_dir: Call1<'a>,
@@ -2202,7 +2273,6 @@ mod tests {
                 before: Box::new(|| {}),
                 after_aside: Box::new(|| {}),
                 noreplace: Box::new(|a: &Path, b: &Path| rename_noreplace(a, b)),
-                rename: Box::new(|a: &Path, b: &Path| fs::rename(a, b)),
                 link: Box::new(|a: &Path, b: &Path| fs::hard_link(a, b)),
                 unlink: Box::new(|a: &Path| drop_name(a)),
                 sync_dir: Box::new(|a: &Path| sync_directory(a)),
@@ -2221,7 +2291,6 @@ mod tests {
                 after_aside: &mut *self.after_aside,
                 exchange: self.exchange,
                 noreplace: &mut *self.noreplace,
-                rename: &mut *self.rename,
                 link: &mut *self.link,
                 unlink: &mut *self.unlink,
                 sync_dir: &mut *self.sync_dir,
@@ -2848,9 +2917,7 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
-    fn an_exchange_copy_that_cannot_be_moved_or_published_stays_under_the_temp_name() {
-        // The documented residual: neither the `.exchanged` move nor the publication works, so
-        // the competing copy stays under the (unlisted) temp name and the outcome names it.
+    fn an_exchange_copy_that_cannot_be_moved_or_published_is_listed() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("vault");
         fs::write(&p, b"old").unwrap();
@@ -2863,11 +2930,109 @@ mod tests {
         let ReplaceOutcome::Displaced { kept, .. } = &outcome else {
             panic!("expected Displaced, got {outcome:?}");
         };
-        assert!(kept.to_string_lossy().ends_with(".tmp"), "{kept:?}");
+        assert_eq!(
+            displaced_copies(&p).unwrap().first().map(|copy| &copy.path),
+            Some(kept)
+        );
         assert_eq!(outcome.retained_working_path(), Some(kept.as_path()));
         assert_eq!(fs::read(kept).unwrap(), b"theirs");
         assert_eq!(fs::read(&p).unwrap(), b"new");
     }
+    #[cfg(unix)]
+    #[test]
+    fn the_exchange_working_name_lists_a_post_swap_crash_only() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().join("vault.kdbx");
+        fs::write(&vault, b"original vault").unwrap();
+
+        // Simulate a crash with the fully written candidate still under its working name.
+        let mut names = SiblingNames::new(dir.path(), vault.file_name().unwrap()).unwrap();
+        let (file, mut candidate) = create_temp_sibling(names.temp.clone()).unwrap();
+        let active = prepare_exchange(&mut names, &mut candidate, &file)
+            .unwrap()
+            .unwrap();
+        finish_temp_write(file, &vault, b"abandoned vault").unwrap();
+        candidate.disarm();
+        drop(active);
+        assert!(displaced_copies(&vault).unwrap().is_empty());
+        assert_eq!(fs::read(&names.temp).unwrap(), b"abandoned vault");
+
+        let mut race = Race::new(true);
+        race.before = Box::new(|| write_atomic(&vault, b"other writer's vault").unwrap());
+        // The exchange has disarmed the temp cleanup by the time it calls the second rename.
+        race.noreplace = Box::new(|_, _| panic!("simulated exit after exchange"));
+        assert!(catch_unwind(AssertUnwindSafe(|| {
+            let _ = race.run(&vault, Some(b"original vault"), b"our vault");
+        }))
+        .is_err());
+        let listed = displaced_copies(&vault).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].kind, DisplacedCopyKind::Exchanged);
+        assert_eq!(fs::read(&listed[0].path).unwrap(), b"other writer's vault");
+        assert_eq!(fs::read(&vault).unwrap(), b"our vault");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_atomic_writer_between_link_and_identity_check_leaves_both_versions() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().join("vault.kdbx");
+        fs::write(&vault, b"old vault").unwrap();
+        let mut race = Race::new(false);
+        race.noreplace = unsupported_link();
+        race.link = Box::new(|from, to| {
+            fs::hard_link(from, to)?;
+            if to.extension().is_some_and(|ext| ext == "aside") {
+                write_atomic(from, b"other writer's vault").unwrap();
+            }
+            Ok(())
+        });
+        let (_, kept) = retained(race.run(&vault, Some(b"old vault"), b"our vault"));
+        assert_eq!(fs::read(&vault).unwrap(), b"other writer's vault");
+        let copies = displaced_copies(&vault).unwrap();
+        assert_eq!(copies.len(), 1);
+        assert!(copies[0].path.ends_with(kept));
+        assert_eq!(fs::read(&copies[0].path).unwrap(), b"old vault");
+    }
+
+    #[test]
+    fn a_crash_left_empty_aside_is_not_listed() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().join("vault.kdbx");
+        fs::write(&vault, b"live vault").unwrap();
+        fs::write(dir.path().join(".vault.kdbx.1.2.3.aside"), b"").unwrap();
+        assert!(displaced_copies(&vault).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_writer_at_the_fallback_move_boundary_keeps_its_distinct_bytes() {
+        use crate::test_util::FailingFileIo;
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().join("vault.kdbx");
+        fs::write(&vault, b"old vault").unwrap();
+        let planted = Arc::new(Mutex::new(None));
+        let sink = planted.clone();
+        let io = FailingFileIo::new(Arc::new(PlainFileIo));
+        io.before_next_aside_move(move |at| {
+            let incoming = at.with_extension("incoming");
+            fs::write(&incoming, b"another writer's file").unwrap();
+            fs::rename(incoming, at).unwrap();
+            *sink.lock().unwrap() = Some(at.to_path_buf());
+        });
+        assert_eq!(
+            io.replace_if(&vault, Some(&hash(b"old vault")), b"new vault", LIMIT)
+                .unwrap(),
+            ReplaceOutcome::Replaced
+        );
+        let planted = planted.lock().unwrap();
+        assert_eq!(
+            fs::read(planted.as_ref().unwrap()).unwrap(),
+            b"another writer's file"
+        );
+        assert_eq!(fs::read(vault).unwrap(), b"new vault");
+    }
+
     #[cfg(unix)]
     #[test]
     fn an_exchange_copy_is_hidden_while_in_flight_and_a_taken_exchanged_name_is_never_replaced() {
@@ -3066,14 +3231,13 @@ mod tests {
         fs::write(&p, b"old").unwrap();
         let racer = p.clone();
         let mut race = Race::new(false);
-        race.noreplace = unsupported_link();
         let mut failures = 1;
-        race.rename = Box::new(move |a: &Path, b: &Path| {
+        race.noreplace = Box::new(move |a: &Path, b: &Path| {
             if failures > 0 {
                 failures -= 1;
                 return Err(Error::from(ErrorKind::PermissionDenied));
             }
-            fs::rename(a, b)
+            rename_noreplace(a, b)
         });
         race.sleep = Box::new(move |_| write_atomic(&racer, b"theirs").unwrap());
         let outcome = race.run(&p, Some(b"old"), b"new").unwrap();
@@ -3086,21 +3250,25 @@ mod tests {
     }
     #[test]
     fn a_failed_move_aside_touches_nothing() {
-        // Both the no-replace rename and, where it is unsupported, the plain rename onto our
-        // reserved placeholder; the empty placeholder is released again.
-        for placeholder in [false, true] {
+        // Fail both the atomic move and the hard-link fallback before they take effect.
+        for &fallback in move_aside_modes() {
             let d = tempfile::tempdir().unwrap();
             let p = d.path().join("vault");
             fs::write(&p, b"old").unwrap();
             let racer = p.clone();
             let mut race = Race::new(false);
             race.before = Box::new(move || write_atomic(&racer, b"theirs").unwrap());
-            if placeholder {
+            if fallback {
                 race.noreplace = unsupported_link();
+                race.link = Box::new(|from, to| {
+                    if to.extension().is_some_and(|ext| ext == "aside") {
+                        return Err(Error::other("injected"));
+                    }
+                    fs::hard_link(from, to)
+                });
             } else {
                 race.noreplace = Box::new(|_: &Path, _: &Path| Err(Error::other("injected")));
             }
-            race.rename = Box::new(|_: &Path, _: &Path| Err(Error::other("injected")));
             io_kind(race.run(&p, Some(b"old"), b"new"), ErrorKind::Other);
             assert_eq!(fs::read(&p).unwrap(), b"theirs");
             only_target(&d);
@@ -3108,9 +3276,9 @@ mod tests {
     }
     /// Plants another program's file under every working name the move aside tries first
     /// (`plant_all`: under every name), then delegates to the no-replace rename, or reports it
-    /// unsupported so the move reserves a placeholder.
+    /// unsupported so the move falls back to a hard link.
     fn planting(
-        placeholder: bool,
+        fallback: bool,
         plant_all: bool,
         planted: std::rc::Rc<std::cell::RefCell<Vec<PathBuf>>>,
     ) -> Call<'static> {
@@ -3119,33 +3287,35 @@ mod tests {
                 fs::write(b, b"another program's file").unwrap();
                 planted.borrow_mut().push(b.to_path_buf());
             }
-            if placeholder {
+            if fallback {
                 Err(Error::from(ErrorKind::Unsupported))
             } else {
                 rename_noreplace(a, b)
             }
         })
     }
+    fn move_aside_modes() -> &'static [bool] {
+        if cfg!(unix) {
+            &[false, true]
+        } else {
+            &[false]
+        }
+    }
+
     #[test]
     fn a_file_already_under_the_aside_name_is_never_overwritten() {
         // V1: another program put its own file under the exact working name first. The move
-        // aside never replaces it (no-replace rename, or an exclusive placeholder where that
-        // rename is unsupported) and takes a fresh name instead.
-        let placeholders: &[bool] = if cfg!(unix) { &[false, true] } else { &[true] };
-        for &placeholder in placeholders {
+        // aside never replaces it and takes a fresh name instead.
+        for &fallback in move_aside_modes() {
             let d = tempfile::tempdir().unwrap();
             let p = d.path().join("vault.kdbx");
             fs::write(&p, b"old").unwrap();
             let planted = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
             let mut race = Race::new(false);
-            race.noreplace = planting(placeholder, false, planted.clone());
+            race.noreplace = planting(fallback, false, planted.clone());
             let outcome = race.run(&p, Some(b"old"), b"new").unwrap();
             drop(race);
-            assert_eq!(
-                outcome,
-                ReplaceOutcome::Replaced,
-                "placeholder={placeholder}"
-            );
+            assert_eq!(outcome, ReplaceOutcome::Replaced, "fallback={fallback}");
             assert_eq!(fs::read(&p).unwrap(), b"new");
             let planted = planted.borrow();
             assert_eq!(planted.len(), 1);
@@ -3158,14 +3328,13 @@ mod tests {
     }
     #[test]
     fn the_move_aside_fails_closed_when_every_working_name_is_taken() {
-        let placeholders: &[bool] = if cfg!(unix) { &[false, true] } else { &[true] };
-        for &placeholder in placeholders {
+        for &fallback in move_aside_modes() {
             let d = tempfile::tempdir().unwrap();
             let p = d.path().join("vault.kdbx");
             fs::write(&p, b"old").unwrap();
             let planted = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
             let mut race = Race::new(false);
-            race.noreplace = planting(placeholder, true, planted.clone());
+            race.noreplace = planting(fallback, true, planted.clone());
             io_kind(race.run(&p, Some(b"old"), b"new"), ErrorKind::AlreadyExists);
             drop(race);
             assert_eq!(fs::read(&p).unwrap(), b"old", "the vault is untouched");
@@ -3178,8 +3347,9 @@ mod tests {
             assert_eq!(listing(d.path()).len(), PUBLISH_ATTEMPTS + 1);
         }
     }
+    #[cfg(unix)]
     #[test]
-    fn the_placeholder_move_aside_keeps_a_racing_writer_and_leaves_nothing_behind() {
+    fn the_fallback_move_aside_keeps_a_racing_writer_and_leaves_nothing_behind() {
         for racing in [false, true] {
             let d = tempfile::tempdir().unwrap();
             let p = d.path().join("vault.kdbx");

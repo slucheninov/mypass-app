@@ -374,7 +374,8 @@ fn a_real_replacement_race_records_its_retained_copy() {
     // reports it in the error: that file is recorded at once.
     let f = fx();
     let live = fs::read(&f.vault).unwrap();
-    let result = super::super::replace_if_stranded(&f.vault, &sha(&live), b"new", 1 << 20);
+    let result =
+        super::super::replace_if_injected(&f.vault, &sha(&live), b"new", 1 << 20, true, None);
     let kept = match &result {
         Err(KdbxError::VaultRetained { path, .. }) => path.clone(),
         Ok(outcome) => match outcome.retained_working_path() {

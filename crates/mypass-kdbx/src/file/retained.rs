@@ -28,9 +28,9 @@
 //! never reopened for writing by MyPass, KeePassXC or sync clients.
 
 use super::{
-    displaced_copies, displaced_kind, io_error, rename_noreplace, rename_sibling, reserve_name,
-    resolve_target, resolve_using, sibling_stem, split_target, sync_directory, ActiveAside,
-    DisplacedCopyKind, ReplaceOutcome, SiblingNames,
+    displaced_copies, displaced_kind, io_error, is_retained_file, rename_noreplace, resolve_target,
+    resolve_using, sibling_stem, split_target, sync_directory, ActiveAside, DisplacedCopyKind,
+    ReplaceOutcome, SiblingNames,
 };
 use crate::{KdbxError, Result, MAX_VAULT_FILE_BYTES};
 use sha2::{Digest, Sha256};
@@ -253,7 +253,7 @@ fn identity_of(target: &Path, copy: &Path) -> Option<RetainedIdentity> {
     let name = copy.file_name()?;
     displaced_kind(&target_name.to_string_lossy(), &name.to_string_lossy())?;
     let (file, meta) = open_no_follow(copy).ok()?;
-    if !is_regular(&meta) {
+    if !is_retained_file(name, &meta) || !is_regular(&meta) {
         return None;
     }
     let (len, sha256) = hash_open(&file, MAX_VAULT_FILE_BYTES).ok()?;
@@ -438,6 +438,9 @@ pub(super) fn remove_with(
         return Err(refused(RetainedRefusal::SameAsLiveVault));
     }
     let found = verify_copy(&copy, Some(removal.len)).map_err(refused)?;
+    if !is_retained_file(name, &found._file.metadata().map_err(io_error)?) {
+        return Err(refused(RetainedRefusal::NotRetainedCopy));
+    }
     if found.sha256 != removal.sha256 {
         return Err(refused(RetainedRefusal::Changed));
     }
@@ -501,7 +504,7 @@ fn check_live_vault(target: &Path, copy: &Verified) -> Result<()> {
 }
 
 /// Moves `copy` to a fresh `.displaced` name of its own, never replacing a file: a no-replace
-/// rename where the volume has one, else an exclusive placeholder that the rename replaces.
+/// rename. A volume without that primitive cannot safely do the private move.
 fn move_to_private_name(copy: &Path, parent: &Path, target_name: &OsStr) -> Result<PathBuf> {
     for _ in 0..super::PUBLISH_ATTEMPTS {
         let private = SiblingNames::new(parent, target_name)?.displaced;
@@ -511,31 +514,8 @@ fn move_to_private_name(copy: &Path, parent: &Path, target_name: &OsStr) -> Resu
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 return Err(refused(RetainedRefusal::Changed))
             }
-            Err(e) if e.kind() == io::ErrorKind::Unsupported => {}
             Err(e) => return Err(io_error(e)),
         }
-        match reserve_name(&private) {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(io_error(e)),
-        }
-        return match rename_sibling(copy, &private) {
-            Ok(()) => Ok(private),
-            Err(e) => {
-                // Our empty placeholder stays as an empty listed file only if it cannot be
-                // dropped; it is never a vault copy.
-                let empty =
-                    fs::symlink_metadata(&private).is_ok_and(|m| m.is_file() && m.len() == 0);
-                if empty {
-                    let _ = remove_private_name(&private);
-                }
-                Err(if e.kind() == io::ErrorKind::NotFound {
-                    refused(RetainedRefusal::Changed)
-                } else {
-                    io_error(e)
-                })
-            }
-        };
     }
     Err(io_error(io::Error::new(
         io::ErrorKind::AlreadyExists,

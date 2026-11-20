@@ -2793,6 +2793,7 @@ dependencies = [
  "hmac",
  "keepass",
  "mypass-kdbx",
+ "mypass-platform",
  "quick-xml",
  "rand",
  "rustix",

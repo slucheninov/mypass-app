@@ -892,7 +892,6 @@ const FILE_MUTATIONS: &[(&str, &str, usize)] = &[
     ),
     ("crates/mypass-kdbx/src/file.rs", "rename(source,target)", 1),
     // Compare-and-replace moves aside competing bytes; only checked/merged bytes are unlinked.
-    ("crates/mypass-kdbx/src/file.rs", "rename(from,to)", 1),
     (
         "crates/mypass-kdbx/src/file.rs",
         "remove_file(&names.probe)",
@@ -901,8 +900,7 @@ const FILE_MUTATIONS: &[(&str, &str, usize)] = &[
     ("crates/mypass-kdbx/src/file.rs", "remove_file(at)", 1),
     // Explicit deletion of one user-confirmed retained copy: only after name, no-follow type,
     // single link, full hash, vault identity and live-vault checks, and only under the fresh
-    // private name it was just moved to and proved to be the verified file (or our own empty
-    // placeholder for that name after a failed move).
+    // private name it was just moved to and proved to be the verified file.
     (
         "crates/mypass-kdbx/src/file/retained.rs",
         "remove_file(private)",

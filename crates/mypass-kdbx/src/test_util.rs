@@ -32,12 +32,15 @@ pub fn vault_header_only(kdf: &crate::KdfParams) -> Vec<u8> {
     bytes
 }
 
+pub(crate) type AsideHook = Box<dyn FnOnce(&Path) + Send>;
+
 #[derive(Default)]
 struct Failures {
     read: Option<ErrorKind>,
     write: Option<ErrorKind>,
     metadata: Option<ErrorKind>,
     strand: bool,
+    before_aside: Option<AsideHook>,
 }
 /// Test-only backend behind the `test-util` feature; never enable in production.
 /// Persistent per-operation failures and counters, including failed calls.
@@ -79,6 +82,10 @@ impl FailingFileIo {
     /// Fail the next conditional install and leave the previous file at its working name.
     pub fn strand_next_replace(&self) {
         self.failures().strand = true;
+    }
+    /// Run once at the working name immediately before the move attempts to acquire it.
+    pub fn before_next_aside_move(&self, hook: impl FnOnce(&Path) + Send + 'static) {
+        self.failures().before_aside = Some(Box::new(hook));
     }
     /// Clear test failures without resetting operation counters.
     pub fn heal(&self) {
@@ -135,9 +142,22 @@ impl FileIo for FailingFileIo {
             return Err(io_error(kind.into()));
         }
         if let Some(expected) = expected {
-            let strand = std::mem::take(&mut self.failures().strand);
-            if strand {
-                return crate::file::replace_if_stranded(path, expected, bytes, max_len);
+            let (strand, before_aside) = {
+                let mut failures = self.failures();
+                (
+                    std::mem::take(&mut failures.strand),
+                    failures.before_aside.take(),
+                )
+            };
+            if strand || before_aside.is_some() {
+                return crate::file::replace_if_injected(
+                    path,
+                    expected,
+                    bytes,
+                    max_len,
+                    strand,
+                    before_aside,
+                );
             }
         }
         self.inner.replace_if(path, expected, bytes, max_len)

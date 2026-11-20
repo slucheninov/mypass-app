@@ -130,6 +130,26 @@ use windows::{
 };
 use zeroize::{Zeroize, Zeroizing};
 
+/// Atomically move a file on the same volume, failing if the destination exists.
+pub fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
+    let wide_path = |path: &Path| {
+        to_wide(path.as_os_str())
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))
+    };
+    let from = wide_path(from)?;
+    let to = wide_path(to)?;
+    // SAFETY: both buffers are NUL-terminated and live for the call. With no flags the
+    // move cannot replace a destination or copy across volumes.
+    unsafe {
+        MoveFileExW(
+            PCWSTR(from.as_ptr()),
+            PCWSTR(to.as_ptr()),
+            MOVE_FILE_FLAGS(0),
+        )
+    }
+    .map_err(|e| std::io::Error::from_raw_os_error(e.code().0 & 0xffff))
+}
+
 /// Query by owned handle, following junctions/symlinks; canonical strings cannot identify
 /// hard links or correctly model case-sensitive Windows directories.
 pub(crate) fn file_identity(path: &Path) -> std::io::Result<crate::FileIdentity> {
