@@ -331,6 +331,46 @@ fn wrong_password_remote_is_never_overwritten() {
 }
 
 #[test]
+fn remote_kdf_above_limit_is_neither_adopted_nor_overwritten() {
+    let fx = Fx::new();
+    let local = fast_db("v");
+    let mut remote = local.clone();
+    let KdfParams::Argon2 { parallelism, .. } = &mut remote.settings.kdf else {
+        panic!("expected Argon2");
+    };
+    *parallelism = 9;
+    fx.external_write(&remote);
+
+    let before = fx.remote_bytes();
+    for push in [false, true] {
+        assert!(matches!(
+            run(&fx.engine, &local, push),
+            Err(SyncError::RemoteUnsupported(_))
+        ));
+    }
+    assert_eq!(fx.remote_bytes(), before);
+    assert_eq!(fx.probe.writes(), 0);
+    assert_eq!(fx.checkpoint(), None);
+}
+
+#[test]
+fn sync_does_not_publish_a_copy_it_cannot_reopen() {
+    let fx = Fx::new();
+    let mut local = fast_db("v");
+    let KdfParams::Argon2 { parallelism, .. } = &mut local.settings.kdf else {
+        panic!("expected Argon2");
+    };
+    *parallelism = 9;
+
+    assert!(matches!(
+        run(&fx.engine, &local, true),
+        Err(SyncError::Encode(_))
+    ));
+    assert!(!fx.file.exists());
+    assert_eq!(fx.probe.writes(), 0);
+}
+
+#[test]
 fn non_kdbx_remote_is_never_overwritten() {
     let fx = Fx::new();
     fs::write(&fx.file, b"just some notes, not a vault").unwrap();

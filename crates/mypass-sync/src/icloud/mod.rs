@@ -21,7 +21,7 @@ pub use file_io::{
     ICloudFileIo, IoHealth, CACHE_STATE_SUFFIX, COORDINATION_TIMEOUT, ICLOUD_CACHE_DIR,
 };
 
-use mypass_kdbx::{Database, FileIo, KdbxError, PlainFileIo, MAX_VAULT_FILE_BYTES};
+use mypass_kdbx::{Database, FileIo, KdbxError, KdfLimits, PlainFileIo, MAX_VAULT_FILE_BYTES};
 pub use mypass_platform::{ConflictVersion, CoordinatedFiles, DownloadState};
 use secrecy::SecretString;
 use serde::Serialize;
@@ -384,8 +384,10 @@ pub fn merge_vault_bytes(
     version: &[u8],
     password: &SecretString,
 ) -> io::Result<Vec<u8>> {
-    let current = Database::open(current, password).map_err(merge_error)?;
-    let version = Database::open(version, password).map_err(merge_error)?;
+    let current =
+        Database::open_with_limits(current, password, KdfLimits::Remote).map_err(merge_error)?;
+    let version =
+        Database::open_with_limits(version, password, KdfLimits::Remote).map_err(merge_error)?;
     mypass_core::merge::merge(&current, &version)
         .save(password)
         .map_err(merge_error)
@@ -394,7 +396,7 @@ pub fn merge_vault_bytes(
 fn merge_error(e: KdbxError) -> io::Error {
     match e {
         KdbxError::Io { kind, message } => io::Error::new(kind, message),
-        other => io::Error::new(io::ErrorKind::InvalidData, other.to_string()),
+        other => io::Error::new(io::ErrorKind::InvalidData, other),
     }
 }
 

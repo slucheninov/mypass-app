@@ -11,7 +11,7 @@
 //! `ConflictVersions` live in `mypass_sync::icloud`; this module holds the status, the resolved
 //! storage and the resolver types.
 
-use mypass_kdbx::FileIo;
+use mypass_kdbx::{FileIo, KdfLimits};
 use mypass_platform::CoordinatedFiles;
 use mypass_sync::icloud::{vault_location_of, ICloudFileIo, IoHealth, VaultLocation};
 use serde::Serialize;
@@ -73,6 +73,13 @@ impl ResolvedStorage {
             io: io.clone(),
             location: VaultLocation::ICloudDrive,
             icloud: Some(io),
+        }
+    }
+
+    pub(crate) fn kdf_limits(&self) -> KdfLimits {
+        match self.location {
+            VaultLocation::Local => KdfLimits::Local,
+            VaultLocation::ICloudDrive => KdfLimits::Remote,
         }
     }
 

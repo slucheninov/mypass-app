@@ -25,6 +25,22 @@ pub(crate) const AES_KDF_ROUNDS_MIN: u64 = 1;
 /// Largest accepted AES-KDF round count.
 pub(crate) const AES_KDF_ROUNDS_MAX: u64 = 1_000_000_000;
 
+/// Maximum costs for automatic reconciliation and opens from remote storage. The Argon2
+/// ceilings allow the app's 64 MiB, three-iteration, two-lane default with room for tuning.
+pub(crate) const REMOTE_ARGON2_MEMORY_MAX_BYTES: u64 = 128 * 1024 * 1024;
+pub(crate) const REMOTE_ARGON2_ITERATIONS_MAX: u64 = 6;
+pub(crate) const REMOTE_ARGON2_PARALLELISM_MAX: u32 = 8;
+pub(crate) const REMOTE_AES_KDF_ROUNDS_MAX: u64 = 10_000_000;
+
+/// KDF cost limits for opening a vault.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KdfLimits {
+    /// The standard limits for a local open.
+    Local,
+    /// Lower ceilings for bytes from remote storage or external changes to a live vault.
+    Remote,
+}
+
 /// Largest accepted length of one HMAC-protected payload block, in bytes (2^30).
 pub(crate) const MAX_BLOCK_LEN: usize = 1 << 30;
 /// Largest accepted decompressed payload, in bytes (1 GiB); the guard against gzip bombs.

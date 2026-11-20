@@ -133,6 +133,25 @@ impl KdfParams {
         Ok(params)
     }
 
+    /// Check the remote cost ceilings. Use before publishing a copy to remote storage.
+    /// Structural checks and local limits are handled separately when opening or saving.
+    pub fn check_remote_limits(&self) -> Result<()> {
+        let parameter = match self {
+            Self::Argon2 { memory_bytes, .. } if *memory_bytes > REMOTE_ARGON2_MEMORY_MAX_BYTES => {
+                "Argon2 memory"
+            }
+            Self::Argon2 { iterations, .. } if *iterations > REMOTE_ARGON2_ITERATIONS_MAX => {
+                "Argon2 iterations"
+            }
+            Self::Argon2 { parallelism, .. } if *parallelism > REMOTE_ARGON2_PARALLELISM_MAX => {
+                "Argon2 parallelism"
+            }
+            Self::AesKdf { rounds, .. } if *rounds > REMOTE_AES_KDF_ROUNDS_MAX => "AES-KDF rounds",
+            _ => return Ok(()),
+        };
+        Err(KdbxError::RemoteKdfLimitExceeded(parameter))
+    }
+
     fn validate(&self) -> Result<()> {
         match self {
             Self::Argon2 {

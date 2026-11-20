@@ -75,8 +75,6 @@ Last updated: 2026-11-15
   currently fail closed with unavailable/unsupportedFolder; never overwrite a competing vault.
 - [ ] Surface retained `.displaced` copies in sync status and provide an explicit cleanup UI.
   These competing vault copies are deliberately never auto-deleted.
-- [ ] Tighter KDF limits for remote/secondary opens: hostile-input limits exist, but expensive
-  KDF work on an untrusted remote file can still consume substantial CPU/memory.
 - [ ] Upgrade device-unlock storage to `SecAccessControl(biometryCurrentSet)` with a data-protection
   Keychain and provisioning profile; current ordinary Keychain + LocalAuthentication handling
   checks biometric domain state for Touch ID-only enrolments.

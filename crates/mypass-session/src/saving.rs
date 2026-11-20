@@ -100,7 +100,7 @@ use crate::session::{
 };
 use mypass_core::merge::merge;
 use mypass_kdbx::{
-    Database, FileIo, KdbxError, KdfParams, Meta, SaveOutcome, SaveSettings, VaultFile,
+    Database, FileIo, KdbxError, KdfLimits, KdfParams, Meta, SaveOutcome, SaveSettings, VaultFile,
 };
 use secrecy::SecretString;
 use std::io::ErrorKind;
@@ -491,10 +491,12 @@ impl VaultSession {
             }
             match file.save(&w.db, &w.password) {
                 Ok(SaveOutcome::Saved) => WriteResult::Saved(w.gen),
-                Ok(SaveOutcome::ChangedOnDisk) => match file.reload(&w.password) {
-                    Ok(remote) => WriteResult::Remote(Box::new(remote)),
-                    Err(e) => WriteResult::Failed(e.into()),
-                },
+                Ok(SaveOutcome::ChangedOnDisk) => {
+                    match file.reload_with_limits(&w.password, KdfLimits::Remote) {
+                        Ok(remote) => WriteResult::Remote(Box::new(remote)),
+                        Err(e) => WriteResult::Failed(e.into()),
+                    }
+                }
                 Err(e) => WriteResult::Failed(e.into()),
             }
         });
@@ -873,17 +875,17 @@ impl VaultSession {
     pub fn restore_from_backup(&self, backup: &[u8]) -> Result<(), SessionError> {
         self.check_not_quitting()?;
         let password = self.with_db_and_password(|_, p| p.clone())?;
-        match Database::open(backup, &password) {
-            Ok(_) => {}
+        let backup_kdf = match Database::open(backup, &password) {
+            Ok(db) => db.settings.kdf,
             Err(KdbxError::WrongPassword) => {
                 return Err(SessionError::InvalidInput(
                     "backup does not open with the current master password".into(),
                 ))
             }
             Err(e) => return Err(e.into()),
-        }
+        };
         self.flush()?;
-        let (mut guard, vault_id) = {
+        let (mut guard, vault_id, limits) = {
             let mut inner = self.wait_idle(lock(&self.0.inner));
             if inner.quitting {
                 return Err(SessionError::Quitting);
@@ -897,6 +899,13 @@ impl VaultSession {
                     "the vault changed while restoring; try again".into(),
                 ));
             }
+            let limits = inner.storage.as_ref().map_or(
+                KdfLimits::Local,
+                crate::storage::ResolvedStorage::kdf_limits,
+            );
+            if limits == KdfLimits::Remote {
+                backup_kdf.check_remote_limits()?;
+            }
             let Some(file) = inner.file.take() else {
                 return Err(file_unavailable());
             };
@@ -905,6 +914,7 @@ impl VaultSession {
             (
                 InFlight::begin(self, &mut inner, file, Slot::File),
                 vault_id,
+                limits,
             )
         };
         let now = self.now().0;
@@ -918,7 +928,7 @@ impl VaultSession {
             }
             file.io().write_atomic(file.path(), backup)?;
             written.store(true, std::sync::atomic::Ordering::SeqCst);
-            file.reload(&password)
+            file.reload_with_limits(&password, limits)
         });
         let mut out = Outbox::default();
         let r = {
@@ -970,7 +980,9 @@ impl VaultSession {
             Self::merge_conflicts_before_read(conflicts.as_ref(), file.path(), &password);
             match file.has_changed_on_disk() {
                 Ok(false) => Ok(None),
-                Ok(true) => file.reload(&password).map(Some),
+                Ok(true) => file
+                    .reload_with_limits(&password, KdfLimits::Remote)
+                    .map(Some),
                 Err(e) => Err(e),
             }
         });
@@ -1397,6 +1409,41 @@ mod tests {
     fn check_external_change_reports_none_when_unchanged() {
         let f = setup();
         assert_eq!(f.session.check_external_change(), Ok(ExternalChange::None));
+    }
+
+    #[test]
+    fn external_kdf_above_remote_limit_is_neither_adopted_nor_overwritten() {
+        let f = setup();
+        external_edit(&f.path, |db| {
+            let KdfParams::Argon2 { parallelism, .. } = &mut db.settings.kdf else {
+                panic!("expected Argon2");
+            };
+            *parallelism = 9;
+            db.root.entries[0].set_field("Title", "remote only", false);
+        });
+        let before = std::fs::read(&f.path).unwrap();
+        assert_eq!(f.disk(), v(&["remote only"])); // Explicit local open still works.
+        assert!(matches!(
+            f.session.check_external_change(),
+            Err(SessionError::LimitExceeded(_))
+        ));
+        assert_eq!(f.titles(), v(&["first"]));
+        f.add("local only").unwrap();
+        assert!(matches!(
+            f.session.flush(),
+            Err(SessionError::LimitExceeded(_))
+        ));
+        assert_eq!(f.titles(), v(&["first", "local only"]));
+        assert_eq!(std::fs::read(&f.path).unwrap(), before);
+
+        f.session.lock(LockReason::Manual);
+        assert!(f.has_pending_bytes());
+        assert!(matches!(
+            f.session.unlock(pw("pw")),
+            Err(SessionError::LimitExceeded(_))
+        ));
+        assert!(f.has_pending_bytes());
+        assert_eq!(std::fs::read(&f.path).unwrap(), before);
     }
 
     #[test]

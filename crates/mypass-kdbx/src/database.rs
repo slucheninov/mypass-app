@@ -156,6 +156,15 @@ impl Database {
     }
 
     pub fn open(data: &[u8], password: &SecretString) -> Result<Self> {
+        Self::open_with_limits(data, password, KdfLimits::Local)
+    }
+
+    /// Authenticate and decode a vault using the selected KDF limits.
+    pub fn open_with_limits(
+        data: &[u8],
+        password: &SecretString,
+        limits: KdfLimits,
+    ) -> Result<Self> {
         let (header, offset) = OuterHeader::parse(data)?;
         let raw = data
             .get(..offset)
@@ -169,6 +178,9 @@ impl Database {
         // Key-independent integrity and KDF limits precede any expensive derivation (R10).
         header_auth::verify_sha256(raw, sha)?;
         let kdf = KdfParams::from_variant(&header.kdf_parameters)?;
+        if limits == KdfLimits::Remote {
+            kdf.check_remote_limits()?;
+        }
         let transformed = kdf.transform(&CompositeKey::from_password(password))?;
         let keys = derive_keys(&header.master_seed, &transformed);
         header_auth::verify_hmac(raw, &keys.hmac_key_base, mac)?;
@@ -306,6 +318,10 @@ mod tests {
             seed: vec![4; 32],
             rounds,
         };
+        make_vector_for(&kdf, bad_sha, rounds == 1)
+    }
+
+    fn make_vector_for(kdf: &KdfParams, bad_sha: bool, authenticate: bool) -> Vec<u8> {
         let header = OuterHeader {
             version: Version { major: 4, minor: 1 },
             cipher: Cipher::Aes256Cbc,
@@ -320,7 +336,7 @@ mod tests {
         if bad_sha {
             sha[0] ^= 1;
         }
-        let mac = if rounds == 1 {
+        let mac = if authenticate {
             let transformed = kdf
                 .transform(&CompositeKey::from_password(&SecretString::from(
                     "password",
@@ -361,6 +377,70 @@ mod tests {
             Err(KdbxError::InvalidKdfParameters(_))
         ));
     }
+    #[test]
+    fn remote_kdf_cost_boundaries_are_checked_before_derivation() {
+        use crate::format::limits::{
+            REMOTE_AES_KDF_ROUNDS_MAX, REMOTE_ARGON2_ITERATIONS_MAX,
+            REMOTE_ARGON2_MEMORY_MAX_BYTES, REMOTE_ARGON2_PARALLELISM_MAX,
+        };
+
+        let argon2 = |memory_bytes, iterations, parallelism| KdfParams::Argon2 {
+            salt: vec![0; 32],
+            version: 0x13,
+            variant: Argon2Variant::Id,
+            memory_bytes,
+            iterations,
+            parallelism,
+        };
+        let aes = |rounds| KdfParams::AesKdf {
+            seed: vec![0; 32],
+            rounds,
+        };
+        let cases = [
+            (
+                "Argon2 memory",
+                argon2(REMOTE_ARGON2_MEMORY_MAX_BYTES, 1, 1),
+                argon2(REMOTE_ARGON2_MEMORY_MAX_BYTES + 1024, 1, 1),
+            ),
+            (
+                "Argon2 iterations",
+                argon2(8 * 1024, REMOTE_ARGON2_ITERATIONS_MAX, 1),
+                argon2(8 * 1024, REMOTE_ARGON2_ITERATIONS_MAX + 1, 1),
+            ),
+            (
+                "Argon2 parallelism",
+                argon2(128 * 1024, 1, REMOTE_ARGON2_PARALLELISM_MAX),
+                argon2(128 * 1024, 1, REMOTE_ARGON2_PARALLELISM_MAX + 1),
+            ),
+            (
+                "AES-KDF rounds",
+                aes(REMOTE_AES_KDF_ROUNDS_MAX),
+                aes(REMOTE_AES_KDF_ROUNDS_MAX + 1),
+            ),
+        ];
+        for (parameter, at_limit, above_limit) in cases {
+            // Validate the inclusive boundary without running a KDF at its ceiling.
+            assert_eq!(at_limit.check_remote_limits(), Ok(()), "{parameter}");
+            assert!(KdfParams::from_variant(&above_limit.to_variant()).is_ok());
+            let wire = make_vector_for(&above_limit, false, false);
+            assert_eq!(
+                Database::open_with_limits(&wire, &"pw".into(), KdfLimits::Remote),
+                Err(KdbxError::RemoteKdfLimitExceeded(parameter)),
+            );
+        }
+    }
+
+    #[test]
+    fn remote_profile_opens_a_vault_with_the_app_defaults() {
+        let db = Database::new("default KDF");
+        let password = SecretString::from("pw");
+        let bytes = db.save(&password).unwrap();
+        assert_eq!(
+            Database::open_with_limits(&bytes, &password, KdfLimits::Remote),
+            Ok(db),
+        );
+    }
+
     #[test]
     fn trailing_data_after_authenticated_terminator_is_corrupt() {
         let data = include_bytes!("../tests/fixtures/aeskdf-aes256-none.kdbx");

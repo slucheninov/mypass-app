@@ -8,7 +8,7 @@ use crate::session::{LockReason, SessionDeps, SessionError, SessionState, VaultS
 use crate::settings::SettingsStore;
 use crate::testing::fast_database;
 use crate::vault_files::VaultFileStatus;
-use mypass_kdbx::{Database, Entry, PlainFileIo, Timestamp};
+use mypass_kdbx::{Database, Entry, KdfParams, PlainFileIo, Timestamp};
 use mypass_platform::testing::{CoordinatedOp, FakeCoordinatedFiles};
 use mypass_platform::ConflictVersion;
 use mypass_sync::icloud::{Clock, ICloudDriveLocation, ICloudFileIo, ICLOUD_CACHE_DIR};
@@ -187,6 +187,33 @@ impl Fx {
             saving_computer: Some("Other Mac".into()),
         }
     }
+}
+
+#[test]
+fn icloud_open_and_unlock_refuse_an_over_limit_copy() {
+    let fx = Fx::new();
+    let mac = fx.mac("A");
+    let mut db = fx.base.clone();
+    let KdfParams::Argon2 { parallelism, .. } = &mut db.settings.kdf else {
+        panic!("expected Argon2");
+    };
+    *parallelism = 9;
+    let expensive = db.save(&pw()).unwrap();
+
+    mac.session.open_vault(&fx.vault, pw()).unwrap();
+    mac.session.lock(LockReason::Manual);
+    fs::write(&fx.vault, &expensive).unwrap();
+    assert!(matches!(
+        mac.session.unlock(pw()),
+        Err(SessionError::LimitExceeded(_))
+    ));
+
+    let other = fx.mac("B");
+    assert!(matches!(
+        other.session.open_vault(&fx.vault, pw()),
+        Err(SessionError::LimitExceeded(_))
+    ));
+    assert_eq!(fs::read(&fx.vault).unwrap(), expensive);
 }
 
 #[test]

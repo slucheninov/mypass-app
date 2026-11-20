@@ -536,6 +536,26 @@ fn conflict_with_wrong_password_is_left_unresolved_and_reported() {
 }
 
 #[test]
+fn icloud_conflict_merge_refuses_over_limit_kdf_on_either_side() {
+    let password = SecretString::from("pw");
+    let mut db = fast_db("vault");
+    let good = db.save(&password).unwrap();
+    let KdfParams::Argon2 { parallelism, .. } = &mut db.settings.kdf else {
+        panic!("expected Argon2");
+    };
+    *parallelism = 9;
+    let expensive = db.save(&password).unwrap();
+
+    for (current, version) in [(&good, &expensive), (&expensive, &good)] {
+        let error = merge_vault_bytes(current, version, &password).unwrap_err();
+        assert_eq!(
+            error.get_ref().and_then(|e| e.downcast_ref::<KdbxError>()),
+            Some(&KdbxError::RemoteKdfLimitExceeded("Argon2 parallelism")),
+        );
+    }
+}
+
+#[test]
 fn no_conflicts_is_noop_false() {
     let password = pw();
     let (current, _) = vault_pair(&["base"], &[], &password);

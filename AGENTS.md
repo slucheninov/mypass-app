@@ -183,7 +183,9 @@ change is done.
   AES-256-CBC, gzip and a ChaCha20 inner stream.
 - **Hostile input.** Limits are named constants in `format/limits.rs` (Argon2 memory, iterations,
   parallelism, salt length, AES-KDF rounds, block length, decompressed size, XML nesting). Parsers
-  return `Err` and never panic.
+  return `Err` and never panic. Secondary-folder and iCloud opens and automatic reloads of
+  changed vaults use lower KDF ceilings: 128 MiB, 6 iterations and 8 lanes for Argon2, and
+  10 million rounds for AES-KDF. Explicit local opens keep the standard limits.
 - **Merge.** Two-way merge keyed by UUID.
 - **Domain matching.** Always through the Public Suffix List; never suffix heuristics. Credentials
   are offered only on `https` pages: a target whose parsed scheme is not `https` never matches (no

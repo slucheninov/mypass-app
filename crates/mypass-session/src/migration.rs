@@ -1,7 +1,7 @@
 //! One-off, guarded migrations. Source copies are never removed. A failure after a durable
 //! target write leaves that verified copy available for recovery; rollback never overwrites a
 //! concurrent writer. Merge deliberately has no persisted sync checkpoint.
-use mypass_kdbx::{Database, KdbxError};
+use mypass_kdbx::{Database, KdbxError, KdfLimits};
 use mypass_sync::{
     InMemoryCheckpointStore, StorageBackend, SyncEngine, SyncError, SyncMode, WriteOutcome,
 };
@@ -154,7 +154,10 @@ impl VaultMigrationService {
             }
             check()?;
             let bytes = local
-                .save(password)
+                .settings
+                .kdf
+                .check_remote_limits()
+                .and_then(|()| local.save(password))
                 .map_err(|_| MigrationError::SourceInvalid)?;
             check()?;
             let verified =
@@ -181,8 +184,8 @@ impl VaultMigrationService {
             .map_err(|_| MigrationError::ValidationFailed)?
             .ok_or(MigrationError::ValidationFailed)?;
         check()?;
-        let verified =
-            Database::open(&bytes, password).map_err(|_| MigrationError::ValidationFailed)?;
+        let verified = Database::open_with_limits(&bytes, password, KdfLimits::Remote)
+            .map_err(|_| MigrationError::ValidationFailed)?;
         if !crate::saving::equivalent_content(&expected, &verified) {
             return Err(MigrationError::ValidationFailed);
         }
@@ -201,7 +204,8 @@ fn unique_ids(group: &mypass_kdbx::Group, ids: &mut std::collections::HashSet<uu
 }
 
 fn open_target(bytes: &[u8], password: &SecretString) -> Result<Database, MigrationError> {
-    Database::open(bytes, password).map_err(|e| match e {
+    Database::open_with_limits(bytes, password, KdfLimits::Remote).map_err(|e| match e {
+        KdbxError::RemoteKdfLimitExceeded(_) => MigrationError::ValidationFailed,
         KdbxError::WrongPassword => MigrationError::TargetPasswordMismatch,
         _ => MigrationError::TargetNotAVault,
     })

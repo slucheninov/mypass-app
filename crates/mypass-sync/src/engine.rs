@@ -24,7 +24,7 @@ use crate::{
     watcher::EchoFilter,
 };
 use mypass_core::merge::merge;
-use mypass_kdbx::{Database, KdbxError, KdfParams, SaveSettings};
+use mypass_kdbx::{Database, KdbxError, KdfLimits, KdfParams, SaveSettings};
 use secrecy::SecretString;
 use sha2::{Digest, Sha256};
 use std::{
@@ -51,7 +51,7 @@ pub enum SyncError {
     /// The remote file is not a KDBX vault; it is never overwritten.
     #[error("the remote file is not a KDBX vault")]
     RemoteNotAVault,
-    /// The remote vault uses a format this engine does not read (KDBX 3, an unknown feature).
+    /// The remote vault uses an unsupported format, feature or KDF cost.
     #[error("the remote vault is unsupported: {0}")]
     RemoteUnsupported(String),
     /// The remote vault is damaged.
@@ -195,7 +195,9 @@ fn remote_open_error(e: KdbxError) -> SyncError {
     match e {
         KdbxError::WrongPassword => SyncError::RemotePasswordMismatch,
         KdbxError::NotKdbx => SyncError::RemoteNotAVault,
-        e @ KdbxError::UnsupportedVersion { .. } => SyncError::RemoteUnsupported(e.to_string()),
+        e @ (KdbxError::UnsupportedVersion { .. } | KdbxError::RemoteKdfLimitExceeded(_)) => {
+            SyncError::RemoteUnsupported(e.to_string())
+        }
         KdbxError::Unsupported(m) => SyncError::RemoteUnsupported(m),
         KdbxError::Corrupt(m) | KdbxError::InvalidKdfParameters(m) => SyncError::RemoteCorrupt(m),
         e @ (KdbxError::Io { .. } | KdbxError::Random | KdbxError::InvalidOperation(_)) => {
@@ -205,7 +207,10 @@ fn remote_open_error(e: KdbxError) -> SyncError {
 }
 
 fn encode(db: &Database, password: &SecretString) -> Result<Vec<u8>, SyncError> {
-    db.save(password)
+    db.settings
+        .kdf
+        .check_remote_limits()
+        .and_then(|()| db.save(password))
         .map_err(|e| SyncError::Encode(e.to_string()))
 }
 
@@ -364,21 +369,22 @@ impl SyncEngine {
         if !still_current() {
             return Err(SyncError::Cancelled);
         }
-        let (remote_db, needs_rekey) = match Database::open(&remote_bytes, password) {
-            Ok(db) => (db, false),
-            Err(KdbxError::WrongPassword) => {
-                // Only exact, previously verified ciphertext can use the retained content.
-                // A persisted checkpoint is insufficient after a restart: fail closed then.
-                let cached = self.verified.lock().unwrap_or_else(PoisonError::into_inner);
-                let db = cached
-                    .as_ref()
-                    .filter(|(hash, _)| *hash == digest(&remote_bytes))
-                    .map(|(_, db)| db.clone())
-                    .ok_or(SyncError::RemotePasswordMismatch)?;
-                (db, true)
-            }
-            Err(e) => return Err(remote_open_error(e)),
-        };
+        let (remote_db, needs_rekey) =
+            match Database::open_with_limits(&remote_bytes, password, KdfLimits::Remote) {
+                Ok(db) => (db, false),
+                Err(KdbxError::WrongPassword) => {
+                    // Only exact, previously verified ciphertext can use the retained content.
+                    // A persisted checkpoint is insufficient after a restart: fail closed then.
+                    let cached = self.verified.lock().unwrap_or_else(PoisonError::into_inner);
+                    let db = cached
+                        .as_ref()
+                        .filter(|(hash, _)| *hash == digest(&remote_bytes))
+                        .map(|(_, db)| db.clone())
+                        .ok_or(SyncError::RemotePasswordMismatch)?;
+                    (db, true)
+                }
+                Err(e) => return Err(remote_open_error(e)),
+            };
         if remote_db.root.uuid != local.root.uuid {
             return Err(SyncError::RemoteIsDifferentVault);
         }
@@ -460,8 +466,8 @@ impl SyncEngine {
                 }
                 // Our bytes are on the remote, but they displaced a version another writer
                 // committed in the last instant: merge it back on the next attempt.
-                let theirs =
-                    Database::open(&theirs, password).map_err(|_| SyncError::ConcurrentCopyKept)?;
+                let theirs = Database::open_with_limits(&theirs, password, KdfLimits::Remote)
+                    .map_err(|_| SyncError::ConcurrentCopyKept)?;
                 if theirs.root.uuid != local.root.uuid {
                     return Err(SyncError::ConcurrentCopyKept);
                 }
