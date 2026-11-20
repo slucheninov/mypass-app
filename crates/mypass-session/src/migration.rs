@@ -1,7 +1,7 @@
 //! One-off, guarded migrations. Source copies are never removed. A failure after a durable
 //! target write leaves that verified copy available for recovery; rollback never overwrites a
 //! concurrent writer. Merge deliberately has no persisted sync checkpoint.
-use mypass_kdbx::{Database, KdbxError};
+use mypass_kdbx::{Database, KdbxError, KdfLimits};
 use mypass_sync::{
     InMemoryCheckpointStore, StorageBackend, SyncEngine, SyncError, SyncMode, WriteOutcome,
 };
@@ -58,6 +58,8 @@ pub enum MigrationError {
     TargetWriteFailed,
     #[error("source invalid")]
     SourceInvalid,
+    #[error("vault KDF cost above the sync limit")]
+    SyncKdfLimitExceeded,
     #[error("target is the current file")]
     SameFile,
     #[error("target validation failed")]
@@ -122,9 +124,10 @@ impl VaultMigrationService {
             .read()
             .map_err(|_| MigrationError::TargetUnreadable)?;
         check()?;
+        let limits = KdfLimits::remote(Some(&local.settings.kdf));
         if strategy == MigrationStrategy::AdoptRemote {
             let bytes = before.ok_or(MigrationError::TargetUnreadable)?;
-            let remote = open_target(&bytes, password)?;
+            let remote = open_target(&bytes, password, limits)?;
             return Ok(MigrationOutcome {
                 strategy,
                 adopted: Some(remote),
@@ -139,6 +142,7 @@ impl VaultMigrationService {
                     SyncError::Cancelled => MigrationError::Locked,
                     SyncError::RemotePasswordMismatch => MigrationError::TargetPasswordMismatch,
                     SyncError::RemoteNotAVault => MigrationError::TargetNotAVault,
+                    SyncError::SyncKdfLimitExceeded => MigrationError::SyncKdfLimitExceeded,
                     _ => MigrationError::TargetWriteFailed,
                 })?;
             let (adopt, _) = result.into_parts();
@@ -150,7 +154,7 @@ impl VaultMigrationService {
             // Even explicit overwrite refuses corrupt/unreadable/differently encrypted targets.
             if let Some(b) = &before {
                 check()?;
-                open_target(b, password)?;
+                open_target(b, password, limits)?;
             }
             check()?;
             let bytes = local
@@ -182,7 +186,10 @@ impl VaultMigrationService {
             .ok_or(MigrationError::ValidationFailed)?;
         check()?;
         let verified =
-            Database::open(&bytes, password).map_err(|_| MigrationError::ValidationFailed)?;
+            Database::open_with_limits(&bytes, password, limits).map_err(|e| match e {
+                KdbxError::RemoteKdfLimitExceeded(_) => MigrationError::SyncKdfLimitExceeded,
+                _ => MigrationError::ValidationFailed,
+            })?;
         if !crate::saving::equivalent_content(&expected, &verified) {
             return Err(MigrationError::ValidationFailed);
         }
@@ -200,8 +207,13 @@ fn unique_ids(group: &mypass_kdbx::Group, ids: &mut std::collections::HashSet<uu
         && group.groups.iter().all(|group| unique_ids(group, ids))
 }
 
-fn open_target(bytes: &[u8], password: &SecretString) -> Result<Database, MigrationError> {
-    Database::open(bytes, password).map_err(|e| match e {
+fn open_target(
+    bytes: &[u8],
+    password: &SecretString,
+    limits: KdfLimits,
+) -> Result<Database, MigrationError> {
+    Database::open_with_limits(bytes, password, limits).map_err(|e| match e {
+        KdbxError::RemoteKdfLimitExceeded(_) => MigrationError::SyncKdfLimitExceeded,
         KdbxError::WrongPassword => MigrationError::TargetPasswordMismatch,
         _ => MigrationError::TargetNotAVault,
     })

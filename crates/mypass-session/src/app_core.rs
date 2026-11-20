@@ -63,6 +63,7 @@ pub enum ErrorCode {
     NotFound,
     InvalidInput,
     LimitExceeded,
+    SyncKdfLimitExceeded,
     Corrupt,
     Unsupported,
     ChangedOnDisk,
@@ -119,6 +120,7 @@ impl From<SessionError> for ApiError {
             S::NotFound => (C::NotFound, e.to_string()),
             S::InvalidInput(m) => (C::InvalidInput, m.clone()),
             S::LimitExceeded(m) => (C::LimitExceeded, m.clone()),
+            S::SyncKdfLimitExceeded => (C::SyncKdfLimitExceeded, String::new()),
             S::Corrupt(m) => (C::Corrupt, m.clone()),
             S::Unsupported(m) => (C::Unsupported, m.clone()),
             S::ChangedOnDisk => (C::ChangedOnDisk, e.to_string()),
@@ -1210,6 +1212,7 @@ fn migration_error(error: crate::migration::MigrationError) -> ApiError {
         M::TargetPasswordMismatch => ErrorCode::MigrationTargetPasswordMismatch,
         M::TargetWriteFailed => ErrorCode::MigrationTargetWriteFailed,
         M::SourceInvalid => ErrorCode::MigrationSourceInvalid,
+        M::SyncKdfLimitExceeded => ErrorCode::SyncKdfLimitExceeded,
         M::SameFile => ErrorCode::MigrationSameFile,
         M::ValidationFailed => ErrorCode::MigrationValidationFailed,
     };
@@ -1236,7 +1239,7 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
-    fn migration_errors_keep_all_eight_typed_api_codes() {
+    fn migration_errors_keep_distinct_typed_api_codes() {
         use crate::migration::MigrationError as M;
         let cases = [
             (M::Locked, ErrorCode::MigrationLocked),
@@ -1248,6 +1251,7 @@ mod tests {
             ),
             (M::TargetWriteFailed, ErrorCode::MigrationTargetWriteFailed),
             (M::SourceInvalid, ErrorCode::MigrationSourceInvalid),
+            (M::SyncKdfLimitExceeded, ErrorCode::SyncKdfLimitExceeded),
             (M::SameFile, ErrorCode::MigrationSameFile),
             (M::ValidationFailed, ErrorCode::MigrationValidationFailed),
         ];
@@ -1348,6 +1352,10 @@ mod tests {
             (SessionError::Io("x".into()), ErrorCode::Io),
             (SessionError::Downloading, ErrorCode::Downloading),
             (SessionError::Quitting, ErrorCode::Quitting),
+            (
+                SessionError::SyncKdfLimitExceeded,
+                ErrorCode::SyncKdfLimitExceeded,
+            ),
             (
                 SessionError::GeneratorRules(G::NoClass),
                 ErrorCode::GeneratorNoClass,

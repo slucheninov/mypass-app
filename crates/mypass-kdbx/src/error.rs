@@ -27,6 +27,9 @@ pub enum KdbxError {
     /// KDF parameters that are missing, malformed or outside the accepted limits.
     #[error("invalid KDF parameters: {0}")]
     InvalidKdfParameters(String),
+    /// An otherwise valid parameter exceeds the tighter limits for a remote open.
+    #[error("remote KDF limit exceeded: {0}")]
+    RemoteKdfLimitExceeded(&'static str),
     /// A file-system failure, flattened so the error stays `Clone + Eq`.
     #[error("i/o error ({kind:?}): {message}")]
     Io {

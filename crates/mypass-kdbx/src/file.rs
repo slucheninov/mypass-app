@@ -1,5 +1,5 @@
 //! Atomic vault replacement and a conservative concurrent-change guard.
-use crate::{Database, KdbxError, Result};
+use crate::{Database, KdbxError, KdfLimits, Result};
 use secrecy::SecretString;
 use sha2::{Digest, Sha256};
 use std::{
@@ -330,7 +330,17 @@ impl VaultFile {
         path: &Path,
         password: &SecretString,
     ) -> Result<(Self, Database)> {
-        Self::open_with_checked(io, path, password, &|| Ok::<(), KdbxError>(()))
+        Self::open_with_limits(io, path, password, KdfLimits::LOCAL)
+    }
+
+    /// Open through an injected I/O backend using the selected KDF limits.
+    pub fn open_with_limits(
+        io: Arc<dyn FileIo>,
+        path: &Path,
+        password: &SecretString,
+        limits: KdfLimits,
+    ) -> Result<(Self, Database)> {
+        Self::open_with_limits_checked(io, path, password, limits, &|| Ok(()))
     }
 
     /// Open with a caller-owned withdrawal fence. Checks before the read and again after it,
@@ -342,17 +352,29 @@ impl VaultFile {
         password: &SecretString,
         check: &dyn Fn() -> std::result::Result<(), E>,
     ) -> std::result::Result<(Self, Database), E> {
+        Self::open_with_limits_checked(io, path, password, KdfLimits::LOCAL, check)
+    }
+
+    /// Open with a withdrawal fence and the selected KDF limits.
+    pub fn open_with_limits_checked<E: From<KdbxError>>(
+        io: Arc<dyn FileIo>,
+        path: &Path,
+        password: &SecretString,
+        limits: KdfLimits,
+        check: &dyn Fn() -> std::result::Result<(), E>,
+    ) -> std::result::Result<(Self, Database), E> {
         check()?;
         // Path identity is resolved once; every later byte/metadata operation uses the seam.
         let path = resolve_vault_path(path).map_err(io_error)?;
         check()?;
         let bytes = io.read(&path)?;
         check()?;
-        let db = Database::open(&bytes, password)?;
+        let db = Database::open_with_limits(&bytes, password, limits)?;
         check()?;
         let stamp = stamp(io.metadata(&path)?, &bytes);
         Ok((Self { path, stamp, io }, db))
     }
+
     /// Return the resolved vault path.
     pub fn path(&self) -> &Path {
         &self.path
@@ -430,8 +452,17 @@ impl VaultFile {
     }
     /// Authenticate the current disk content and refresh the stamp only on success.
     pub fn reload(&mut self, password: &SecretString) -> Result<Database> {
+        self.reload_with_limits(password, KdfLimits::LOCAL)
+    }
+
+    /// Reload using the selected KDF limits, refreshing the stamp only on success.
+    pub fn reload_with_limits(
+        &mut self,
+        password: &SecretString,
+        limits: KdfLimits,
+    ) -> Result<Database> {
         let bytes = self.io.read(&self.path)?;
-        let db = Database::open(&bytes, password)?;
+        let db = Database::open_with_limits(&bytes, password, limits)?;
         self.stamp = stamp(self.io.metadata(&self.path)?, &bytes);
         Ok(db)
     }

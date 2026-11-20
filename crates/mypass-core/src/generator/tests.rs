@@ -2,7 +2,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 use super::*;
 use crate::parse_password_rules;
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{rngs::StdRng, SeedableRng, TryRng};
 fn make_rng() -> StdRng {
     StdRng::seed_from_u64(7)
 }
@@ -93,35 +93,30 @@ fn no_modulo_bias_smoke() {
 struct BoundaryRng {
     calls: usize,
 }
-impl RngCore for BoundaryRng {
-    fn next_u32(&mut self) -> u32 {
-        self.next_u64() as u32
+impl TryRng for BoundaryRng {
+    type Error = std::convert::Infallible;
+
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        Ok(self.try_next_u64()? as u32)
     }
-    fn next_u64(&mut self) -> u64 {
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
         self.calls += 1;
-        if self.calls == 1 {
-            u64::MAX
-        } else {
-            0
-        }
+        Ok(if self.calls == 1 { 0 } else { u64::MAX })
     }
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
         for byte in dest {
-            *byte = self.next_u32() as u8;
+            *byte = self.try_next_u32()? as u8;
         }
-    }
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
-        self.fill_bytes(dest);
         Ok(())
     }
 }
-impl CryptoRng for BoundaryRng {}
+impl rand::TryCryptoRng for BoundaryRng {}
 #[test]
-fn rejection_sampling_rejects_maximum_rng_value() {
+fn rejection_sampling_rejects_values_in_the_incomplete_bucket() {
     let mut rng = BoundaryRng::default();
     let pool: Vec<_> = LOWER.chars().collect();
-    assert!(sample(&pool, &mut rng).unwrap() == 'a');
-    assert!(rng.calls >= 2);
+    assert_eq!(sample(&pool, &mut rng).unwrap(), 'z');
+    assert_eq!(rng.calls, 2);
 }
 #[test]
 fn required_clauses_are_satisfied() {

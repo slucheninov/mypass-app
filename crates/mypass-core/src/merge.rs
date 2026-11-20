@@ -70,7 +70,7 @@ fn version(e: &Entry) -> impl std::hash::Hash + Eq + '_ {
         e.expiry_time,
         e.fields
             .iter()
-            .map(|f| (f.key.as_str(), f.value.as_str(), f.protected))
+            .map(|f| (f.key.as_str(), f.value(), f.protected))
             .collect::<Vec<_>>(),
         e.attachments
             .iter()

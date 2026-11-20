@@ -247,6 +247,20 @@ describe("startStores", () => {
     expect(text).toContain('sync: label !== "tray-panel"');
   });
 
+  it("shows the KDF recovery message when a save is blocked by the sync budget", async () => {
+    const fake = createFakeBackend({ session: "unlocked" });
+    fake.install();
+    stop = await startStores();
+    await fake.emit("saveStateChanged", { state: "failed", message: "disk is full" });
+    await fake.emit("saveStateChanged", {
+      state: "failed", message: "diagnostics", errorCode: "syncKdfLimitExceeded",
+    });
+    expect(toasts.items).toHaveLength(1);
+    expect(toasts.items[0]).toMatchObject({
+      text: "This vault was saved with very expensive key-derivation settings. Open the file explicitly or re-save it in another app with lower settings.",
+    });
+  });
+
   it("save_toast_false_keeps_the_failed_save_status_but_raises_no_toast", async () => {
     const fake = createFakeBackend({ session: "unlocked" });
     fake.install();

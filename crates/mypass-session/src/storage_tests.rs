@@ -8,7 +8,7 @@ use crate::session::{LockReason, SessionDeps, SessionError, SessionState, VaultS
 use crate::settings::SettingsStore;
 use crate::testing::fast_database;
 use crate::vault_files::VaultFileStatus;
-use mypass_kdbx::{Database, Entry, PlainFileIo, Timestamp};
+use mypass_kdbx::{Database, Entry, KdfParams, PlainFileIo, Timestamp};
 use mypass_platform::testing::{CoordinatedOp, FakeCoordinatedFiles};
 use mypass_platform::ConflictVersion;
 use mypass_sync::icloud::{Clock, ICloudDriveLocation, ICloudFileIo, ICLOUD_CACHE_DIR};
@@ -187,6 +187,34 @@ impl Fx {
             saving_computer: Some("Other Mac".into()),
         }
     }
+}
+
+#[test]
+fn explicit_icloud_open_and_unlock_accept_keepassxc_like_costs() {
+    let fx = Fx::new();
+    let mut db = fx.base.clone();
+    let KdfParams::Argon2 {
+        parallelism,
+        iterations,
+        ..
+    } = &mut db.settings.kdf
+    else {
+        panic!("expected Argon2");
+    };
+    *parallelism = 16;
+    *iterations = 20;
+    let bytes = db.save(&pw()).unwrap();
+
+    let mac = fx.mac("A");
+    mac.session.open_vault(&fx.vault, pw()).unwrap();
+    mac.session.lock(LockReason::Manual);
+    fs::write(&fx.vault, &bytes).unwrap();
+    mac.session.unlock(pw()).unwrap();
+
+    let other = fx.mac("B");
+    other.session.open_vault(&fx.vault, pw()).unwrap();
+    assert_eq!(mac.titles(), ["first"]);
+    assert_eq!(other.titles(), ["first"]);
 }
 
 #[test]

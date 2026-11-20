@@ -45,7 +45,7 @@ fn identifiers(entry: &Entry) -> Vec<String> {
         .fields
         .iter()
         .filter(|f| !f.protected && !Entry::is_reserved_key(&f.key))
-        .map(|f| f.value.trim())
+        .map(|f| f.value().trim())
         .filter(|v| !v.is_empty())
         .map(str::to_owned)
         .collect()
@@ -126,6 +126,7 @@ pub fn session_error_response(e: &SessionError) -> Response {
         SessionError::NotFound => error("entry not found"),
         SessionError::InvalidInput(_) => error("invalid request"),
         SessionError::LimitExceeded(_) => error("limit exceeded"),
+        SessionError::SyncKdfLimitExceeded => error("vault KDF cost above the sync limit"),
         SessionError::ChangedOnDisk => error("the vault file changed, try again"),
         SessionError::Downloading => error("the vault is still downloading from iCloud, try again"),
         SessionError::WrongPassword

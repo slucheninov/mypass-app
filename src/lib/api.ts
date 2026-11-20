@@ -39,6 +39,8 @@ const MESSAGES: Record<ErrorCode, () => string> = {
   notFound: () => t("Item not found"),
   invalidInput: () => t("Invalid input"),
   limitExceeded: () => t("Limit reached"),
+  syncKdfLimitExceeded: () =>
+    t("This vault was saved with very expensive key-derivation settings. Open the file explicitly or re-save it in another app with lower settings."),
   corrupt: () => t("The vault file looks damaged"),
   unsupported: () => t("Not supported on this system"),
   changedOnDisk: () => t("The vault changed on disk"),

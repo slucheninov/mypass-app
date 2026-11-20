@@ -536,6 +536,24 @@ fn conflict_with_wrong_password_is_left_unresolved_and_reported() {
 }
 
 #[test]
+fn icloud_conflict_merge_refuses_over_limit_kdf_on_either_side() {
+    let password = SecretString::from("pw");
+    let good = fast_db("vault").save(&password).unwrap();
+    let expensive = mypass_kdbx::test_util::vault_header_only(&KdfParams::AesKdf {
+        seed: vec![0; 32],
+        rounds: 300_000_001,
+    });
+
+    for (current, version) in [(&good, &expensive), (&expensive, &good)] {
+        let error = merge_vault_bytes(current, version, &password).unwrap_err();
+        assert_eq!(
+            error.get_ref().and_then(|e| e.downcast_ref::<KdbxError>()),
+            Some(&KdbxError::RemoteKdfLimitExceeded("AES-KDF rounds")),
+        );
+    }
+}
+
+#[test]
 fn no_conflicts_is_noop_false() {
     let password = pw();
     let (current, _) = vault_pair(&["base"], &[], &password);

@@ -21,6 +21,7 @@
 //! No other component (auto-lock, clipboard service) holds its own lock while calling the
 //! session.
 
+use crate::app_core::ErrorCode;
 use crate::backups::BackupManager;
 use crate::scheduler::{lock, Scheduler, TaskHandle};
 use crate::settings::{Settings, SettingsPatch, SettingsStore};
@@ -29,8 +30,8 @@ use crate::storage::{
     REMOTE_CHANGE_DEBOUNCE,
 };
 use crate::vault_files::{file_status, VaultFileStatus};
-use mypass_kdbx::{Database, FileIo, FileMeta, KdbxError, Meta, Timestamp, VaultFile};
-use mypass_sync::icloud::merge_vault_bytes;
+use mypass_kdbx::{Database, FileIo, FileMeta, KdbxError, KdfLimits, Meta, Timestamp, VaultFile};
+use mypass_sync::icloud::merge_vault_bytes_with_limits;
 use secrecy::{ExposeSecret, SecretString};
 use serde::Serialize;
 use std::io::ErrorKind;
@@ -78,6 +79,8 @@ pub enum SaveState {
 pub struct SaveStatus {
     pub state: SaveState,
     pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<ErrorCode>,
 }
 
 impl SaveStatus {
@@ -86,24 +89,30 @@ impl SaveStatus {
         Self {
             state: SaveState::Idle,
             message: None,
+            error_code: None,
         }
     }
     pub(crate) fn pending() -> Self {
         Self {
             state: SaveState::Pending,
             message: None,
+            error_code: None,
         }
     }
     pub(crate) fn saving() -> Self {
         Self {
             state: SaveState::Saving,
             message: None,
+            error_code: None,
         }
     }
-    pub(crate) fn failed(message: String) -> Self {
+    /// A failed save or reload. The code accompanies failures with dedicated UI wording.
+    pub fn failed(error: &SessionError, message: String) -> Self {
         Self {
             state: SaveState::Failed,
             message: Some(message),
+            error_code: matches!(error, SessionError::SyncKdfLimitExceeded)
+                .then_some(ErrorCode::SyncKdfLimitExceeded),
         }
     }
 }
@@ -176,6 +185,8 @@ pub enum SessionError {
     InvalidInput(String),
     #[error("limit exceeded: {0}")]
     LimitExceeded(String),
+    #[error("vault KDF cost above the sync limit")]
+    SyncKdfLimitExceeded,
     #[error("corrupt vault: {0}")]
     Corrupt(String),
     #[error("unsupported: {0}")]
@@ -197,6 +208,7 @@ impl From<KdbxError> for SessionError {
     fn from(e: KdbxError) -> Self {
         match e {
             KdbxError::WrongPassword => Self::WrongPassword,
+            KdbxError::RemoteKdfLimitExceeded(_) => Self::SyncKdfLimitExceeded,
             KdbxError::Corrupt(m) | KdbxError::InvalidKdfParameters(m) => Self::Corrupt(m),
             e @ KdbxError::NotKdbx => Self::Corrupt(e.to_string()),
             e @ KdbxError::UnsupportedVersion { .. } => Self::Unsupported(e.to_string()),
@@ -734,12 +746,14 @@ impl VaultSession {
         resolver: Option<&ConflictResolver>,
         path: &Path,
         password: &SecretString,
+        limits: KdfLimits,
     ) -> bool {
         let Some(resolver) = resolver else {
             return false;
         };
-        let mut merge =
-            |current: &[u8], version: &[u8]| merge_vault_bytes(current, version, password);
+        let mut merge = |current: &[u8], version: &[u8]| {
+            merge_vault_bytes_with_limits(current, version, password, limits)
+        };
         resolver(path, &mut merge).unwrap_or(false)
     }
 
@@ -945,8 +959,8 @@ impl VaultSession {
         if std::fs::symlink_metadata(path).is_ok() {
             return Err(SessionError::AlreadyExists);
         }
-        let bytes = db.save(&password)?;
         let storage = self.resolve_storage(path);
+        let bytes = db.save(&password)?;
         if let Some(icloud) = &storage.icloud {
             if let Err(e) = icloud.create_new(&bytes) {
                 if matches!(
@@ -1002,7 +1016,7 @@ impl VaultSession {
             let mut inner = self.wait_quiescent(lock(&self.0.inner));
             crate::saving::InFlight::recovery(self, &mut inner)
         });
-        Self::merge_conflicts_before_read(conflicts.as_ref(), path, &password);
+        Self::merge_conflicts_before_read(conflicts.as_ref(), path, &password, KdfLimits::LOCAL);
         let (file, db) =
             VaultFile::open_with(storage.io.clone(), path, &password).map_err(open_error)?;
         self.finish_open_reserved(file, db, password, false, storage, operation)
@@ -1104,7 +1118,12 @@ impl VaultSession {
             };
             let storage = storage.unwrap_or_else(|| self.resolve_storage(&path));
             let conflicts = self.conflict_resolver_for(Some(&storage));
-            Self::merge_conflicts_before_read(conflicts.as_ref(), &path, &password);
+            Self::merge_conflicts_before_read(
+                conflicts.as_ref(),
+                &path,
+                &password,
+                KdfLimits::LOCAL,
+            );
             let (file, disk_db) =
                 VaultFile::open_with(storage.io.clone(), &path, &password).map_err(open_error)?;
             let restored = match &pending {
@@ -1531,14 +1550,19 @@ impl VaultSession {
             storage = ResolvedStorage::plain(io);
         }
         storage.io = Arc::new(crate::migration::BoundedIo(storage.io));
-        let (file, remote) =
-            VaultFile::open_with_checked(storage.io.clone(), path, &snapshot.password, &|| {
+        let (file, remote) = VaultFile::open_with_limits_checked(
+            storage.io.clone(),
+            path,
+            &snapshot.password,
+            KdfLimits::remote(Some(&snapshot.db.settings.kdf)),
+            &|| {
                 if self.is_incarnation(snapshot.incarnation) {
                     Ok(())
                 } else {
                     Err(SessionError::ChangedOnDisk)
                 }
-            })?;
+            },
+        )?;
         let expected = adopt.as_ref().unwrap_or(&snapshot.db);
         if !crate::saving::equivalent_content(&remote, expected) {
             return Err(SessionError::ChangedOnDisk);

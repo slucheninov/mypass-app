@@ -14,17 +14,9 @@ Last updated: 2026-11-15
   directory fsync. On Unix the atomic save treats a directory-sync `Unsupported` or `InvalidInput`
   error as success by design; any other directory-sync error is reported after the replacement has
   committed, and the caller must reload. Only real mounts can show which error they return.
-- [ ] Migrate `rand` to 0.10 (generator API, `rand_core` unification). The public `generate` takes
-  `R: CryptoRng + RngCore` and `generate_os` uses `rand::rngs::OsRng`; 0.10 moves
-  `RngCore`, `OsRng` and `rand::Error`, and the lockfile still carries `rand_core` 0.6 next to 0.10,
-  so check that the RustCrypto crates agree on one trait set first. Update the generator tests
-  (`BoundaryRng`) and `THIRD_PARTY_NOTICES.md` in the same change.
-- [ ] Zeroize protected field values in entry clones and history, not only when `Entry::set_field`
-  replaces or removes one. Today every such `String` is freed without a wipe, so a passkey private
-  key PEM (or password) can linger in freed memory: the old value `set_field` replaces, history
-  copies, and the full `Entry` clones the passkey confirm keeps for its undo
-  (`mypass-bridge/src/passkeys/create.rs`, `Undo.after` with the new key and, on Replace,
-  `Undo.before` with the old one), alive from the write until the confirm answers.
+- [ ] Wipe UI-facing secret copies in `crates/mypass-session/src/editing.rs`, secret DTO values in
+  `queries.rs`, and protected attachment buffers. These copies still use plain `String` or
+  `Vec` allocations that are freed without wiping.
 
 ## Stage 2a follow-ups
 
@@ -86,8 +78,6 @@ Last updated: 2026-11-15
   currently fail closed with unavailable/unsupportedFolder; never overwrite a competing vault.
 - [ ] Surface retained `.displaced` copies in sync status and provide an explicit cleanup UI.
   These competing vault copies are deliberately never auto-deleted.
-- [ ] Tighter KDF limits for remote/secondary opens: hostile-input limits exist, but expensive
-  KDF work on an untrusted remote file can still consume substantial CPU/memory.
 - [ ] Upgrade device-unlock storage to `SecAccessControl(biometryCurrentSet)` with a data-protection
   Keychain and provisioning profile; current ordinary Keychain + LocalAuthentication handling
   checks biometric domain state for Touch ID-only enrolments.

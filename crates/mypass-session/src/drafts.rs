@@ -33,7 +33,7 @@ use base64::Engine as _;
 use chacha20poly1305::aead::{Aead, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
 use mypass_kdbx::{CustomDataItem, Database};
-use rand::RngCore;
+use rand::{rand_core::UnwrapErr, rngs::SysRng, Rng};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
@@ -307,7 +307,7 @@ impl DraftStore {
     fn encode(&self, entry: Uuid, versions: &[StoredVersion]) -> Option<Vec<u8>> {
         let plain = Zeroizing::new(serde_json::to_vec(versions).ok()?);
         let mut nonce = [0u8; NONCE_LEN];
-        rand::rngs::OsRng.fill_bytes(&mut nonce);
+        UnwrapErr(SysRng).fill_bytes(&mut nonce);
         let cipher = ChaCha20Poly1305::new(&(*self.key).into());
         let ciphertext = cipher
             .encrypt(
@@ -434,7 +434,7 @@ pub fn load_or_create_key(session: &VaultSession) -> Result<[u8; 32], SessionErr
             return Ok(key);
         }
         let mut key = Zeroizing::new([0u8; 32]);
-        rand::rngs::OsRng.fill_bytes(&mut *key);
+        UnwrapErr(SysRng).fill_bytes(&mut *key);
         let encoded = Zeroizing::new(base64::engine::general_purpose::STANDARD.encode(*key));
         match db
             .meta
