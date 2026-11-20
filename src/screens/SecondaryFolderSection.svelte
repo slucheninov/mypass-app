@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, errorMessage } from "../lib/api";
+  import { api, ApiFailure, errorMessage } from "../lib/api";
   import type { FolderProbe_Serialize, SecondaryError, SecondaryUnavailable } from "../lib/bindings";
   import { sync } from "../lib/stores/sync.svelte";
   import { session } from "../lib/stores/session.svelte";
@@ -14,6 +14,7 @@
   const errors = $derived<Record<SecondaryError, string>>({
     wrongPassword: t("Wrong master password for the vault in that folder"), notAVault: t("That file is not a vault"),
     unsupported: t("Not supported on this system"), corrupt: t("The vault file looks damaged"), differentVault: t("That folder contains a different vault"),
+    syncKdfLimitExceeded: errorMessage(new ApiFailure("syncKdfLimitExceeded")),
     tooLarge: t("Limit reached"), notRegularFile: t("That file is not a vault"), remoteBusy: t("The vault changed on disk"), io: t("Something went wrong"), watchFailed: t("Folder changes cannot be watched. Try syncing again."),
   });
   const unavailable = $derived<Record<SecondaryUnavailable, string>>({ folderMissing: t("Folder not available"), timedOut: t("Folder not available"), readOnly: t("Folder is read-only"), invalidFolder: t("Folder not available"), unsupportedFolder: t("Not supported on this system") });

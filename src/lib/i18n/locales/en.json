@@ -363,6 +363,7 @@
   "Licensed under Apache-2.0": "Licensed under Apache-2.0",
   "Light": "Light",
   "Limit reached": "Limit reached",
+  "This vault was saved with very expensive key-derivation settings. Open the file explicitly or re-save it in another app with lower settings.": "This vault was saved with very expensive key-derivation settings. Open the file explicitly or re-save it in another app with lower settings.",
   "Limited to %lld characters by this website": "Limited to {0} characters by this website",
   "Link": "Link",
   "List": "List",

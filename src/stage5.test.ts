@@ -193,6 +193,7 @@ it.each([
   [{ state: "unavailable", reason: "folderMissing" }, "Folder not available"],
   [{ state: "error", code: "wrongPassword" }, "Wrong master password for the vault in that folder"],
   [{ state: "error", code: "notAVault" }, "That file is not a vault"],
+  [{ state: "error", code: "syncKdfLimitExceeded" }, "This vault was saved with very expensive key-derivation settings. Open the file explicitly or re-save it in another app with lower settings."],
 ] as const)("secondary status renders %j", async (status, label) => {
   await renderSettingsApp({}, { pane: "Vault", prepare: f => { f.state.sync = status; } });
   expect(await screen.findByText(label)).toBeTruthy();

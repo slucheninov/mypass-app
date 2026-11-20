@@ -363,6 +363,7 @@
   "Licensed under Apache-2.0": "Лицензия Apache-2.0",
   "Light": "Светлая",
   "Limit reached": "Достигнут лимит",
+  "This vault was saved with very expensive key-derivation settings. Open the file explicitly or re-save it in another app with lower settings.": "Это хранилище сохранено с очень ресурсоёмкими параметрами выработки ключа. Откройте файл вручную или сохраните его в другом приложении с менее требовательными параметрами.",
   "Limited to %lld characters by this website": "Ограничено до {0} символов этим веб-сайтом",
   "Link": "Ссылка",
   "List": "Список",

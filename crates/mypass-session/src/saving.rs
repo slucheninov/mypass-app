@@ -568,7 +568,7 @@ impl VaultSession {
                         SessionError::WrongPassword => wrong_password_message(),
                         other => other.to_string(),
                     };
-                    out.save(inner.set_save(SaveStatus::failed(message)));
+                    out.save(inner.set_save(SaveStatus::failed(e, message)));
                     if inner.db.is_some() {
                         self.schedule_job(&mut inner, PENDING_RETRY, false);
                     }
@@ -776,7 +776,7 @@ impl VaultSession {
                     Err(SessionError::ChangedOnDisk)
                 }
                 Err(e) => {
-                    out.save(inner.set_save(SaveStatus::failed(e.to_string())));
+                    out.save(inner.set_save(SaveStatus::failed(&e, e.to_string())));
                     self.schedule_job(&mut inner, PENDING_RETRY, true);
                     Err(e)
                 }
@@ -1420,14 +1420,18 @@ mod tests {
         std::fs::write(&f.path, &before).unwrap();
         assert!(matches!(
             f.session.check_external_change(),
-            Err(SessionError::LimitExceeded(_))
+            Err(SessionError::SyncKdfLimitExceeded)
         ));
         assert_eq!(f.titles(), v(&["first"]));
         f.add("local only").unwrap();
         assert!(matches!(
             f.session.flush(),
-            Err(SessionError::LimitExceeded(_))
+            Err(SessionError::SyncKdfLimitExceeded)
         ));
+        assert_eq!(
+            f.session.status().save.error_code,
+            Some(crate::app_core::ErrorCode::SyncKdfLimitExceeded)
+        );
         assert_eq!(f.titles(), v(&["first", "local only"]));
         assert_eq!(std::fs::read(&f.path).unwrap(), before);
 

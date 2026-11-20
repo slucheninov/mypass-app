@@ -342,7 +342,7 @@ fn remote_kdf_above_limit_is_neither_adopted_nor_overwritten() {
     for push in [false, true] {
         assert!(matches!(
             run(&fx.engine, &local, push),
-            Err(SyncError::RemoteUnsupported(_))
+            Err(SyncError::SyncKdfLimitExceeded)
         ));
     }
     assert_eq!(fx.remote_bytes(), before);

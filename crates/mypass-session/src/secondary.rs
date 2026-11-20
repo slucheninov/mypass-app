@@ -155,6 +155,8 @@ pub enum SecondaryError {
     NotAVault,
     /// A vault format this app does not read.
     Unsupported,
+    /// The copy's KDF cost exceeds the sync budget.
+    SyncKdfLimitExceeded,
     /// The copy is damaged.
     Corrupt,
     /// The file is a different vault (another root group).
@@ -1347,6 +1349,7 @@ fn failure_status(e: &SyncError) -> SecondaryStatus {
         SyncError::RemotePasswordMismatch => SecondaryError::WrongPassword,
         SyncError::RemoteNotAVault => SecondaryError::NotAVault,
         SyncError::RemoteUnsupported(_) => SecondaryError::Unsupported,
+        SyncError::SyncKdfLimitExceeded => SecondaryError::SyncKdfLimitExceeded,
         SyncError::RemoteCorrupt(_) => SecondaryError::Corrupt,
         SyncError::RemoteIsDifferentVault => SecondaryError::DifferentVault,
         SyncError::RemoteChangedDuringSync | SyncError::ConcurrentCopyKept => {

@@ -135,13 +135,13 @@ describe("errorMessage", () => {
 });
 
 it("every migration failure has a distinct actionable translation in every language", () => {
-  const codes: ErrorCode[] = ["migrationLocked", "migrationTargetUnreadable", "migrationTargetNotAVault", "migrationTargetPasswordMismatch", "migrationTargetWriteFailed", "migrationSourceInvalid", "migrationSameFile", "migrationValidationFailed"];
+  const codes: ErrorCode[] = ["migrationLocked", "migrationTargetUnreadable", "migrationTargetNotAVault", "migrationTargetPasswordMismatch", "migrationTargetWriteFailed", "migrationSourceInvalid", "migrationSameFile", "migrationValidationFailed", "syncKdfLimitExceeded"];
   setLanguage("en");
   const keys = codes.map(code => errorMessage(new ApiFailure(code)));
   for (const lang of ["en", "uk", "ru"] as const) {
     setLanguage(lang);
     const messages = codes.map(code => errorMessage(new ApiFailure(code, "RAW-BACKEND-TEXT")));
-    expect(new Set(messages).size).toBe(8);
+    expect(new Set(messages).size).toBe(codes.length);
     const catalog = { en, uk, ru }[lang];
     expect(messages).toEqual(keys.map(key => catalog[key as keyof typeof catalog]));
     for (const message of messages) {

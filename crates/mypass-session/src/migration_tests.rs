@@ -54,6 +54,30 @@ fn seed_remote_uploads_and_leaves_local_untouched() {
 }
 
 #[test]
+fn migration_reports_sync_kdf_limit_for_an_over_budget_target() {
+    let d = tempfile::tempdir().unwrap();
+    let local = fast_database("migration");
+    let path = d.path().join("v.kdbx");
+    let before = mypass_kdbx::test_util::vault_header_only(&mypass_kdbx::KdfParams::AesKdf {
+        seed: vec![0; 32],
+        rounds: 300_000_001,
+    });
+    fs::write(&path, &before).unwrap();
+    let target = Arc::new(FileIoBackend::new(Arc::new(PlainFileIo), &path));
+    for strategy in [
+        MigrationStrategy::AdoptRemote,
+        MigrationStrategy::OverwriteRemote,
+        MigrationStrategy::Merge,
+    ] {
+        assert_eq!(
+            VaultMigrationService::migrate(&local, &"pw".into(), target.clone(), strategy).err(),
+            Some(MigrationError::SyncKdfLimitExceeded)
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+}
+
+#[test]
 fn adopt_remote_wrong_password_leaves_both_sides_untouched() {
     let d = tempfile::tempdir().unwrap();
     let db = fast_database("migration");

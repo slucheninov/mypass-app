@@ -38,7 +38,7 @@ pub const MAX_SYNC_ATTEMPTS: usize = 3;
 
 /// Why a sync failed. In every case the remote was left as it was, except where a write had
 /// already committed (`Storage` after a write, `RemoteChangedDuringSync` after a write that was
-/// replaced again, `ConcurrentCopyKept`, or `Cancelled` after a write). A subsequent sync
+/// replaced again, a displaced copy kept for recovery, or `Cancelled` after a write). A subsequent sync
 /// reconciles the remote content.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SyncError {
@@ -51,9 +51,12 @@ pub enum SyncError {
     /// The remote file is not a KDBX vault; it is never overwritten.
     #[error("the remote file is not a KDBX vault")]
     RemoteNotAVault,
-    /// The remote vault uses an unsupported format, feature or KDF cost.
+    /// The remote vault uses an unsupported format or feature.
     #[error("the remote vault is unsupported: {0}")]
     RemoteUnsupported(String),
+    /// A copy exceeds the automatic-open budget. An already displaced copy is kept.
+    #[error("vault KDF cost above the sync limit")]
+    SyncKdfLimitExceeded,
     /// The remote vault is damaged.
     #[error("the remote vault is damaged: {0}")]
     RemoteCorrupt(String),
@@ -195,9 +198,8 @@ fn remote_open_error(e: KdbxError) -> SyncError {
     match e {
         KdbxError::WrongPassword => SyncError::RemotePasswordMismatch,
         KdbxError::NotKdbx => SyncError::RemoteNotAVault,
-        e @ (KdbxError::UnsupportedVersion { .. } | KdbxError::RemoteKdfLimitExceeded(_)) => {
-            SyncError::RemoteUnsupported(e.to_string())
-        }
+        e @ KdbxError::UnsupportedVersion { .. } => SyncError::RemoteUnsupported(e.to_string()),
+        KdbxError::RemoteKdfLimitExceeded(_) => SyncError::SyncKdfLimitExceeded,
         KdbxError::Unsupported(m) => SyncError::RemoteUnsupported(m),
         KdbxError::Corrupt(m) | KdbxError::InvalidKdfParameters(m) => SyncError::RemoteCorrupt(m),
         e @ (KdbxError::Io { .. } | KdbxError::Random | KdbxError::InvalidOperation(_)) => {
@@ -471,7 +473,10 @@ impl SyncEngine {
                     password,
                     KdfLimits::remote(Some(&local.settings.kdf)),
                 )
-                .map_err(|_| SyncError::ConcurrentCopyKept)?;
+                .map_err(|e| match e {
+                    KdbxError::RemoteKdfLimitExceeded(_) => SyncError::SyncKdfLimitExceeded,
+                    _ => SyncError::ConcurrentCopyKept,
+                })?;
                 if theirs.root.uuid != local.root.uuid {
                     return Err(SyncError::ConcurrentCopyKept);
                 }

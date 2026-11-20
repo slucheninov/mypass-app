@@ -58,6 +58,8 @@ pub enum MigrationError {
     TargetWriteFailed,
     #[error("source invalid")]
     SourceInvalid,
+    #[error("vault KDF cost above the sync limit")]
+    SyncKdfLimitExceeded,
     #[error("target is the current file")]
     SameFile,
     #[error("target validation failed")]
@@ -140,6 +142,7 @@ impl VaultMigrationService {
                     SyncError::Cancelled => MigrationError::Locked,
                     SyncError::RemotePasswordMismatch => MigrationError::TargetPasswordMismatch,
                     SyncError::RemoteNotAVault => MigrationError::TargetNotAVault,
+                    SyncError::SyncKdfLimitExceeded => MigrationError::SyncKdfLimitExceeded,
                     _ => MigrationError::TargetWriteFailed,
                 })?;
             let (adopt, _) = result.into_parts();
@@ -182,8 +185,11 @@ impl VaultMigrationService {
             .map_err(|_| MigrationError::ValidationFailed)?
             .ok_or(MigrationError::ValidationFailed)?;
         check()?;
-        let verified = Database::open_with_limits(&bytes, password, limits)
-            .map_err(|_| MigrationError::ValidationFailed)?;
+        let verified =
+            Database::open_with_limits(&bytes, password, limits).map_err(|e| match e {
+                KdbxError::RemoteKdfLimitExceeded(_) => MigrationError::SyncKdfLimitExceeded,
+                _ => MigrationError::ValidationFailed,
+            })?;
         if !crate::saving::equivalent_content(&expected, &verified) {
             return Err(MigrationError::ValidationFailed);
         }
@@ -207,7 +213,7 @@ fn open_target(
     limits: KdfLimits,
 ) -> Result<Database, MigrationError> {
     Database::open_with_limits(bytes, password, limits).map_err(|e| match e {
-        KdbxError::RemoteKdfLimitExceeded(_) => MigrationError::ValidationFailed,
+        KdbxError::RemoteKdfLimitExceeded(_) => MigrationError::SyncKdfLimitExceeded,
         KdbxError::WrongPassword => MigrationError::TargetPasswordMismatch,
         _ => MigrationError::TargetNotAVault,
     })

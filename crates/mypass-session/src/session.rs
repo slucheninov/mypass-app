@@ -21,6 +21,7 @@
 //! No other component (auto-lock, clipboard service) holds its own lock while calling the
 //! session.
 
+use crate::app_core::ErrorCode;
 use crate::backups::BackupManager;
 use crate::scheduler::{lock, Scheduler, TaskHandle};
 use crate::settings::{Settings, SettingsPatch, SettingsStore};
@@ -78,6 +79,8 @@ pub enum SaveState {
 pub struct SaveStatus {
     pub state: SaveState,
     pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<ErrorCode>,
 }
 
 impl SaveStatus {
@@ -86,24 +89,30 @@ impl SaveStatus {
         Self {
             state: SaveState::Idle,
             message: None,
+            error_code: None,
         }
     }
     pub(crate) fn pending() -> Self {
         Self {
             state: SaveState::Pending,
             message: None,
+            error_code: None,
         }
     }
     pub(crate) fn saving() -> Self {
         Self {
             state: SaveState::Saving,
             message: None,
+            error_code: None,
         }
     }
-    pub(crate) fn failed(message: String) -> Self {
+    /// A failed save or reload. The code accompanies failures with dedicated UI wording.
+    pub fn failed(error: &SessionError, message: String) -> Self {
         Self {
             state: SaveState::Failed,
             message: Some(message),
+            error_code: matches!(error, SessionError::SyncKdfLimitExceeded)
+                .then_some(ErrorCode::SyncKdfLimitExceeded),
         }
     }
 }
@@ -176,6 +185,8 @@ pub enum SessionError {
     InvalidInput(String),
     #[error("limit exceeded: {0}")]
     LimitExceeded(String),
+    #[error("vault KDF cost above the sync limit")]
+    SyncKdfLimitExceeded,
     #[error("corrupt vault: {0}")]
     Corrupt(String),
     #[error("unsupported: {0}")]
@@ -197,7 +208,7 @@ impl From<KdbxError> for SessionError {
     fn from(e: KdbxError) -> Self {
         match e {
             KdbxError::WrongPassword => Self::WrongPassword,
-            e @ KdbxError::RemoteKdfLimitExceeded(_) => Self::LimitExceeded(e.to_string()),
+            KdbxError::RemoteKdfLimitExceeded(_) => Self::SyncKdfLimitExceeded,
             KdbxError::Corrupt(m) | KdbxError::InvalidKdfParameters(m) => Self::Corrupt(m),
             e @ KdbxError::NotKdbx => Self::Corrupt(e.to_string()),
             e @ KdbxError::UnsupportedVersion { .. } => Self::Unsupported(e.to_string()),

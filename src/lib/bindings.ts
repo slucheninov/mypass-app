@@ -603,7 +603,7 @@ export type EntrySummary = {
 export type EntryTypeDto = "login" | "address" | "card" | "notes" | "files";
 
 /**  The stable error code the UI localises. Serialised in camelCase. */
-export type ErrorCode = "locked" | "noVault" | "wrongPassword" | "alreadyExists" | "notFound" | "invalidInput" | "limitExceeded" | "corrupt" | "unsupported" | "changedOnDisk" | "io" | 
+export type ErrorCode = "locked" | "noVault" | "wrongPassword" | "alreadyExists" | "notFound" | "invalidInput" | "limitExceeded" | "syncKdfLimitExceeded" | "corrupt" | "unsupported" | "changedOnDisk" | "io" | 
 /**  The vault is in iCloud Drive and did not download in time, try again later. */
 "downloading" | "quitting" | "generatorNoClass" | "generatorUnsatisfiable" | "cancelled" | "lockout" | "invalidated" | "notEnrolledOnDevice" | "deviceUnlockUnavailable" | "migrationLocked" | "migrationTargetUnreadable" | "migrationTargetNotAVault" | "migrationTargetPasswordMismatch" | "migrationTargetWriteFailed" | "migrationSourceInvalid" | "migrationSameFile" | "migrationValidationFailed" | "internal";
 
@@ -1018,12 +1018,14 @@ export type SaveStatus = SaveStatus_Serialize | SaveStatus_Deserialize;
 export type SaveStatus_Deserialize = {
 	state: SaveState,
 	message?: string | null,
+	errorCode?: ErrorCode | null,
 };
 
 /**  Save state plus the last failure message (no secret content, file-system wording only). */
 export type SaveStatus_Serialize = {
 	state: SaveState,
 	message: string | null,
+	errorCode?: ErrorCode,
 };
 
 export type Scope = { kind: "category"; category: Category } | { kind: "group"; groupId: string };
@@ -1036,6 +1038,8 @@ export type SecondaryError =
 "notAVault" | 
 /**  A vault format this app does not read. */
 "unsupported" | 
+/**  The copy's KDF cost exceeds the sync budget. */
+"syncKdfLimitExceeded" | 
 /**  The copy is damaged. */
 "corrupt" | 
 /**  The file is a different vault (another root group). */

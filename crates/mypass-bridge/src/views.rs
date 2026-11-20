@@ -126,6 +126,7 @@ pub fn session_error_response(e: &SessionError) -> Response {
         SessionError::NotFound => error("entry not found"),
         SessionError::InvalidInput(_) => error("invalid request"),
         SessionError::LimitExceeded(_) => error("limit exceeded"),
+        SessionError::SyncKdfLimitExceeded => error("vault KDF cost above the sync limit"),
         SessionError::ChangedOnDisk => error("the vault file changed, try again"),
         SessionError::Downloading => error("the vault is still downloading from iCloud, try again"),
         SessionError::WrongPassword
