@@ -205,9 +205,9 @@ pub fn entry_history_reveal(
 pub fn entry_history_restore(
     state: State<'_, AppState>,
     id: String,
-    index: u32,
+    revision: String,
 ) -> Result<(), ApiError> {
-    state.0.entry_history_restore(&id, index)
+    state.0.entry_history_restore(&id, &revision)
 }
 
 #[cfg(test)]

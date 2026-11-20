@@ -915,20 +915,17 @@ fn revealable_fields(version: &Entry, changed: &[String]) -> Vec<HistoryReveal> 
     out
 }
 
-/// Version `index` of an entry's history, newest first.
-fn history_version(entry: &Entry, index: usize) -> Option<&Entry> {
-    index
-        .checked_add(1)
-        .and_then(|n| entry.history.len().checked_sub(n))
-        .and_then(|pos| entry.history.get(pos))
-}
-
-/// Restores version `index` (newest first, as listed by [`history`]). The current state is
-/// snapshotted into history first, so the restore is itself undoable.
-pub fn restore_history(session: &VaultSession, id: Uuid, index: usize) -> Result<(), SessionError> {
+/// Restores the version named by `revision` (as listed by [`history`]), never by its position,
+/// which shifts when a sync adds or trims a version: a stale name answers `NotFound` and changes
+/// nothing. The current state is snapshotted into history first, so the restore is itself undoable.
+pub fn restore_history(
+    session: &VaultSession,
+    id: Uuid,
+    revision: &str,
+) -> Result<(), SessionError> {
     session.mutate(|db, now| {
         let entry = find_entry(db, id)?;
-        let old = history_version(entry, index)
+        let old = history_revision(entry, revision)
             .cloned()
             .ok_or(SessionError::NotFound)?;
         db.update_entry(id, now, |entry| {
@@ -2380,7 +2377,7 @@ mod tests {
         });
         f.edit(id, |m| m.password = "new".into());
         assert_eq!(f.entry(id).history.len(), 1);
-        restore_history(&f.session, id, 0).unwrap();
+        restore_history(&f.session, id, &revision(&f, id, 0)).unwrap();
         let e = f.entry(id);
         assert_eq!(e.field("Password"), Some("old"));
         assert_eq!(e.history.len(), 2);
@@ -2390,9 +2387,50 @@ mod tests {
             Some("new")
         );
         assert_eq!(
-            restore_history(&f.session, id, 9),
+            restore_history(&f.session, id, "no-such-revision"),
             Err(SessionError::NotFound)
         );
+    }
+
+    #[test]
+    fn restore_history_restores_the_listed_version_after_one_is_prepended() {
+        let f = fx();
+        let id = f.create(|m| m.password = "first".into());
+        f.edit(id, |m| m.password = "second".into());
+        f.edit(id, |m| m.password = "third".into());
+        // The user looked at the oldest version (index 1: "first").
+        let shown = revision(&f, id, 1);
+        // A sync lands a newer version before the click: index 1 now names another version.
+        f.edit(id, |m| m.password = "fourth".into());
+        restore_history(&f.session, id, &shown).unwrap();
+        assert_eq!(f.entry(id).field("Password"), Some("first"));
+    }
+
+    #[test]
+    fn restore_history_with_a_trimmed_revision_changes_nothing() {
+        let f = fx();
+        let id = f.create(|m| m.password = "first".into());
+        f.edit(id, |m| m.password = "second".into());
+        f.edit(id, |m| m.password = "third".into());
+        let shown = revision(&f, id, 1);
+        f.session
+            .mutate(|db, _| {
+                if let Some(entry) = db.find_entry_mut(id) {
+                    entry
+                        .history
+                        .retain(|v| v.field("Password") != Some("first"));
+                }
+                Ok(())
+            })
+            .unwrap();
+        let before = f.entry(id);
+        assert_eq!(
+            restore_history(&f.session, id, &shown),
+            Err(SessionError::NotFound)
+        );
+        let after = f.entry(id);
+        assert_eq!(after.field("Password"), before.field("Password"));
+        assert_eq!(after.history.len(), before.history.len());
     }
 
     #[test]
@@ -2411,7 +2449,7 @@ mod tests {
             }];
         });
         assert!(f.entry(id).attachments.is_empty());
-        restore_history(&f.session, id, 0).unwrap();
+        restore_history(&f.session, id, &revision(&f, id, 0)).unwrap();
         assert_eq!(f.entry(id).attachments.len(), 1);
     }
 

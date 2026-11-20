@@ -321,7 +321,8 @@ impl Database {
         Ok(())
     }
     /// Moves a recycled group (below the bin, not the bin itself) to `target`; rejects anything
-    /// else and every case [`Database::move_group`] rejects. The recorded origin is still the bin-time one while in the bin, then the bin itself once the move leaves it.
+    /// else and every case [`Database::move_group`] rejects. Records the bin as the previous
+    /// parent, like any move out of it.
     pub fn restore_group(&mut self, id: Uuid, target: Uuid, now: Timestamp) -> Result<()> {
         if !self.is_group_in_recycle_bin(id) {
             return Err(invalid("group is not in the recycle bin"));

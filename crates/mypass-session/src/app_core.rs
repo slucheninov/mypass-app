@@ -726,12 +726,12 @@ impl AppCore {
         }
     }
 
-    pub fn entry_history_restore(&self, id: &str, index: u32) -> Result<(), ApiError> {
+    pub fn entry_history_restore(&self, id: &str, revision: &str) -> Result<(), ApiError> {
         self.writable()?;
         Ok(editing::restore_history(
             &self.session,
             parse_id(id)?,
-            index as usize,
+            revision,
         )?)
     }
 
@@ -1487,7 +1487,7 @@ mod tests {
         call!("entry_move", c, a => c.entry_move(&a.entry, &a.root));
         call!("entry_touch", c, a => c.entry_touch(&a.entry));
         call!("entry_history", c, a => c.entry_history(&a.entry));
-        call!("entry_history_restore", c, a => c.entry_history_restore(&a.entry, 0));
+        call!("entry_history_restore", c, a => c.entry_history_restore(&a.entry, "rev"));
         call!("entry_history_reveal", c, a => c.entry_history_reveal(&a.entry, "rev", FieldRef::Password));
         call!("attachment_export", c, a => c.attachment_export(&a.entry, "a.txt", "/nonexistent/out.bin"));
         call!("group_create", c, a => c.group_create(None, "g", None));
