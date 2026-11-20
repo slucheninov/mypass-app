@@ -13,7 +13,7 @@
 //!   [`super::SIBLING_STEM_MAX`] bytes of the vault's file name, so two long vault names can share
 //!   one listing. A copy with a record belongs to the recorded vault and to no other. A copy
 //!   without one (written before records existed, or by a process that crashed before the record
-//!   was persisted) is accepted only where the name match is exact (an untruncated stem).
+//!   was persisted) is accepted only where a longer name cannot truncate to the same stem.
 //!   Header bytes never decide vault identity: every vault with the same settings shares them.
 //! - **Removal re-verifies everything** ([`remove_retained_copy`]): the name must still be a
 //!   retained name of this vault, opened without following a symbolic link, a regular file with
@@ -29,8 +29,8 @@
 
 use super::{
     displaced_copies, displaced_kind, io_error, is_retained_file, rename_noreplace, resolve_target,
-    resolve_using, sibling_stem, split_target, sync_directory, ActiveAside, DisplacedCopyKind,
-    ReplaceOutcome, SiblingNames,
+    resolve_using, split_target, sync_directory, ActiveAside, DisplacedCopyKind, ReplaceOutcome,
+    SiblingNames, SIBLING_STEM_MAX,
 };
 use crate::{KdbxError, Result, MAX_VAULT_FILE_BYTES};
 use sha2::{Digest, Sha256};
@@ -43,8 +43,9 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-/// A `.aside` or `.exchanged` file modified this recently may belong to a replacement that is
-/// still running in another process (its rollback source): never deletable.
+/// A working file may still be a replacement's rollback source during this grace period.
+/// On Unix it starts at the last inode change (including a rename). Stable Windows Rust only
+/// exposes the last write time for this check, so there it covers recent writes to the file.
 pub const RETAINED_IN_FLIGHT_GRACE: Duration = Duration::from_secs(5 * 60);
 
 /// How many identities the in-process journal keeps (the newest win).
@@ -306,7 +307,7 @@ pub fn inspect_retained_copies(
 struct Verified {
     len: u64,
     sha256: [u8; 32],
-    modified: Option<SystemTime>,
+    last_change: Option<SystemTime>,
     #[cfg(unix)]
     dev_ino: (u64, u64),
     /// The open handle, kept until the removal is done so the inode cannot be reused.
@@ -341,11 +342,31 @@ fn verify_copy(
     Ok(Verified {
         len,
         sha256,
-        modified: meta.modified().ok(),
+        last_change: last_working_change(&meta),
         #[cfg(unix)]
         dev_ino: dev_ino(&meta),
         _file: file,
     })
+}
+
+#[cfg(unix)]
+fn last_working_change(meta: &fs::Metadata) -> Option<SystemTime> {
+    use std::os::unix::fs::MetadataExt;
+
+    let seconds = meta.ctime();
+    let whole_seconds = Duration::from_secs(seconds.unsigned_abs());
+    let whole_time = if seconds < 0 {
+        SystemTime::UNIX_EPOCH.checked_sub(whole_seconds)?
+    } else {
+        SystemTime::UNIX_EPOCH.checked_add(whole_seconds)?
+    };
+    let nanos = u64::try_from(meta.ctime_nsec()).ok()?;
+    whole_time.checked_add(Duration::from_nanos(nanos))
+}
+
+#[cfg(not(unix))]
+fn last_working_change(meta: &fs::Metadata) -> Option<SystemTime> {
+    meta.modified().ok()
 }
 
 /// Decides whether a verified copy may be deleted.
@@ -360,8 +381,8 @@ fn provenance(
 ) -> std::result::Result<RetainedProvenance, RetainedRefusal> {
     if kind != DisplacedCopyKind::Displaced {
         let settled = found
-            .modified
-            .and_then(|modified| now.duration_since(modified).ok())
+            .last_change
+            .and_then(|last_change| now.duration_since(last_change).ok())
             .is_some_and(|age| age >= RETAINED_IN_FLIGHT_GRACE);
         if !settled {
             return Err(RetainedRefusal::InFlight);
@@ -385,9 +406,11 @@ fn provenance(
 /// Whether retained names of `target` carry its whole file name (no truncation), so a name
 /// match cannot also match another vault in the folder.
 fn stem_is_exact(target: &Path) -> bool {
+    // A longer name may have a four-byte UTF-8 character just beyond this name. Leave
+    // enough room for that character so truncation never backs up to this exact stem.
     split_target(target).is_ok_and(|(_, name)| {
-        let name = name.to_string_lossy();
-        sibling_stem(&name).len() == name.len()
+        name.to_str()
+            .is_some_and(|name| name.len() <= SIBLING_STEM_MAX - 4)
     })
 }
 

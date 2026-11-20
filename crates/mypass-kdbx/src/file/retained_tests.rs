@@ -277,6 +277,84 @@ fn a_record_that_no_longer_matches_the_bytes_is_refused() {
 }
 
 #[test]
+fn only_stems_that_cannot_be_shared_allow_unrecorded_removal() {
+    for (len, suffix, expected) in [
+        (92, "\u{1f4a1}", RetainedRefusal::NotRetainedCopy),
+        (93, "\u{1f4a1}", RetainedRefusal::UnverifiedVault),
+        (96, "x", RetainedRefusal::UnverifiedVault),
+        (97, "x", RetainedRefusal::UnverifiedVault),
+    ] {
+        let f = fx();
+        let name = "a".repeat(len);
+        let longer = format!("{name}{suffix}");
+        let a = f.root.join(&name);
+        let b = f.root.join(&longer);
+        fs::copy(&f.vault, &a).unwrap();
+        fs::copy(&f.vault, b).unwrap();
+        let own_copy = f.root.join(format!(
+            ".{}.1.2.3.displaced",
+            super::super::sibling_stem(&name)
+        ));
+        let other_copy = f.root.join(format!(
+            ".{}.1.2.4.displaced",
+            super::super::sibling_stem(&longer)
+        ));
+        fs::write(&own_copy, b"kept for a").unwrap();
+        fs::write(&other_copy, b"kept for b").unwrap();
+        let checked = inspect_retained_copies(&a, &[]).unwrap();
+        if len == 92 {
+            assert_eq!(checked.copies.len(), 1);
+            assert_eq!(
+                checked.copies[0].verdict,
+                Ok(RetainedProvenance::Unrecorded)
+            );
+        } else {
+            assert_eq!(checked.copies.len(), 2, "{len}-byte vault name");
+            assert!(
+                checked.copies.iter().all(|c| c.verdict == Err(expected)),
+                "{len}-byte vault name: {checked:?}"
+            );
+        }
+        assert_eq!(
+            refusal(remove_retained_copy(
+                &removal(&a, &other_copy, b"kept for b"),
+                &[]
+            )),
+            expected,
+            "{len}-byte vault name"
+        );
+        assert_eq!(fs::read(other_copy).unwrap(), b"kept for b");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn renaming_old_contents_to_a_working_name_starts_the_grace() {
+    let f = fx();
+    let old_mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(1_600_000_000);
+    fs::File::options()
+        .write(true)
+        .open(&f.copy)
+        .unwrap()
+        .set_modified(old_mtime)
+        .unwrap();
+    let aside = f.root.join(".v.kdbx.1.2.4.aside");
+    fs::rename(&f.copy, &aside).unwrap();
+    assert_eq!(fs::metadata(&aside).unwrap().modified().unwrap(), old_mtime);
+
+    let checked = inspect_retained_copies(&f.vault, &[]).unwrap();
+    assert_eq!(checked.copies[0].verdict, Err(RetainedRefusal::InFlight));
+    assert_eq!(
+        refusal(remove_retained_copy(
+            &removal(&f.vault, &aside, b"competing"),
+            &[]
+        )),
+        RetainedRefusal::InFlight
+    );
+    assert_eq!(fs::read(aside).unwrap(), b"competing");
+}
+
+#[test]
 fn inspection_hashes_and_judges_every_listed_copy() {
     let f = fx();
     let aside = f.root.join(".v.kdbx.1.2.4.aside");
