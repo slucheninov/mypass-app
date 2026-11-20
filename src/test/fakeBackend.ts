@@ -558,11 +558,12 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     },
     // Like `editing::restore_history`: the current state is snapshotted first (the restore is
     // undoable), then the version's content replaces it; the group and the favourite stay.
-    entryHistoryRestore: ({ id, index }) => {
+    // The version is named by its `revision` (never an index, which shifts): a stale one is `notFound`.
+    entryHistoryRestore: ({ id, revision }) => {
       requireUnlocked();
       const found = findEntry(id);
-      const old = found.history[found.history.length - 1 - index];
-      if (!Number.isInteger(index) || index < 0 || !old) throw apiError("notFound");
+      const old = found.history.find((v) => v.revision === revision);
+      if (!old) throw apiError("notFound");
       found.history.push({ modified: found.modified, model: structuredClone(found.model) });
       found.model = {
         ...structuredClone(old.model),

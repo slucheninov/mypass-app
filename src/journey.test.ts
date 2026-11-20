@@ -234,7 +234,7 @@ describe("journeys", () => {
     await user.click(within(dialog).getByRole("button", { name: "Restore this version" }));
     const confirm = await screen.findByRole("dialog", { name: "Restore this version" });
     await user.click(within(confirm).getByRole("button", { name: "Restore" }));
-    await waitFor(() => expect(calls(fake, "entryHistoryRestore")[0]?.args).toEqual({ id: "e-router", index: 0 }));
+    await waitFor(() => expect(calls(fake, "entryHistoryRestore")[0]?.args).toEqual({ id: "e-router", revision: expect.any(String) }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     await screen.findByRole("heading", { name: "Router (first)" });
     await waitFor(() => expect(titles()).toContain("Router (first)"));

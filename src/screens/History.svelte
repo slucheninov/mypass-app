@@ -190,12 +190,14 @@
     busy = true;
     const unchanged = lockGuard();
     try {
-      await api.entryHistoryRestore(entryId, item.index);
+      await api.entryHistoryRestore(entryId, item.revision);
       // The vault-changed event refetches the detail and the list; the modal has done its job.
       if (unchanged()) onclose();
     } catch (e) {
       if (unchanged()) {
         toasts.reportError(e);
+        // The version is gone (trimmed, merged away) or the entry is: look again, the list shows which.
+        if (e instanceof ApiFailure && e.code === "notFound") void load();
         await tick();
         listbox?.focus();
       }
@@ -219,7 +221,7 @@
       bind:this={listbox}
       {onkeydown}
     >
-      {#each items as item, position (item.revision)}
+      {#each items as item, position (`${item.revision}:${position}`)}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <div
           class="version"
