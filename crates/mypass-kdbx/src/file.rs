@@ -192,9 +192,11 @@ impl FileIo for PlainFileIo {
     ///   tmpfs) or `renamex_np(RENAME_SWAP)` (macOS: APFS, HFS+) works.** The new file is
     ///   swapped in and whatever was at the path at that instant comes back under our temp
     ///   name, which from then on is never deleted unless it holds the expected content.
-    ///   Anything else is renamed to `.<name>.<pid>.<nanos>.<n>.displaced` and returned as
-    ///   [`ReplaceOutcome::Displaced`]; if even that rename fails it stays under the temp name
-    ///   `.<name>.<pid>.<nanos>.<n>.tmp` (still returned as `Displaced`, `kept` names it).
+    ///   Anything else is published under `.<name>.<pid>.<nanos>.<n>.displaced` by a no-replace
+    ///   hard link (a fresh name is drawn when that one is taken, so no other file is ever
+    ///   overwritten) and returned as [`ReplaceOutcome::Displaced`]; if even that fails it stays
+    ///   under the temp name `.<name>.<pid>.<nanos>.<n>.tmp` (still returned as `Displaced`,
+    ///   `kept` names it).
     /// - **Move aside, then a no-replace link: volumes without the exchange that have hard
     ///   links (Windows NTFS and ReFS; SMB, NFS and other mounts that refuse the swap but
     ///   allow `link`).** After the final check, a probe link proves that hard links work
@@ -202,7 +204,11 @@ impl FileIo for PlainFileIo {
     ///   whatever is at the path at that instant, overwriting nothing) and the new file is
     ///   linked in at the path, which fails rather than replaces when another writer created
     ///   the file in between. The moved-aside file is removed only when it proves to be the
-    ///   expected content; otherwise it is renamed to `.displaced`, kept and returned as `Displaced`. While the path
+    ///   expected content; otherwise it is published as `.displaced` (no-replace link, fresh name when taken), kept and
+    ///   returned as `Displaced`. When the install itself fails, the moved-aside file is linked back
+    ///   at the path and in every case also published as `.displaced`, so the only copy never stays
+    ///   under the unlisted `.aside` working name; if even the publication fails the error names
+    ///   the retained file. While the path
     ///   is briefly absent, a reader sees no file (a racing creator wins, and our bytes are
     ///   then not installed: `Displaced` when a foreign version was moved aside, else
     ///   `Conflict`).
@@ -613,6 +619,8 @@ const SIBLING_STEM_MAX: usize = 96;
 /// `.<stem>.<pid>.<nanos>.<n>`: a process id, the clock and a per-process counter, so no two
 /// replacements (in this process or another) ever pick the same name.
 struct SiblingNames {
+    parent: PathBuf,
+    name: std::ffi::OsString,
     /// The new bytes, written and synced before anything is renamed.
     temp: PathBuf,
     /// Where a file that may hold another writer's vault is kept for good (a finalized
@@ -640,11 +648,20 @@ impl SiblingNames {
             std::process::id()
         );
         Ok(Self {
+            parent: parent.to_path_buf(),
+            name: name.to_os_string(),
             temp: parent.join(format!("{token}.tmp")),
             displaced: parent.join(format!("{token}.displaced")),
             aside: parent.join(format!("{token}.aside")),
             probe: parent.join(format!("{token}.link.tmp")),
         })
+    }
+}
+impl SiblingNames {
+    /// A `.displaced` name no replacement has used before (a fresh token), for when the planned
+    /// one is already taken.
+    fn fresh_displaced(&self) -> Result<PathBuf> {
+        Ok(Self::new(&self.parent, &self.name)?.displaced)
     }
 }
 /// The prefix of the target's file name that sibling names carry (at most [`SIBLING_STEM_MAX`]
@@ -693,17 +710,16 @@ fn is_displaced_name(target_name: &str, candidate: &str) -> bool {
 
 /// The finalized competing copies kept next to `target` (a vault path), sorted by path. Only
 /// `.displaced` names are listed: a file still being moved aside by a running replacement carries
-/// the `.aside` suffix and is never one of them. A folder that does not exist has none; any other
-/// failure to read the folder or one of its entries is returned, never reported as an empty
-/// list. Nothing here changes anything on disk.
+/// the `.aside` suffix and is never one of them. A folder that cannot be read, a missing or
+/// unplugged one included, or one of its entries is an error, never an empty list (only an entry
+/// that vanishes while the folder is read is skipped). Nothing here changes anything on disk.
 pub fn displaced_copies(target: &Path) -> Result<Vec<DisplacedCopy>> {
-    let (parent, name) = split_target(target)?;
+    // Resolved exactly as the writer resolves it, so a vault reached through a symlink is
+    // scanned where its copies are kept: next to the resolved file, under the resolved name.
+    let target = resolve_using(|| resolve_target(target), std::thread::sleep).map_err(io_error)?;
+    let (parent, name) = split_target(&target)?;
     let name = name.to_string_lossy();
-    let entries = match fs::read_dir(parent) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(io_error(e)),
-    };
+    let entries = fs::read_dir(parent).map_err(io_error)?;
     let mut found = Vec::new();
     for entry in entries {
         let entry = match entry {
@@ -1058,16 +1074,64 @@ fn replace_expected(
         )),
         Err(e) => {
             // Ours is not installed and the path may be empty. Put the moved-aside file back
-            // without replacing anything (best effort). It keeps a name as well: nothing is
-            // deleted on a failure path. When it could not be put back it may be the only copy
-            // of the vault, so it is promoted to a kept `.displaced` copy, which the
-            // competing-copy listing shows.
-            if (seams.link)(&names.aside, target).is_err() {
-                let _ = (seams.rename)(&names.aside, &names.displaced);
-            }
+            // without replacing anything (best effort), then ALWAYS publish it as a kept
+            // `.displaced` copy as well: nothing is deleted on a failure path, and whether or not
+            // the restore worked the file never stays under its unlisted working name. (After a
+            // successful restore the copy is a duplicate of the live vault: harmless, and it may
+            // hold a foreign version that was moved aside.)
+            let _ = (seams.link)(&names.aside, target);
             drop(cleanup);
-            Err(io_error(e))
+            Err(match publish_displaced(&names.aside, names, seams) {
+                Some(_) => io_error(e),
+                // Nothing could name it: it is still under its working name, so say which file
+                // (the name only, never a folder) holds the retained vault.
+                None => retained_error(&e, &names.aside),
+            })
         }
+    }
+}
+
+/// How many `.displaced` names are tried when the planned one is taken.
+const PUBLISH_ATTEMPTS: usize = 8;
+
+/// Removes one name of a file (the source name after a publication; the verified expected
+/// content). Its single call site keeps the mutation guard's allowance at one.
+fn drop_name(at: &Path) {
+    let _ = fs::remove_file(at);
+}
+
+/// Publishes the settled file `at` under a `.displaced` name without ever replacing anything: a
+/// no-replace hard link (it fails with `AlreadyExists` on an occupied name, so another
+/// process's retained vault is never overwritten), a fresh unique name when the planned one is
+/// taken, and only after the link holds is the working name dropped (the data stays reachable
+/// under the new name). `None` when no name could be made; the file then stays where it is.
+fn publish_displaced(at: &Path, names: &SiblingNames, seams: &mut Seams<'_>) -> Option<PathBuf> {
+    let mut candidate = names.displaced.clone();
+    for _ in 0..PUBLISH_ATTEMPTS {
+        match retry_rename(|| (seams.link)(at, &candidate), &mut *seams.sleep) {
+            Ok(()) => {
+                drop_name(at);
+                return Some(candidate);
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                candidate = names.fresh_displaced().ok()?;
+            }
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
+/// The install failed and the moved-aside vault could be neither restored nor given a
+/// `.displaced` name: the error says which file (the name only) holds it.
+fn retained_error(e: &io::Error, kept: &Path) -> KdbxError {
+    let name = kept
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    KdbxError::Io {
+        kind: e.kind(),
+        message: format!("{e}; the previous vault is kept as {name} next to it"),
     }
 }
 
@@ -1091,19 +1155,17 @@ fn judge_swapped_out(
         .is_some_and(|bytes| hash(bytes) == *expected)
     {
         // The content we checked and the caller already merged into the new bytes.
-        let _ = fs::remove_file(at);
+        drop_name(at);
         return if installed {
             ReplaceOutcome::Replaced
         } else {
             ReplaceOutcome::Conflict
         };
     }
-    // Settled: the file is kept for good, so it takes the finalized `.displaced` name.
-    let kept = match (seams.rename)(at, &names.displaced) {
-        Ok(()) => names.displaced.clone(),
-        // Keep it under its current, recognisable name rather than lose it.
-        Err(_) => at.to_path_buf(),
-    };
+    // Settled: the file is kept for good, so it takes a finalized `.displaced` name, never
+    // replacing a file that is already there.
+    // Keep it under its current, recognisable name rather than lose it when no name can be made.
+    let kept = publish_displaced(at, names, seams).unwrap_or_else(|| at.to_path_buf());
     ReplaceOutcome::Displaced {
         bytes: content.unwrap_or_default(),
         kept,
@@ -1983,16 +2045,20 @@ mod tests {
         ));
     }
     #[test]
-    fn a_missing_folder_lists_nothing_and_an_unreadable_one_is_an_error() {
+    fn a_missing_or_unreadable_folder_is_an_error_not_an_empty_list() {
         let d = tempfile::tempdir().unwrap();
+        // An unplugged or removed folder: the scan cannot say "no copies".
         let missing = d.path().join("nope").join("vault.kdbx");
-        assert_eq!(displaced_copies(&missing).unwrap(), Vec::new());
-        // A folder name that is a file cannot be read: not an empty list.
+        assert!(displaced_copies(&missing).is_err());
+        // A folder name that is a file cannot be read either.
         let file = d.path().join("plain");
         fs::write(&file, b"x").unwrap();
         assert!(displaced_copies(&file.join("vault.kdbx")).is_err());
-        // A target without a file name cannot be resolved either.
+        // A target without a file name cannot be resolved.
         assert!(displaced_copies(Path::new("/")).is_err());
+        // A genuinely empty folder is an empty list.
+        let ok = d.path().join("vault.kdbx");
+        assert_eq!(displaced_copies(&ok).unwrap(), Vec::new());
     }
     #[cfg(unix)]
     #[test]
@@ -2052,7 +2118,32 @@ mod tests {
     #[test]
     fn a_failed_install_that_cannot_restore_keeps_the_only_copy_as_displaced() {
         // The install link and the restoring link both fail: the moved-aside vault may be the
-        // only copy, so it is promoted to a listed `.displaced` copy instead of being lost.
+        // only copy, so it is published as a listed `.displaced` copy instead of being lost.
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("vault.kdbx");
+        fs::write(&p, b"old").unwrap();
+        let mut race = Race::new(false);
+        let mut calls = 0;
+        race.link = Box::new(move |a: &Path, b: &Path| {
+            calls += 1;
+            // 1 probe, 2 install, 3 restore fail; 4 (the publication) works.
+            if calls == 2 || calls == 3 {
+                return Err(Error::other("injected link failure"));
+            }
+            fs::hard_link(a, b)
+        });
+        io_kind(race.run(&p, Some(b"old"), b"new"), ErrorKind::Other);
+        let listed = displaced_copies(&p).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(fs::read(&listed[0].path).unwrap(), b"old");
+        assert!(!p.exists());
+        let names: Vec<_> = listing(d.path()).into_iter().map(|(n, _)| n).collect();
+        assert!(!names.iter().any(|n| n.ends_with(".aside")), "{names:?}");
+    }
+    #[test]
+    fn a_failure_that_cannot_even_publish_names_the_retained_file_in_the_error() {
+        // Install, restore and publication all fail: the only copy stays under its working
+        // name and the error says which file (the name only, no folder) holds it.
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("vault.kdbx");
         fs::write(&p, b"old").unwrap();
@@ -2065,24 +2156,107 @@ mod tests {
             }
             fs::hard_link(a, b)
         });
-        io_kind(race.run(&p, Some(b"old"), b"new"), ErrorKind::Other);
-        let listed = displaced_copies(&p).unwrap();
-        assert_eq!(listed.len(), 1);
-        assert_eq!(fs::read(&listed[0].path).unwrap(), b"old");
-        assert!(!p.exists());
+        let Err(KdbxError::Io { message, .. }) = race.run(&p, Some(b"old"), b"new") else {
+            panic!("expected an Io error");
+        };
+        let kept: Vec<_> = listing(d.path())
+            .into_iter()
+            .filter(|(n, _)| n.ends_with(".aside"))
+            .collect();
+        assert_eq!(kept.len(), 1, "the vault is still on disk");
+        assert_eq!(kept[0].1, b"old");
+        assert!(message.contains(&kept[0].0), "{message}");
+        assert!(!message.contains(&d.path().to_string_lossy().into_owned()));
+    }
+    #[test]
+    fn publication_never_overwrites_an_occupied_displaced_name() {
+        // Another process created the planned `.displaced` name between the final check and the
+        // promotion. Its bytes survive, and ours go to a fresh unique name; both are listed.
+        for exchange in modes() {
+            let d = tempfile::tempdir().unwrap();
+            let p = d.path().join("vault.kdbx");
+            fs::write(&p, b"old").unwrap();
+            let racer = p.clone();
+            let mut race = Race::new(exchange);
+            race.before = Box::new(move || write_atomic(&racer, b"theirs").unwrap());
+            let mut occupied = Vec::new();
+            race.link = Box::new(move |a: &Path, b: &Path| {
+                if b.to_string_lossy().ends_with(".displaced") && occupied.is_empty() {
+                    fs::write(b, b"someone else's vault").unwrap();
+                    occupied.push(b.to_path_buf());
+                }
+                fs::hard_link(a, b)
+            });
+            let outcome = race.run(&p, Some(b"old"), b"new").unwrap();
+            let ReplaceOutcome::Displaced { bytes, kept } = outcome else {
+                panic!("expected Displaced, got {outcome:?} (exchange={exchange})");
+            };
+            assert_eq!(bytes, b"theirs");
+            assert_eq!(fs::read(&kept).unwrap(), b"theirs");
+            let listed = displaced_copies(&p).unwrap();
+            assert_eq!(listed.len(), 2, "exchange={exchange}");
+            let mut contents: Vec<_> = listed.iter().map(|c| fs::read(&c.path).unwrap()).collect();
+            contents.sort();
+            assert_eq!(
+                contents,
+                [b"someone else's vault".to_vec(), b"theirs".to_vec()]
+            );
+            assert_eq!(fs::read(&p).unwrap(), b"new");
+        }
     }
     #[cfg(unix)]
     #[test]
-    fn failed_displaced_rename_after_an_exchange_keeps_the_competing_copy() {
-        // N1: the swap succeeded, so the temp name holds the competing vault; naming it
-        // `.displaced` fails. It must stay on disk (under the temp name) and be returned.
+    fn a_vault_reached_through_a_symlink_is_scanned_where_its_copies_are_kept() {
+        // The secondary vault is a symlink in one folder to a differently named file in another.
+        // The writer retains a competing copy next to the RESOLVED file; the scan finds it.
+        for exchange in modes() {
+            let d = tempfile::tempdir().unwrap();
+            let real_dir = d.path().join("real");
+            let link_dir = d.path().join("link");
+            fs::create_dir_all(&real_dir).unwrap();
+            fs::create_dir_all(&link_dir).unwrap();
+            let real = real_dir.join("actual.kdbx");
+            let link = link_dir.join("secondary.kdbx");
+            fs::write(&real, b"old").unwrap();
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+            let racer = real.clone();
+            let outcome = replace(
+                &link,
+                Some(b"old"),
+                b"new",
+                &mut || write_atomic(&racer, b"theirs").unwrap(),
+                exchange,
+            );
+            assert!(
+                matches!(outcome, ReplaceOutcome::Displaced { .. }),
+                "{outcome:?}"
+            );
+            let listed = displaced_copies(&link).unwrap();
+            assert_eq!(listed.len(), 1, "exchange={exchange}");
+            assert_eq!(fs::read(&listed[0].path).unwrap(), b"theirs");
+            assert_eq!(
+                listed[0].path.parent(),
+                Some(real_dir.canonicalize().unwrap().as_path())
+            );
+            assert_eq!(listed, displaced_copies(&real).unwrap());
+            assert!(
+                fs::read_dir(&link_dir).unwrap().count() == 1,
+                "nothing next to the link"
+            );
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn failed_displaced_publication_after_an_exchange_keeps_the_competing_copy() {
+        // N1: the swap succeeded, so the temp name holds the competing vault; publishing it
+        // as `.displaced` fails. It must stay on disk (under the temp name) and be returned.
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("vault");
         fs::write(&p, b"old").unwrap();
         let racer = p.clone();
         let mut race = Race::new(true);
         race.before = Box::new(move || write_atomic(&racer, b"theirs").unwrap());
-        race.rename = Box::new(|_: &Path, _: &Path| Err(Error::other("injected rename failure")));
+        race.link = Box::new(|_: &Path, _: &Path| Err(Error::other("injected link failure")));
         let outcome = race.run(&p, Some(b"old"), b"new").unwrap();
         let ReplaceOutcome::Displaced { bytes, kept } = outcome else {
             panic!("expected Displaced, got {outcome:?}");
@@ -2282,8 +2456,9 @@ mod tests {
     #[test]
     fn a_failed_link_after_the_move_aside_restores_and_keeps_the_copy() {
         // The probe link works, the install link fails: the moved-aside file is linked back at
-        // the path and its working `.aside` name kept (not a listed competing copy); nothing is
-        // deleted on the failure path.
+        // the path and ALSO published as a listed `.displaced` copy (a duplicate of the live
+        // vault, harmless); it never stays under its unlisted `.aside` working name, and nothing
+        // is deleted on the failure path.
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("vault");
         fs::write(&p, b"old").unwrap();
@@ -2302,8 +2477,8 @@ mod tests {
         assert_eq!(fs::read(&p).unwrap(), b"theirs", "restored at the path");
         let names: Vec<_> = listing(d.path()).into_iter().map(|(n, _)| n).collect();
         assert_eq!(names.len(), 2, "{names:?}");
-        assert!(names.iter().any(|n| n.ends_with(".aside")), "{names:?}");
-        assert!(displaced_copies(&p).unwrap().is_empty());
+        assert!(names.iter().any(|n| n.ends_with(".displaced")), "{names:?}");
+        assert!(!names.iter().any(|n| n.ends_with(".aside")), "{names:?}");
         assert!(!holds(d.path(), b"new"), "our temp file is removed");
     }
     #[cfg(unix)]
