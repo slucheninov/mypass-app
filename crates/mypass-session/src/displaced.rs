@@ -4,8 +4,9 @@
 //! file next to the vault as `.<name>.<pid>.<nanos>.<n>.displaced` (see
 //! `mypass_kdbx::ReplaceOutcome::Displaced`). MyPass never deletes one: it may be the only copy
 //! of someone's edit. This module only lists them, read-only, for the Settings vault pane; the
-//! user reviews them in the vault folder. A move-aside working file can also remain after
-//! a failed replacement and is labelled separately.
+//! user reviews them in the vault folder. A move-aside working file, or the file an atomic
+//! exchange swapped out (`.exchanged`), can also remain after a failed replacement and is
+//! labelled separately. Temp names are never listed: they can hold an uninstalled candidate.
 //!
 //! The status carries file names only (no folder), a location marker and, for a folder that
 //! could not be read, an `unavailable` marker: a failed scan is never reported as "no copies".
@@ -30,6 +31,8 @@ pub enum DisplacedLocation {
 pub enum RetainedCopyKind {
     Displaced,
     Aside,
+    /// The previous file an atomic exchange swapped out, left under its working name.
+    Exchanged,
 }
 
 /// One retained copy. `name` is the file name only, for display.
@@ -85,6 +88,7 @@ pub(crate) fn list(targets: &[(DisplacedLocation, PathBuf)]) -> DisplacedCopies 
                     kind: match copy.kind {
                         DisplacedCopyKind::Displaced => RetainedCopyKind::Displaced,
                         DisplacedCopyKind::Aside => RetainedCopyKind::Aside,
+                        DisplacedCopyKind::Exchanged => RetainedCopyKind::Exchanged,
                     },
                     name: copy
                         .path
@@ -158,6 +162,20 @@ mod tests {
         assert!(status.unavailable.is_empty());
         assert!(!status.copies.iter().any(|c| c.name.contains('/')));
         assert!(one.exists() && two.exists());
+    }
+
+    #[test]
+    fn retained_exchange_copies_are_listed_and_temp_candidates_are_not() {
+        let d = tempfile::tempdir().unwrap();
+        let primary = d.path().join("v.kdbx");
+        fs::write(&primary, b"vault").unwrap();
+        fs::write(d.path().join(".v.kdbx.1.2.3.exchanged"), b"previous").unwrap();
+        // A temp name can hold an uninstalled candidate: never a recovery copy.
+        fs::write(d.path().join(".v.kdbx.1.2.4.tmp"), b"candidate").unwrap();
+        let status = list(&targets(Some(primary), None));
+        assert_eq!(status.count, 1);
+        assert_eq!(status.copies[0].kind, RetainedCopyKind::Exchanged);
+        assert_eq!(status.copies[0].name, ".v.kdbx.1.2.3.exchanged");
     }
 
     #[test]
