@@ -260,7 +260,7 @@ impl BridgeUi for TauriBridgeUi {
 }
 
 /// Why the bridge did not start. The messages are for the developer; the webview only learns
-/// `listening: false` and `pairingStoreFailed`.
+/// `listening: false`, `pairingStoreFailed` and the coarse `startFailure` reason.
 #[derive(Debug, thiserror::Error)]
 pub enum BridgeStartError {
     #[error("the paired browser list is unreadable: {0}")]
@@ -269,6 +269,36 @@ pub enum BridgeStartError {
     Server(ServerError),
     #[error("a worker thread could not be started: {0}")]
     Thread(String),
+    #[error("the legacy endpoint record could not be removed")]
+    LegacyEndpoint,
+}
+
+/// Why the bridge is not running, as far as the Browser pane distinguishes it. Carries no detail:
+/// the underlying error text can name paths, so it never leaves the process.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StartFailure {
+    /// The stored list of paired browsers could not be read.
+    PairingStore,
+    /// The endpoint record could not be published or the old one not removed (for example a
+    /// `secrets/shared` folder with group or other permission bits).
+    EndpointStore,
+    /// The loopback listener could not be created.
+    Listener,
+    /// A worker thread could not be started.
+    Worker,
+}
+
+impl BridgeStartError {
+    pub fn failure(&self) -> StartFailure {
+        match self {
+            Self::PairingStore(_) => StartFailure::PairingStore,
+            Self::Server(ServerError::Endpoint(_)) | Self::LegacyEndpoint => {
+                StartFailure::EndpointStore
+            }
+            Self::Server(ServerError::Bind(_)) => StartFailure::Listener,
+            Self::Thread(_) => StartFailure::Worker,
+        }
+    }
 }
 
 /// A running bridge.
@@ -423,9 +453,7 @@ fn start_bridge_with_kind(
             .is_err()
     {
         server.shutdown();
-        return Err(BridgeStartError::Thread(
-            "could not remove legacy endpoint".into(),
-        ));
+        return Err(BridgeStartError::LegacyEndpoint);
     }
 
     let registration = Arc::new(Mutex::new(None));
@@ -485,7 +513,8 @@ type Starter = dyn Fn(Arc<Mutex<bool>>) -> Result<BridgeHandle, BridgeStartError
 
 struct StateInner {
     slot: Mutex<Option<Arc<BridgeHandle>>>,
-    store_failed: AtomicBool,
+    /// Why the last start failed; `None` while running or before the first start.
+    failure: Mutex<Option<StartFailure>>,
     store_kind: mypass_platform::endpoint_store::SharedStoreKind,
     /// Set by the final quit: nothing starts after it, so a start that was still queued cannot
     /// publish an endpoint record the exiting process never clears.
@@ -530,7 +559,7 @@ impl BridgeState {
     ) -> Self {
         Self(Arc::new(StateInner {
             slot: Mutex::new(None),
-            store_failed: AtomicBool::new(false),
+            failure: Mutex::new(None),
             store_kind,
             quit: AtomicBool::new(false),
             starter,
@@ -553,13 +582,12 @@ impl BridgeState {
         }
         match (self.0.starter)(Arc::clone(&self.0.registration_gate)) {
             Ok(handle) => {
-                self.0.store_failed.store(false, Ordering::SeqCst);
+                *lock(&self.0.failure) = None;
                 *slot = Some(Arc::new(handle));
                 Ok(())
             }
             Err(e) => {
-                let failed = matches!(e, BridgeStartError::PairingStore(_));
-                self.0.store_failed.store(failed, Ordering::SeqCst);
+                *lock(&self.0.failure) = Some(e.failure());
                 Err(e)
             }
         }
@@ -570,7 +598,12 @@ impl BridgeState {
     }
 
     pub fn pairing_store_failed(&self) -> bool {
-        self.0.store_failed.load(Ordering::SeqCst)
+        self.start_failure() == Some(StartFailure::PairingStore)
+    }
+
+    /// Why the last start failed, `None` while the bridge runs.
+    pub fn start_failure(&self) -> Option<StartFailure> {
+        *lock(&self.0.failure)
     }
 
     pub fn bundled_host(&self) -> Option<PathBuf> {

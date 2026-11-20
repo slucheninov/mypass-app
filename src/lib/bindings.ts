@@ -279,6 +279,21 @@ export type BrowserRegistrationDto_Serialize = {
 	detail: string | null,
 };
 
+/**
+ *  Why the bridge is not running when the pairing list is not the cause. A fixed reason only: no
+ *  path, no store error text.
+ */
+export type BrowserStartFailure = 
+/**
+ *  The endpoint record cannot be stored (for example a `secrets/shared` folder with group or
+ *  other permission bits).
+ */
+"endpointStoreUnusable" | 
+/**  The loopback listener could not be created. */
+"listenerUnavailable" | 
+/**  A worker thread could not be started. */
+"workerUnavailable";
+
 /**  Everything the Browser pane shows. */
 export type BrowserStatus = BrowserStatus_Serialize | BrowserStatus_Deserialize;
 
@@ -291,6 +306,8 @@ export type BrowserStatus_Deserialize = {
 	 *  offers `browser_reset_pairings`.
 	 */
 	pairingStoreFailed: boolean,
+	/**  The machine-readable reason the bridge is not running, other than the pairing list. */
+	startFailure?: BrowserStartFailure | null,
 	paired: PairedBrowserDto_Deserialize[],
 	pairing?: PairingChallengeDto | null,
 	registrations: BrowserRegistrationDto_Deserialize[],
@@ -309,6 +326,8 @@ export type BrowserStatus_Serialize = {
 	 *  offers `browser_reset_pairings`.
 	 */
 	pairingStoreFailed: boolean,
+	/**  The machine-readable reason the bridge is not running, other than the pairing list. */
+	startFailure: BrowserStartFailure | null,
 	paired: PairedBrowserDto_Serialize[],
 	pairing: PairingChallengeDto | null,
 	registrations: BrowserRegistrationDto_Serialize[],

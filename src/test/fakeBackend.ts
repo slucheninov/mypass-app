@@ -197,6 +197,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     browser: {
       listening: true,
       pairingStoreFailed: false,
+      startFailure: null,
       paired: [],
       pairing: null,
       registrations: [],

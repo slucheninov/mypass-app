@@ -60,9 +60,6 @@ Last updated: 2026-11-15
   vault and record the results in the PR.
 - [ ] Before any `connectNative` use: host handshake lazily on the first frame, reconnect with a fresh
   handshake, never resend a frame already written.
-- [ ] A failed `LoopbackServer::start` (for example a `secrets/shared` folder with group or other
-  bits) shows `listening: false` with no reason and no action in the Browser pane; surface an
-  "endpoint store unusable" state.
 
 ## Stage 4 passkeys
 
