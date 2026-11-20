@@ -73,6 +73,12 @@ pub enum ErrorCode {
     Quitting,
     GeneratorNoClass,
     GeneratorUnsatisfiable,
+    /// The CSV has no `title`, `username` or `password` column (`message` names the column).
+    CsvMissingColumn,
+    /// The CSV is not valid UTF-8 text.
+    CsvNotUtf8,
+    /// The CSV file has no content.
+    CsvEmpty,
     Cancelled,
     Lockout,
     Invalidated,
@@ -167,13 +173,19 @@ impl From<SettingsError> for ApiError {
 
 impl From<CsvImportError> for ApiError {
     fn from(e: CsvImportError) -> Self {
-        // The messages name a column or nothing, never a cell.
-        match e {
-            CsvImportError::TooLarge => {
-                Self::new(ErrorCode::LimitExceeded, "the file is too large")
-            }
-            other => Self::new(ErrorCode::InvalidInput, other.to_string()),
-        }
+        // The messages name a column or nothing, never a cell. Each cause has its own code, so the
+        // UI never matches the English text.
+        let code = match &e {
+            CsvImportError::TooLarge => ErrorCode::LimitExceeded,
+            CsvImportError::NotUtf8 => ErrorCode::CsvNotUtf8,
+            CsvImportError::MissingRequiredColumn(_) => ErrorCode::CsvMissingColumn,
+            CsvImportError::Empty => ErrorCode::CsvEmpty,
+        };
+        let message = match e {
+            CsvImportError::TooLarge => "the file is too large".to_owned(),
+            other => other.to_string(),
+        };
+        Self::new(code, message)
     }
 }
 
@@ -594,6 +606,18 @@ impl AppCore {
         self.read(|db| editing::reveal_at(db, parse_id(id)?, &field, now))
     }
 
+    /// One plain value of an earlier version of the entry (`revision` as in `entry_history`, not
+    /// its position), after an explicit click. History listings never carry values; this is the
+    /// only way one leaves. A version that no longer exists is `NotFound`.
+    pub fn entry_history_reveal(
+        &self,
+        id: &str,
+        revision: &str,
+        field: FieldRef,
+    ) -> Result<String, ApiError> {
+        self.read(|db| editing::reveal_history(db, parse_id(id)?, revision, &field))
+    }
+
     /// Copies a field to the clipboard from Rust (cleared after the configured seconds); the
     /// value never leaves the backend.
     pub fn entry_copy(&self, id: &str, field: FieldRef) -> Result<(), ApiError> {
@@ -650,14 +674,12 @@ impl AppCore {
         Ok(())
     }
 
-    /// Moves a bin entry to `group_id` (the root when `None`).
+    /// Moves a bin entry to `group_id`, or back to the group it was deleted from when `None`
+    /// (the root if that group is gone).
     pub fn entry_restore(&self, id: &str, group_id: Option<&str>) -> Result<(), ApiError> {
         self.writable()?;
         let id = parse_id(id)?;
-        let group = match group_id {
-            Some(g) => parse_id(g)?,
-            None => self.session.with_db(Database::root_id)?,
-        };
+        let group = group_id.map(parse_id).transpose()?;
         Ok(editing::restore_entry(&self.session, id, group)?)
     }
 
@@ -706,12 +728,12 @@ impl AppCore {
         }
     }
 
-    pub fn entry_history_restore(&self, id: &str, index: u32) -> Result<(), ApiError> {
+    pub fn entry_history_restore(&self, id: &str, revision: &str) -> Result<(), ApiError> {
         self.writable()?;
         Ok(editing::restore_history(
             &self.session,
             parse_id(id)?,
-            index as usize,
+            revision,
         )?)
     }
 
@@ -898,6 +920,17 @@ impl AppCore {
             generator_service::record_history(&self.session, value, url)?;
         }
         self.copy(value)
+    }
+
+    /// Records a generated password the user took with "Use" (the form fills it in; nothing is
+    /// copied) in the generator history, exactly like a copy with a record URL does. The website
+    /// is optional: a login without one still lands in the history (with a blank website), so the
+    /// password can be recovered if the form is never saved. The history entry is written before
+    /// the form takes the value.
+    pub fn generator_use(&self, value: &str, record_url: Option<&str>) -> Result<(), ApiError> {
+        self.writable()?;
+        generator_service::record_history(&self.session, value, record_url.unwrap_or(""))?;
+        Ok(())
     }
 
     pub fn generator_history_copy(&self, id: &str) -> Result<(), ApiError> {
@@ -1462,7 +1495,8 @@ mod tests {
         call!("entry_move", c, a => c.entry_move(&a.entry, &a.root));
         call!("entry_touch", c, a => c.entry_touch(&a.entry));
         call!("entry_history", c, a => c.entry_history(&a.entry));
-        call!("entry_history_restore", c, a => c.entry_history_restore(&a.entry, 0));
+        call!("entry_history_restore", c, a => c.entry_history_restore(&a.entry, "rev"));
+        call!("entry_history_reveal", c, a => c.entry_history_reveal(&a.entry, "rev", FieldRef::Password));
         call!("attachment_export", c, a => c.attachment_export(&a.entry, "a.txt", "/nonexistent/out.bin"));
         call!("group_create", c, a => c.group_create(None, "g", None));
         call!("group_update", c, a => c.group_update(&a.root, "g", None));
@@ -1477,6 +1511,7 @@ mod tests {
         call!("generator_history_delete", c, a => c.generator_history_delete(&a.entry));
         call!("generator_generate+record", c, a => c.generator_generate(a.generate.clone()));
         call!("generator_copy+record", c, a => c.generator_copy("secret", Some("https://example.com")));
+        call!("generator_use", c, a => c.generator_use("secret", Some("https://example.com")));
         call!("import_csv_commit", c, a => c.import_csv_commit("/nonexistent/in.csv", &a.root));
         call!("backup_restore", c, a => c.backup_restore("backup-1.kdbx"));
         calls
@@ -2094,6 +2129,55 @@ mod tests {
     }
 
     #[test]
+    fn generator_use_records_history_without_touching_the_clipboard() {
+        let f = fx_open();
+        f.core
+            .generator_use("Gen#Pass-2", Some("https://login.example.com/path"))
+            .unwrap();
+        assert_eq!(f.fake.clipboard.contents(), None, "use never copies");
+        let history = f.core.generator_history_list().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].title, "login.example.com");
+        assert_eq!(
+            f.core.generator_history_reveal(&history[0].id).unwrap(),
+            "Gen#Pass-2"
+        );
+    }
+
+    #[test]
+    fn generator_use_without_a_website_still_records_the_value() {
+        let f = fx_open();
+        f.core.generator_use("Gen#Pass-3", None).unwrap();
+        assert_eq!(f.fake.clipboard.contents(), None, "use never copies");
+        let history = f.core.generator_history_list().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            (history[0].url.as_str(), history[0].title.as_str()),
+            ("", "")
+        );
+        assert_eq!(
+            f.core.generator_history_reveal(&history[0].id).unwrap(),
+            "Gen#Pass-3"
+        );
+    }
+
+    #[test]
+    fn generator_use_fails_when_locked_or_quitting() {
+        let f = fx_open();
+        f.core.vault_lock().unwrap();
+        assert_eq!(
+            code(f.core.generator_use("secret", Some("https://example.com"))),
+            ErrorCode::Locked
+        );
+        f.core.vault_unlock(pw("pw")).unwrap();
+        f.core.begin_quit();
+        assert_eq!(
+            code(f.core.generator_use("secret", Some("https://example.com"))),
+            ErrorCode::Quitting
+        );
+    }
+
+    #[test]
     fn generator_copy_does_not_copy_when_recording_fails() {
         let f = fx_open();
         f.core.vault_lock().unwrap();
@@ -2483,19 +2567,21 @@ mod tests {
             ApiError::from(CsvImportError::TooLarge).code,
             ErrorCode::LimitExceeded
         );
-        for e in [
-            CsvImportError::NotUtf8,
-            CsvImportError::Empty,
-            CsvImportError::MissingRequiredColumn("title".into()),
+        for (e, code) in [
+            (CsvImportError::NotUtf8, ErrorCode::CsvNotUtf8),
+            (CsvImportError::Empty, ErrorCode::CsvEmpty),
+            (
+                CsvImportError::MissingRequiredColumn("title".into()),
+                ErrorCode::CsvMissingColumn,
+            ),
         ] {
-            assert_eq!(ApiError::from(e).code, ErrorCode::InvalidInput);
+            assert_eq!(ApiError::from(e).code, code);
         }
         assert_eq!(
             ApiError::from(CsvImportError::MissingRequiredColumn("title".into())).message,
             "missing required column title"
         );
-        // The import dialog tells these causes apart by this English text (the code is the same
-        // `InvalidInput` for all of them), so a rewording must change the UI in the same commit.
+        // The English text is diagnostics only: the UI localises by code.
         assert_eq!(
             ApiError::from(CsvImportError::NotUtf8).message,
             "file is not valid UTF-8"
@@ -2535,8 +2621,18 @@ mod tests {
             .core
             .import_csv_preview(csv.to_str().unwrap())
             .unwrap_err();
-        assert_eq!(error.code, ErrorCode::InvalidInput);
+        assert_eq!(error.code, ErrorCode::CsvMissingColumn);
         assert!(!error.message.contains("secret-cell"));
+        std::fs::write(&csv, b"title,username,password\n\xff\xfe,x,y\n").unwrap();
+        assert_eq!(
+            code(f.core.import_csv_preview(csv.to_str().unwrap())),
+            ErrorCode::CsvNotUtf8
+        );
+        std::fs::write(&csv, "").unwrap();
+        assert_eq!(
+            code(f.core.import_csv_preview(csv.to_str().unwrap())),
+            ErrorCode::CsvEmpty
+        );
         assert_eq!(
             code(f.core.import_csv_preview("/nonexistent/in.csv")),
             ErrorCode::NotFound

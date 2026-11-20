@@ -41,6 +41,15 @@ export function findGroup(nodes: GroupNode_Serialize[], id: string): GroupNode_S
   return null;
 }
 
+/** True for the root and every group outside the recycle bin: a place an item can be saved into.
+ *  A group in the bin was deleted (it is listed there until the bin is emptied). */
+export function isLiveGroup(nodes: GroupNode_Serialize[], rootId: string, id: string): boolean {
+  if (id === rootId) return true;
+  const live = (list: GroupNode_Serialize[]): boolean =>
+    list.some((node) => !node.isRecycleBin && (node.id === id || live(node.children)));
+  return live(nodes);
+}
+
 /** True when `id` is `ancestorId` itself or lies inside its subtree (a group cannot move there). */
 export function isSelfOrDescendant(nodes: GroupNode_Serialize[], ancestorId: string, id: string): boolean {
   const ancestor = findGroup(nodes, ancestorId);

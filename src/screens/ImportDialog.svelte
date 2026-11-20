@@ -4,7 +4,7 @@
   // password ever reaches this component) or `null` when the user cancelled, and
   // `import_csv_commit(groupId)` then imports the file that preview remembered, exactly once.
   import { onMount } from "svelte";
-  import { api, ApiFailure, errorMessage } from "../lib/api";
+  import { api, errorMessage } from "../lib/api";
   import type { CsvPreview, SkipReason } from "../lib/bindings";
   import { visibleGroups } from "../lib/group-tree";
   import { t } from "../lib/i18n/index.svelte";
@@ -44,20 +44,6 @@
     return options.some((o) => o.value === wanted) ? wanted : rootId;
   });
 
-  /**
-   * The backend reports a bad file as `invalidInput` with a fixed English message (the code has no
-   * finer grain, R15); those three messages are pinned by a Rust test, anything else falls back to
-   * the code's own localised text.
-   */
-  function failureMessage(e: unknown): string {
-    if (e instanceof ApiFailure && e.code === "invalidInput") {
-      if (e.detail.startsWith("missing required column")) return t("The file must have title, username and password columns");
-      if (e.detail === "file is not valid UTF-8") return t("The file is not UTF-8 text");
-      if (e.detail === "file is empty") return t("The file is empty");
-    }
-    return errorMessage(e);
-  }
-
   const reason = (line: number, code: SkipReason): string =>
     code === "fieldCountMismatch"
       ? t("Row %lld: the number of columns does not match", line)
@@ -79,7 +65,7 @@
       else preview = picked;
     } catch (e) {
       if (closed || !unchanged()) return;
-      error = failureMessage(e);
+      error = errorMessage(e);
     }
   }
 
@@ -99,7 +85,7 @@
         // The backend spends the remembered file on every commit, also a failing one: another
         // Import could only fail again, so the dialog goes back to choosing a file.
         preview = null;
-        error = failureMessage(e);
+        error = errorMessage(e);
       }
     } finally {
       busy = false;

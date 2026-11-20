@@ -50,6 +50,12 @@ fn custom(out: &mut String, items: &[CustomDataItem]) {
     }
     out.push_str("</CustomData>");
 }
+/// Written whenever recorded; a reader that predates KDBX 4.1 skips the unknown element.
+fn previous_parent(out: &mut String, id: Option<uuid::Uuid>) {
+    if let Some(id) = id {
+        text(out, "PreviousParentGroup", &B64.encode(id.as_bytes()));
+    }
+}
 fn extra(out: &mut String, items: &[RawXml]) {
     for x in items {
         out.push_str(&x.0);
@@ -91,6 +97,7 @@ fn entry(
 ) -> Result<()> {
     out.push_str("<Entry>");
     text(out, "UUID", &B64.encode(e.uuid.as_bytes()));
+    previous_parent(out, e.previous_parent);
     text(out, "IconID", &e.icon_id.to_string());
     times(
         out,
@@ -146,6 +153,7 @@ fn group(
 ) -> Result<()> {
     out.push_str("<Group>");
     text(out, "UUID", &B64.encode(g.uuid.as_bytes()));
+    previous_parent(out, g.previous_parent);
     text(out, "Name", &g.name);
     text(out, "IconID", &g.icon_id.to_string());
     times(

@@ -55,7 +55,12 @@ export const commands = {
 	entryEmptyBin: () => typedError<number, ApiError>(__TAURI_INVOKE("entry_empty_bin")),
 	entryGet: (id: string) => typedError<EntryDetailDto_Serialize, ApiError>(__TAURI_INVOKE("entry_get", { id })),
 	entryHistory: (id: string) => typedError<HistoryItem[], ApiError>(__TAURI_INVOKE("entry_history", { id })),
-	entryHistoryRestore: (id: string, index: number) => typedError<null, ApiError>(__TAURI_INVOKE("entry_history_restore", { id, index })),
+	entryHistoryRestore: (id: string, revision: string) => typedError<null, ApiError>(__TAURI_INVOKE("entry_history_restore", { id, revision })),
+	/**
+	 *  Reveal command: one plain value of an earlier version of the entry, after the user's explicit
+	 *  click. `entry_history` never carries values.
+	 */
+	entryHistoryReveal: (id: string, revision: string, field: FieldRef) => typedError<string, ApiError>(__TAURI_INVOKE("entry_history_reveal", { id, revision, field })),
 	entryList: (query: EntryQuery) => typedError<EntrySummary[], ApiError>(__TAURI_INVOKE("entry_list", { query })),
 	entryMove: (id: string, groupId: string) => typedError<null, ApiError>(__TAURI_INVOKE("entry_move", { id, groupId })),
 	entryNewModel: (entryType: EntryTypeDto, groupId: string | null) => typedError<EntryEditModel_Serialize, ApiError>(__TAURI_INVOKE("entry_new_model", { entryType, groupId })),
@@ -74,6 +79,11 @@ export const commands = {
 	entryTotp: (id: string) => typedError<TotpDto, ApiError>(__TAURI_INVOKE("entry_totp", { id })),
 	entryTouch: (id: string) => typedError<null, ApiError>(__TAURI_INVOKE("entry_touch", { id })),
 	generatorCopy: (value: string, recordUrl: string | null) => typedError<null, ApiError>(__TAURI_INVOKE("generator_copy", { value, recordUrl })),
+	/**
+	 *  Records a password the form took with "Use" in the generator history (the website is
+	 *  optional); nothing is copied.
+	 */
+	generatorUse: (value: string, recordUrl: string | null) => typedError<null, ApiError>(__TAURI_INVOKE("generator_use", { value, recordUrl })),
 	generatorGenerate: (req: GenerateRequest_Deserialize) => typedError<GeneratedPassword_Serialize, ApiError>(__TAURI_INVOKE("generator_generate", { req })),
 	generatorHistoryCopy: (id: string) => typedError<null, ApiError>(__TAURI_INVOKE("generator_history_copy", { id })),
 	generatorHistoryDelete: (id: string) => typedError<null, ApiError>(__TAURI_INVOKE("generator_history_delete", { id })),
@@ -536,6 +546,11 @@ export type EntryEditModel_Deserialize = {
 	 *  passkey stored after the editor opened (a browser replace) is never removed unseen.
 	 */
 	passkeyRef?: string | null,
+	/**
+	 *  The user explicitly chose to bring this deleted entry back: when it sits in the recycle
+	 *  bin, a save is refused unless this is set, and then it moves the entry to `group_id`.
+	 */
+	restore?: boolean,
 };
 
 /**
@@ -576,6 +591,11 @@ export type EntryEditModel_Serialize = {
 	 *  passkey stored after the editor opened (a browser replace) is never removed unseen.
 	 */
 	passkeyRef: string | null,
+	/**
+	 *  The user explicitly chose to bring this deleted entry back: when it sits in the recycle
+	 *  bin, a save is refused unless this is set, and then it moves the entry to `group_id`.
+	 */
+	restore: boolean,
 };
 
 export type EntryQuery = {
@@ -605,7 +625,13 @@ export type EntryTypeDto = "login" | "address" | "card" | "notes" | "files";
 /**  The stable error code the UI localises. Serialised in camelCase. */
 export type ErrorCode = "locked" | "noVault" | "wrongPassword" | "alreadyExists" | "notFound" | "invalidInput" | "limitExceeded" | "syncKdfLimitExceeded" | "corrupt" | "unsupported" | "changedOnDisk" | "io" | 
 /**  The vault is in iCloud Drive and did not download in time, try again later. */
-"downloading" | "quitting" | "generatorNoClass" | "generatorUnsatisfiable" | "cancelled" | "lockout" | "invalidated" | "notEnrolledOnDevice" | "deviceUnlockUnavailable" | "migrationLocked" | "migrationTargetUnreadable" | "migrationTargetNotAVault" | "migrationTargetPasswordMismatch" | "migrationTargetWriteFailed" | "migrationSourceInvalid" | "migrationSameFile" | "migrationValidationFailed" | "internal";
+"downloading" | "quitting" | "generatorNoClass" | "generatorUnsatisfiable" | 
+/**  The CSV has no `title`, `username` or `password` column (`message` names the column). */
+"csvMissingColumn" | 
+/**  The CSV is not valid UTF-8 text. */
+"csvNotUtf8" | 
+/**  The CSV file has no content. */
+"csvEmpty" | "cancelled" | "lockout" | "invalidated" | "notEnrolledOnDevice" | "deviceUnlockUnavailable" | "migrationLocked" | "migrationTargetUnreadable" | "migrationTargetNotAVault" | "migrationTargetPasswordMismatch" | "migrationTargetWriteFailed" | "migrationSourceInvalid" | "migrationSameFile" | "migrationValidationFailed" | "internal";
 
 /**  A single field to reveal or copy. `Totp` resolves to the current code. */
 export type FieldRef = { kind: "username" } | { kind: "password" } | { kind: "url" } | { kind: "notesBody" } | { kind: "cardNumber" } | { kind: "cardCvv" } | { kind: "totp" } | { kind: "custom"; key: string };
@@ -743,11 +769,36 @@ export type GroupNode_Serialize = {
  *  newer version (or the current entry) changed relative to this one.
  */
 export type HistoryItem = {
+	/**
+	 *  The position in the list, for restoring. It shifts whenever a version is added or dropped,
+	 *  so a value is revealed by `revision`, never by this.
+	 */
 	index: number,
+	/**
+	 *  An opaque, stable name of this exact version (the same one across reloads while the version
+	 *  exists, a different one for a different version even with equal title and date). It is
+	 *  derived with a per-run secret, so it reveals nothing about the values it covers.
+	 */
+	revision: string,
 	/**  Unix milliseconds. */
 	modified: number | null,
 	title: string,
 	changedFields: string[],
+	/**
+	 *  The changed fields whose old value this version still holds and that can be revealed, in
+	 *  the order of `changed_fields`. Reserved values (the code, passkey material, attachment
+	 *  bytes, the app's own bookkeeping) are never listed.
+	 */
+	revealable: HistoryReveal[],
+};
+
+/**
+ *  One revealable field of a history version: `key` is the changed-field name from
+ *  `HistoryItem::changed_fields`, `field` what to pass to `entry_history_reveal`.
+ */
+export type HistoryReveal = {
+	key: string,
+	field: FieldRef,
 };
 
 /**  Auto-lock after this much inactivity. */

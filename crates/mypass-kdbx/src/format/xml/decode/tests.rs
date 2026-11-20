@@ -494,3 +494,28 @@ fn attachment_expansion_counter_overflow_is_corrupt() {
     assert!(matches!(result, Err(KdbxError::Corrupt(ref message))
         if message == "attachment expansion exceeds limit"));
 }
+#[test]
+fn previous_parent_group_is_read_and_a_bad_value_is_dropped() {
+    let d = read(&make_xml(
+        "<Group><UUID>AAECAwQFBgcICQoLDA0ODw==</UUID><PreviousParentGroup>EBESExQVFhcYGRobHB0eHw==</PreviousParentGroup></Group>",
+    ))
+    .unwrap();
+    let g = d.root.groups.first().unwrap();
+    assert_eq!(
+        g.previous_parent,
+        Some(Uuid::from_bytes([
+            16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+        ]))
+    );
+    assert!(g.extra.is_empty());
+    // A hint only: malformed or all-zero values neither fail the vault nor stay behind.
+    for bad in ["AA==", "AAAAAAAAAAAAAAAAAAAAAA==", "not base64"] {
+        let d = read(&make_xml(&format!(
+            "<Group><UUID>AAECAwQFBgcICQoLDA0ODw==</UUID><PreviousParentGroup>{bad}</PreviousParentGroup></Group>"
+        )))
+        .unwrap();
+        let g = d.root.groups.first().unwrap();
+        assert_eq!(g.previous_parent, None);
+        assert!(g.extra.is_empty());
+    }
+}

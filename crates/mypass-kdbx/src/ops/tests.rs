@@ -220,6 +220,8 @@ fn restore_moves_out_of_bin_and_move_preserves_content() {
     db.restore_entry(id, db.root_id(), t(3)).unwrap();
     let mut expected = before;
     expected.location_changed = t(3);
+    // Content is untouched; only the location data changes (the source of the move is the bin).
+    expected.previous_parent = db.meta.recycle_bin_uuid;
     assert_eq!(db.find_entry(id), Some(&expected));
     assert!(!db.is_in_recycle_bin(id));
 }
@@ -608,4 +610,201 @@ fn add_entries_matches_add_entry_and_is_all_or_nothing() {
         .is_err());
     assert_eq!(db.root.entries.len(), 2);
     db.add_entries(root, Vec::new(), t(7)).unwrap();
+}
+fn db_with_group_entry() -> (Database, Uuid, Uuid) {
+    let mut db = Database::new("Root");
+    let g = Group::new("work", t(0));
+    let gid = g.uuid;
+    db.add_group(db.root_id(), g, t(1)).unwrap();
+    let e = make_entry("in work");
+    let id = e.uuid;
+    db.add_entry(gid, e, t(1)).unwrap();
+    (db, id, gid)
+}
+#[test]
+fn deleting_an_entry_records_its_group_and_restore_target_uses_it() {
+    let (mut db, id, gid) = db_with_group_entry();
+    assert_eq!(db.find_entry(id).unwrap().previous_parent, None);
+    db.delete_entry(id, t(2)).unwrap();
+    assert!(db.is_in_recycle_bin(id));
+    assert_eq!(db.find_entry(id).unwrap().previous_parent, Some(gid));
+    assert_eq!(db.restore_target_of_entry(id), gid);
+    db.restore_entry(id, gid, t(3)).unwrap();
+    assert_eq!(db.parent_of_entry(id), Some(gid));
+    // Like every parent change, the restore records its immediate source: the bin.
+    assert_eq!(
+        db.find_entry(id).unwrap().previous_parent,
+        db.meta.recycle_bin_uuid
+    );
+}
+#[test]
+fn moving_inside_the_bin_keeps_the_original_origin() {
+    let (mut db, id, gid) = db_with_group_entry();
+    db.delete_entry(id, t(2)).unwrap();
+    let bin = db.meta.recycle_bin_uuid.unwrap();
+    let sub = Group::new("sub", t(0));
+    let sub_id = sub.uuid;
+    db.add_group(bin, sub, t(3)).unwrap();
+    db.move_entry(id, sub_id, t(4)).unwrap();
+    assert_eq!(db.find_entry(id).unwrap().previous_parent, Some(gid));
+    assert_eq!(db.restore_target_of_entry(id), gid);
+}
+#[test]
+fn an_ordinary_move_records_the_immediate_source() {
+    let (mut db, id, gid) = db_with_group_entry();
+    let root = db.root_id();
+    db.move_entry(id, root, t(2)).unwrap();
+    assert_eq!(db.find_entry(id).unwrap().previous_parent, Some(gid));
+}
+#[test]
+fn a_move_replaces_a_previous_parent_that_another_client_recorded() {
+    // KeePass moved the entry from A to B and recorded A; MyPass then moves it from B to C.
+    let mut db = Database::new("Root");
+    let (a, b, c) = (
+        Group::new("a", t(0)),
+        Group::new("b", t(0)),
+        Group::new("c", t(0)),
+    );
+    let (a_id, b_id, c_id) = (a.uuid, b.uuid, c.uuid);
+    for g in [a, b, c] {
+        db.add_group(db.root_id(), g, t(1)).unwrap();
+    }
+    let e = make_entry("moved elsewhere");
+    let id = e.uuid;
+    db.add_entry(b_id, e, t(1)).unwrap();
+    db.find_entry_mut(id).unwrap().previous_parent = Some(a_id);
+    db.move_entry(id, c_id, t(2)).unwrap();
+    assert_eq!(db.find_entry(id).unwrap().previous_parent, Some(b_id));
+    // Same-parent operations keep what was recorded.
+    db.move_entry(id, c_id, t(3)).unwrap();
+    assert_eq!(db.find_entry(id).unwrap().previous_parent, Some(b_id));
+}
+#[test]
+fn restore_followed_by_another_move_and_a_second_delete_records_each_source() {
+    let (mut db, id, gid) = db_with_group_entry();
+    let root = db.root_id();
+    let bin_of = |db: &Database| db.meta.recycle_bin_uuid;
+    db.delete_entry(id, t(2)).unwrap();
+    db.restore_entry(id, gid, t(3)).unwrap();
+    assert_eq!(db.find_entry(id).unwrap().previous_parent, bin_of(&db));
+    db.move_entry(id, root, t(4)).unwrap();
+    assert_eq!(db.find_entry(id).unwrap().previous_parent, Some(gid));
+    db.delete_entry(id, t(5)).unwrap();
+    assert_eq!(db.find_entry(id).unwrap().previous_parent, Some(root));
+    assert_eq!(db.restore_target_of_entry(id), root);
+}
+#[test]
+fn a_group_move_records_its_immediate_source_and_bin_moves_keep_the_origin() {
+    let mut db = Database::new("Root");
+    let (a, b) = (Group::new("a", t(0)), Group::new("b", t(0)));
+    let (a_id, b_id) = (a.uuid, b.uuid);
+    db.add_group(db.root_id(), a, t(1)).unwrap();
+    db.add_group(db.root_id(), b, t(1)).unwrap();
+    let child = Group::new("child", t(0));
+    let child_id = child.uuid;
+    db.add_group(a_id, child, t(1)).unwrap();
+    db.find_group_mut(child_id).unwrap().previous_parent = Some(Uuid::new_v4());
+    db.move_group(child_id, b_id, t(2)).unwrap();
+    assert_eq!(db.find_group(child_id).unwrap().previous_parent, Some(a_id));
+    db.move_group(child_id, b_id, t(3)).unwrap();
+    assert_eq!(db.find_group(child_id).unwrap().previous_parent, Some(a_id));
+    db.delete_group(child_id, t(4)).unwrap();
+    assert_eq!(db.find_group(child_id).unwrap().previous_parent, Some(b_id));
+    let bin = db.meta.recycle_bin_uuid.unwrap();
+    let sub = Group::new("sub", t(0));
+    let sub_id = sub.uuid;
+    db.add_group(bin, sub, t(5)).unwrap();
+    db.move_group(child_id, sub_id, t(6)).unwrap();
+    assert_eq!(db.find_group(child_id).unwrap().previous_parent, Some(b_id));
+}
+#[test]
+fn restore_target_falls_back_to_the_root_when_the_original_group_is_gone() {
+    let (mut db, id, gid) = db_with_group_entry();
+    db.delete_entry(id, t(2)).unwrap();
+    // Purged outright: the recorded group no longer exists.
+    db.purge_group(gid, t(3)).unwrap();
+    assert_eq!(db.find_entry(id).unwrap().previous_parent, Some(gid));
+    assert_eq!(db.restore_target_of_entry(id), db.root_id());
+    // Never recorded at all.
+    assert_eq!(db.restore_target_of_entry(Uuid::nil()), db.root_id());
+}
+#[test]
+fn restore_target_ignores_an_original_group_that_was_recycled_too() {
+    let (mut db, id, gid) = db_with_group_entry();
+    db.delete_entry(id, t(2)).unwrap();
+    db.delete_group(gid, t(3)).unwrap();
+    // The group exists, but inside the bin: restoring there would leave the entry deleted.
+    assert!(db.find_group(gid).is_some());
+    assert_eq!(db.restore_target_of_entry(id), db.root_id());
+}
+#[test]
+fn restore_target_never_names_the_bin() {
+    let (mut db, id, _) = db_with_group_entry();
+    db.delete_entry(id, t(2)).unwrap();
+    let bin = db.meta.recycle_bin_uuid.unwrap();
+    db.find_entry_mut(id).unwrap().previous_parent = Some(bin);
+    assert_eq!(db.restore_target_of_entry(id), db.root_id());
+}
+#[test]
+fn deleting_a_group_records_its_parent_and_restore_group_uses_it() {
+    let mut db = Database::new("Root");
+    let parent = Group::new("parent", t(0));
+    let parent_id = parent.uuid;
+    db.add_group(db.root_id(), parent, t(1)).unwrap();
+    let child = Group::new("child", t(0));
+    let child_id = child.uuid;
+    db.add_group(parent_id, child, t(1)).unwrap();
+    db.delete_group(child_id, t(2)).unwrap();
+    assert!(db.is_group_in_recycle_bin(child_id));
+    assert_eq!(
+        db.find_group(child_id).unwrap().previous_parent,
+        Some(parent_id)
+    );
+    let target = db.restore_target_of_group(child_id);
+    assert_eq!(target, parent_id);
+    db.restore_group(child_id, target, t(3)).unwrap();
+    assert!(!db.is_group_in_recycle_bin(child_id));
+    assert_eq!(
+        db.find_group(child_id).unwrap().previous_parent,
+        db.meta.recycle_bin_uuid
+    );
+    assert!(db
+        .find_group(parent_id)
+        .unwrap()
+        .groups
+        .iter()
+        .any(|g| g.uuid == child_id));
+}
+#[test]
+fn restore_group_with_a_missing_original_parent_goes_to_the_root() {
+    let mut db = Database::new("Root");
+    let parent = Group::new("parent", t(0));
+    let parent_id = parent.uuid;
+    db.add_group(db.root_id(), parent, t(1)).unwrap();
+    let mut child = Group::new("child", t(0));
+    let e = make_entry("nested");
+    let eid = e.uuid;
+    child.entries.push(e);
+    let child_id = child.uuid;
+    db.add_group(parent_id, child, t(1)).unwrap();
+    db.delete_group(child_id, t(2)).unwrap();
+    db.purge_group(parent_id, t(3)).unwrap();
+    let target = db.restore_target_of_group(child_id);
+    assert_eq!(target, db.root_id());
+    db.restore_group(child_id, target, t(4)).unwrap();
+    assert_eq!(db.parent_of_entry(eid), Some(child_id));
+    assert!(!db.is_in_recycle_bin(eid));
+}
+#[test]
+fn restore_group_rejects_groups_outside_the_bin_and_the_bin_itself() {
+    let (mut db, _, gid) = db_with_group_entry();
+    let root = db.root_id();
+    assert!(db.restore_group(gid, root, t(2)).is_err());
+    let doomed = Group::new("doomed", t(0));
+    let did = doomed.uuid;
+    db.add_group(root, doomed, t(1)).unwrap();
+    db.delete_group(did, t(2)).unwrap();
+    let bin = db.meta.recycle_bin_uuid.unwrap();
+    assert!(db.restore_group(bin, root, t(3)).is_err());
+    assert!(db.restore_group(root, root, t(3)).is_err());
 }

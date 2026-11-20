@@ -8,7 +8,7 @@ import { navigation } from "../lib/stores/navigation.svelte";
 import { toasts } from "../lib/stores/toasts.svelte";
 import { expectNoAxeViolations } from "../test/axe";
 import { backendWith, openEdit, openNew, user } from "../test/editorHelpers";
-import { WORK_GROUP_ID, sessionStatus } from "../test/fixtures";
+import { PERSONAL_GROUP_ID, ROOT_GROUP_ID, WORK_GROUP_ID, makeEntry, sessionStatus } from "../test/fixtures";
 import { calls, renderMainApp } from "../test/mainApp";
 import LoginFormHarness from "../test/LoginFormHarness.svelte";
 import { renderWithBackend } from "../test/render";
@@ -499,5 +499,183 @@ describe("list actions on the entry open in the editor", () => {
     await fireEvent.contextMenu(row());
     await user().click(screen.getByRole("menuitem", { name: "Delete" }));
     await waitFor(() => expect(calls(fake, "entryDelete")).toHaveLength(1));
+  });
+});
+
+// What the editor does when the vault changes under it: unsaved edits are never lost to a change in
+// the vault, and a deleted entry is saved back only by an explicit "Restore and save".
+describe("the vault changing under the editor", () => {
+  async function editing(groupId = WORK_GROUP_ID, dirty = true) {
+    const fake = backendWith([{ id: "e-bank", title: "Bank", groupId, modified: 1 }]);
+    await openEdit(fake, "e-bank");
+    if (dirty) await user().type(field("Title"), " draft");
+    return fake;
+  }
+  const alertText = () => screen.queryByRole("alert")?.textContent ?? null;
+  const notice = () => screen.queryByTestId("editor-notice")?.textContent ?? null;
+  const GROUP_GONE = "The group of this item was deleted. Choose another group to save it.";
+  const ITEM_DELETED = "This item is in Deleted. Saving restores it to the selected group.";
+  const ITEM_PURGED = "This item was permanently deleted. Saving creates a new item with your changes; its attachments and passkey are not carried over.";
+  const entryOf = (fake: { state: { entries: { summary: { id: string } }[] } }, id: string) =>
+    fake.state.entries.find((e) => e.summary.id === id);
+
+  it("a_clean_editor_of_a_purged_entry_closes_with_a_notice", async () => {
+    const fake = await editing(WORK_GROUP_ID, false);
+    await fake.handlers.entryDelete({ id: "e-bank" });
+    await fake.handlers.entryEmptyBin({});
+    await waitFor(() => expect(navigation.editModel).toBeNull());
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(toasts.items.map((x) => x.text)).toContain("This item was deleted, so its editor was closed.");
+    expect(calls(fake, "entrySave")).toHaveLength(0);
+  });
+
+  it("a_dirty_editor_of_a_purged_entry_keeps_the_draft_until_it_is_saved_as_a_new_item_or_discarded", async () => {
+    const fake = await editing();
+    await fake.handlers.entryDelete({ id: "e-bank" });
+    await fake.handlers.entryEmptyBin({});
+    await waitFor(() => expect(notice()).toBe(ITEM_PURGED));
+    expect(navigation.editModel).not.toBeNull();
+    expect(field("Title").value).toBe("Bank draft");
+    expect(toasts.items.map((x) => x.text)).not.toContain("This item was deleted, so its editor was closed.");
+    // Cancel asks before the draft is lost.
+    await user().click(screen.getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByRole("dialog", { name: "Discard changes?" })).toBeTruthy();
+    await user().click(screen.getByRole("button", { name: "Keep editing" }));
+    expect(navigation.editModel).not.toBeNull();
+    // Save creates a new item from the draft in the group the editor shows.
+    await user().click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(calls(fake, "entrySave")).toHaveLength(1));
+    expect(savedModel(fake)).toMatchObject({ id: null, title: "Bank draft", groupId: WORK_GROUP_ID, restore: false });
+    expect(fake.state.entries.map((e) => e.model.title)).toContain("Bank draft");
+    await waitFor(() => expect(navigation.editModel).toBeNull());
+  });
+
+  it("a_purged_entry_draft_with_a_queued_attachment_removal_saves_as_a_new_item_without_the_old_files", async () => {
+    const fake = backendWith([
+      {
+        id: "e-bank",
+        title: "Bank",
+        groupId: WORK_GROUP_ID,
+        modified: 1,
+        attachments: [{ name: "a.txt", size: 1 }],
+        passkey: { relyingParty: "bank.test", username: "ann", created: 1, usable: true },
+      },
+    ]);
+    await openEdit(fake, "e-bank");
+    // The user queues the removal of the existing file and edits the title.
+    await user().click(screen.getByRole("button", { name: "Remove" }));
+    await user().type(field("Title"), " draft");
+    await fake.handlers.entryDelete({ id: "e-bank" });
+    await fake.handlers.entryEmptyBin({});
+    await waitFor(() => expect(notice()).toBe(ITEM_PURGED));
+    expect(ITEM_PURGED).toContain("attachments and passkey are not carried over");
+    // The form no longer offers what no longer exists.
+    expect(screen.queryByText("a.txt")).toBeNull();
+    await user().click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(calls(fake, "entrySave")).toHaveLength(1));
+    expect(savedModel(fake)).toMatchObject({
+      id: null,
+      title: "Bank draft",
+      attachments: [],
+      attachmentOps: [],
+      passkey: null,
+      removePasskey: false,
+      passkeyRef: null,
+    });
+    await waitFor(() => expect(navigation.editModel).toBeNull());
+    expect(fake.state.entries.map((e) => e.model.title)).toContain("Bank draft");
+    expect(toasts.items.map((x) => x.text)).toEqual([]);
+  });
+
+  it("discarding_the_draft_of_a_purged_entry_is_an_explicit_choice", async () => {
+    const fake = await editing();
+    await fake.handlers.entryDelete({ id: "e-bank" });
+    await fake.handlers.entryEmptyBin({});
+    await waitFor(() => expect(notice()).toBe(ITEM_PURGED));
+    await user().click(screen.getByRole("button", { name: "Cancel" }));
+    await user().click(await screen.findByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(navigation.editModel).toBeNull());
+    expect(calls(fake, "entrySave")).toHaveLength(0);
+  });
+
+  it("a_deleted_group_keeps_the_draft_and_refuses_to_save_until_another_group_is_chosen", async () => {
+    const fake = await editing();
+    await fake.handlers.groupDelete({ id: WORK_GROUP_ID });
+    await waitFor(() => expect(alertText()).toBe(GROUP_GONE));
+    expect(field("Title").value).toBe("Bank draft");
+    expect(navigation.editModel).not.toBeNull();
+    await user().click(screen.getByRole("button", { name: "Restore and save" }));
+    expect(calls(fake, "entrySave")).toHaveLength(0);
+    expect(navigation.editModel?.title).toBe("Bank draft");
+    // Choosing a live group lifts the refusal; "Restore and save" brings the entry out of the bin.
+    await user().click(screen.getByRole("button", { name: "Deleted" }));
+    const picker = await screen.findByRole("dialog", { name: "Group" });
+    await user().click(picker.querySelector(`[role="treeitem"][data-id="${PERSONAL_GROUP_ID}"]`)!);
+    await waitFor(() => expect(alertText()).toBeNull());
+    await user().click(screen.getByRole("button", { name: "Restore and save" }));
+    await waitFor(() => expect(calls(fake, "entrySave")).toHaveLength(1));
+    expect(savedModel(fake)).toMatchObject({ title: "Bank draft", groupId: PERSONAL_GROUP_ID, restore: true });
+    expect(entryOf(fake, "e-bank")).toMatchObject({ summary: { inRecycleBin: false } });
+  });
+
+  it("an_entry_deleted_under_the_editor_is_saved_back_only_by_the_explicit_restore_and_save", async () => {
+    const fake = await editing();
+    await fake.handlers.entryDelete({ id: "e-bank" });
+    await waitFor(() => expect(notice()).toBe(ITEM_DELETED));
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(field("Title").value).toBe("Bank draft");
+    await user().click(screen.getByRole("button", { name: "Restore and save" }));
+    await waitFor(() => expect(calls(fake, "entrySave")).toHaveLength(1));
+    // The destination is the group the editor shows (the original one), chosen explicitly.
+    expect(savedModel(fake)).toMatchObject({ id: "e-bank", groupId: WORK_GROUP_ID, restore: true });
+    expect(entryOf(fake, "e-bank")).toMatchObject({ summary: { inRecycleBin: false, groupId: WORK_GROUP_ID } });
+  });
+
+  it("a_recycled_root_entry_can_be_restored_to_its_root_without_any_other_group", async () => {
+    const fake = createFakeBackend({ session: "unlocked" });
+    fake.state.groups = fake.state.groups.filter((g) => g.isRecycleBin);
+    fake.state.entries.push(makeEntry({ id: "e-root", title: "Root item", groupId: ROOT_GROUP_ID, modified: 1 }));
+    await openEdit(fake, "e-root");
+    await user().type(field("Title"), " draft");
+    await fake.handlers.entryDelete({ id: "e-root" });
+    await waitFor(() => expect(notice()).toBe(ITEM_DELETED));
+    expect(alertText()).toBeNull();
+    await user().click(screen.getByRole("button", { name: "Restore and save" }));
+    await waitFor(() => expect(calls(fake, "entrySave")).toHaveLength(1));
+    expect(savedModel(fake)).toMatchObject({ id: "e-root", groupId: ROOT_GROUP_ID, restore: true });
+    expect(entryOf(fake, "e-root")).toMatchObject({ summary: { inRecycleBin: false, groupId: ROOT_GROUP_ID } });
+  });
+
+  it("a_save_that_loses_the_race_with_a_delete_is_refused_and_the_editor_catches_up", async () => {
+    const fake = await editing();
+    // The entry is recycled without the editor hearing about it (the event is still in flight).
+    const entry = entryOf(fake, "e-bank") as unknown as { summary: { inRecycleBin: boolean; groupId: string } };
+    entry.summary.inRecycleBin = true;
+    await user().click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(calls(fake, "entrySave")).toHaveLength(1));
+    expect(savedModel(fake)).toMatchObject({ restore: false });
+    // Refused by the backend: nothing was restored, the draft stays and the editor now says why.
+    expect(entry.summary.inRecycleBin).toBe(true);
+    await waitFor(() => expect(notice()).toBe(ITEM_DELETED));
+    expect(navigation.editModel?.title).toBe("Bank draft");
+    expect(screen.getByRole("button", { name: "Restore and save" })).toBeTruthy();
+  });
+
+  it("the_backend_refuses_a_save_into_a_removed_group_as_well", async () => {
+    const fake = await editing();
+    await fake.handlers.groupDelete({ id: WORK_GROUP_ID });
+    const model = { ...structuredClone(fake.state.entries[0]!.model), groupId: WORK_GROUP_ID, restore: true };
+    await expect(Promise.resolve().then(() => fake.handlers.entrySave({ model }))).rejects.toMatchObject({ code: "notFound" });
+  });
+
+  it("a_new_entry_aimed_at_a_deleted_group_is_refused_too", async () => {
+    const fake = backendWith();
+    await openNew(fake, "login", WORK_GROUP_ID);
+    await user().type(field("Title"), "Fresh");
+    await fake.handlers.groupDelete({ id: WORK_GROUP_ID });
+    await waitFor(() => expect(alertText()).toBe(GROUP_GONE));
+    await user().click(screen.getByRole("button", { name: "Save" }));
+    expect(calls(fake, "entrySave")).toHaveLength(0);
+    expect(field("Title").value).toBe("Fresh");
   });
 });

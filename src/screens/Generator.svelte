@@ -58,6 +58,8 @@
   let effectiveLength = $state(0);
   let error = $state<string | null>(null);
   let busy = $state(false);
+  /** A Use request is in flight. */
+  let using = $state(false);
   /** The number field's text while it is being typed; null shows the clamped length. */
   let draft = $state<string | null>(null);
   let tab = $state<"generate" | "history">("generate");
@@ -67,6 +69,7 @@
   /** Our own settings writes still in flight. */
   let writes = 0;
   let genSeq = 0;
+  let useSeq = 0;
   let historySeq = 0;
   const group = createRevealGroup();
   const revealers = new Map<string, Revealed>();
@@ -152,6 +155,8 @@
   function clearSecrets() {
     genSeq++;
     busy = false;
+    useSeq++;
+    using = false;
     value = null;
     error = null;
     group.hideAll();
@@ -250,6 +255,30 @@
       await api.generatorCopy(current, recordTarget);
       announceCopied();
     });
+  }
+
+  /** Use records the value in the history first (like Copy, with a blank website when there is
+   *  none, so the password can always be recovered), then hands it to the form; a failed record
+   *  keeps the value out of the form. One request at a time, and an answer that arrives after the
+   *  value was replaced or cleared, the window hid, the session locked or the generator closed is
+   *  dropped: the form never receives a stale password. */
+  async function use() {
+    if (value === null || !onuse || using) return;
+    const current = value;
+    const target = recordTarget;
+    const mine = genSeq;
+    const request = ++useSeq;
+    const unchanged = lockGuard();
+    using = true;
+    try {
+      await toasts.guard(async () => {
+        await api.generatorUse(current, target);
+        if (mine !== genSeq || !unchanged()) return;
+        onuse(current);
+      });
+    } finally {
+      if (request === useSeq) using = false;
+    }
   }
 
   async function loadHistory() {
@@ -396,7 +425,7 @@
       <div class="actions">
         <Button disabled={value === null} onclick={() => void copy()}>{t("Copy")}</Button>
         {#if onuse}
-          <Button variant="primary" disabled={value === null} onclick={() => value !== null && onuse(value)}>{t("Use password")}</Button>
+          <Button variant="primary" disabled={value === null || using} onclick={() => void use()}>{t("Use password")}</Button>
         {/if}
       </div>
     </div>
@@ -410,7 +439,11 @@
             {@const r = revealers.get(item.id)}
             <li>
               <div class="info">
-                <span class="title">{item.title === "" ? item.url : item.title}</span>
+                {#if item.title !== "" || item.url !== ""}
+                  <span class="title">{item.title === "" ? item.url : item.title}</span>
+                {:else}
+                  <span class="title muted">{t("No website")}</span>
+                {/if}
                 <span class="date">{when(item)}</span>
                 {#if r && r.value !== null}
                   <code class="secret" translate="no">{r.value}</code>
@@ -543,6 +576,9 @@
     flex-wrap: wrap;
     align-items: baseline;
     gap: 4px 10px;
+  }
+  .muted {
+    color: var(--text-2);
   }
   .title {
     font-weight: 600;

@@ -672,6 +672,7 @@
   "The file is not UTF-8 text": "Файл не является текстом UTF-8",
   "The file is removed when you save. This can't be undone after saving.": "Файл будет удалён при сохранении. После сохранения это нельзя отменить.",
   "The file must have title, username and password columns": "В файле должны быть столбцы с названием, именем пользователя и паролем",
+  "The group of this item was deleted. Choose another group to save it.": "Группу этой записи удалили. Выберите другую группу, чтобы сохранить её.",
   "The last write has not finished. If you quit now, recent changes may be lost.": "Последняя запись не завершена. Если выйти сейчас, последние изменения могут быть потеряны.",
   "The list of connected browsers could not be read, so browser integration is not running.": "Не удалось прочитать список подключённых браузеров, поэтому интеграция с браузером не работает.",
   "The menu bar icon provides quick access while MyPass runs. Turning it off hides the icon but keeps the main window available from the Dock.": "Значок в строке меню обеспечивает быстрый доступ, пока MyPass запущен. Если его отключить, значок исчезнет, но главное окно останется доступным из Dock.",
@@ -711,6 +712,7 @@
   "This folder is not inside iCloud Drive, so iCloud will not sync it. MyPass will still keep the vault there.": "Эта папка находится не в iCloud Drive, поэтому iCloud не будет её синхронизировать. MyPass всё равно будет хранить хранилище там.",
   "This group is empty": "Эта группа пуста",
   "This is the last reported state, not a live check. Reopen the extension and choose Check this browser after changing another manager.": "Это последнее зафиксированное состояние, а не проверка в реальном времени. После изменения другого менеджера снова откройте расширение и выберите «Check this browser».",
+  "This item was deleted, so its editor was closed.": "Эта запись удалена, поэтому редактор закрыт.",
   "This password protects your vault. Remember it — it cannot be changed or reset later.": "Этот пароль защищает ваше хранилище. Запомните его — позже его нельзя будет изменить или сбросить.",
   "This site's password requirements could not be satisfied": "Требования этого сайта к паролю невозможно выполнить",
   "This site's requirements conflict with your current options.": "Требования этого сайта противоречат вашим текущим параметрам.",
@@ -867,5 +869,9 @@
   "Disabled in Windows Startup settings. Open Windows Settings > Apps > Startup and allow MyPass.": "Отключено в параметрах автозагрузки Windows. Откройте Параметры Windows > Приложения > Автозагрузка и разрешите MyPass.",
   "On Windows, turning off the display also locks MyPass when this option is enabled.": "В Windows выключение дисплея также блокирует MyPass, когда этот параметр включён.",
   "Ctrl+Shift+L is also used by Word and some editors. MyPass overrides it while running; you can change the lock hotkey here.": "Ctrl+Shift+L также используется в Word и некоторых редакторах. MyPass перехватывает его во время работы; здесь можно изменить клавиши блокировки.",
-  "startup.webview2.missing": "MyPass требуется Microsoft Edge WebView2 Runtime, которого нет на этом компьютере. Установите его с https://go.microsoft.com/fwlink/p/?LinkId=2124703 и запустите MyPass снова."
+  "startup.webview2.missing": "MyPass требуется Microsoft Edge WebView2 Runtime, которого нет на этом компьютере. Установите его с https://go.microsoft.com/fwlink/p/?LinkId=2124703 и запустите MyPass снова.",
+  "Restore and save": "Восстановить и сохранить",
+  "This item is in Deleted. Saving restores it to the selected group.": "Эта запись в разделе «Удалено». Сохранение восстановит её в выбранной группе.",
+  "This item was permanently deleted. Saving creates a new item with your changes; its attachments and passkey are not carried over.": "Эта запись удалена навсегда. Сохранение создаст новую запись с вашими изменениями; её вложения и ключ доступа не будут перенесены.",
+  "No website": "Без веб-сайта"
 }

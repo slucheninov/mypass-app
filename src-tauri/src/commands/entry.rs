@@ -1,7 +1,7 @@
 //! `entry_*`: list, read, copy, edit and delete entries.
 //!
-//! Secrets leave Rust only through the commands that say so: `entry_reveal` (one value after an
-//! explicit click), `entry_edit_model` (the editor, dropped by the UI on close, save and lock)
+//! Secrets leave Rust only through the commands that say so: `entry_reveal` and
+//! `entry_history_reveal` (one value after an explicit click), `entry_edit_model` (the editor, dropped by the UI on close, save and lock)
 //! and `entry_totp` (a display code). `entry_passkey_details` adds only the public credential id
 //! to the passkey metadata.
 
@@ -187,14 +187,27 @@ pub fn entry_touch(state: State<'_, AppState>, id: String) -> Result<(), ApiErro
     state.0.entry_touch(&id)
 }
 
+/// Reveal command: one plain value of an earlier version of the entry, after the user's explicit
+/// click. `entry_history` never carries values.
+#[tauri::command]
+#[specta::specta]
+pub fn entry_history_reveal(
+    state: State<'_, AppState>,
+    id: String,
+    revision: String,
+    field: FieldRef,
+) -> Result<String, ApiError> {
+    state.0.entry_history_reveal(&id, &revision, field)
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn entry_history_restore(
     state: State<'_, AppState>,
     id: String,
-    index: u32,
+    revision: String,
 ) -> Result<(), ApiError> {
-    state.0.entry_history_restore(&id, index)
+    state.0.entry_history_restore(&id, &revision)
 }
 
 #[cfg(test)]

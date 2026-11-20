@@ -39,6 +39,7 @@ fn metadata(g: &Group) -> Group {
     // Do not clone the recursive tree: caller-created trees need not obey XML limits.
     Group {
         uuid: g.uuid,
+        previous_parent: g.previous_parent,
         name: g.name.clone(),
         icon_id: g.icon_id,
         created: g.created,
@@ -199,15 +200,18 @@ pub fn merge(local: &Database, remote: &Database) -> Database {
         let b = r.groups.get(&id);
         // Rule 6 applies to groups as well as entries. Content and location
         // clocks arbitrate independently; preserve the winning parent's clock.
-        let (parent, location_changed) = match (a, b) {
+        // The recorded bin origin belongs to the location, so it follows the same winner.
+        let (parent, location_changed, previous_parent) = match (a, b) {
             (Some((a, ap)), Some((b, bp))) => {
                 if a.location_changed >= b.location_changed {
-                    (*ap, a.location_changed)
+                    (*ap, a.location_changed, a.previous_parent)
                 } else {
-                    (*bp, b.location_changed)
+                    (*bp, b.location_changed, b.previous_parent)
                 }
             }
-            (Some((g, p)), None) | (None, Some((g, p))) => (*p, g.location_changed),
+            (Some((g, p)), None) | (None, Some((g, p))) => {
+                (*p, g.location_changed, g.previous_parent)
+            }
             (None, None) => continue,
         };
         let (newer, older) = match (a, b) {
@@ -225,6 +229,7 @@ pub fn merge(local: &Database, remote: &Database) -> Database {
         let mut g = metadata(newer);
         g.uuid = id;
         g.location_changed = location_changed;
+        g.previous_parent = previous_parent;
         let mut custom = BTreeMap::new();
         for c in older
             .into_iter()
@@ -357,13 +362,16 @@ pub fn merge(local: &Database, remote: &Database) -> Database {
         let (mut entry, parent) = match (l.entries.get(&id), r.entries.get(&id)) {
             (Some((a, ap)), Some((b, bp))) => {
                 // Rule 6: location, independently of content; ties favour local.
-                let (parent, location) = if a.location_changed >= b.location_changed {
-                    (*ap, a.location_changed)
-                } else {
-                    (*bp, b.location_changed)
-                };
+                let (parent, location, previous_parent) =
+                    if a.location_changed >= b.location_changed {
+                        (*ap, a.location_changed, a.previous_parent)
+                    } else {
+                        (*bp, b.location_changed, b.previous_parent)
+                    };
                 let mut entry = merge_entry(a, b);
                 entry.location_changed = location;
+                // The recorded bin origin belongs to the location, so it follows the same winner.
+                entry.previous_parent = previous_parent;
                 (entry, parent)
             }
             (Some((a, p)), None) | (None, Some((a, p))) => (merge_entry(a, a), *p), // Rule 1, normalize history before trimming
@@ -652,6 +660,31 @@ mod tests {
         let g = &m.root.groups[0].groups[0];
         assert_eq!(g.modified, Timestamp(8000));
         assert_eq!(g.location_changed, Timestamp(9000));
+    }
+    #[test]
+    fn previous_parent_follows_the_winning_location() {
+        let origin = Uuid::from_u128(77);
+        let mut l = make_db(vec![make_entry(1, "same", 5000)]);
+        let mut r = l.clone();
+        l.root.entries[0].location_changed = Timestamp(1000);
+        r.root.entries[0].location_changed = Timestamp(9000);
+        r.root.entries[0].previous_parent = Some(origin);
+        let m = merge(&l, &r);
+        assert_eq!(m.root.entries[0].previous_parent, Some(origin));
+        // Swapped sides: the winner has none, so the loser's hint is dropped.
+        let m = merge(&r, &{
+            let mut l2 = l.clone();
+            l2.root.entries[0].location_changed = Timestamp(10_000);
+            l2
+        });
+        assert_eq!(m.root.entries[0].previous_parent, None);
+        let mut l = make_db(vec![]);
+        l.root.groups.push(group(5));
+        let mut r = l.clone();
+        l.root.groups[0].location_changed = Timestamp(1000);
+        r.root.groups[0].location_changed = Timestamp(9000);
+        r.root.groups[0].previous_parent = Some(origin);
+        assert_eq!(merge(&l, &r).root.groups[0].previous_parent, Some(origin));
     }
     #[test]
     fn root_tombstone_is_dropped() {

@@ -118,7 +118,7 @@
       const model = await api.entryEditModel(id);
       if (unchanged()) navigation.requestOpenEditor(model);
     });
-  // No group: the backend restores to the top level, the same default as the list's menu.
+  // No group: the backend returns the entry to the group it was deleted from (the root if that is gone).
   const restore = () => guard(() => api.entryRestore(id, null));
   const restoreTo = (groupId: string) => {
     restoringTo = false;
