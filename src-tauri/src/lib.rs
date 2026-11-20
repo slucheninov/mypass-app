@@ -90,6 +90,7 @@ pub fn commands() -> Commands<tauri::Wry> {
         entry::entry_totp,
         entry::entry_touch,
         generator::generator_copy,
+        generator::generator_use,
         generator::generator_generate,
         generator::generator_history_copy,
         generator::generator_history_delete,

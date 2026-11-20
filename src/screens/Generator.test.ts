@@ -234,6 +234,64 @@ describe("copy and use", () => {
     expect((screen.getByLabelText("Password") as HTMLInputElement).value).toBe(value);
   });
 
+  it("use_with_a_website_records_the_value_in_the_history_and_copies_nothing", async () => {
+    const user = userEvent.setup();
+    let used: string | null = null;
+    const { fake } = await mount({ onuse: (v) => (used = v) });
+    await user.type(screen.getByRole("textbox", { name: "For website" }), "example.com");
+    await user.click(screen.getByRole("button", { name: "Generate" }));
+    await waitFor(() => expect(shown().textContent).toHaveLength(20));
+    const value = shown().textContent!;
+    await user.click(screen.getByRole("button", { name: "Use password" }));
+    await waitFor(() => expect(used).toBe(value));
+    expect(calls(fake, "generatorUse")).toHaveLength(1);
+    expect(calls(fake, "generatorUse")[0]!.args).toEqual({ value, recordUrl: "example.com" });
+    expect(calls(fake, "generatorCopy")).toHaveLength(0);
+    expect(fake.state.generatorHistory.map((h) => h.url)).toEqual(["example.com"]);
+    expect(toasts.items.map((x) => x.text).join("|")).not.toContain(value);
+  });
+
+  it("use_uses_the_page_url_while_the_website_is_unchanged", async () => {
+    const user = userEvent.setup();
+    const { fake } = await mount({
+      host: "example.com",
+      recordUrl: "https://example.com/login",
+      onuse: () => undefined,
+    });
+    await user.click(screen.getByRole("button", { name: "Generate" }));
+    await waitFor(() => expect(shown().textContent).toHaveLength(20));
+    await user.click(screen.getByRole("button", { name: "Use password" }));
+    await waitFor(() => expect(calls(fake, "generatorUse")).toHaveLength(1));
+    expect(calls(fake, "generatorUse")[0]!.args.recordUrl).toBe("https://example.com/login");
+  });
+
+  it("use_without_a_website_records_nothing", async () => {
+    const user = userEvent.setup();
+    let used: string | null = null;
+    const { fake } = await mount({ onuse: (v) => (used = v) });
+    await user.click(screen.getByRole("button", { name: "Generate" }));
+    await waitFor(() => expect(shown().textContent).toHaveLength(20));
+    await user.click(screen.getByRole("button", { name: "Use password" }));
+    await waitFor(() => expect(used).not.toBeNull());
+    expect(calls(fake, "generatorUse")).toHaveLength(0);
+    expect(fake.state.generatorHistory).toEqual([]);
+  });
+
+  it("a_failed_record_keeps_the_value_out_of_the_form", async () => {
+    const user = userEvent.setup();
+    let used: string | null = null;
+    const { fake } = await mount({ onuse: (v) => (used = v) });
+    fake.handlers.generatorUse = () => {
+      throw apiError("io");
+    };
+    await user.type(screen.getByRole("textbox", { name: "For website" }), "example.com");
+    await user.click(screen.getByRole("button", { name: "Generate" }));
+    await waitFor(() => expect(shown().textContent).toHaveLength(20));
+    await user.click(screen.getByRole("button", { name: "Use password" }));
+    await waitFor(() => expect(calls(fake, "generatorUse")).toHaveLength(1));
+    expect(used).toBeNull();
+  });
+
   it("modal_mode_has_no_use_button", async () => {
     await mount();
     expect(screen.queryByRole("button", { name: "Use password" })).toBeNull();

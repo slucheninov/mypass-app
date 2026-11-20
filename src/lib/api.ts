@@ -137,6 +137,7 @@ export const api = {
   entryTotp: wrap(commands.entryTotp),
   entryTouch: wrap(commands.entryTouch),
   generatorCopy: wrap(commands.generatorCopy),
+  generatorUse: wrap(commands.generatorUse),
   generatorGenerate: wrap(commands.generatorGenerate),
   generatorHistoryCopy: wrap(commands.generatorHistoryCopy),
   generatorHistoryDelete: wrap(commands.generatorHistoryDelete),

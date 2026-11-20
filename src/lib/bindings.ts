@@ -79,6 +79,8 @@ export const commands = {
 	entryTotp: (id: string) => typedError<TotpDto, ApiError>(__TAURI_INVOKE("entry_totp", { id })),
 	entryTouch: (id: string) => typedError<null, ApiError>(__TAURI_INVOKE("entry_touch", { id })),
 	generatorCopy: (value: string, recordUrl: string | null) => typedError<null, ApiError>(__TAURI_INVOKE("generator_copy", { value, recordUrl })),
+	/**  Records a password the form took with "Use" in the generator history; nothing is copied. */
+	generatorUse: (value: string, recordUrl: string) => typedError<null, ApiError>(__TAURI_INVOKE("generator_use", { value, recordUrl })),
 	generatorGenerate: (req: GenerateRequest_Deserialize) => typedError<GeneratedPassword_Serialize, ApiError>(__TAURI_INVOKE("generator_generate", { req })),
 	generatorHistoryCopy: (id: string) => typedError<null, ApiError>(__TAURI_INVOKE("generator_history_copy", { id })),
 	generatorHistoryDelete: (id: string) => typedError<null, ApiError>(__TAURI_INVOKE("generator_history_delete", { id })),

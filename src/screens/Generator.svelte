@@ -252,6 +252,18 @@
     });
   }
 
+  /** Use records the value in the history first (like Copy), then hands it to the form; a failed
+   *  record keeps the value out of the form. With no website there is nothing to record. */
+  async function use() {
+    if (value === null || !onuse) return;
+    const current = value;
+    const target = recordTarget;
+    await toasts.guard(async () => {
+      if (target !== null) await api.generatorUse(current, target);
+      onuse(current);
+    });
+  }
+
   async function loadHistory() {
     const mine = ++historySeq;
     const unchanged = lockGuard();
@@ -396,7 +408,7 @@
       <div class="actions">
         <Button disabled={value === null} onclick={() => void copy()}>{t("Copy")}</Button>
         {#if onuse}
-          <Button variant="primary" disabled={value === null} onclick={() => value !== null && onuse(value)}>{t("Use password")}</Button>
+          <Button variant="primary" disabled={value === null} onclick={() => void use()}>{t("Use password")}</Button>
         {/if}
       </div>
     </div>

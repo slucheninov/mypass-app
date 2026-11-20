@@ -907,6 +907,16 @@ impl AppCore {
         self.copy(value)
     }
 
+    /// Records a generated password the user took with "Use" (the form fills it in; nothing is
+    /// copied) in the generator history, exactly like a copy with a record URL does. The caller
+    /// passes a record URL only when the user typed or kept a website, so a use without one is
+    /// not sent at all. The history entry is written before the form takes the value.
+    pub fn generator_use(&self, value: &str, record_url: &str) -> Result<(), ApiError> {
+        self.writable()?;
+        generator_service::record_history(&self.session, value, record_url)?;
+        Ok(())
+    }
+
     pub fn generator_history_copy(&self, id: &str) -> Result<(), ApiError> {
         let value =
             Zeroizing::new(self.read(|db| generator_service::history_reveal(db, parse_id(id)?))?);
@@ -1479,6 +1489,7 @@ mod tests {
         call!("generator_history_delete", c, a => c.generator_history_delete(&a.entry));
         call!("generator_generate+record", c, a => c.generator_generate(a.generate.clone()));
         call!("generator_copy+record", c, a => c.generator_copy("secret", Some("https://example.com")));
+        call!("generator_use", c, a => c.generator_use("secret", "https://example.com"));
         call!("import_csv_commit", c, a => c.import_csv_commit("/nonexistent/in.csv", &a.root));
         call!("backup_restore", c, a => c.backup_restore("backup-1.kdbx"));
         calls
@@ -2093,6 +2104,38 @@ mod tests {
         f.core.generator_history_copy(&history[0].id).unwrap();
         f.core.generator_copy("Other", None).unwrap();
         assert_eq!(f.core.generator_history_list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn generator_use_records_history_without_touching_the_clipboard() {
+        let f = fx_open();
+        f.core
+            .generator_use("Gen#Pass-2", "https://login.example.com/path")
+            .unwrap();
+        assert_eq!(f.fake.clipboard.contents(), None, "use never copies");
+        let history = f.core.generator_history_list().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].title, "login.example.com");
+        assert_eq!(
+            f.core.generator_history_reveal(&history[0].id).unwrap(),
+            "Gen#Pass-2"
+        );
+    }
+
+    #[test]
+    fn generator_use_fails_when_locked_or_quitting() {
+        let f = fx_open();
+        f.core.vault_lock().unwrap();
+        assert_eq!(
+            code(f.core.generator_use("secret", "https://example.com")),
+            ErrorCode::Locked
+        );
+        f.core.vault_unlock(pw("pw")).unwrap();
+        f.core.begin_quit();
+        assert_eq!(
+            code(f.core.generator_use("secret", "https://example.com")),
+            ErrorCode::Quitting
+        );
     }
 
     #[test]

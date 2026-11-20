@@ -754,6 +754,12 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       }
       return null;
     },
+    // "Use" fills the form and only records the history (nothing is copied).
+    generatorUse: ({ value, recordUrl }) => {
+      requireUnlocked();
+      recordHistory(value, recordUrl);
+      return null;
+    },
     // Mirrors `resolve_options`: the length is clamped to the site bounds, forced classes switch on,
     // excluded ones off; no class is `generatorNoClass`, every class excluded `generatorUnsatisfiable`.
     // The value is deterministic (no RNG): it cycles the enabled classes so each one appears.

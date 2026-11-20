@@ -93,6 +93,7 @@ fn main() {
         "generator_history_list",
         "generator_history_reveal",
         "generator_rules_summary",
+        "generator_use",
         "group_create",
         "group_delete",
         "group_move",

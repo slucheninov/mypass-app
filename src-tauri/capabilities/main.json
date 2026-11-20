@@ -58,6 +58,7 @@
     "allow-generator-history-list",
     "allow-generator-history-reveal",
     "allow-generator-rules-summary",
+    "allow-generator-use",
     "allow-group-create",
     "allow-group-delete",
     "allow-group-move",
