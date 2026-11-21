@@ -130,8 +130,8 @@
   }
   .panes {
     flex: none;
-    width: 160px;
-    padding: 12px 8px;
+    width: 170px;
+    padding: var(--space-6) var(--space-4);
     border-right: var(--sep);
     background: var(--sidebar-bg);
   }
@@ -141,7 +141,8 @@
     gap: 2px;
   }
   [role="tab"] {
-    padding: 6px 10px;
+    min-height: var(--row-height);
+    padding: var(--space-3) var(--space-5);
     border: 0;
     border-radius: var(--radius);
     background: transparent;
@@ -156,10 +157,10 @@
     flex: 1;
     min-width: 0;
     overflow-y: auto;
-    padding: 16px 24px 24px;
+    padding: var(--space-7) 28px 28px;
   }
   h1 {
-    margin: 0 0 8px;
+    margin: 0 0 var(--space-5);
     font-size: 18px;
     font-weight: 600;
   }

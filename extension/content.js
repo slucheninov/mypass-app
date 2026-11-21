@@ -1448,7 +1448,8 @@
         return;
       }
       if (message.type === 'queryAddressForm') {
-        if (window.top !== window || message.url !== location.href) return;
+        if (_sender?.id !== chrome.runtime.id || window.top !== window
+          || !shared.urlMatch.isHttpsAddressPage(location.href) || message.url !== location.href) return;
         const groups = pageAutofillSettings.showAddresses ? shared.addressForm.collect(document) : [];
         addressSnapshot = { challenge: message.challenge, url: location.href, groups, at: Date.now() };
         // The background obtains documentId from Chrome's authenticated sender,
@@ -1459,9 +1460,11 @@
         return;
       }
       if (message.type === 'applyAddress') {
+        if (_sender?.id !== chrome.runtime.id) return;
         const snapshot = addressSnapshot;
         addressSnapshot = null; // one explicit selection can fill only once
-        if (window.top !== window || !snapshot || snapshot.challenge !== message.challenge
+        if (!pageAutofillSettings.showAddresses || !shared.urlMatch.isHttpsAddressPage(location.href)
+          || window.top !== window || !snapshot || snapshot.challenge !== message.challenge
           || snapshot.url !== location.href || message.url !== location.href
           || Date.now() - snapshot.at > 120000 || !message.address) {
           sendResponse({ type: 'error', code: 'address_form_changed' });

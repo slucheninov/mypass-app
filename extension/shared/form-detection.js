@@ -304,6 +304,54 @@ function findLoginForm(root) {
   };
 }
 
+// Match whole normalized hints so fields such as username, email confirmation,
+// and cardholder name do not get an address value from a shared word.
+const ADDRESS_FIELD_HINTS = Object.entries({
+  name: /^(?:name|full name|contact name|vollständiger name|vor und nachname|повне ім я|ім я та прізвище|полное имя|имя и фамилия|фио)$/,
+  'given-name': /^(?:first name|firstname|given name|forename|vorname|ім я|имя)$/,
+  'family-name': /^(?:last name|lastname|family name|surname|nachname|familienname|прізвище|фамилия)$/,
+  organization: /^(?:company(?: name)?|organization|organisation|business name|firma|firmenname|unternehmen|компанія|компания|організація|организация)$/,
+  'street-address': /^full address$/,
+  'address-line1': /^(?:address|address line ?1|address ?1|street(?: name| address)?|street 1|street address 1|straße(?: und hausnummer)?|strasse(?: und hausnummer)?|anschrift|адреса|адрес|вулиця|улица)$/,
+  'address-line2': /^(?:address line ?2|address ?2|street 2|street address 2|apt|apartment|suite|unit|adresszusatz|wohnung|квартира)$/,
+  'address-level2': /^(?:city|town|locality|stadt|ort|wohnort|місто|город|населений пункт|населенный пункт)$/,
+  'address-level1': /^(?:state(?: province)?|province|region|county|bundesland|область|регіон|регион|штат)$/,
+  'postal-code': /^(?:zip(?: code)?|zipcode|postal ?code|post ?code|postleitzahl|plz|поштовий індекс|почтовый индекс|індекс|индекс)$/,
+  'country-name': /^(?:country(?: name| region)?|land(?: region)?|staat|країна|страна)$/,
+  country: /^(?:country code|ländercode|код країни|код страны)$/,
+  tel: /^(?:phone(?: number)?|telephone(?: number)?|tel|mobile(?: phone| number)?|telefon(?:nummer)?|handynummer|телефон|номер телефону|номер телефона)$/,
+  email: /^(?:e ?mail(?: address| adresse)?|електронна пошта|электронная почта|пошта|почта)$/,
+});
+
+function addressLabelText(node, control) {
+  if (node === control) return '';
+  if (!node.contains?.(control)) return node.textContent;
+  // A wrapping label's textContent also includes all the options of its select.
+  return Array.from(node.childNodes, (child) => addressLabelText(child, control)).join(' ');
+}
+
+function addressFieldHint(control) {
+  const labels = Array.from(control.labels || [], (label) => addressLabelText(label, control));
+  const hints = [control.name, control.id, control.getAttribute('aria-label'), ...labels];
+  for (const hint of hints) {
+    const text = String(hint || '').normalize('NFKC')
+      .replace(/([\p{Ll}\d])(\p{Lu})/gu, '$1 $2').toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+      .replace(/ (?:optional|required|pflichtfeld|необов язково|необязательно)$/, '');
+    const scope = /^(?:checkout )?(shipping|billing)\b ?/.exec(text);
+    const purpose = scope ? scope[1] : '';
+    const addressHint = text.slice(scope ? scope[0].length : 0).replace(/^checkout /, '');
+    const unprefixed = addressHint.replace(/^address /, '');
+    for (const [token, pattern] of ADDRESS_FIELD_HINTS) {
+      if (pattern.test(addressHint) || pattern.test(unprefixed)) {
+        const field = token === 'address-line1' && control.tagName === 'TEXTAREA' ? 'street-address' : token;
+        return { token: field, purpose };
+      }
+    }
+  }
+  return null;
+}
+
 // Bare name for content.js. globalThis in a content script is the page, so
 // globalThis.findLoginForm is not this function (LinkedIn throws
 // "findLoginForm is not a function").
@@ -316,17 +364,9 @@ var mypassFormDetection = {
   isNewPasswordCandidate,
   findFillableFields,
   findLoginForm,
+  addressFieldHint,
 };
 
 if (typeof module !== 'undefined') {
-  module.exports = {
-    scoreUsernameLikeness,
-    findBestUsernameInput,
-    scoreOtpLikeness,
-    findOtpField,
-    isFieldVisible,
-    isNewPasswordCandidate,
-    findFillableFields,
-    findLoginForm,
-  };
+  module.exports = mypassFormDetection;
 }

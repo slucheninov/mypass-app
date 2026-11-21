@@ -7,19 +7,45 @@
     label,
     onclick,
     pressed,
+    expanded,
+    controls,
+    keyshortcuts,
+    tooltip,
     disabled = false,
+    tone = "accent",
   }: {
     icon: IconName;
     /** Accessible name and tooltip, already translated. */
     label: string;
     onclick?: (event: MouseEvent) => void;
     pressed?: boolean;
+    /** `aria-expanded`, for a button that shows and hides a region (`controls` names it). */
+    expanded?: boolean;
+    controls?: string;
+    /** `aria-keyshortcuts`, in its own syntax (`Control+Shift+S`). */
+    keyshortcuts?: string;
+    /** Tooltip when it should say more than the label (a shortcut); defaults to the label. */
+    tooltip?: string;
     disabled?: boolean;
+    /** How a pressed button shows: `accent` tints it, `favorite` draws a filled amber icon. */
+    tone?: "accent" | "favorite";
   } = $props();
 </script>
 
-<button class="icon-btn" type="button" aria-label={label} title={label} aria-pressed={pressed} {disabled} {onclick}>
-  <Icon name={icon} />
+<button
+  class="icon-btn"
+  class:favorite={tone === "favorite"}
+  type="button"
+  aria-label={label}
+  title={tooltip ?? label}
+  aria-pressed={pressed}
+  aria-expanded={expanded}
+  aria-controls={controls}
+  aria-keyshortcuts={keyshortcuts}
+  {disabled}
+  {onclick}
+>
+  <Icon name={icon} filled={tone === "favorite" && pressed === true} />
 </button>
 
 <style>
@@ -42,6 +68,13 @@
   .icon-btn[aria-pressed="true"] {
     background: var(--selected);
     color: var(--accent);
+  }
+  .icon-btn.favorite[aria-pressed="true"] {
+    background: transparent;
+    color: var(--favorite);
+  }
+  .icon-btn.favorite[aria-pressed="true"]:hover:not(:disabled) {
+    background: var(--hover);
   }
   .icon-btn:disabled {
     opacity: 0.4;

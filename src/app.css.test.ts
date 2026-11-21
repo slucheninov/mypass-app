@@ -63,6 +63,19 @@ function token(body: string, name: string): string {
   return m[1];
 }
 
+function composite(body: string, overlay: string, background: string): string {
+  const rgba = new RegExp(`${overlay}:\\s*rgba\\(([^)]+)\\)`).exec(body)?.[1];
+  if (!rgba) throw new Error(`token ${overlay} missing`);
+  const [red, green, blue, alpha] = rgba.split(",").map(Number);
+  if (alpha === undefined) throw new Error(`token ${overlay} has no alpha`);
+  return "#" + [red, green, blue].map((channel, index) => {
+    if (channel === undefined) throw new Error(`token ${overlay} is missing a channel`);
+    const offset = 1 + index * 2;
+    const below = parseInt(background.slice(offset, offset + 2), 16);
+    return Math.round(channel * alpha + below * (1 - alpha)).toString(16).padStart(2, "0");
+  }).join("");
+}
+
 describe("contrast", () => {
   const light = block(":root {");
   const dark = block(':root[data-theme="dark"]');
@@ -88,6 +101,21 @@ describe("contrast", () => {
     }
   });
 
+  it("favorite_star_reaches_non_text_contrast_in_light_and_both_dark_blocks", () => {
+    for (const [theme, body] of [["light", light], ["forced dark", dark], ["system dark", media]] as const) {
+      const star = token(body, "--favorite");
+      const list = token(body, "--list-bg");
+      const detail = token(body, "--bg");
+      expect(contrast(star, list), `${theme} list`).toBeGreaterThanOrEqual(3);
+      expect(contrast(star, detail), `${theme} detail`).toBeGreaterThanOrEqual(3);
+      for (const overlay of ["--selected", "--hover"]) {
+        expect(contrast(star, composite(body, overlay, list)), `${theme} list ${overlay}`).toBeGreaterThanOrEqual(3);
+      }
+      expect(contrast(star, composite(body, "--hover", detail)), `${theme} hovered detail`).toBeGreaterThanOrEqual(3);
+    }
+    expect(token(dark, "--favorite")).toBe(token(media, "--favorite"));
+  });
+
   it("danger_text_and_close_hover_reach_aa", () => {
     expect(contrast(token(light, "--danger"), token(light, "--bg"))).toBeGreaterThanOrEqual(4.5);
     expect(contrast(token(dark, "--danger"), token(dark, "--bg"))).toBeGreaterThanOrEqual(4.5);
@@ -97,5 +125,20 @@ describe("contrast", () => {
   it("the_two_dark_blocks_declare_identical_tokens", () => {
     const norm = (b: string) => b.split(";").map((x) => x.trim()).filter(Boolean).sort();
     expect(norm(media)).toEqual(norm(dark));
+  });
+});
+
+describe("spacing tokens", () => {
+  it("spacing_and_type_tokens_are_declared_once_on_the_root", () => {
+    const root = block(":root {");
+    for (const name of ["--space-1", "--space-6", "--font-size-sm", "--font-size-md", "--row-height", "--field-height"]) {
+      expect(root).toContain(`${name}:`);
+    }
+    expect(root).toContain("--row-height: 32px");
+    expect(css).toMatch(/\nbody \{[^}]*font-size: var\(--font-size-md\)/);
+  });
+
+  it("windows_gets_its_own_body_size_through_the_root_os_attribute", () => {
+    expect(block(':root[data-os="windows"]')).toContain("--font-size-md: 14px");
   });
 });

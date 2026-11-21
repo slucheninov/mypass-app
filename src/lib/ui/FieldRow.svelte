@@ -14,8 +14,8 @@
   .field-row {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 8px 0;
+    gap: var(--space-6);
+    padding: var(--space-5) 0;
     border-bottom: var(--sep);
   }
   .label {

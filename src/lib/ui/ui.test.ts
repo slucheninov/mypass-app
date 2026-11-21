@@ -18,6 +18,7 @@ import ContextMenu from "./ContextMenu.svelte";
 import FieldRow from "./FieldRow.svelte";
 import Icon from "./Icon.svelte";
 import { ICON_NAMES, ICON_PATHS } from "./icons";
+import Modal from "./Modal.svelte";
 import Segmented from "./Segmented.svelte";
 import Select from "./Select.svelte";
 import SplitPane from "./SplitPane.svelte";
@@ -38,6 +39,27 @@ describe("Modal", () => {
     expect(onclose).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(document.activeElement).toBe(opener);
+  });
+
+  it("modal_header_shows_an_icon_and_a_subtitle_when_given", () => {
+    render(Modal, {
+      props: {
+        open: true, title: "Sheet", subtitle: "file.kdbx", onclose: () => {},
+        icon: textSnippet("ICON"), children: textSnippet("body"),
+      },
+    });
+    const dialog = screen.getByRole("dialog", { name: "Sheet" });
+    expect(dialog.classList.contains("roomy")).toBe(true);
+    expect(dialog.querySelector(".header-icon")?.textContent).toBe("ICON");
+    expect(dialog.querySelector(".subtitle")?.textContent).toBe("file.kdbx");
+  });
+
+  it("modal_without_icon_keeps_the_plain_header", () => {
+    render(Modal, { props: { open: true, title: "Plain", onclose: () => {}, children: textSnippet("body") } });
+    const dialog = screen.getByRole("dialog", { name: "Plain" });
+    expect(dialog.classList.contains("roomy")).toBe(false);
+    expect(dialog.querySelector(".header-icon")).toBeNull();
+    expect(dialog.querySelector(".subtitle")).toBeNull();
   });
 
   it("modal_traps_tab_inside_dialog", async () => {
@@ -354,10 +376,10 @@ describe("SplitPane", () => {
       await fireEvent.pointerMove(window, { clientX: -500, pointerId: 1 });
       expect(onresize).toHaveBeenLastCalledWith([160, 300]);
       await fireEvent.pointerUp(window, { pointerId: 1 });
-      // Drag far right: the detail pane keeps its 320 px minimum (1000 - 300 - 320 = 380).
+      // Drag far right: leave 320 px for detail and 2 px for the handles.
       await fireEvent.pointerDown(h1, { clientX: 200, pointerId: 1 });
       await fireEvent.pointerMove(window, { clientX: 5000, pointerId: 1 });
-      expect(onresize).toHaveBeenLastCalledWith([380, 300]);
+      expect(onresize).toHaveBeenLastCalledWith([378, 300]);
       await fireEvent.pointerUp(window, { pointerId: 1 });
       // Second handle: list width clamps to min[1] and to the room left.
       await fireEvent.pointerDown(h2, { clientX: 500, pointerId: 1 });
@@ -368,6 +390,41 @@ describe("SplitPane", () => {
       h1.focus();
       await fireEvent.keyDown(h1, { key: "ArrowLeft" });
       expect(onresize).toHaveBeenLastCalledWith([184, 300]);
+    } finally {
+      if (desc) Object.defineProperty(proto, "clientWidth", desc);
+      else delete (proto as unknown as Record<string, unknown>).clientWidth;
+    }
+  });
+});
+
+describe("SplitPane collapse", () => {
+  it("split_pane_collapsed_hides_the_first_pane_and_gives_its_room_to_the_list", async () => {
+    const proto = HTMLElement.prototype;
+    const desc = Object.getOwnPropertyDescriptor(proto, "clientWidth");
+    Object.defineProperty(proto, "clientWidth", { configurable: true, get: () => 1000 });
+    try {
+      const onresize = vi.fn();
+      const oncollapse = vi.fn();
+      render(SplitPane, {
+        props: {
+          widths: [200, 300], min: [160, 240, 320], onresize, collapsed: true, oncollapse,
+          first: textSnippet("one"), second: textSnippet("two"), third: textSnippet("three"),
+        },
+      });
+      // Only the list separator is left, and the hidden pane is out of reach.
+      const handles = screen.getAllByRole("separator");
+      expect(handles).toHaveLength(1);
+      const first = screen.getByTestId("split-first");
+      expect(first.inert).toBe(true);
+      expect(first.style.width).toBe("0px");
+      // The list may now grow into the sidebar's room, leaving 1 px for the list handle.
+      const list = handles[0];
+      if (!list) throw new Error("separator missing");
+      await fireEvent.pointerDown(list, { clientX: 500, pointerId: 1 });
+      await fireEvent.pointerMove(window, { clientX: 5000, pointerId: 1 });
+      expect(onresize).toHaveBeenLastCalledWith([200, 679]);
+      await fireEvent.pointerUp(window, { pointerId: 1 });
+      expect(oncollapse).not.toHaveBeenCalled();
     } finally {
       if (desc) Object.defineProperty(proto, "clientWidth", desc);
       else delete (proto as unknown as Record<string, unknown>).clientWidth;

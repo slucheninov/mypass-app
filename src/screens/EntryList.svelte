@@ -5,7 +5,7 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { tick } from "svelte";
   import { api } from "../lib/api";
-  import type { EntrySummary, FieldRef, SecurityFlag, SortKey } from "../lib/bindings";
+  import type { EntrySummary, FieldRef, SecurityFlag, SortKey, SortOrder } from "../lib/bindings";
   import { startDrag } from "../lib/dnd";
   import { t } from "../lib/i18n/index.svelte";
   import { lockGuard } from "../lib/lock-guard";
@@ -17,9 +17,9 @@
   import Button from "../lib/ui/Button.svelte";
   import ContextMenu from "../lib/ui/ContextMenu.svelte";
   import Icon from "../lib/ui/Icon.svelte";
-  import type { MenuItem } from "../lib/ui/menu";
+  import type { MenuEntry, MenuItem } from "../lib/ui/menu";
+  import Menu from "../lib/ui/Menu.svelte";
   import Modal from "../lib/ui/Modal.svelte";
-  import Select from "../lib/ui/Select.svelte";
   import GroupPicker from "./GroupPicker.svelte";
 
   const uid = $props.id();
@@ -40,10 +40,53 @@
   // The menu closes before `onselect` runs, so the entry it was opened for is kept here too.
   let menuEntryId: string | null = null;
 
-  const sortOptions: { value: SortKey; label: string }[] = $derived([
-    { value: "title", label: t("Title") },
-    { value: "modified", label: t("Modified") },
+  const SORT_KEYS: SortKey[] = ["title", "created", "modified", "usageCount", "accessed"];
+  const SORT_LABEL = (key: SortKey): string => {
+    switch (key) {
+      case "title":
+        return t("Title");
+      case "created":
+        return t("Date Created");
+      case "modified":
+        return t("Date Modified");
+      case "usageCount":
+        return t("Frequently Used");
+      case "accessed":
+        return t("Recently Used");
+    }
+  };
+  // The direction labels follow the key: letters for the title, counts for usage, dates otherwise.
+  const ORDER_LABEL = (key: SortKey, order: SortOrder): string => {
+    if (key === "title") return order === "ascending" ? t("A to Z") : t("Z to A");
+    if (key === "usageCount") return order === "descending" ? t("Most Used First") : t("Least Used First");
+    return order === "descending" ? t("Newest First") : t("Oldest First");
+  };
+  const ORDERS = (key: SortKey): SortOrder[] => (key === "title" ? ["ascending", "descending"] : ["descending", "ascending"]);
+
+  const sortItems = $derived<MenuEntry[]>([
+    { id: "heading", label: t("%lld items sorted by", items.length), heading: true },
+    {
+      id: "sort-key",
+      label: t("Sort by"),
+      choices: SORT_KEYS.map((key) => ({ id: `key:${key}`, label: SORT_LABEL(key), checked: query.sort === key })),
+    },
+    { id: "sep", label: "", separator: true },
+    {
+      id: "sort-order",
+      label: t("Sort order"),
+      choices: ORDERS(query.sort).map((order) => ({
+        id: `order:${order}`,
+        label: ORDER_LABEL(query.sort, order),
+        checked: query.order === order,
+      })),
+    },
   ]);
+
+  function onsort(id: string) {
+    const [kind, value] = id.split(":");
+    if (kind === "key" && value !== query.sort) void entries.setSort(value as SortKey);
+    else if (kind === "order" && value !== query.order) void entries.setOrder(value as SortOrder);
+  }
 
   const FLAG_LABEL = (flag: SecurityFlag): string => {
     switch (flag) {
@@ -347,7 +390,9 @@
     {#if inDeletedScope && items.length > 0}
       <Button variant="plain" onclick={() => (confirming = { kind: "empty" })}>{t("Empty Deleted")}</Button>
     {/if}
-    <Select value={query.sort} options={sortOptions} label={t("Sort by")} onchange={(sort) => void entries.setSort(sort)} />
+    <Menu items={sortItems} onselect={onsort} label={t("Sort by")} align="end">
+      {#snippet trigger()}<Icon name="sort" />{/snippet}
+    </Menu>
   </header>
 
   {#if items.length === 0}
@@ -388,7 +433,14 @@
         >
           <Avatar text={entry.title} size={32} />
           <span class="text">
-            <span class="title" data-part="title">{entry.title}</span>
+            <span class="title-line">
+              <span class="title" data-part="title">{entry.title}</span>
+              {#if entry.favorite}
+                <span class="favorite" role="img" aria-label={t("Favorite")} data-testid="favorite-star"
+                  ><Icon name="star" size={12} filled /></span
+                >
+              {/if}
+            </span>
             {#if entry.subtitle}<span class="subtitle">{entry.subtitle}</span>{/if}
             {#if entry.flags.length > 0}
               <span class="flags">
@@ -397,7 +449,6 @@
             {/if}
           </span>
           <span class="badges">
-            {#if entry.favorite}<span role="img" aria-label={t("Favorites")}><Icon name="star" size={13} /></span>{/if}
             {#if entry.hasTotp}<span role="img" aria-label={t("Verification Code")}><Icon name="shield-key" size={13} /></span>{/if}
             {#if entry.hasPasskey}<span role="img" aria-label={t("Passkey")}><Icon name="passkey" size={13} /></span>{/if}
             {#if entry.attachmentCount > 0}
@@ -460,14 +511,14 @@
     display: flex;
     flex: none;
     align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
+    gap: var(--space-4);
+    padding: var(--space-5) var(--space-6);
     border-bottom: var(--sep);
   }
   .count {
     flex: 1;
     color: var(--text-2);
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
   .listbox {
     flex: 1;
@@ -477,8 +528,8 @@
   .row {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
+    gap: var(--space-6);
+    padding: var(--space-6);
     border-bottom: 1px solid var(--separator);
     cursor: default;
   }
@@ -493,7 +544,18 @@
     flex: 1;
     flex-direction: column;
     min-width: 0;
-    gap: 1px;
+    gap: 3px;
+  }
+  .title-line {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+  .favorite {
+    display: inline-flex;
+    flex: none;
+    color: var(--favorite);
   }
   .title {
     overflow: hidden;
@@ -504,15 +566,15 @@
   .subtitle {
     overflow: hidden;
     color: var(--text-2);
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .flags {
     display: flex;
     flex-wrap: wrap;
-    gap: 4px;
-    margin-top: 2px;
+    gap: var(--space-2);
+    margin-top: var(--space-1);
   }
   .chip {
     padding: 0 6px;
@@ -525,9 +587,9 @@
     display: flex;
     flex: none;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-3);
     color: var(--text-2);
-    font-size: 11px;
+    font-size: var(--font-size-xs);
   }
   .badges > span {
     display: inline-flex;
@@ -540,7 +602,7 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 24px;
+    padding: var(--space-8);
     color: var(--text-2);
     text-align: center;
   }

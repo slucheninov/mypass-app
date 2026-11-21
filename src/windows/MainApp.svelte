@@ -10,6 +10,7 @@
   import OpenGuardHost from "../screens/OpenGuardHost.svelte";
   import OpenVaultSheet from "../screens/OpenVaultSheet.svelte";
   import { navigation } from "../lib/stores/navigation.svelte";
+  import DetailEmpty from "../screens/DetailEmpty.svelte";
   import EntryDetail from "../screens/EntryDetail.svelte";
   import EntryEditor from "../screens/EntryEditor.svelte";
   import EntryList from "../screens/EntryList.svelte";
@@ -69,6 +70,8 @@
                 historyVault = session.status.vaultPath;
                 historyId = id;
               }} />{/key}
+            {:else}
+              <DetailEmpty />
             {/if}
           {/snippet}
         </Shell>

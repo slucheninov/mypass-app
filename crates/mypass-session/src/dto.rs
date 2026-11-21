@@ -105,7 +105,25 @@ impl From<EntryType> for EntryTypeDto {
 #[serde(rename_all = "camelCase")]
 pub enum SortKey {
     Title,
+    /// KDBX `CreationTime`.
+    Created,
+    /// KDBX `LastModificationTime`.
     Modified,
+    /// "Recently used": KDBX `LastAccessTime`, set when a field is copied or the bridge fills.
+    Accessed,
+    /// "Frequently used": KDBX `UsageCount`, bumped together with `Accessed`.
+    UsageCount,
+}
+
+/// The direction of an [`EntryQuery`] sort. Ties always fall back to the title (A to Z, case
+/// insensitive) and then the entry id, whatever the direction, so the order is stable.
+#[derive(Serialize, Deserialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum SortOrder {
+    /// A to Z, oldest first, least used first.
+    Ascending,
+    /// Z to A, newest first, most used first.
+    Descending,
 }
 
 #[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq, Debug)]
@@ -125,6 +143,7 @@ pub struct EntryQuery {
     pub scope: Scope,
     pub search: String,
     pub sort: SortKey,
+    pub order: SortOrder,
 }
 
 #[derive(Serialize, Deserialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug)]
@@ -556,9 +575,11 @@ pub enum FieldRef {
     Username,
     Password,
     Url,
+    UrlAt { index: u32 },
     NotesBody,
     CardNumber,
     CardCvv,
+    Address { name: String },
     Totp,
     Custom { key: String },
 }

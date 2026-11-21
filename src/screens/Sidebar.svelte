@@ -1,5 +1,6 @@
 <script lang="ts">
   import { api } from "../lib/api";
+  import { CATEGORIES, categoryLabel } from "../lib/categories";
   import type { Category, GroupNode_Serialize, Scope } from "../lib/bindings";
   import { dragKind, readDrag, startDrag } from "../lib/dnd";
   import { isSelfOrDescendant, visibleGroups } from "../lib/group-tree";
@@ -10,7 +11,6 @@
   import Button from "../lib/ui/Button.svelte";
   import ContextMenu from "../lib/ui/ContextMenu.svelte";
   import Icon from "../lib/ui/Icon.svelte";
-  import type { IconName } from "../lib/ui/icons";
   import Modal from "../lib/ui/Modal.svelte";
   import { treeNav } from "../lib/ui/tree-nav";
 
@@ -23,45 +23,6 @@
     /** Opens the group editor for an existing group. */
     oneditgroup: (group: { id: string; name: string; emoji: string | null }) => void;
   } = $props();
-
-  // The spec's order; the counts come from the backend by category.
-  const CATEGORIES: { category: Category; icon: IconName }[] = [
-    { category: "all", icon: "all" },
-    { category: "favorites", icon: "star" },
-    { category: "codes", icon: "shield-key" },
-    { category: "passkeys", icon: "passkey" },
-    { category: "addresses", icon: "address" },
-    { category: "cards", icon: "card" },
-    { category: "notes", icon: "note" },
-    { category: "files", icon: "paperclip" },
-    { category: "security", icon: "security" },
-    { category: "deleted", icon: "trash" },
-  ];
-
-  function categoryLabel(category: Category): string {
-    switch (category) {
-      case "all":
-        return t("All");
-      case "favorites":
-        return t("Favorites");
-      case "codes":
-        return t("Codes");
-      case "passkeys":
-        return t("Passkeys");
-      case "addresses":
-        return t("Addresses");
-      case "cards":
-        return t("Cards");
-      case "notes":
-        return t("Notes");
-      case "files":
-        return t("Files");
-      case "security":
-        return t("Security");
-      case "deleted":
-        return t("Deleted");
-    }
-  }
 
   const sidebar = $derived(entries.sidebar);
   let collapsed = $state<Record<string, boolean>>({});
@@ -268,7 +229,7 @@
           aria-expanded={expandable ? expanded : undefined}
           data-key={key}
           data-id={node.id}
-          style="padding-left: {8 + (level - 1) * 14}px"
+          style="padding-left: {10 + (level - 1) * 16}px"
           tabindex={tabKey === key ? 0 : -1}
           draggable="true"
           onclick={() => choose({ kind: "group", groupId: node.id })}
@@ -351,20 +312,26 @@
   .sidebar {
     height: 100%;
     overflow-y: auto;
-    padding: 8px 6px;
+    padding: var(--space-5) var(--space-4);
     background: var(--sidebar-bg);
   }
   .tree {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: var(--space-6);
     outline: none;
+  }
+  .tree > [role="group"] {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
   }
   .row {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 4px 8px;
+    gap: var(--space-5);
+    min-height: var(--row-height);
+    padding: var(--space-3) var(--space-5);
     border-radius: var(--radius);
     cursor: default;
     user-select: none;
@@ -395,16 +362,17 @@
   }
   .count {
     color: var(--text-2);
-    font-size: 11px;
+    font-size: var(--font-size-xs);
     font-variant-numeric: tabular-nums;
   }
   .selected .count {
     color: inherit;
   }
   .heading {
-    padding: 6px 8px 2px;
+    padding: var(--space-2) var(--space-5) var(--space-3);
     color: var(--text-2);
-    font-size: 11px;
+    font-size: var(--font-size-xs);
+    letter-spacing: 0.02em;
     font-weight: 600;
     text-transform: uppercase;
   }

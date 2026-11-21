@@ -27,6 +27,8 @@ APPROVED = {
     "BSD-2-Clause", "BSD-3-Clause AND MIT", "BSD-3-Clause OR MIT OR Apache-2.0",
     "BSD-3-Clause/MIT", "ISC", "MIT OR Apache-2.0 OR Zlib", "Unlicense/MIT",
     "Zlib OR Apache-2.0 OR MIT",
+    # The macOS tray PNG decoder links moxcms and pxfm through image.
+    "BSD-3-Clause OR Apache-2.0",
     # Added with the platform crate (stage 2a): `clipboard-win` and `error-code`, the Windows
     # backend of `arboard`. The Boost Software License is permissive (no binary attribution).
     "BSL-1.0",

@@ -9,7 +9,7 @@ import { startStores } from "../lib/stores";
 import { navigation } from "../lib/stores/navigation.svelte";
 import { toasts } from "../lib/stores/toasts.svelte";
 import { expectNoAxeViolations } from "../test/axe";
-import { createFakeBackend, type FakeBackend } from "../test/fakeBackend";
+import { apiError, createFakeBackend, type FakeBackend } from "../test/fakeBackend";
 import {
   FIXTURE_CARD_CVV,
   FIXTURE_CARD_NUMBER,
@@ -63,7 +63,7 @@ describe("login detail", () => {
     const fake = backend();
     await open(fake, github);
     expect(row(t("Username")).textContent).toContain("octo");
-    expect(within(row(t("Website"))).getByRole("link", { name: "https://github.com" })).toBeTruthy();
+    expect(within(row(t("Website"))).getByRole("link", { name: "Open website https://github.com" })).toBeTruthy();
     expect(within(pane()).getByRole("button", { name: "Personal" })).toBeTruthy();
     expect(pane().textContent).toContain(formatDate(1_700_000_300_000, "datetime"));
     expect(row(t("Password")).textContent).toContain("••••••••");
@@ -144,11 +144,23 @@ describe("login detail", () => {
     await waitFor(() => expect(toasts.items.map((x) => x.text)).toContain("Copied. The clipboard clears in 45 s."));
   });
 
+  it("clicking_the_username_value_copies_it", async () => {
+    const fake = backend();
+    await open(fake, github);
+    await press(row(t("Username")), "octo");
+    expect(calls(fake, "entryCopy").map((call) => call.args)).toEqual([
+      { id: github, field: { kind: "username" } },
+    ]);
+  });
+
   it("copy_never_receives_value_in_webview", async () => {
     const fake = backend();
     const { container } = await open(fake, github);
-    await press(row(t("Password")), "Copy");
+    const user = userEvent.setup();
+    within(row(t("Password"))).getByRole("button", { name: "Copy" }).focus();
+    await user.keyboard("{Enter}");
     await waitFor(() => expect(calls(fake, "entryCopy")).toHaveLength(1));
+    expect(calls(fake, "entryCopy")[0]?.args).toEqual({ id: github, field: { kind: "password" } });
     expect(revealCalls(fake)).toHaveLength(0);
     expect(container.textContent).not.toContain(FIXTURE_LOGIN_PASSWORD);
     expect(JSON.stringify(toasts.items)).not.toContain(FIXTURE_LOGIN_PASSWORD);
@@ -190,7 +202,7 @@ describe("login detail", () => {
     await open(fake, "e-urls");
     const websites = row(t("Website"));
     const links = within(websites).getAllByRole("link");
-    expect(links.map((a) => a.textContent)).toEqual(["https://secure.test/a", "http://plain.test"]);
+    expect(links.map((a) => a.getAttribute("href"))).toEqual(["https://secure.test/a", "http://plain.test/"]);
     expect(websites.textContent).toContain("javascript:alert(1)");
     expect(websites.textContent).toContain("file:///etc/passwd");
     await userEvent.setup().click(links[0]!);
@@ -204,6 +216,12 @@ describe("login detail", () => {
     expect(await fireEvent.keyDown(links[0]!, { key: "Enter" })).toBe(false);
     await waitFor(() => expect(opened).toHaveLength(4));
     expect(await fireEvent.dragStart(links[0]!)).toBe(false);
+
+    await press(websites, "http://plain.test");
+    expect(calls(fake, "entryCopy").map((call) => call.args)).toEqual([
+      { id: "e-urls", field: { kind: "urlAt", index: 3 } },
+    ]);
+    expect(opened).toHaveLength(4);
   });
 
   it("detail_for_missing_entry_shows_not_found_state", async () => {
@@ -227,6 +245,20 @@ describe("login detail", () => {
 });
 
 describe("totp", () => {
+  it("totp_has_no_copy_button_while_loading_or_after_a_failed_load", async () => {
+    const fake = backend();
+    let rejectCode!: (reason: unknown) => void;
+    const pending = new Promise<typeof fake.state.totp>((_, reject) => { rejectCode = reject; });
+    fake.handlers.entryTotp = () => pending;
+    await open(fake, github);
+    const codeRow = within(row(t("One-time code")));
+    expect.soft(codeRow.queryAllByRole("button")).toHaveLength(0);
+
+    rejectCode(apiError("invalidInput"));
+    await waitFor(() => expect(toasts.items.some((item) => item.kind === "error")).toBe(true));
+    expect(codeRow.queryAllByRole("button")).toHaveLength(0);
+  });
+
   it("totp_code_grouping_six_and_eight_digits", async () => {
     const fake = backend();
     await open(fake, github);
@@ -353,10 +385,19 @@ describe("header actions", () => {
   it("the_favorite_star_toggles_through_entry_set_favorite", async () => {
     const fake = backend();
     await open(fake, "e-gitlab");
-    await userEvent.setup().click(within(pane()).getByRole("button", { name: "Add to Favorites" }));
+    const star = within(pane()).getByRole("button", { name: "Favorite" });
+    expect(star.getAttribute("aria-pressed")).toBe("false");
+    expect(star.getAttribute("title")).toBe("Add to Favorites");
+    expect(star.querySelector("svg")?.getAttribute("fill")).toBe("none");
+    await userEvent.setup().click(star);
     await waitFor(() => expect(calls(fake, "entrySetFavorite")[0]!.args).toEqual({ id: "e-gitlab", favorite: true }));
-    // The detail refetches on VaultChanged and the star flips.
-    expect(await within(pane()).findByRole("button", { name: "Remove from Favorites" })).toBeTruthy();
+    // The detail refetches on VaultChanged and the star fills.
+    await waitFor(() =>
+      expect(within(pane()).getByRole("button", { name: "Favorite" }).getAttribute("aria-pressed")).toBe("true"),
+    );
+    const on = within(pane()).getByRole("button", { name: "Favorite" });
+    expect(on.getAttribute("title")).toBe("Remove from Favorites");
+    expect(on.querySelector("svg")?.getAttribute("fill")).toBe("currentColor");
   });
 
   it("the_group_link_selects_the_group_scope", async () => {
@@ -378,7 +419,7 @@ describe("header actions", () => {
 });
 
 describe("address, card, files", () => {
-  it("address_detail_lists_nonempty_fields_only", async () => {
+  it("address_detail_lists_nonempty_fields_and_clicking_values_copies_them", async () => {
     const fake = backend([
       {
         id: "e-addr",
@@ -397,7 +438,13 @@ describe("address, card, files", () => {
     for (const v of ["Ann Doe", "1 Main St", "Springfield", "12345", "US", "ann@example.org"]) expect(body, v).toContain(v);
     expect(within(pane()).queryByRole("group", { name: t("Phone") })).toBeNull();
     expect(within(pane()).queryByRole("group", { name: t("Organization") })).toBeNull();
-    expect(within(pane()).getByRole("group", { name: t("City") })).toBeTruthy();
+    await expectNoAxeViolations(pane());
+    await press(row(t("City")), "Springfield");
+    await press(row(t("Country")), "US");
+    expect(calls(fake, "entryCopy").map((call) => call.args)).toEqual([
+      { id: "e-addr", field: { kind: "address", name: "city" } },
+      { id: "e-addr", field: { kind: "address", name: "countryCode" } },
+    ]);
   });
 
   it("card_detail_masks_number_and_reveals_cvv_on_click", async () => {

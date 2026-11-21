@@ -9,6 +9,8 @@
   --danger: #c8312b;
   --danger-hover: #e81123;
   --danger-hover-text: #ffffff;
+  /* Keep the filled favorite star at 3:1 on plain, hovered and selected backgrounds. */
+  --favorite: #a66c00;
   --bg: #ffffff;
   --sidebar-bg: #f5f5f7;
   --list-bg: #fbfbfc;
@@ -22,6 +24,34 @@
   --overlay: rgba(0, 0, 0, 0.32);
   --shadow: 0 8px 28px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.06);
   color-scheme: light;
+
+  /* Spacing and type scale: one airy rhythm shared by both systems. */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 10px;
+  --space-6: 14px;
+  --space-7: 20px;
+  --space-8: 24px;
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-md: 13px;
+  --font-size-lg: 15px;
+  --line-height: 1.45;
+  /* A sidebar row; list rows are taller (avatar plus two lines). */
+  --row-height: 32px;
+  /* Text inputs and the password field in forms and sheets. */
+  --field-height: 32px;
+  /* The search field and other controls inside the title bar. */
+  --toolbar-control-height: 30px;
+}
+
+/* Windows body text is 14 px (Segoe UI Variable); macOS keeps its 13 px system size. The 32 px
+   Windows caption leaves less room for controls in the title bar. `data-os` is set from app_info. */
+:root[data-os="windows"] {
+  --font-size-md: 14px;
+  --toolbar-control-height: 28px;
 }
 
 /* Dark follows the system only while no theme is forced. */
@@ -30,6 +60,7 @@
     --accent: #4c8dff;
     --accent-text: #0b1220;
     --danger: #ff6b63;
+    --favorite: #ffc53d;
     --bg: #1e1e20;
     --sidebar-bg: #252528;
     --list-bg: #212124;
@@ -50,6 +81,7 @@
   --accent: #4c8dff;
   --accent-text: #0b1220;
   --danger: #ff6b63;
+  --favorite: #ffc53d;
   --bg: #1e1e20;
   --sidebar-bg: #252528;
   --list-bg: #212124;
@@ -81,8 +113,8 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
-  font-size: 13px;
-  line-height: 1.4;
+  font-size: var(--font-size-md);
+  line-height: var(--line-height);
   -webkit-font-smoothing: antialiased;
   user-select: none;
   -webkit-user-select: none;

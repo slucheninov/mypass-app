@@ -1,6 +1,10 @@
 import type { IconName } from "./icons";
 
-/** A menu row. A `separator` row draws a rule and takes no focus (its `label` is unused). */
+/**
+ * A menu row. A `separator` row draws a rule and takes no focus (its `label` is unused); a
+ * `heading` row is a small caption that takes no focus and names the menu. A row with `checked`
+ * set (true or false) is a `menuitemradio` and shows a check mark when true.
+ */
 export type MenuItem = {
   id: string;
   label: string;
@@ -8,6 +12,15 @@ export type MenuItem = {
   disabled?: boolean;
   danger?: boolean;
   separator?: boolean;
+  heading?: boolean;
+  checked?: boolean;
+};
+
+/** A named set of mutually exclusive menu choices. */
+export type MenuEntry = MenuItem | {
+  id: string;
+  label: string;
+  choices: (MenuItem & { checked: boolean })[];
 };
 
 const MARGIN = 4;

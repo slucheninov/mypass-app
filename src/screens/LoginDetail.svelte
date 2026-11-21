@@ -6,14 +6,17 @@
   import { formatDate } from "../lib/i18n/format";
   import { t } from "../lib/i18n/index.svelte";
   import type { RevealGroup } from "../lib/secret.svelte";
+  import { toasts } from "../lib/stores/toasts.svelte";
   import Button from "../lib/ui/Button.svelte";
   import FieldRow from "../lib/ui/FieldRow.svelte";
   import Icon from "../lib/ui/Icon.svelte";
   import { webLinks } from "../lib/ui/web-links";
   import { webUrl } from "../lib/web-url";
+  import CopyFieldValue from "./CopyFieldValue.svelte";
   import DetailField from "./DetailField.svelte";
   import PasskeyPopover from "./PasskeyPopover.svelte";
   import TotpField from "./TotpField.svelte";
+  import { copyField } from "./detail-actions";
 
   let {
     detail,
@@ -32,6 +35,9 @@
   const entryId = $derived(detail.id);
   let passkeyOpen = $state(false);
 
+  function copyUrl(index: number) {
+    return toasts.guard(() => copyField(entryId, { kind: "urlAt", index }));
+  }
 </script>
 
 {#if detail.username !== ""}
@@ -45,18 +51,21 @@
 {/if}
 {#if detail.urls.length > 0}
   <DetailField label={t("Website")} {entryId} field={{ kind: "url" }} {onlargetype}>
-    <ul class="urls" use:webLinks>
-      {#each detail.urls as raw, i (i)}
-        {@const url = webUrl(raw)}
-        <li>
-          {#if url !== null}
-            <a href={url}>{raw}</a>
-          {:else}
-            {raw}
-          {/if}
-        </li>
-      {/each}
-    </ul>
+    {#snippet valueWithActions()}
+      <ul class="urls" use:webLinks>
+        {#each detail.urls as raw, i (i)}
+          {@const url = webUrl(raw)}
+          <li>
+            <CopyFieldValue onclick={() => copyUrl(i)}>{raw}</CopyFieldValue>
+            {#if url !== null}
+              <a href={url} aria-label={`${t("Open website")} ${raw}`} title={t("Open website")}>
+                <Icon name="link" size={14} />
+              </a>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    {/snippet}
     {#snippet extra()}
       <Button variant="plain" onclick={onchangewebsite}>{t("Change…")}</Button>
     {/snippet}
@@ -89,8 +98,20 @@
     margin: 0;
     padding: 0;
   }
-  a {
+  .urls li {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .urls a {
+    display: inline-flex;
+    flex: none;
+    padding: 4px;
+    border-radius: var(--radius);
     color: var(--accent);
+  }
+  .urls a:hover {
+    background: var(--hover);
   }
   .added {
     display: inline-flex;

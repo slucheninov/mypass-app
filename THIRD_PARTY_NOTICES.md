@@ -118,6 +118,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `bumpalo` | 3.20.3 | MIT OR Apache-2.0 |
 | `bytemuck` | 1.25.2 | Zlib OR Apache-2.0 OR MIT |
 | `byteorder` | 1.5.0 | Unlicense OR MIT |
+| `byteorder-lite` | 0.1.0 | Unlicense OR MIT |
 | `bytes` | 1.12.1 | MIT |
 | `cairo-rs` | 0.18.5 | MIT |
 | `cairo-sys-rs` | 0.18.2 | MIT |
@@ -263,6 +264,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `ident_case` | 1.0.1 | MIT/Apache-2.0 |
 | `idna` | 1.1.0 | MIT OR Apache-2.0 |
 | `idna_adapter` | 1.2.2 | Apache-2.0 OR MIT |
+| `image` | 0.25.10 | MIT OR Apache-2.0 |
 | `indexmap` | 1.9.3 | Apache-2.0 OR MIT |
 | `indexmap` | 2.14.2 | Apache-2.0 OR MIT |
 | `infer` | 0.22.0 | MIT |
@@ -304,6 +306,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `miniz_oxide` | 0.8.9 | MIT OR Zlib OR Apache-2.0 |
 | `miniz_oxide` | 0.9.1 | MIT OR Zlib OR Apache-2.0 |
 | `mio` | 1.2.4 | MIT |
+| `moxcms` | 0.8.1 | BSD-3-Clause OR Apache-2.0 |
 | `muda` | 0.20.0 | Apache-2.0 OR MIT |
 | `native-tls` | 0.2.18 | MIT OR Apache-2.0 |
 | `ndk` | 0.9.0 | MIT OR Apache-2.0 |
@@ -380,6 +383,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `proc-macro-error` | 1.0.4 | MIT OR Apache-2.0 |
 | `proc-macro-error-attr` | 1.0.4 | MIT OR Apache-2.0 |
 | `proc-macro2` | 1.0.107 | MIT OR Apache-2.0 |
+| `pxfm` | 0.1.30 | BSD-3-Clause OR Apache-2.0 |
 | `quick-xml` | 0.42.0 | MIT |
 | `quote` | 1.0.47 | MIT OR Apache-2.0 |
 | `r-efi` | 5.3.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later |

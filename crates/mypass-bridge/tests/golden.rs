@@ -61,10 +61,10 @@ fn request_cases() -> Vec<(Request, &'static str)> {
         (
             Request::ListEntries {
                 token: t(),
-                category: s("logins"),
+                category: s("addresses"),
                 pairing: None,
             },
-            r#"{"type":"listEntries","token":"tok-1","category":"logins"}"#,
+            r#"{"type":"listEntries","token":"tok-1","category":"addresses"}"#,
         ),
         (
             Request::SearchEntries {

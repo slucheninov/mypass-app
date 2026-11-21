@@ -10,7 +10,7 @@
 use crate::dto::{
     timestamp_ms, AddressDto, AttachmentMeta, CardDto, Category, CategoryCount, CustomFieldDto,
     EntryDetailDto, EntryQuery, EntrySummary, EntryTypeDto, GroupNode, PasskeyDetails, PasskeyMeta,
-    Scope, SecurityFlag, Sidebar, SortKey, TotpDto,
+    Scope, SecurityFlag, Sidebar, SortKey, SortOrder, TotpDto,
 };
 use crate::fields::{
     bin_id, is_history_group, EntryFields, ADDRESS_FIELDS, ADDRESS_LABELS, ADDRESS_PREFIX,
@@ -359,7 +359,6 @@ pub fn list_entries(db: &Database, q: &EntryQuery, scope: SearchScope) -> Vec<En
     let walked = walk(db);
     let audit = Audit::new(&walked.items);
     let searching = !q.search.is_empty();
-    let mut out: Vec<EntrySummary> = Vec::new();
     let selected: Vec<&Item<'_>> = match &q.scope {
         Scope::Category { category } => walked
             .items
@@ -389,16 +388,56 @@ pub fn list_entries(db: &Database, q: &EntryQuery, scope: SearchScope) -> Vec<En
                 .collect()
         }
     };
+    let mut keyed: Vec<(SortData, EntrySummary)> = Vec::new();
     for item in selected {
         if entry_matches(item.entry, item.group_name, &q.search, scope) {
-            out.push(summary(item, &audit));
+            let row = summary(item, &audit);
+            keyed.push((SortData::new(item.entry, &row), row));
         }
     }
-    match q.sort {
-        SortKey::Title => out.sort_by_cached_key(|s| s.title.to_lowercase()),
-        SortKey::Modified => out.sort_by(|a, b| b.modified.total_cmp(&a.modified)),
+    keyed.sort_by(|(a, _), (b, _)| a.compare(b, q.sort, q.order));
+    keyed.into_iter().map(|(_, row)| row).collect()
+}
+
+/// What [`list_entries`] sorts by, taken once per row.
+struct SortData {
+    title: String,
+    created: i64,
+    modified: i64,
+    accessed: i64,
+    usage_count: u32,
+    id: String,
+}
+
+impl SortData {
+    fn new(entry: &Entry, row: &EntrySummary) -> Self {
+        Self {
+            title: row.title.to_lowercase(),
+            created: entry.created.0,
+            modified: entry.modified.0,
+            accessed: entry.accessed.0,
+            usage_count: entry.usage_count,
+            id: row.id.clone(),
+        }
     }
-    out
+
+    /// The key in the chosen direction, then title A to Z, then id: a total, stable order.
+    fn compare(&self, other: &Self, key: SortKey, order: SortOrder) -> std::cmp::Ordering {
+        let primary = match key {
+            SortKey::Title => self.title.cmp(&other.title),
+            SortKey::Created => self.created.cmp(&other.created),
+            SortKey::Modified => self.modified.cmp(&other.modified),
+            SortKey::Accessed => self.accessed.cmp(&other.accessed),
+            SortKey::UsageCount => self.usage_count.cmp(&other.usage_count),
+        };
+        let primary = match order {
+            SortOrder::Ascending => primary,
+            SortOrder::Descending => primary.reverse(),
+        };
+        primary
+            .then_with(|| self.title.cmp(&other.title))
+            .then_with(|| self.id.cmp(&other.id))
+    }
 }
 
 fn group_node(group: &Group, bin: Option<Uuid>) -> GroupNode {
@@ -770,6 +809,7 @@ mod tests {
             scope: Scope::Category { category: c },
             search: search.into(),
             sort: SortKey::Title,
+            order: SortOrder::Ascending,
         }
     }
 
@@ -866,6 +906,7 @@ mod tests {
             },
             search: String::new(),
             sort: SortKey::Title,
+            order: SortOrder::Ascending,
         };
         assert!(list_entries(&s.db, &q, SearchScope::App).is_empty());
         assert!(!ids(&recent_entries(&s.db, 50)).contains(&h));
@@ -1277,6 +1318,7 @@ mod tests {
             },
             search: search.into(),
             sort: SortKey::Title,
+            order: SortOrder::Ascending,
         };
         assert_eq!(
             titles(&list_entries(
@@ -1311,12 +1353,13 @@ mod tests {
             },
             search: String::new(),
             sort: SortKey::Title,
+            order: SortOrder::Ascending,
         };
         assert!(list_entries(&s.db, &bad, SearchScope::App).is_empty());
     }
 
     #[test]
-    fn sort_title_is_case_insensitive_and_modified_is_newest_first() {
+    fn sort_title_is_case_insensitive_and_title_and_modified_reverse() {
         let mut db = fast_database("s");
         let root = db.root_id();
         let mut ids_by_title = Vec::new();
@@ -1336,9 +1379,94 @@ mod tests {
             ["A", "b", "c"]
         );
         q.sort = SortKey::Modified;
+        q.order = SortOrder::Descending;
         let list = list_entries(&db, &q, SearchScope::App);
         assert_eq!(titles(&list), ["A", "c", "b"]);
         assert_eq!(list[0].modified, 300_000.0);
+        q.order = SortOrder::Ascending;
+        assert_eq!(
+            titles(&list_entries(&db, &q, SearchScope::App)),
+            ["b", "c", "A"]
+        );
+        q.sort = SortKey::Title;
+        q.order = SortOrder::Descending;
+        assert_eq!(
+            titles(&list_entries(&db, &q, SearchScope::App)),
+            ["c", "b", "A"]
+        );
+    }
+
+    /// One entry per row: title, created, accessed, usage count. Times are pinned after
+    /// `add_entry`, which may set them.
+    fn usage_database(rows: &[(&str, i64, i64, u32)]) -> (Database, Vec<Uuid>) {
+        let mut db = fast_database("s");
+        let root = db.root_id();
+        let mut ids = Vec::new();
+        for (title, ..) in rows {
+            let e = entry(title);
+            ids.push(e.uuid);
+            db.add_entry(root, e, NOW).unwrap();
+        }
+        for (id, (_, created, accessed, usage)) in ids.iter().zip(rows) {
+            let e = db.find_entry_mut(*id).unwrap();
+            e.created = Timestamp(*created);
+            e.accessed = Timestamp(*accessed);
+            e.usage_count = *usage;
+        }
+        (db, ids)
+    }
+
+    #[test]
+    fn sort_by_created_accessed_and_usage_in_both_directions() {
+        let (db, _) = usage_database(&[("b", 100, 500, 3), ("A", 300, 400, 9), ("c", 200, 600, 1)]);
+        let mut q = cat(Category::All, "");
+        let list = |q: &EntryQuery| titles(&list_entries(&db, q, SearchScope::App));
+        let cases = [
+            (SortKey::Created, ["A", "c", "b"]),
+            (SortKey::Accessed, ["c", "b", "A"]),
+            (SortKey::UsageCount, ["A", "b", "c"]),
+        ];
+        for (key, newest_first) in cases {
+            q.sort = key;
+            q.order = SortOrder::Descending;
+            assert_eq!(list(&q), newest_first, "{key:?} descending");
+            q.order = SortOrder::Ascending;
+            let mut oldest_first = newest_first;
+            oldest_first.reverse();
+            assert_eq!(list(&q), oldest_first, "{key:?} ascending");
+        }
+    }
+
+    #[test]
+    fn sort_ties_fall_back_to_title_then_id_in_either_direction() {
+        // Every entry has the same usage; two share a title, so only the id can order them.
+        let (db, ids) = usage_database(&[
+            ("same", 1, 1, 4),
+            ("Alpha", 1, 1, 4),
+            ("same", 1, 1, 4),
+            ("beta", 1, 1, 4),
+        ]);
+        let mut dupes = vec![simple(ids[0]), simple(ids[2])];
+        dupes.sort();
+        let mut q = cat(Category::All, "");
+        q.sort = SortKey::UsageCount;
+        for order in [SortOrder::Ascending, SortOrder::Descending] {
+            q.order = order;
+            let list = list_entries(&db, &q, SearchScope::App);
+            assert_eq!(
+                titles(&list),
+                ["Alpha", "beta", "same", "same"],
+                "{order:?}"
+            );
+            let tail: Vec<String> = list[2..].iter().map(|s| s.id.clone()).collect();
+            assert_eq!(tail, dupes, "{order:?}");
+        }
+        q.sort = SortKey::Title;
+        q.order = SortOrder::Descending;
+        let list = list_entries(&db, &q, SearchScope::App);
+        assert_eq!(titles(&list), ["same", "same", "beta", "Alpha"]);
+        let head: Vec<String> = list[..2].iter().map(|s| s.id.clone()).collect();
+        assert_eq!(head, dupes);
     }
 
     #[test]

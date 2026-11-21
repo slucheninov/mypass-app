@@ -2,7 +2,7 @@
 // return after every modal, and the tab order across the main window's panes.
 import { fireEvent, screen, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { expectNoAxeViolations } from "./test/axe";
 import { createFakeBackend, type FakeBackend } from "./test/fakeBackend";
 import { dragAndDrop } from "./test/dnd";
@@ -413,7 +413,8 @@ function modalKeys(): string[] {
       while (i < f.text.length && f.text.charAt(i) !== ">") {
         if (f.text.charAt(i) === "{") {
           const end = braced(f.text, i);
-          if (f.text.slice(m.index, i).trimEnd().endsWith("title=")) titleExpr = f.text.slice(i + 1, end - 1);
+          // `\stitle=`, so `subtitle=` is not taken for the title.
+          if (/\stitle=$/.test(f.text.slice(m.index, i).trimEnd())) titleExpr = f.text.slice(i + 1, end - 1);
           i = end;
         } else i++;
       }
@@ -447,6 +448,25 @@ describe("focus return", () => {
 });
 
 describe("keyboard", () => {
+  it("tab_order_reaches_the_copy_action_once_per_field", async () => {
+    const { user } = await unlocked();
+    await user.click(screen.getByRole("option", { name: /GitHub/ }));
+    await screen.findByRole("heading", { name: "GitHub" });
+    const username = within(pane()).getByRole("group", { name: "Username" });
+    const password = within(within(pane()).getByRole("group", { name: "Password" }));
+    const usernameCopy = within(username).getByRole("button", { name: "Copy" });
+
+    usernameCopy.focus();
+    await user.tab({ shift: true });
+    expect(username.contains(document.activeElement)).toBe(false);
+    await user.tab();
+    expect(document.activeElement).toBe(usernameCopy);
+    await user.tab();
+    expect(document.activeElement).toBe(password.getByRole("button", { name: "Reveal" }));
+    await user.tab();
+    expect(document.activeElement).toBe(password.getByRole("button", { name: "Copy" }));
+  });
+
   it("tab_order_reaches_toolbar_sidebar_list_detail_in_order", async () => {
     const { user } = await unlocked();
     await user.click(screen.getByRole("option", { name: /GitHub/ }));
@@ -470,5 +490,32 @@ describe("keyboard", () => {
       if (seen.includes("detail")) break;
     }
     expect(seen).toEqual(["toolbar", "sidebar", "list", "detail"]);
+  });
+
+  it("tab_order_skips_the_hidden_sidebar", async () => {
+    // The collapsed state is persisted; later tests start with the sidebar shown.
+    onTestFinished(() => localStorage.removeItem("layout.sidebarCollapsed"));
+    const { user } = await unlocked();
+    await user.click(screen.getByRole("button", { name: "Hide sidebar" }));
+    await user.click(screen.getByRole("option", { name: /GitHub/ }));
+    await screen.findByRole("heading", { name: "GitHub" });
+    (document.activeElement as HTMLElement | null)?.blur();
+    const toolbar = screen.getByRole("searchbox").closest("header");
+    const zoneOf = (el: Element | null): string | null => {
+      if (!el) return null;
+      if (toolbar?.contains(el)) return "toolbar";
+      if (el.closest("[role=tree]")) return "sidebar";
+      if (el.closest("[role=listbox]")) return "list";
+      if (el.closest("[role=region]")) return "detail";
+      return null;
+    };
+    const seen: string[] = [];
+    for (let i = 0; i < 80; i += 1) {
+      await user.tab();
+      const zone = zoneOf(document.activeElement);
+      if (zone && seen[seen.length - 1] !== zone) seen.push(zone);
+      if (seen.includes("detail")) break;
+    }
+    expect(seen).toEqual(["toolbar", "list", "detail"]);
   });
 });

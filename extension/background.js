@@ -942,7 +942,7 @@ function activeAddressTab() {
   return new Promise((resolve) => chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     if (chrome.runtime.lastError) { resolve(null); return; }
     const tab = tabs && tabs[0];
-    resolve(tab && typeof tab.id === 'number' && /^https?:\/\//.test(tab.url || '') ? tab : null);
+    resolve(tab && typeof tab.id === 'number' && urlMatch.isHttpsAddressPage(tab.url) ? tab : null);
   }));
 }
 function sendAddressToDocument(target, message) {
@@ -954,6 +954,7 @@ function sendAddressToDocument(target, message) {
 async function prepareAddressFill() {
   const tab = await activeAddressTab();
   if (!tab) return addressError('address_no_form');
+  if (!(await readAutofillSettings()).showAddresses) return addressError('address_disabled');
   for (const [key, target] of addressTargets) {
     if (Date.now() - target.at > ADDRESS_TARGET_TTL_MS) addressTargets.delete(key);
   }
@@ -1001,6 +1002,7 @@ async function fillSelectedAddress(message) {
     return addressError('address_page_changed');
   }
   const sameTab = (tab) => tab && tab.id === target.tabId && tab.url === target.url;
+  if (!(await readAutofillSettings()).showAddresses) return addressError('address_disabled');
   if (!sameTab(await activeAddressTab())) return addressError('address_page_changed');
   const response = await sendNativeMessageWithPairing({ type: 'fillAddress', id: message.id, url: target.url });
   if (!response || response.type !== 'address') {
@@ -1009,6 +1011,7 @@ async function fillSelectedAddress(message) {
   }
   if (!response.address || typeof response.address.id !== 'string'
     || response.address.id.toLowerCase() !== message.id.toLowerCase()) return addressError('address_unavailable');
+  if (!(await readAutofillSettings()).showAddresses) return addressError('address_disabled');
   if (!sameTab(await activeAddressTab())) return addressError('address_page_changed');
   const result = await sendAddressToDocument(target, { type: 'applyAddress', url: target.url,
     challenge: target.challenge, groupId: message.groupId, address: response.address });
@@ -1769,6 +1772,10 @@ function handleRuntimeMessage(message, sender, sendResponse) {
   }
 
   if (!message || !knownTypes.includes(message.type)) {
+    return false;
+  }
+  // These popup-only vault views can include address summaries independent of the site.
+  if (['listEntries', 'searchEntries', 'getFavorites'].includes(message.type) && !isAddressPopup(sender)) {
     return false;
   }
 

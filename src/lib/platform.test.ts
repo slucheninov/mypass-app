@@ -11,5 +11,7 @@ describe("platform store", () => {
     await loadPlatform();
     expect(platform.deviceUnlockAvailable).toBe(true);
     expect(platform.os).toBe("windows");
+    // The root carries the OS for CSS-only presentation differences (`:root[data-os]`).
+    expect(document.documentElement.dataset.os).toBe("windows");
   });
 });

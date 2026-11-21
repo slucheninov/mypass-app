@@ -690,6 +690,7 @@ export type EntryQuery = {
 	scope: Scope,
 	search: string,
 	sort: SortKey,
+	order: SortOrder,
 };
 
 export type EntrySummary = {
@@ -727,7 +728,7 @@ export type ErrorCode = "locked" | "noVault" | "wrongPassword" | "alreadyExists"
 "retainedCopyRefused" | "internal";
 
 /**  A single field to reveal or copy. `Totp` resolves to the current code. */
-export type FieldRef = { kind: "username" } | { kind: "password" } | { kind: "url" } | { kind: "notesBody" } | { kind: "cardNumber" } | { kind: "cardCvv" } | { kind: "totp" } | { kind: "custom"; key: string };
+export type FieldRef = { kind: "username" } | { kind: "password" } | { kind: "url" } | { kind: "urlAt"; index: number } | { kind: "notesBody" } | { kind: "cardNumber" } | { kind: "cardCvv" } | { kind: "address"; name: string } | { kind: "totp" } | { kind: "custom"; key: string };
 
 /**  Probe consumes a grant and returns a fresh grant for the user's strategy decision. */
 export type FolderProbe = FolderProbe_Serialize | FolderProbe_Deserialize;
@@ -1522,7 +1523,25 @@ export type SkippedRow = {
 	reason: SkipReason,
 };
 
-export type SortKey = "title" | "modified";
+export type SortKey = "title" | 
+/**  KDBX `CreationTime`. */
+"created" | 
+/**  KDBX `LastModificationTime`. */
+"modified" | 
+/**  "Recently used": KDBX `LastAccessTime`, set when a field is copied or the bridge fills. */
+"accessed" | 
+/**  "Frequently used": KDBX `UsageCount`, bumped together with `Accessed`. */
+"usageCount";
+
+/**
+ *  The direction of an [`EntryQuery`] sort. Ties always fall back to the title (A to Z, case
+ *  insensitive) and then the entry id, whatever the direction, so the order is stable.
+ */
+export type SortOrder = 
+/**  A to Z, oldest first, least used first. */
+"ascending" | 
+/**  Z to A, newest first, most used first. */
+"descending";
 
 /**
  *  Where the open vault is stored and how that storage is doing (the `StorageStatusChanged`

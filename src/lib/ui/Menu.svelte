@@ -1,19 +1,22 @@
 <script lang="ts">
   import { tick, type Snippet } from "svelte";
   import MenuList from "./MenuList.svelte";
-  import { fitInViewport, type MenuItem } from "./menu";
+  import { fitInViewport, type MenuEntry } from "./menu";
 
   let {
     items,
     onselect,
     trigger,
     label,
+    align = "start",
   }: {
-    items: MenuItem[];
+    items: MenuEntry[];
     onselect: (id: string) => void;
     trigger: Snippet;
-    /** Accessible name of the trigger button, already translated; required when the trigger has no text. */
+    /** Accessible name and tooltip of the trigger button, already translated; required when the trigger has no text. */
     label?: string;
+    /** Which edge of the trigger the popup lines up with: `end` for a trigger at the right of a pane. */
+    align?: "start" | "end";
   } = $props();
 
   let open = $state(false);
@@ -42,6 +45,7 @@
     aria-haspopup="menu"
     aria-expanded={open}
     aria-label={label}
+    title={label}
     bind:this={button}
     onclick={() => (open = !open)}
     onkeydown={(e) => {
@@ -54,7 +58,7 @@
     {@render trigger()}
   </button>
   {#if open}
-    <div class="popup" use:fitInViewport>
+    <div class="popup" class:end={align === "end"} use:fitInViewport>
       <MenuList
         {items}
         onselect={async (id) => {
@@ -94,5 +98,9 @@
     left: 0;
     z-index: 50;
     margin-top: 4px;
+  }
+  .popup.end {
+    right: 0;
+    left: auto;
   }
 </style>

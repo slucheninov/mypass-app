@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import type { Snippet } from "svelte";
   import { t } from "../i18n/index.svelte";
 
@@ -6,6 +7,10 @@
     widths,
     min,
     onresize,
+    collapsed = false,
+    oncollapse,
+    snap = 120,
+    firstId,
     first,
     second,
     third,
@@ -13,6 +18,14 @@
     widths: [number, number];
     min: [number, number, number];
     onresize: (widths: [number, number]) => void;
+    /** The first pane is hidden (width 0, out of the tab order and the accessibility tree). */
+    collapsed?: boolean;
+    /** Asked to collapse when the first handle is dragged below `snap`, and to expand when dragged back. */
+    oncollapse?: (collapsed: boolean) => void;
+    /** Width in px under which a drag of the first handle collapses the first pane. */
+    snap?: number;
+    /** The id of the first pane, for an `aria-controls` elsewhere. */
+    firstId?: string;
     first: Snippet;
     second: Snippet;
     third: Snippet;
@@ -20,32 +33,67 @@
 
   let container: HTMLElement | undefined = $state();
   let drag: { index: 0 | 1; startX: number; startWidths: [number, number] } | null = null;
+  // Reactive twin of `drag`, so a drag turns the width animation off.
+  let dragging = $state(false);
   const KEY_STEP = 16;
+  const HANDLE_WIDTH = 1;
+  let wasCollapsed = false;
+
+  function roomForSidebarAndList(): number {
+    const total = container?.clientWidth ?? 0;
+    return total > 0 ? total - (collapsed ? 1 : 2) * HANDLE_WIDTH - min[2] : Infinity;
+  }
+
+  $effect.pre(() => {
+    const expanded = wasCollapsed && !collapsed;
+    wasCollapsed = collapsed;
+    if (!expanded) return;
+    untrack(() => {
+      // Give up the extra list width from the collapsed layout before shrinking the sidebar.
+      const room = roomForSidebarAndList();
+      const [sidebar, list] = widths;
+      const nextList = Math.max(min[1], Math.min(list, room - sidebar));
+      const nextSidebar = Math.max(min[0], Math.min(sidebar, room - nextList));
+      if (nextSidebar !== sidebar || nextList !== list) onresize([nextSidebar, nextList]);
+    });
+  });
 
   /** The widths after moving handle `index` by `delta`, clamped so every pane keeps its minimum. */
   function clamp(index: 0 | 1, base: [number, number], delta: number): [number, number] {
-    const total = container?.clientWidth ?? 0;
+    const room = roomForSidebarAndList();
     const [a, b] = base;
-    if (index === 0) {
-      const room = total > 0 ? total - b - min[2] : Infinity;
-      return [Math.max(min[0], Math.min(a + delta, Math.max(min[0], room))), b];
-    }
-    const room = total > 0 ? total - a - min[2] : Infinity;
-    return [a, Math.max(min[1], Math.min(b + delta, Math.max(min[1], room)))];
+    if (index === 0) return [Math.max(min[0], Math.min(a + delta, room - b)), b];
+    // A collapsed first pane takes no room.
+    return [a, Math.max(min[1], Math.min(b + delta, room - (collapsed ? 0 : a)))];
   }
 
   function down(index: 0 | 1, event: PointerEvent) {
     drag = { index, startX: event.clientX, startWidths: [widths[0], widths[1]] };
+    dragging = true;
     event.preventDefault();
   }
 
   function move(event: PointerEvent) {
     if (!drag) return;
-    onresize(clamp(drag.index, drag.startWidths, event.clientX - drag.startX));
+    const delta = event.clientX - drag.startX;
+    if (drag.index === 0 && oncollapse) {
+      // Below the snap width the pane collapses and keeps the width it had before the drag, so
+      // showing it again brings that width back; dragging out again expands it.
+      if (drag.startWidths[0] + delta < snap) {
+        if (!collapsed) {
+          onresize([drag.startWidths[0], widths[1]]);
+          oncollapse(true);
+        }
+        return;
+      }
+      if (collapsed) oncollapse(false);
+    }
+    onresize(clamp(drag.index, drag.startWidths, delta));
   }
 
   function up() {
     drag = null;
+    dragging = false;
   }
 
   function key(index: 0 | 1, event: KeyboardEvent) {
@@ -58,20 +106,36 @@
 
 <svelte:window onpointermove={move} onpointerup={up} onpointercancel={up} />
 
-<div class="split" bind:this={container}>
-  <div class="pane" style="width: {widths[0]}px">{@render first()}</div>
-  <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+<div class="split" class:dragging bind:this={container} style:--handle-width="{HANDLE_WIDTH}px">
+  <!-- Collapsed: kept mounted (its tree state survives) but inert and hidden; `visibility` is
+       inline so it applies before any stylesheet, and its transition is delayed in CSS so the
+       width can animate first. -->
   <div
-    class="handle"
-    role="separator"
-    aria-orientation="vertical"
-    aria-label={t("Resize sidebar")}
-    aria-valuenow={widths[0]}
-    aria-valuemin={min[0]}
-    tabindex="0"
-    onpointerdown={(e) => down(0, e)}
-    onkeydown={(e) => key(0, e)}
-  ></div>
+    class="pane first"
+    class:collapsed
+    id={firstId}
+    style="width: {collapsed ? 0 : widths[0]}px{collapsed ? '; visibility: hidden' : ''}"
+    inert={collapsed}
+    data-testid="split-first"
+  >
+    <!-- Keeps its full width while the pane animates, so the content is clipped, not squeezed. -->
+    <div class="inner" style="width: {widths[0]}px">{@render first()}</div>
+  </div>
+  {#if !collapsed}
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+    <div
+      class="handle"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={t("Resize sidebar")}
+      aria-controls={firstId}
+      aria-valuenow={widths[0]}
+      aria-valuemin={min[0]}
+      tabindex="0"
+      onpointerdown={(e) => down(0, e)}
+      onkeydown={(e) => key(0, e)}
+    ></div>
+  {/if}
   <div class="pane" style="width: {widths[1]}px">{@render second()}</div>
   <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
   <div
@@ -102,9 +166,26 @@
   .rest {
     flex: 1;
   }
+  /* Collapse and expand animate briefly; reduced motion turns transitions off globally (app.css). */
+  .first {
+    transition:
+      width 150ms ease,
+      visibility 0s linear 0s;
+  }
+  .first.collapsed {
+    transition:
+      width 150ms ease,
+      visibility 0s linear 150ms;
+  }
+  .dragging .first {
+    transition: none;
+  }
+  .inner {
+    height: 100%;
+  }
   .handle {
     flex: none;
-    width: 1px;
+    width: var(--handle-width);
     position: relative;
     background: var(--separator);
     cursor: col-resize;

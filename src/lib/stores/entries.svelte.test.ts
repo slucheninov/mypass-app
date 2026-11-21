@@ -70,6 +70,7 @@ describe("entries store", () => {
       scope: { kind: "category", category: "all" },
       search: "",
       sort: "title",
+      order: "ascending",
     });
   });
 

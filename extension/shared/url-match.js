@@ -44,10 +44,21 @@ function fillTargetMatches(messageUrl, pageUrl) {
   }
 }
 
+// Address filling is domain-independent. The caller separately pins the URL
+// and document from the user's confirmation.
+function isHttpsAddressPage(url) {
+  try {
+    const page = new URL(url);
+    return page.protocol === 'https:' && !!page.hostname && !page.username && !page.password;
+  } catch (_) {
+    return false;
+  }
+}
+
 // Bare name for later content scripts. Do not read this off globalThis:
 // in a content script that object is the page, not this extension.
-var mypassUrlMatch = { hostnameMatches, fillTargetMatches };
+var mypassUrlMatch = { hostnameMatches, fillTargetMatches, isHttpsAddressPage };
 
 if (typeof module !== 'undefined') {
-  module.exports = { hostnameMatches, fillTargetMatches };
+  module.exports = mypassUrlMatch;
 }

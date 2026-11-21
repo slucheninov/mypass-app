@@ -8,6 +8,7 @@
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type {
+  AddressDto,
   ApiError,
   HistoryReveal,
   DeviceUnlockStatus_Serialize,
@@ -61,6 +62,11 @@ import {
 type Commands = typeof commands;
 export type CommandName = keyof Commands;
 export type EventName = keyof typeof events;
+
+const ADDRESS_FIELDS: ReadonlySet<string> = new Set<keyof AddressDto>([
+  "label", "fullName", "givenName", "familyName", "organization", "addressLine1", "addressLine2",
+  "city", "region", "postalCode", "countryCode", "countryName", "phone", "email",
+]);
 
 /** Canonical shortcuts the backend refuses on every platform (a subset of its reserved list). */
 const RESERVED_SHORTCUTS = new Set(["CommandOrControl+Q", "CommandOrControl+W", "CommandOrControl+Tab"]);
@@ -311,12 +317,20 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         return model.username;
       case "url":
         return model.urls[0] ?? "";
+      case "urlAt": {
+        const url = model.urls[field.index];
+        if (url === undefined) throw apiError("notFound");
+        return url;
+      }
       case "notesBody":
         return model.notes;
       case "cardNumber":
         return model.card?.number ?? "";
       case "cardCvv":
         return model.card?.cvv ?? "";
+      case "address":
+        if (!ADDRESS_FIELDS.has(field.name)) throw apiError("invalidInput");
+        return model.address?.[field.name as keyof AddressDto] ?? "";
       case "totp":
         if (!entry.summary.hasTotp) throw apiError("invalidInput");
         return state.totp.code;

@@ -48,19 +48,20 @@
   .text-field {
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: var(--space-2);
   }
   label {
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: var(--space-2);
   }
   .label {
     color: var(--text-2);
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
   input {
-    padding: 5px 8px;
+    min-height: var(--field-height);
+    padding: var(--space-3) var(--space-5);
     border: 1px solid var(--control-border);
     border-radius: var(--radius);
     background: var(--control-bg);
@@ -73,6 +74,6 @@
   .error {
     margin: 0;
     color: var(--danger);
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
 </style>

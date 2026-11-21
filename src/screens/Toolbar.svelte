@@ -126,10 +126,10 @@
     display: flex;
     flex: 1;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-5);
     min-width: 0;
     height: 100%;
-    padding: 0 12px;
+    padding: 0 var(--space-6) 0 var(--space-3);
   }
   .spacer {
     flex: 1;
@@ -138,10 +138,11 @@
   .search {
     display: flex;
     align-items: center;
-    gap: 6px;
-    width: 240px;
+    gap: var(--space-3);
+    width: 260px;
     min-width: 120px;
-    padding: 0 8px;
+    height: var(--toolbar-control-height);
+    padding: 0 var(--space-4);
     border: 1px solid var(--control-border);
     border-radius: var(--radius);
     background: var(--control-bg);
@@ -150,12 +151,11 @@
   .search input {
     flex: 1;
     min-width: 0;
-    padding: 4px 0;
+    padding: 0;
     border: 0;
     outline: none;
     background: transparent;
     color: var(--text);
-    font-size: 13px;
   }
   .search:focus-within {
     outline: 2px solid var(--accent);

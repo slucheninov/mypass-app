@@ -39,6 +39,10 @@ export interface FixtureEntry {
   summary: EntrySummary;
   model: EntryEditModel_Serialize;
   modified: number;
+  /** KDBX `CreationTime`, `LastAccessTime` and `UsageCount` (the sort keys); default to `modified`, `modified` and 0. */
+  created?: number;
+  accessed?: number;
+  usageCount?: number;
   /** What `entry_get` reports besides the edit model. */
   passkey: PasskeyMeta_Serialize | null;
   /** Earlier versions, oldest first (the order of the KDBX `History` element). */
@@ -114,6 +118,9 @@ export interface EntrySpec {
   /** Explicit earlier versions (oldest first); wins over `historyCount`. */
   history?: HistorySpec[];
   modified: number;
+  created?: number;
+  accessed?: number;
+  usageCount?: number;
 }
 
 /** One entry of the fake vault; the summary and the edit model are kept consistent. */
@@ -123,6 +130,9 @@ export function makeEntry(spec: EntrySpec): FixtureEntry {
   const favorite = spec.favorite ?? false;
   const entry: FixtureEntry = {
     modified: spec.modified,
+    created: spec.created ?? spec.modified,
+    accessed: spec.accessed ?? spec.modified,
+    usageCount: spec.usageCount ?? 0,
     passkey: spec.passkey ?? null,
     history: [],
     summary: {
@@ -286,8 +296,8 @@ export function entryMatches(e: FixtureEntry, groupName: string, search: string)
 /**
  * The list the backend would return for a query (`queries::list_entries`): a category scope
  * searches inside the category; a group scope covers the group's subtree, but with a search it
- * covers the whole vault (never the bin unless the group is in the bin); sorted by lower-cased
- * title or by newest modification.
+ * covers the whole vault (never the bin unless the group is in the bin); sorted by the query's key
+ * and order, ties by lower-cased title and then id.
  */
 export function listEntries(
   entries: FixtureEntry[],
@@ -310,8 +320,27 @@ export function listEntries(
     scoped = entries.filter((e) => inScope(e.summary, query.scope));
   }
   const rows = scoped.filter((e) => entryMatches(e, nameOf(e.summary.groupId), query.search));
-  const key = (e: FixtureEntry) => e.summary.title.toLowerCase();
-  rows.sort((a, b) => (query.sort === "title" ? (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0) : b.modified - a.modified));
+  const title = (e: FixtureEntry) => e.summary.title.toLowerCase();
+  const cmp = <T extends string | number>(a: T, b: T) => (a < b ? -1 : a > b ? 1 : 0);
+  const primary = (e: FixtureEntry): string | number => {
+    switch (query.sort) {
+      case "title":
+        return title(e);
+      case "created":
+        return e.created ?? e.modified;
+      case "modified":
+        return e.modified;
+      case "accessed":
+        return e.accessed ?? e.modified;
+      case "usageCount":
+        return e.usageCount ?? 0;
+    }
+  };
+  const direction = query.order === "descending" ? -1 : 1;
+  rows.sort(
+    (a, b) =>
+      direction * cmp(primary(a), primary(b)) || cmp(title(a), title(b)) || cmp(a.summary.id, b.summary.id),
+  );
   return rows.map((e) => structuredClone(e.summary));
 }
 

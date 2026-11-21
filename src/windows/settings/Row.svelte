@@ -15,14 +15,14 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
-    column-gap: 16px;
-    padding: 9px 0;
+    column-gap: var(--space-6);
+    padding: 11px 0;
     border-bottom: var(--sep);
   }
   .hint {
     grid-column: 1 / -1;
-    margin-top: 4px;
-    font-size: 12px;
+    margin-top: var(--space-2);
+    font-size: var(--font-size-sm);
     color: var(--text-2);
   }
 </style>

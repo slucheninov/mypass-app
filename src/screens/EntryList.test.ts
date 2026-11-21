@@ -97,13 +97,16 @@ describe("rows", () => {
       ]),
     );
     const github = optionNamed(/GitHub/);
-    expect(within(github).getByRole("img", { name: t("Favorites") })).toBeTruthy();
+    const star = within(github).getByRole("img", { name: t("Favorite") });
+    // A filled star next to the title, not an outline among the badges.
+    expect(star.closest(".title-line")).not.toBeNull();
+    expect(star.querySelector("svg")?.getAttribute("fill")).toBe("currentColor");
     expect(within(github).getByRole("img", { name: t("Verification Code") })).toBeTruthy();
     expect(within(github).queryByRole("img", { name: t("Passkey") })).toBeNull();
     const zed = optionNamed(/Zed/);
     expect(within(zed).getByRole("img", { name: t("Passkey") })).toBeTruthy();
     expect(within(zed).getByRole("img", { name: t("%lld files", 2) })).toBeTruthy();
-    expect(within(zed).queryByRole("img", { name: t("Favorites") })).toBeNull();
+    expect(within(zed).queryByRole("img", { name: t("Favorite") })).toBeNull();
   });
 
   it("security_flags_rendered_as_localised_chips", async () => {
@@ -217,12 +220,81 @@ describe("search", () => {
     expect(withText).toHaveLength(1);
   });
 
-  it("sort_select_triggers_query_with_modified_sort", async () => {
+  it("the_sort_menu_picks_a_key_and_a_direction", async () => {
     const { fake } = await open();
+    const user = userEvent.setup();
+    const lastQuery = () => calls(fake, "entryList").at(-1)?.args.query as { sort: string; order: string };
     expect(titles()).toEqual(["GitHub", "GitLab", "Server notes", "Visa"]);
-    await userEvent.setup().selectOptions(screen.getByRole("combobox", { name: t("Sort by") }), t("Modified"));
-    await waitFor(() => expect((calls(fake, "entryList").at(-1)?.args.query as { sort: string }).sort).toBe("modified"));
+    // The count stays in the list header.
+    expect(screen.getByTestId("list-count").textContent).toBe(t("%lld items", 4));
+    const button = screen.getByRole("button", { name: t("Sort by") });
+    expect(button.getAttribute("aria-haspopup")).toBe("menu");
+    await user.click(button);
+    const menu = screen.getByRole("menu", { name: t("%lld items sorted by", 4) });
+    const radio = (name: string) => within(menu).getByRole("menuitemradio", { name });
+    const sortBy = within(menu).getByRole("group", { name: t("Sort by") });
+    const sortOrder = within(menu).getByRole("group", { name: "Sort order" });
+    expect(radio(t("Title")).getAttribute("aria-checked")).toBe("true");
+    expect(radio(t("A to Z")).getAttribute("aria-checked")).toBe("true");
+    expect(radio(t("Z to A")).getAttribute("aria-checked")).toBe("false");
+    expect(within(sortBy).getAllByRole("menuitemradio").map((r) => r.textContent?.trim())).toEqual([
+      t("Title"),
+      t("Date Created"),
+      t("Date Modified"),
+      t("Frequently Used"),
+      t("Recently Used"),
+    ]);
+    expect(within(sortOrder).getAllByRole("menuitemradio").map((r) => r.textContent?.trim())).toEqual([
+      t("A to Z"), t("Z to A"),
+    ]);
+    await expectNoAxeViolations(menu);
+    await user.click(radio(t("Date Modified")));
+    expect(screen.queryByRole("menu")).toBeNull();
+    // A date starts newest first.
+    await waitFor(() => expect(lastQuery()).toMatchObject({ sort: "modified", order: "descending" }));
     await waitFor(() => expect(titles()).toEqual(["GitHub", "GitLab", "Visa", "Server notes"]));
+    await user.click(button);
+    const again = screen.getByRole("menu");
+    expect(within(again).getByRole("menuitemradio", { name: t("Date Modified") }).getAttribute("aria-checked")).toBe("true");
+    expect(within(again).getByRole("menuitemradio", { name: t("Newest First") }).getAttribute("aria-checked")).toBe("true");
+    await user.click(within(again).getByRole("menuitemradio", { name: t("Oldest First") }));
+    await waitFor(() => expect(lastQuery()).toMatchObject({ sort: "modified", order: "ascending" }));
+    await waitFor(() => expect(titles()).toEqual(["Server notes", "Visa", "GitLab", "GitHub"]));
+    // Frequently used names its directions by count.
+    await user.click(button);
+    await user.click(within(screen.getByRole("menu")).getByRole("menuitemradio", { name: t("Frequently Used") }));
+    await waitFor(() => expect(lastQuery()).toMatchObject({ sort: "usageCount", order: "descending" }));
+    await user.click(button);
+    expect(within(screen.getByRole("menu")).getByRole("menuitemradio", { name: t("Most Used First") }).getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("the_sort_menu_works_from_the_keyboard_and_closes_outside", async () => {
+    const { fake } = await open();
+    const user = userEvent.setup();
+    const button = screen.getByRole("button", { name: t("Sort by") });
+    button.focus();
+    await user.keyboard("{Enter}");
+    // Focus lands on the checked key.
+    expect(document.activeElement?.textContent?.trim()).toBe(t("Title"));
+    await user.keyboard("{ArrowDown}{ArrowDown}");
+    expect(document.activeElement?.textContent?.trim()).toBe(t("Date Modified"));
+    await user.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}");
+    expect(document.activeElement?.textContent?.trim()).toBe(t("A to Z"));
+    await user.keyboard("{ArrowUp}");
+    expect(document.activeElement?.textContent?.trim()).toBe(t("Recently Used"));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(button));
+    await user.keyboard("{Enter}");
+    await user.keyboard("{ArrowDown}{Enter}");
+    await waitFor(() =>
+      expect(calls(fake, "entryList").at(-1)?.args.query).toMatchObject({ sort: "created", order: "descending" }),
+    );
+    await waitFor(() => expect(document.activeElement).toBe(button));
+    await user.click(button);
+    expect(screen.getByRole("menu")).toBeTruthy();
+    await user.click(screen.getByTestId("list-count"));
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 });
 

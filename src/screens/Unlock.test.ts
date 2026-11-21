@@ -20,6 +20,48 @@ beforeEach(() => {
 });
 
 describe("no vault", () => {
+  const recents = [
+    { path: "/gone/Old.kdbx", fileName: "Old.kdbx", exists: false },
+    { path: "/vaults/Latest.kdbx", fileName: "Latest.kdbx", exists: true },
+    { path: "/other/Family.kdbx", fileName: "Family.kdbx", exists: true },
+  ];
+
+  it("features_the_most_recent_existing_vault", async () => {
+    await renderMainApp({ session: "noVault" }, (fake) => (fake.state.recents = structuredClone(recents)));
+    const card = await screen.findByRole("button", { name: /Latest\.kdbx.*Open/ });
+    expect(within(card).getByText("/vaults")).toBeTruthy();
+    const list = screen.getByRole("list", { name: "Recent vaults" });
+    expect(within(list).queryByText("Latest.kdbx")).toBeNull();
+    expect(within(list).getByRole("button", { name: /Family\.kdbx/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Create vault" })).toBeTruthy();
+  });
+
+  it("opening_the_featured_vault_prompts_for_its_password", async () => {
+    const user = userEvent.setup();
+    const { fake } = await renderMainApp({ session: "noVault" }, (f) => (f.state.recents = structuredClone(recents)));
+    await user.click(await screen.findByRole("button", { name: /Latest\.kdbx.*Open/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Open vault" });
+    expect(within(dialog).getByText("Latest.kdbx")).toBeTruthy();
+    expect(within(dialog).getByLabelText("Master password")).toBeTruthy();
+    expect(calls(fake, "vaultOpenWarnings").map((call) => call.args)).toEqual([{ path: "/vaults/Latest.kdbx" }]);
+    expect(calls(fake, "vaultOpen")).toHaveLength(0);
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("a_missing_recent_cannot_be_opened_and_can_be_forgotten", async () => {
+    const user = userEvent.setup();
+    const { fake } = await renderMainApp({ session: "noVault" }, (f) => (f.state.recents = structuredClone(recents)));
+    const list = await screen.findByRole("list", { name: "Recent vaults" });
+    const item = within(list).getByText("Old.kdbx").closest("li") as HTMLElement;
+    expect(within(item).getByText("File not found")).toBeTruthy();
+    const buttons = within(item).getAllByRole("button");
+    expect(buttons).toHaveLength(1);
+    await user.click(within(item).getByRole("button", { name: "Remove from list" }));
+    await waitFor(() => expect(within(list).queryByText("Old.kdbx")).toBeNull());
+    expect(calls(fake, "vaultForget").map((call) => call.args)).toEqual([{ path: "/gone/Old.kdbx" }]);
+    expect(calls(fake, "vaultOpenWarnings")).toHaveLength(0);
+  });
+
   it("no_vault_shows_create_open_and_find_actions", async () => {
     await renderMainApp({ session: "noVault" });
     expect(await screen.findByRole("button", { name: "Create vault" })).toBeTruthy();
@@ -338,8 +380,13 @@ describe("keyboard layout after a switch key", () => {
 
 describe("accessibility", () => {
   it("screens_pass_axe", async () => {
-    const first = await renderMainApp({ session: "noVault", keyboardLayout: "EN" });
-    await screen.findByRole("button", { name: "Create vault" });
+    const first = await renderMainApp({ session: "noVault", keyboardLayout: "EN" }, (f) => {
+      f.state.recents = [
+        { path: "/other/Family.kdbx", fileName: "Family.kdbx", exists: true },
+        { path: "/gone/Old.kdbx", fileName: "Old.kdbx", exists: false },
+      ];
+    });
+    await screen.findByRole("list", { name: "Recent vaults" });
     await expectNoAxeViolations(first.container);
     first.unmount();
     const locked = await renderMainApp({ session: "locked", keyboardLayout: "EN" }, (f) => {

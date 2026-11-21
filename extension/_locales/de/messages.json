@@ -240,7 +240,7 @@
     "message": "Symbol für Eintrag ohne Titel"
   },
   "addressNoForm": {
-    "message": "Auf dieser Seite gibt es kein unterstütztes Adressformular. Öffne ein Formular mit Standardfeldern für die Adress-Autovervollständigung. Das Ausfüllen von Adressen ist nur auf der Hauptseite möglich."
+    "message": "Auf dieser Seite gibt es kein unterstütztes Adressformular. Öffne das Adressformular direkt auf einer HTTPS-Seite."
   },
   "addressPageChanged": {
     "message": "Die Seite oder der ausgewählte Tab hat sich geändert. Kehre zum Adressformular zurück und wähle die Adresse erneut aus."
@@ -249,7 +249,7 @@
     "message": "Das Adressformular hat sich geändert. Prüfe die bereits ausgefüllten Felder und wähle die Adresse erneut aus."
   },
   "addressNoValues": {
-    "message": "Keine gespeicherten Adresswerte passen zu den Feldern dieses Formulars. Bearbeite diese Adresse in MyPass."
+    "message": "Mit dieser Adresse können keine leeren Felder ausgefüllt werden. Prüfe das Formular und die gespeicherte Adresse in MyPass."
   },
   "addressFillFailed": {
     "message": "Die Adresse konnte nicht ausgefüllt werden. Prüfe, ob MyPass entsperrt ist, und wähle die Adresse erneut aus."

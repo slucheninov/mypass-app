@@ -197,9 +197,13 @@
           <Button onclick={() => (restoringTo = true)}>{t("Restore to…")}</Button>
           <Button variant="danger" onclick={requestDelete}>{t("Delete permanently")}</Button>
         {:else}
+          <!-- A toggle keeps one name; the tooltip says what a click does. -->
           <IconButton
             icon="star"
-            label={detail.favorite ? t("Remove from Favorites") : t("Add to Favorites")}
+            tone="favorite"
+            label={t("Favorite")}
+            pressed={detail.favorite}
+            tooltip={detail.favorite ? t("Remove from Favorites") : t("Add to Favorites")}
             onclick={toggleFavorite}
           />
           <Button onclick={edit}>{t("Edit")}</Button>
@@ -212,7 +216,7 @@
       {#if detail.entryType === "login"}
         <LoginDetail {detail} {group} onlargetype={showLargeType} onchangewebsite={changeWebsite} />
       {:else if detail.entryType === "address" && detail.address}
-        <AddressDetail address={detail.address} />
+        <AddressDetail entryId={id} address={detail.address} onlargetype={showLargeType} />
       {:else if detail.entryType === "card" && detail.card}
         <CardDetail entryId={id} card={detail.card} {group} onlargetype={showLargeType} />
       {/if}
@@ -268,13 +272,13 @@
 
 <style>
   .detail {
-    padding: 20px 24px;
+    padding: var(--space-8) 28px;
   }
   header {
     display: flex;
     align-items: center;
-    gap: 12px;
-    margin-bottom: 12px;
+    gap: var(--space-6);
+    margin-bottom: var(--space-6);
   }
   .titles {
     flex: 1;

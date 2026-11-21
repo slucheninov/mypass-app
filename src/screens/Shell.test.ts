@@ -1,5 +1,6 @@
 import { fireEvent, screen, waitFor } from "@testing-library/svelte";
-import { afterEach, describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { loadPlatform, platform } from "../lib/platform.svelte";
 import { expectNoAxeViolations } from "../test/axe";
 import { createFakeBackend } from "../test/fakeBackend";
@@ -63,6 +64,154 @@ describe("layout", () => {
     await shell();
     expect(now(sidebarHandle())).toBe("220");
     expect(now(listHandle())).toBe("300");
+  });
+});
+
+describe("sidebar collapse", () => {
+  const sidebarPane = () => screen.getByTestId("split-first");
+  // jsdom keeps `inert` as a property only (browsers reflect it as an attribute).
+  const isHidden = () => sidebarPane().inert && sidebarPane().style.visibility === "hidden";
+  const shortcut = (target: HTMLElement) =>
+    fireEvent.keyDown(target, { code: "KeyS", key: "s", ctrlKey: true, metaKey: true });
+
+  it("toolbar_toggle_hides_and_shows_the_sidebar_and_persists", async () => {
+    const user = userEvent.setup();
+    await shell();
+    const hide = screen.getByRole("button", { name: "Hide sidebar" });
+    expect(hide.getAttribute("aria-expanded")).toBe("true");
+    expect(hide.getAttribute("aria-controls")).toBe(sidebarPane().id);
+    expect(isHidden()).toBe(false);
+    await user.click(hide);
+    const show = screen.getByRole("button", { name: "Show sidebar" });
+    expect(show.getAttribute("aria-expanded")).toBe("false");
+    expect(isHidden()).toBe(true);
+    expect(sidebarPane().style.width).toBe("0px");
+    // The sidebar separator goes with it; the list one stays.
+    expect(screen.queryByRole("separator", { name: "Resize sidebar" })).toBeNull();
+    expect(listHandle()).toBeTruthy();
+    expect(localStorage.getItem("layout.sidebarCollapsed")).toBe("true");
+    await user.click(show);
+    expect(isHidden()).toBe(false);
+    expect(now(sidebarHandle())).toBe("220");
+    expect(localStorage.getItem("layout.sidebarCollapsed")).toBe("false");
+  });
+
+  it("stored_collapsed_state_is_restored", async () => {
+    localStorage.setItem("layout.sidebarCollapsed", "true");
+    await shell();
+    expect(isHidden()).toBe(true);
+    expect(screen.getByRole("button", { name: "Show sidebar" })).toBeTruthy();
+  });
+
+  it.each([
+    { width: 1000, sidebar: 220, list: 418 },
+    { width: 820, sidebar: 198, list: 260 },
+  ])("expanding at $width px leaves room for the detail minimum", async ({ width, sidebar, list }) => {
+    const clientWidth = vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(width);
+    onTestFinished(() => { clientWidth.mockRestore(); });
+    const user = userEvent.setup();
+    await shell();
+    await user.click(screen.getByRole("button", { name: "Hide sidebar" }));
+    await fireEvent.pointerDown(listHandle(), { clientX: 320, pointerId: 1 });
+    await fireEvent.pointerMove(window, { clientX: 1000, pointerId: 1 });
+    await fireEvent.pointerUp(window, { pointerId: 1 });
+    expect(Number(now(listHandle()))).toBeGreaterThan(list);
+
+    await user.click(screen.getByRole("button", { name: "Show sidebar" }));
+    const restoredSidebar = Number(now(sidebarHandle()));
+    const restoredList = Number(now(listHandle()));
+    expect([restoredSidebar, restoredList]).toEqual([sidebar, list]);
+    expect(width - restoredSidebar - restoredList - 2).toBe(360);
+    expect(JSON.parse(localStorage.getItem("layout.widths") ?? "null")).toEqual([sidebar, list]);
+  });
+
+  it("control_command_s_toggles_the_sidebar_on_macos", async () => {
+    await shell({ session: "unlocked", os: "macos" });
+    expect(screen.getByRole("button", { name: "Hide sidebar" }).getAttribute("aria-keyshortcuts")).toBe("Control+Meta+S");
+    // The Windows chord does nothing on macOS.
+    await fireEvent.keyDown(window, { code: "KeyS", key: "S", ctrlKey: true, shiftKey: true });
+    expect(isHidden()).toBe(false);
+    await fireEvent.keyDown(window, { code: "KeyS", key: "s", ctrlKey: true, metaKey: true });
+    expect(isHidden()).toBe(true);
+    await fireEvent.keyDown(window, { code: "KeyS", key: "s", ctrlKey: true, metaKey: true });
+    expect(isHidden()).toBe(false);
+  });
+
+  it("ctrl_shift_s_toggles_the_sidebar_on_windows", async () => {
+    await shell({ session: "unlocked", os: "windows" });
+    expect(screen.getByRole("button", { name: "Hide sidebar" }).getAttribute("aria-keyshortcuts")).toBe("Control+Shift+S");
+    // A Cyrillic layout sends another `key` for the same physical key.
+    await fireEvent.keyDown(window, { code: "KeyS", key: "\u042B", ctrlKey: true, shiftKey: true });
+    expect(isHidden()).toBe(true);
+    await fireEvent.keyDown(window, { code: "KeyS", key: "s", ctrlKey: true });
+    expect(isHidden()).toBe(true);
+  });
+
+  it("collapsing_from_inside_the_sidebar_moves_focus_to_the_list", async () => {
+    await shell();
+    const all = await screen.findByRole("treeitem", { name: /^All/ });
+    all.focus();
+    await fireEvent.keyDown(all, { code: "KeyS", key: "s", ctrlKey: true, metaKey: true });
+    expect(isHidden()).toBe(true);
+    expect(document.activeElement).toBe(screen.getByRole("listbox"));
+  });
+
+  it("collapsing_from_the_sidebar_separator_moves_focus_to_the_list", async () => {
+    await shell();
+    const handle = sidebarHandle();
+    handle.focus();
+    expect(document.activeElement).toBe(handle);
+    await shortcut(handle);
+    expect(isHidden()).toBe(true);
+    expect(document.activeElement).toBe(screen.getByRole("listbox"));
+  });
+
+  it("the_sidebar_shortcut_is_ignored_while_a_modal_is_open", async () => {
+    const user = userEvent.setup();
+    await shell();
+    await user.click(screen.getByRole("button", { name: "New Entry" }));
+    await user.click(await screen.findByRole("menuitem", { name: "New Group" }));
+    const dialog = await screen.findByRole("dialog", { name: "New Group" });
+    const active = document.activeElement as HTMLElement;
+    expect(dialog.contains(active)).toBe(true);
+    expect(await shortcut(active)).toBe(true);
+    expect(isHidden()).toBe(false);
+    expect(document.activeElement).toBe(active);
+  });
+
+  it.each(["input", "textarea", "div"])("the_sidebar_shortcut_is_ignored_in_an_editable_%s", async (tag) => {
+    await shell();
+    const editable = document.createElement(tag);
+    if (tag === "div") {
+      editable.setAttribute("contenteditable", "true");
+      editable.tabIndex = 0;
+      // jsdom does not implement isContentEditable.
+      Object.defineProperty(editable, "isContentEditable", { value: true });
+    }
+    sidebarPane().append(editable);
+    editable.focus();
+    expect(document.activeElement).toBe(editable);
+    expect(await shortcut(editable)).toBe(true);
+    expect(isHidden()).toBe(false);
+    expect(document.activeElement).toBe(editable);
+  });
+
+  it("dragging_the_sidebar_separator_below_the_snap_width_collapses_it", async () => {
+    await shell();
+    await fireEvent.pointerDown(sidebarHandle(), { clientX: 220, pointerId: 1 });
+    // Exactly the 120 px snap width is still a resize (clamped to the 180 px minimum)...
+    await fireEvent.pointerMove(window, { clientX: 120, pointerId: 1 });
+    expect(isHidden()).toBe(false);
+    expect(now(sidebarHandle())).toBe("180");
+    // ...below it the pane collapses, keeping the width it had before the drag.
+    await fireEvent.pointerMove(window, { clientX: 110, pointerId: 1 });
+    expect(isHidden()).toBe(true);
+    expect(localStorage.getItem("layout.sidebarCollapsed")).toBe("true");
+    // Dragging back out expands it again during the same drag.
+    await fireEvent.pointerMove(window, { clientX: 230, pointerId: 1 });
+    expect(isHidden()).toBe(false);
+    await fireEvent.pointerUp(window, { pointerId: 1 });
+    expect(now(sidebarHandle())).toBe("230");
   });
 });
 

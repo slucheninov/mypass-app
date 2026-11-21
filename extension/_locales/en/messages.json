@@ -244,7 +244,7 @@
     "message": "Icon for untitled entry"
   },
   "addressNoForm": {
-    "message": "No supported address form on this page. Open a form with standard address autocomplete fields. Address filling is available in the main page only."
+    "message": "No supported address form on this page. Open the address form directly on an HTTPS page."
   },
   "addressPageChanged": {
     "message": "The page or selected tab changed. Return to the address form and select the address again."
@@ -253,7 +253,7 @@
     "message": "The address form changed. Review any fields already filled, then select the address again."
   },
   "addressNoValues": {
-    "message": "No saved address values match the fields in this form. Edit this address in MyPass."
+    "message": "No empty fields can be filled with this address. Check the form and the saved address in MyPass."
   },
   "addressFillFailed": {
     "message": "Could not fill the address. Check that MyPass is unlocked, then select the address again."
