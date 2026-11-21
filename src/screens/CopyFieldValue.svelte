@@ -12,7 +12,7 @@
 <style>
   .value {
     max-width: 100%;
-    padding: 2px 4px;
+    padding: var(--space-1) var(--space-2);
     border: 0;
     border-radius: var(--radius);
     background: transparent;

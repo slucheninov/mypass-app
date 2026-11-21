@@ -227,7 +227,7 @@
     display: flex;
     flex-wrap: wrap;
     justify-content: center;
-    gap: 8px;
+    gap: var(--space-4);
   }
   .featured {
     display: flex;
@@ -261,7 +261,7 @@
     gap: 3px;
   }
   .open {
-    padding: 4px 12px;
+    padding: var(--space-2) 12px;
     border-radius: var(--radius);
     background: var(--accent);
     color: var(--accent-text);
