@@ -59,6 +59,8 @@ impl Default for RelayOptions {
 pub enum RelayOutcome {
     /// Chromium closed stdin and the relay drained.
     StdinClosed,
+    /// The host answered a host-local message.
+    HostHandled,
     /// No endpoint, no connection, or a peer that failed the handshake.
     AppNotRunning,
     /// stdin broke the framing (oversized or truncated frame); nothing more can be read.
@@ -301,11 +303,25 @@ pub fn run_relay<R: Read, W: Write + Send + 'static>(
 /// Production signed hosts supply a listener identity check, after connect and before any
 /// token-bearing request. The HMAC handshake is retained as an independent check.
 pub fn run_relay_verified<R: Read, W: Write + Send + 'static>(
+    stdin: R,
+    stdout: W,
+    endpoint: Option<Endpoint>,
+    opts: &RelayOptions,
+    verify_peer: &dyn Fn(u16) -> bool,
+) -> RelayOutcome {
+    run_relay_with_first_frame(stdin, stdout, endpoint, opts, verify_peer, None)
+}
+
+type InputFrame = io::Result<Option<Zeroizing<Vec<u8>>>>;
+
+/// Continue a normal relay after host-local dispatch has inspected the first frame.
+pub(crate) fn run_relay_with_first_frame<R: Read, W: Write + Send + 'static>(
     mut stdin: R,
     stdout: W,
     endpoint: Option<Endpoint>,
     opts: &RelayOptions,
     verify_peer: &dyn Fn(u16) -> bool,
+    mut first: Option<InputFrame>,
 ) -> RelayOutcome {
     let out = Arc::new(Mutex::new(stdout));
     let not_running = |out: &Mutex<W>| {
@@ -349,8 +365,11 @@ pub fn run_relay_verified<R: Read, W: Write + Send + 'static>(
     };
 
     let outcome = loop {
-        let frame = match read_frame(&mut stdin, opts.max_frame) {
-            Ok(Some(frame)) => Zeroizing::new(frame),
+        let input = first.take().unwrap_or_else(|| {
+            read_frame(&mut stdin, opts.max_frame).map(|frame| frame.map(Zeroizing::new))
+        });
+        let frame = match input {
+            Ok(Some(frame)) => frame,
             Ok(None) => {
                 drain(&shared, opts.drain_timeout);
                 break RelayOutcome::StdinClosed;

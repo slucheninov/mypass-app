@@ -722,8 +722,8 @@ fn windows_integration_host_exits_zero_in_every_scenario() {
 fn windows_integration_sixteen_hosts_hold_the_cap_and_the_seventeenth_is_refused_until_a_slot_frees(
 ) {
     require_native_opt_in();
-    // The held hosts connect eagerly and send nothing, so each keeps its slot until its stdin
-    // closes; the generous first-frame deadline keeps the server from reaping them meanwhile.
+    // Each host sends its first frame before connecting. Keep authenticated hosts open so each
+    // holds its slot until its stdin closes.
     let app = App::start_with(ServerConfig {
         first_frame_deadline: Duration::from_secs(120),
         ..ServerConfig::default()
@@ -733,7 +733,16 @@ fn windows_integration_sixteen_hosts_hold_the_cap_and_the_seventeenth_is_refused
         app.server.active_connections() == 0
     });
 
-    let mut held: Vec<Host> = (0..16).map(|_| app.spawn()).collect();
+    let mut held: Vec<Host> = (0..16)
+        .map(|_| {
+            let mut host = app.spawn();
+            assert_eq!(
+                host.call(get_credentials(&secret))["type"],
+                "credentialList"
+            );
+            host
+        })
+        .collect();
     wait_until("16 held connections", || {
         app.server.active_connections() == 16
     });
