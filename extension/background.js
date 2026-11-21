@@ -1333,7 +1333,8 @@ async function createPrompt(kind, message, sender) {
     if (kind === "saveTotp" && !settings.offerSaveTotp) return { type: "ok", created: false };
   }
   const payload = kind === "saveLogin"
-    ? { username: message.username, password: message.password, fields: message.fields }
+    ? { username: message.username, password: message.password, fields: message.fields,
+      usernameIsEmail: message.usernameIsEmail }
     : kind === "saveTotp" ? { otpauthOrSecret: message.otpauthOrSecret } : {};
   const record = promptRecords.create(kind, sender, payload, Date.now());
   if (!record) return { type: "error", code: "prompt_rejected" };
@@ -1588,6 +1589,8 @@ async function consumePrompt(message, sender) {
     if (Array.isArray(record.payload.fields) && record.payload.fields.length > 0) {
       nativeMessage.extraFields = record.payload.fields;
     }
+    // The username was the form's email: an Address entry made from the form gets it too.
+    if (record.payload.usernameIsEmail === true) nativeMessage.usernameIsEmail = true;
   } else {
     // The chosen account must be one the app offers for this page right now; the popup's word
     // for it is not enough.

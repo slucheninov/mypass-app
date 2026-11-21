@@ -366,19 +366,52 @@ function normalizedHint(value) {
 
 const WORD = (alternatives) => new RegExp('(?:^| )(?:' + alternatives + ')(?: |$)');
 
-// A field that holds a payment card, a one-time or verification code, a security answer, a
-// national id or a search query is never captured or filled, whatever else its hints say.
+// A field that holds a payment card, a one-time, verification or authentication code, a PIN, a
+// captcha, a token, a security answer, a bank or national id, a passport, a search query or a
+// coupon is never captured or filled, whatever else its hints or its autocomplete attribute say:
+// registration-form.js checks this before any positive hint.
 const SENSITIVE_FIELD_HINT = WORD([
   'card(?: number| holder| name)?', 'credit ?card', 'cc(?: number| num| name| exp\\w*)?', 'cvv2?', 'cvc2?', 'csc', 'cid',
-  'exp(?:iry|iration)?(?: date| month| year)?', 'security code', 'verification code', 'one time(?: code| password)?',
-  'otp', 'captcha', 'pin', 'token', 'secret', 'security answer', 'answer', 'security question', 'iban', 'bic', 'swift',
-  'ssn', 'social security(?: number)?', 'tax id', 'passport(?: number)?', 'search', 'query', 'coupon', 'promo(?: code)?',
-  'gift card', 'voucher',
-  'karte', 'kartennummer', 'kreditkarte', 'karteninhaber', 'prüfnummer', 'sicherheitscode', 'gültig bis', 'suche',
-  'gutschein(?:code)?', 'steuer ?id', 'steuernummer', 'reisepass',
-  'картка', 'картки', 'номер картки', 'кредитна картка', 'код безпеки', 'код підтвердження', 'пошук', 'промокод',
-  'паспорт', 'іпн',
-  'карта', 'карты', 'номер карты', 'кредитная карта', 'код безопасности', 'код подтверждения', 'поиск', 'инн',
+  'exp(?:iry|iration)?(?: date| month| year)?', 'security code', 'verification(?: code)?', 'verify code',
+  'one ?time(?: code| password| passcode| pin)?', 'otp(?: code)?', 'totp', 'passcode',
+  'auth(?:entication|entificator)?(?: code)?', '2fa(?: code)?', 'mfa(?: code)?', 'two ?factor(?: code)?',
+  'sms code', 'confirmation code', 'captcha', 'recaptcha', 'pin(?: code| number)?', 'token', 'secret',
+  'security answer', 'answer', 'security question', 'iban', 'bic', 'swift', 'routing number', 'account number',
+  'ssn', 'social security(?: number)?', 'tax id', 'passport(?: number| no)?', 'search', 'query', 'coupon(?: code)?',
+  'promo(?: code)?', 'gift card', 'voucher(?: code)?', 'discount code',
+  'karte', 'kartennummer', 'kreditkarte', 'karteninhaber', 'prüfnummer', 'prüfziffer', 'sicherheitscode',
+  'gültig bis', 'bestätigungscode', 'verifizierungscode', 'authentifizierungscode', 'einmalcode',
+  'einmalpasswort', 'einmalkennwort', 'sicherheitsfrage', 'sicherheitsantwort', 'antwort', 'suche',
+  'gutschein(?:code)?', 'rabattcode', 'steuer ?id', 'steuernummer', 'reisepass(?:nummer)?',
+  'sozialversicherungsnummer', 'kontonummer', 'tan',
+  'картка', 'картки', 'номер картки', 'кредитна картка', 'код безпеки', 'код підтвердження',
+  'код автентифікації', 'код аутентифікації', 'одноразовий(?: код| пароль)?', 'пін(?: код)?', 'капча',
+  'токен', 'секретне питання', 'контрольне питання', 'відповідь', 'пошук', 'промокод', 'купон',
+  'паспорт', 'іпн', 'номер рахунку',
+  'карта', 'карты', 'номер карты', 'кредитная карта', 'код безопасности', 'код подтверждения',
+  'код аутентификации', 'одноразовый(?: код| пароль)?', 'пин(?: код)?', 'секретный вопрос',
+  'контрольный вопрос', 'ответ', 'поиск', 'инн', 'снилс', 'номер счета', 'номер счёта',
+].join('|'));
+
+// A password-type field that holds a card code, a PIN or a one-time code, not an account password.
+// Narrower than SENSITIVE_FIELD_HINT: "auth" or "secret" in a password field's name is common.
+const SENSITIVE_PASSWORD_HINT = WORD([
+  'card(?: number| code)?', 'credit ?card', 'cvv2?', 'cvc2?', 'csc', 'cid', 'security code', 'verification code',
+  'one ?time(?: code| password| passcode| pin)?', 'otp(?: code)?', 'pin(?: code| number)?', 'tan',
+  'prüfnummer', 'sicherheitscode', 'einmalcode', 'einmalpasswort',
+  'пін(?: код)?', 'код безпеки', 'одноразовий(?: код| пароль)?',
+  'пин(?: код)?', 'код безопасности', 'одноразовый(?: код| пароль)?',
+].join('|'));
+
+// A password field that holds the user's existing password (a change-password or re-auth form):
+// "current", "old" or "existing" password in the four languages. Registration forms never have one.
+const CURRENT_PASSWORD_HINT = WORD([
+  'current(?: password)?', 'old(?: password)?', 'existing(?: password)?', 'previous(?: password)?',
+  'present password', 'cur(?:r)? pass(?:word)?',
+  'aktuelles(?: passwort| kennwort)?', 'altes(?: passwort| kennwort)?', 'bisheriges(?: passwort| kennwort)?',
+  'derzeitiges(?: passwort| kennwort)?',
+  'поточний(?: пароль)?', 'старий(?: пароль)?', 'чинний(?: пароль)?', 'теперішній(?: пароль)?',
+  'текущий(?: пароль)?', 'старый(?: пароль)?', 'действующий(?: пароль)?', 'прежний(?: пароль)?',
 ].join('|'));
 
 const IDENTITY_FIELD_HINTS = [
@@ -445,6 +478,40 @@ function isSensitiveFieldHint(control) {
   return controlHints(control).some((hint) => SENSITIVE_FIELD_HINT.test(hint));
 }
 
+function isSensitivePasswordHint(control) {
+  return controlHints(control).some((hint) => SENSITIVE_PASSWORD_HINT.test(hint));
+}
+
+function isCurrentPasswordHint(control) {
+  return controlHints(control).some((hint) => CURRENT_PASSWORD_HINT.test(hint));
+}
+
+// Whether a control is really on screen, the way the address autofill decides it
+// (address-form.js `editable`): connected, not under [hidden], [inert] or aria-hidden="true",
+// no ancestor with display:none or opacity 0, visibility "visible", and a box of some size. No
+// offsetParent shortcut: a field inside an opacity:0 or visibility:hidden wrapper still has one.
+// Elements without those APIs (test doubles) are not shown.
+function isControlShown(control) {
+  if (!control || control.isConnected === false) return false;
+  if (typeof control.closest !== 'function' || control.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
+  const view = control.ownerDocument && control.ownerDocument.defaultView;
+  if (!view || typeof view.getComputedStyle !== 'function' || typeof control.getBoundingClientRect !== 'function') return false;
+  for (let node = control; node; node = node.parentElement) {
+    const style = view.getComputedStyle(node);
+    if (!style || style.display === 'none' || Number(style.opacity) === 0) return false;
+    if (node === control && style.visibility !== 'visible') return false;
+  }
+  const box = control.getBoundingClientRect();
+  return !!box && box.width > 0 && box.height > 0;
+}
+
+// Disabled itself or through a disabled <fieldset> (`:disabled` matches both).
+function isEffectivelyDisabled(control) {
+  if (!control) return true;
+  if (control.disabled === true) return true;
+  return typeof control.matches === 'function' && control.matches(':disabled');
+}
+
 // The identity kind of a control from its texts, or null. Sensitive fields are never classified.
 function identityFieldHint(control) {
   const hints = controlHints(control);
@@ -474,6 +541,10 @@ var mypassFormDetection = {
   addressFieldHint,
   identityFieldHint,
   isSensitiveFieldHint,
+  isSensitivePasswordHint,
+  isCurrentPasswordHint,
+  isControlShown,
+  isEffectivelyDisabled,
   isRegistrationActionText,
 };
 

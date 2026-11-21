@@ -94,6 +94,8 @@ var mypassPromptRecord = (function () {
         if (!fields) return null;
         if (fields.length) data.fields = fields;
       }
+      if (input.usernameIsEmail !== undefined && typeof input.usernameIsEmail !== 'boolean') return null;
+      if (input.usernameIsEmail === true && data.username) data.usernameIsEmail = true;
     } else if (kind === 'saveTotp') {
       if (!isString(input.otpauthOrSecret, MAX_FIELD) || !input.otpauthOrSecret) return null;
       data = { otpauthOrSecret: input.otpauthOrSecret };

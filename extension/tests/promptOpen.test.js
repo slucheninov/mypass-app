@@ -381,6 +381,20 @@ function dispatch(message, sender) {
   }
   session = {};
 
+  // The username typed into the form's email field travels as such, so the app can give an
+  // Address entry made from the form that email; anything but a boolean refuses the prompt.
+  await dispatch({ ...loginRequest, fields: FORM_FIELDS, usernameIsEmail: true }, contentSender());
+  resetLogs();
+  assert.deepStrictEqual(await dispatch({ type: 'consumePrompt', promptId: (await bg.readPrompts())[0].id, action: 'save' }, uiSender),
+    { type: 'saveProposalAccepted' });
+  assert.strictEqual(log.native.find((m) => m.type === 'proposeSaveLogin').usernameIsEmail, true);
+  assert.strictEqual(registered.usernameIsEmail, undefined, 'absent unless the username was the email');
+  for (const usernameIsEmail of ['yes', 1, null]) {
+    session = {};
+    assert.strictEqual((await dispatch({ ...loginRequest, usernameIsEmail }, contentSender())).code, 'prompt_rejected');
+  }
+  session = {};
+
   // dismiss sends nothing to the app
   await dispatch(loginRequest, contentSender());
   resetLogs();

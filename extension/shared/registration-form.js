@@ -3,13 +3,27 @@
 // user submits it. DOM functions only, no chrome.*: content.js wires them to the inline icon, the
 // panel and the save prompt.
 //
-// A form is a registration form when it has a new-password field (autocomplete=new-password, the
-// "password + confirm" pair, or a single password next to a "Sign up" button or real identity
-// fields) and no current-password field, or, without any password, at least two identity kinds
-// in three or more fields. Field kinds come from the autocomplete attribute first, then from the
-// localized hints in form-detection.js. Hidden inputs, password fields other than the one new
-// password, card, one-time-code and other sensitive fields are never classified, captured or
-// filled.
+// A form is a registration form when it has a new-password field and no field for the user's
+// current password, or, without any password, at least two identity kinds in three or more
+// fields. The new password is a field with autocomplete=new-password, the first of an unhinted
+// "password + confirm" pair, or a single unhinted password whose form is submitted by a control
+// that says "Sign up", "Register", "Create account" (localized): the control that really submits
+// (the submitter, or the form's default button), never just any button somewhere in the form. A
+// password field hinted as the current, old or existing password (autocomplete or text) makes the
+// form a change-password or re-authentication form, which is never a registration form.
+//
+// Field kinds: sensitive hints first (card, CVV, one-time, verification or authentication code,
+// PIN, captcha, token, bank and national ids, passport, security answer, search, coupon; four
+// languages), so no autocomplete token or positive hint can classify such a field; then the
+// autocomplete attribute; then the localized hints in form-detection.js. Hidden, invisible,
+// disabled (also through a disabled fieldset) and read-only controls, password fields other than
+// the one new password, card, one-time-code and other sensitive fields are never classified,
+// captured or filled.
+//
+// Grouping: controls of a <form> belong to that form. Controls outside any form are grouped by
+// proximity, never document-wide: two such controls share a group when they sit under the same
+// boundary element (a section, dialog, fieldset...) and have a common ancestor within
+// PROXIMITY_LEVELS levels, transitively.
 //
 // What a capture sends is checked again by the background (prompt-record.js) and by the bridge,
 // which refuses the whole proposal when a field breaks a limit, so the limits here match theirs:
@@ -29,6 +43,11 @@ var mypassRegistrationForm = (() => {
   // Input types a registration field may have. Never hidden, password, file, checkbox or radio.
   const FIELD_TYPES = new Set(['text', 'email', 'tel', 'date', 'number', '']);
   const SENSITIVE = 'sensitive';
+  const ACTION_SELECTOR = 'button, input[type="submit"], input[type="button"], input[type="image"], [role="button"]';
+  // Elements that bound a group of form-less controls, like address-form.js `addressBoundaries`.
+  const BOUNDARY_SELECTOR = 'form, dialog, [role="dialog"], [role="form"], section, fieldset, article, aside, main, header, footer, nav';
+  // How many levels up two form-less controls may look for a shared container.
+  const PROXIMITY_LEVELS = 4;
 
   const AUTOCOMPLETE_KINDS = {
     name: 'name', 'given-name': 'givenName', 'family-name': 'familyName', email: 'email',
@@ -50,14 +69,9 @@ var mypassRegistrationForm = (() => {
     organization: 'organization', addressLine1: 'address-line1', addressLine2: 'address-line2',
     city: 'address-level2', region: 'address-level1', postalCode: 'postal-code', country: 'country-name',
   };
-  // Kinds that say a single-password form is about a person, not a login.
-  const PERSON_KINDS = new Set([
-    'name', 'givenName', 'familyName', 'phone', 'birthday', 'organization',
-    'addressLine1', 'addressLine2', 'city', 'region', 'postalCode', 'country',
-  ]);
 
   function attr(node, name) {
-    return typeof node.getAttribute === 'function' ? node.getAttribute(name) || '' : '';
+    return node && typeof node.getAttribute === 'function' ? node.getAttribute(name) || '' : '';
   }
 
   function tagOf(node) {
@@ -80,8 +94,12 @@ var mypassRegistrationForm = (() => {
     return token;
   }
 
+  function editable(node, isVisible) {
+    return !!node && node.isConnected !== false && !node.readOnly
+      && !formDetection.isEffectivelyDisabled(node) && isVisible(node);
+  }
+
   function usable(node, isVisible) {
-    if (!node || node.isConnected === false || node.disabled || node.readOnly) return false;
     const tag = tagOf(node);
     if (tag === 'SELECT') {
       if (node.multiple) return false;
@@ -89,12 +107,12 @@ var mypassRegistrationForm = (() => {
       return false;
     }
     if (typeof node.closest === 'function' && node.closest('[hidden], [inert]')) return false;
-    return isVisible(node);
+    return editable(node, isVisible);
   }
 
   function usablePassword(node, isVisible) {
-    return !!node && tagOf(node) === 'INPUT' && typeOf(node) === 'password' && node.isConnected !== false
-      && !node.disabled && !node.readOnly && isVisible(node);
+    return tagOf(node) === 'INPUT' && typeOf(node) === 'password' && editable(node, isVisible)
+      && autocompleteToken(node) !== SENSITIVE && !formDetection.isSensitivePasswordHint(node);
   }
 
   function cleanText(text) {
@@ -116,13 +134,14 @@ var mypassRegistrationForm = (() => {
     return RESERVED_LABEL_PREFIXES.some((prefix) => lowered.startsWith(prefix));
   }
 
-  // The kind of one usable field, or null when it must be left alone.
+  // The kind of one usable field, or null when it must be left alone. Sensitive hints are checked
+  // before anything that could classify the field, the autocomplete attribute included.
   function classify(node) {
+    if (formDetection.isSensitiveFieldHint(node)) return null;
     const token = autocompleteToken(node);
     if (token === SENSITIVE || token === 'new-password' || token === 'current-password') return null;
     const explicit = Object.hasOwn(AUTOCOMPLETE_KINDS, token) ? AUTOCOMPLETE_KINDS[token] : null;
     if (explicit) return explicit;
-    if (formDetection.isSensitiveFieldHint(node)) return null;
     const type = typeOf(node);
     if (type === 'email') return 'email';
     if (type === 'tel') return 'phone';
@@ -136,7 +155,7 @@ var mypassRegistrationForm = (() => {
   function isActionControl(node) {
     const tag = tagOf(node);
     const type = typeOf(node);
-    if (tag === 'INPUT') return type === 'submit' || type === 'button';
+    if (tag === 'INPUT') return type === 'submit' || type === 'button' || type === 'image';
     return tag === 'BUTTON' || attr(node, 'role') === 'button';
   }
 
@@ -145,71 +164,173 @@ var mypassRegistrationForm = (() => {
       .filter(Boolean).join(' ');
   }
 
-  // Whether a click on `node` submits a registration: a submit button, or any button whose text
-  // says "Sign up", "Register", "Create account" (localized).
+  function hasRegistrationText(node) {
+    return !!node && formDetection.isRegistrationActionText(actionText(node));
+  }
+
+  // A control whose activation submits its form natively (and so runs the browser's constraint
+  // validation before the `submit` event): a submit button or a submit/image input of a form.
+  function isNativeSubmitControl(node) {
+    if (!node || !node.form) return false;
+    const tag = tagOf(node);
+    const type = typeOf(node);
+    if (tag === 'BUTTON') return type === 'submit' || type === '';
+    return tag === 'INPUT' && (type === 'submit' || type === 'image');
+  }
+
+  // Whether `node` submits a registration: a native submit control, or a button whose text says
+  // "Sign up", "Register", "Create account" (localized).
   function isSubmitControl(node) {
     if (!node || !isActionControl(node)) return false;
-    const type = typeOf(node);
-    if (tagOf(node) === 'BUTTON' && (type === 'submit' || (type === '' && node.form))) return true;
-    if (tagOf(node) === 'INPUT' && type === 'submit') return true;
-    return formDetection.isRegistrationActionText(actionText(node));
+    return isNativeSubmitControl(node) || hasRegistrationText(node);
   }
 
-  function ownerOf(node, doc) {
-    return node.form || doc;
+  // A click on `node` that may stand for a registration submit: only a script-driven control that
+  // says "Sign up" (localized). A native submit control is never one: its form's `submit` event
+  // follows only once the browser's validation passed, and that event is what counts.
+  function isScriptSubmitControl(node) {
+    return !!node && isActionControl(node) && !isNativeSubmitControl(node) && hasRegistrationText(node);
   }
 
-  // Every registration form of `doc`, each `{ owner, fields, newPassword }` where `fields` is
-  // `[{ node, kind, label }]` in document order and `newPassword` the field the new password is
-  // typed into (null for a form without one). `options.isVisible` replaces the visibility check.
-  function find(doc, options) {
-    const isVisible = (options && options.isVisible) || formDetection.isFieldVisible;
-    const groups = new Map();
-    const groupOf = (owner) => {
-      if (!groups.has(owner)) groups.set(owner, { owner, fields: [], passwords: [], action: false });
-      return groups.get(owner);
+  function formOf(node) {
+    if (node.form) return node.form;
+    if (['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(tagOf(node))) return null;
+    return typeof node.closest === 'function' ? node.closest('form') : null;
+  }
+
+  function parentsOf(node, levels) {
+    const path = [];
+    for (let parent = node.parentElement; parent && path.length < levels; parent = parent.parentElement) {
+      if (tagOf(parent) === 'BODY' || tagOf(parent) === 'HTML') break;
+      path.push(parent);
+    }
+    return path;
+  }
+
+  function boundaryOf(node) {
+    return typeof node.closest === 'function' ? node.closest(BOUNDARY_SELECTOR) : null;
+  }
+
+  // The owner of every entry: its form, or for form-less controls a proximity group key shared by
+  // the controls under the same boundary with a common ancestor within PROXIMITY_LEVELS levels.
+  function assignOwners(entries) {
+    const loose = [];
+    for (const entry of entries) {
+      entry.owner = formOf(entry.node);
+      if (!entry.owner) loose.push(entry);
+    }
+    const parent = loose.map((_, i) => i);
+    const root = (i) => {
+      while (parent[i] !== i) {
+        parent[i] = parent[parent[i]];
+        i = parent[i];
+      }
+      return i;
     };
+    const facts = loose.map((entry) => ({ boundary: boundaryOf(entry.node), path: parentsOf(entry.node, PROXIMITY_LEVELS) }));
+    for (let i = 0; i < loose.length; i += 1) {
+      for (let j = i + 1; j < loose.length; j += 1) {
+        if (facts[i].boundary !== facts[j].boundary) continue;
+        if (!facts[i].path.some((node) => facts[j].path.includes(node))) continue;
+        parent[root(j)] = root(i);
+      }
+    }
+    const keys = new Map();
+    loose.forEach((entry, i) => {
+      const key = root(i);
+      if (!keys.has(key)) keys.set(key, { proximityGroup: true });
+      entry.owner = keys.get(key);
+    });
+  }
+
+  // Every registration form of `doc`, each `{ owner, fields, newPassword, actions }` where
+  // `fields` is `[{ node, kind, label }]` in document order and `newPassword` the field the new
+  // password is typed into (null for a form without one). `owner` is the <form> element, or an
+  // opaque key of a proximity group (only stable within one call).
+  // `options.isVisible` replaces the visibility check; `options.submitter` is the control that
+  // submitted (a submit event's submitter, or the clicked script control): its own text is then
+  // the only "Sign up" evidence of its form.
+  function find(doc, options) {
+    const isVisible = (options && options.isVisible) || formDetection.isControlShown;
+    const submitter = (options && options.submitter) || null;
+    const entries = [];
     for (const node of doc.querySelectorAll('input, select')) {
       if (usablePassword(node, isVisible)) {
-        groupOf(ownerOf(node, doc)).passwords.push(node);
+        entries.push({ node, role: 'password' });
         continue;
       }
       if (!usable(node, isVisible)) continue;
       const kind = classify(node);
-      if (!kind) continue;
-      groupOf(ownerOf(node, doc)).fields.push({ node, kind, label: readableLabel(node) });
+      if (kind) entries.push({ node, role: 'field', kind, label: readableLabel(node) });
     }
-    for (const node of doc.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"]')) {
-      const owner = ownerOf(node, doc);
-      if (groups.has(owner) && formDetection.isRegistrationActionText(actionText(node))) groups.get(owner).action = true;
+    for (const node of doc.querySelectorAll(ACTION_SELECTOR)) {
+      if (node === submitter || isActionControl(node)) entries.push({ node, role: 'action' });
+    }
+    if (submitter && !entries.some((entry) => entry.node === submitter)) entries.push({ node: submitter, role: 'action' });
+    assignOwners(entries);
+    const groups = new Map();
+    for (const entry of entries) {
+      if (!groups.has(entry.owner)) groups.set(entry.owner, { owner: entry.owner, fields: [], passwords: [], actions: [] });
+      const group = groups.get(entry.owner);
+      if (entry.role === 'password') group.passwords.push(entry.node);
+      else if (entry.role === 'field') group.fields.push({ node: entry.node, kind: entry.kind, label: entry.label });
+      else group.actions.push(entry.node);
     }
     const forms = [];
     for (const group of groups.values()) {
-      const newPassword = newPasswordOf(group);
+      const newPassword = newPasswordOf(group, registrationEvidence(group, submitter, isVisible));
       const kinds = new Set(group.fields.map((field) => field.kind).filter((kind) => kind !== 'other'));
       const passwordless = group.passwords.length === 0 && kinds.size >= 2 && group.fields.length >= 3;
-      if (newPassword || passwordless) forms.push({ owner: group.owner, fields: group.fields, newPassword });
+      if (newPassword || passwordless) {
+        forms.push({ owner: group.owner, fields: group.fields, newPassword, actions: group.actions });
+      }
     }
     return forms;
   }
 
-  function newPasswordOf(group) {
+  // Whether the control that submits `group` says "Sign up": the submitter when it belongs to the
+  // group; otherwise a form's default button (its first native submit control), or, for a
+  // proximity group, which has no native submit, one of its visible buttons.
+  function registrationEvidence(group, submitter, isVisible) {
+    if (submitter && group.actions.includes(submitter)) return hasRegistrationText(submitter);
+    if (group.owner && group.owner.proximityGroup) {
+      return group.actions.some((node) => isVisible(node) && hasRegistrationText(node));
+    }
+    const defaultButton = group.actions.find(isNativeSubmitControl);
+    return !!defaultButton && hasRegistrationText(defaultButton);
+  }
+
+  function isCurrentPassword(node) {
+    return autocompleteToken(node) === 'current-password' || formDetection.isCurrentPasswordHint(node);
+  }
+
+  function newPasswordOf(group, signUpAction) {
     const passwords = group.passwords;
-    if (passwords.some((node) => autocompleteToken(node) === 'current-password')) return null;
+    // A field for the current password: a change-password or sign-in form, whatever else it has.
+    if (passwords.some(isCurrentPassword)) return null;
     const explicit = passwords.find((node) => autocompleteToken(node) === 'new-password');
     if (explicit) return explicit;
     // Two unhinted fields are "password + confirm"; three or more are a change-password form.
     if (passwords.length === 2) return passwords[0];
     if (passwords.length !== 1) return null;
-    const person = group.fields.some((field) => PERSON_KINDS.has(field.kind));
-    return group.action || person ? passwords[0] : null;
+    // One unhinted password is a login unless the control that submits says "Sign up".
+    return signUpAction ? passwords[0] : null;
   }
 
-  // The registration form `node` belongs to (a field, a button, or the form element itself).
+  function contains(form, node) {
+    return form.owner === node || form.newPassword === node || form.actions.includes(node)
+      || form.fields.some((field) => field.node === node);
+  }
+
+  // The registration form `node` belongs to (a field, a password, a button, or the form element
+  // itself), with the same options as `find`.
   function formFor(doc, node, options) {
     if (!node) return null;
-    const owner = tagOf(node) === 'FORM' ? node : (node.form || (typeof node.closest === 'function' && node.closest('form')) || doc);
-    return find(doc, options).find((form) => form.owner === owner) || null;
+    if (tagOf(node) !== 'FORM' && !node.form && typeof node.closest === 'function' && node.closest('form')
+      && !['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(tagOf(node))) {
+      node = node.closest('form');
+    }
+    return find(doc, options).find((form) => contains(form, node)) || null;
   }
 
   // The fields of `form` an Address entry can fill (the inline identity icon goes on these).
@@ -217,23 +338,50 @@ var mypassRegistrationForm = (() => {
     return form.fields.filter((field) => Object.hasOwn(FILL_TOKENS, field.kind));
   }
 
-  // Fills every empty fillable field of `form` from `address` (the bridge's ExtensionAddress),
-  // with input and change events through `setValue`. A country goes first, so a region select it
-  // repopulates is matched afterwards. Returns how many fields were written.
-  function fill(form, address, setValue) {
-    if (!form || !address || typeof address !== 'object') return 0;
+  function tokenFor(field) {
+    return field.kind === 'country' && autocompleteToken(field.node) === 'country' ? 'country' : FILL_TOKENS[field.kind];
+  }
+
+  // What the user chose to fill, taken when they click an Address entry in the panel of `input`:
+  // the exact controls of the registration form `input` belongs to, with their kinds. Null when
+  // `input` is in no registration form. Node references only, never values.
+  function selectionFor(doc, input, options) {
+    const form = formFor(doc, input, options);
+    if (!form || !form.fields.some((field) => field.node === input)) return null;
+    return {
+      anchor: input,
+      formElement: input.form || null,
+      controls: fillableFields(form).map((field) => ({ node: field.node, kind: field.kind })),
+    };
+  }
+
+  // Fills the empty controls of `selection` from `address` (the bridge's ExtensionAddress) through
+  // `setValue`, which dispatches input and change events. Every control is checked again right
+  // before its write, because a page's handlers may move, replace, hide or retype controls while
+  // the fill runs: it must still be connected, in the same form (or the same proximity group as
+  // the clicked field), visible and enabled, of the same kind, and empty. A control that is not is
+  // skipped; `options.stillCurrent()` false stops the fill. A country goes first, so a region
+  // select it repopulates is matched afterwards. Returns how many controls were written.
+  function fillSelection(doc, selection, address, setValue, options) {
+    if (!selection || !address || typeof address !== 'object') return 0;
+    const stillCurrent = options && options.stillCurrent;
+    const findOptions = options && options.isVisible ? { isVisible: options.isVisible } : undefined;
     const profile = addressForm.withNameParts(address);
-    const controls = fillableFields(form).map((field) => ({
-      node: field.node,
-      token: field.kind === 'country' && autocompleteToken(field.node) === 'country' ? 'country' : FILL_TOKENS[field.kind],
-    }));
-    const region = (control) => control.token === 'address-level1' && tagOf(control.node) === 'SELECT';
+    const region = (control) => control.kind === 'region' && tagOf(control.node) === 'SELECT';
+    const order = [...selection.controls.filter((c) => !region(c)), ...selection.controls.filter(region)];
     let filled = 0;
-    for (const control of [...controls.filter((c) => !region(c)), ...controls.filter(region)]) {
-      if (control.node.isConnected === false || !addressForm.fillable(control.node)) continue;
-      const value = addressForm.valueFor(control, profile);
-      if (value === null || value === control.node.value) continue;
-      setValue(control.node, value);
+    for (const control of order) {
+      if (stillCurrent && !stillCurrent()) break;
+      const node = control.node;
+      if (node.isConnected === false || (node.form || null) !== selection.formElement) continue;
+      if (selection.anchor.isConnected === false) break;
+      const current = formFor(doc, selection.anchor, findOptions);
+      const field = current && current.fields.find((candidate) => candidate.node === node);
+      if (!field || field.kind !== control.kind || !Object.hasOwn(FILL_TOKENS, field.kind)) continue;
+      if (!addressForm.fillable(node)) continue;
+      const value = addressForm.valueFor({ node, token: tokenFor(field) }, profile);
+      if (value === null || value === node.value) continue;
+      setValue(node, value);
       filled += 1;
     }
     return filled;
@@ -256,10 +404,11 @@ var mypassRegistrationForm = (() => {
     return value.replace(/\s+/g, ' ').toLowerCase();
   }
 
-  // What a submit of `form` proposes to save: `{ username, password, fields }`, or null when the
-  // new password is empty. The username is the username field, else the email; that field is
-  // not repeated in `fields`. Values that break a limit, and a second field with the same kind
-  // and value (an "email" and its "confirm email"), are left out.
+  // What a submit of `form` proposes to save: `{ username, usernameIsEmail, password, fields }`,
+  // or null when the new password is empty. The username is the username field, else the email
+  // (then `usernameIsEmail` is true, so an Address entry made from the form still gets the
+  // email); that field is not repeated in `fields`. Values that break a limit, and a second field
+  // with the same kind and value (an "email" and its "confirm email"), are left out.
   function capture(form) {
     if (!form || !form.newPassword) return null;
     const password = String(form.newPassword.value || '');
@@ -281,12 +430,13 @@ var mypassRegistrationForm = (() => {
       if (key) seen.add(key);
       fields.push({ kind: field.kind, label, value: field.value });
     }
-    return { username, password, fields };
+    return { username, usernameIsEmail: !!login && login.kind === 'email', password, fields };
   }
 
   return {
     MAX_FIELDS, MAX_LABEL, MAX_VALUE,
-    classify, find, formFor, fillableFields, fill, capture, isSubmitControl, readableLabel,
+    classify, find, formFor, fillableFields, selectionFor, fillSelection, capture,
+    isSubmitControl, isScriptSubmitControl, isNativeSubmitControl, readableLabel,
   };
 })();
 if (typeof module !== 'undefined') module.exports = mypassRegistrationForm;

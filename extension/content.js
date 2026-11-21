@@ -310,9 +310,15 @@
 
   // `fields` are the extra values of a registration form (registration-form.js `capture`); they
   // ride along with the login and become the proposal's extraFields once the user saves.
-  function requestSavePrompt(url, username, password, state, sendMessage, now, fields) {
+  // `usernameIsEmail` says the username came from the form's email field. The dedupe key covers
+  // the field values too (fingerprinted like the password, never kept in plain text), so a
+  // corrected retry of the same form within the dedupe window still asks again.
+  function requestSavePrompt(url, username, password, state, sendMessage, now, fields, usernameIsEmail) {
     const at = typeof now === 'number' ? now : Date.now();
-    const key = url + '\u0000' + username + '\u0000' + passwordFingerprint(state, password);
+    const extras = Array.isArray(fields) && fields.length > 0 ? fields : null;
+    const extrasKey = extras || usernameIsEmail === true
+      ? '\u0000' + passwordFingerprint(state, JSON.stringify([extras, usernameIsEmail === true])) : '';
+    const key = url + '\u0000' + username + '\u0000' + passwordFingerprint(state, password) + extrasKey;
     const last = state.lastLoginPrompt;
     if (last && last.key === key && at - last.at < PROMPT_DEDUPE_MS) return false;
     const entry = { key, at };
@@ -324,7 +330,8 @@
     }, PROMPT_DEDUPE_MS);
     if (timer && typeof timer.unref === 'function') timer.unref();
     const message = { type: 'requestPrompt', kind: 'saveLogin', url, username, password };
-    if (Array.isArray(fields) && fields.length > 0) message.fields = fields;
+    if (extras) message.fields = extras;
+    if (usernameIsEmail === true && username) message.usernameIsEmail = true;
     sendMessage(message, (response) => {
       // A reply that never came (the service worker restarted, the extension reloaded) sets
       // runtime.lastError; reading it is what stops Chrome logging "Unchecked runtime.lastError".
@@ -1422,8 +1429,11 @@
         const content = buildPanelContent(document, routed, {
           onSelect: (event, entryId) => {
             if (!isTrustedActivation(event)) return;
+            // The exact controls to fill are fixed now, at the user's click, not when the reply
+            // comes back.
+            const selection = shared.registrationForm.selectionFor(document, input);
             closePanel();
-            requestIdentityFill(input, entryId);
+            if (selection) requestIdentityFill(input, entryId, selection);
           },
           onUnlock: (event) => {
             if (isTrustedActivation(event)) {
@@ -1437,15 +1447,16 @@
     }
 
     // The background reads the chosen Address entry for this exact document and answers with its
-    // values; they go only into the form the clicked field still belongs to, never elsewhere.
-    function requestIdentityFill(input, entryId) {
+    // values; they go only into the controls of `selection` (taken at the click), each checked
+    // again right before its write (registration-form.js `fillSelection`), never elsewhere.
+    function requestIdentityFill(input, entryId, selection) {
       const pageUrl = location.href;
+      const stillCurrent = () => location.href === pageUrl && identityFeatureOn() && input.isConnected;
       sendRuntimeMessage({ type: 'fillIdentity', id: entryId, url: pageUrl }, (response) => {
         if (typeof chrome !== 'undefined' && chrome && chrome.runtime) void chrome.runtime.lastError;
-        if (!response || response.type !== 'identity' || !response.address || location.href !== pageUrl) return;
-        if (!identityFeatureOn() || !input.isConnected) return;
-        const form = shared.registrationForm.formFor(document, input);
-        if (form) shared.registrationForm.fill(form, response.address, shared.addressForm.setNativeAddressValue);
+        if (!response || response.type !== 'identity' || !response.address || !stillCurrent()) return;
+        shared.registrationForm.fillSelection(document, selection, response.address,
+          shared.addressForm.setNativeAddressValue, { stillCurrent });
       });
     }
 
@@ -1520,7 +1531,7 @@
         // (see isUserSubmit); the background additionally throttles opening per tab.
         if (!isUserSubmit(event)) return;
         // A registration form raises its own prompt, with its extra fields (see below).
-        if (registrationSaveTarget(loginForm.form)) return;
+        if (registrationSaveTarget(loginForm.form, event.submitter)) return;
         if (
           runsHere('saveBanner') &&
           pageAutofillSettings.offerSaveLogin &&
@@ -1536,32 +1547,34 @@
     }
 
     // The registration form whose submit may raise a save prompt, or null: https top frame,
-    // save offers on, and a form that has a new-password field.
-    function registrationSaveTarget(node) {
+    // save offers on, and a form that has a new-password field. `submitter` is the control that
+    // submitted: its text, not any other button of the form, is the "Sign up" evidence.
+    function registrationSaveTarget(node, submitter) {
       if (!runsHere('saveBanner') || !pageAutofillSettings.offerSaveLogin
         || !shared.urlMatch.isHttpsAddressPage(location.href)) return null;
-      const form = shared.registrationForm.formFor(document, node);
+      const form = shared.registrationForm.formFor(document, node, submitter ? { submitter } : undefined);
       return form && form.newPassword ? form : null;
     }
 
-    // A user's submit of a registration form (the submit event, or a click on its submit or
-    // "Sign up" button, whichever comes first; requestSavePrompt drops the repeat) asks to save
-    // the new login with the form's other values. Capture phase, so a page that stops the event
-    // or swaps the form on submit is still seen. A locked vault is not a reason to stay quiet:
-    // the prompt itself asks to unlock before it saves.
-    function onRegistrationSubmit(event, node) {
+    // A user's submit of a registration form asks to save the new login with the form's other
+    // values. A <form> counts on its native `submit` event, which the browser fires only after its
+    // constraint validation passed; a click on a script-driven "Sign up" control (not a native
+    // submit button of a form) is the fallback for forms that never submit natively. Capture
+    // phase, so a page that stops the event or swaps the form on submit is still seen. A locked
+    // vault is not a reason to stay quiet: the prompt itself asks to unlock before it saves.
+    function onRegistrationSubmit(event, node, submitter) {
       if (!isUserSubmit(event)) return;
-      const form = registrationSaveTarget(node);
+      const form = registrationSaveTarget(node, submitter);
       const captured = form && shared.registrationForm.capture(form);
       if (!captured) return;
       requestSavePrompt(location.href, captured.username, captured.password, state, sendRuntimeMessage,
-        undefined, captured.fields);
+        undefined, captured.fields, captured.usernameIsEmail);
     }
-    document.addEventListener('submit', (event) => onRegistrationSubmit(event, event.target), true);
+    document.addEventListener('submit', (event) => onRegistrationSubmit(event, event.target, event.submitter || null), true);
     document.addEventListener('click', (event) => {
       const target = event.target && typeof event.target.closest === 'function'
-        ? event.target.closest('button, input[type="submit"], input[type="button"], [role="button"]') : null;
-      if (target && shared.registrationForm.isSubmitControl(target)) onRegistrationSubmit(event, target);
+        ? event.target.closest('button, input[type="submit"], input[type="button"], input[type="image"], [role="button"]') : null;
+      if (target && shared.registrationForm.isScriptSubmitControl(target)) onRegistrationSubmit(event, target, target);
     }, true);
 
     let addressSnapshot = null;

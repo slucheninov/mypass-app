@@ -119,6 +119,21 @@ async function run() {
   assert.deepEqual(messages[0].fields, fields);
   assert.equal(Object.hasOwn(messages[1], 'fields'), false);
 
+  // A corrected retry of the same form (same login, other field values) asks again; the very
+  // same submit inside the dedupe window does not. The username-is-email flag travels.
+  messages.length = 0;
+  const retry = {};
+  const first = [{ kind: 'givenName', label: '', value: 'Ann' }];
+  const corrected = [{ kind: 'givenName', label: '', value: 'Anna' }];
+  assert.equal(requestSavePrompt(page, 'ann@example.test', 'pw-3', retry, send, 1000, first, true), true);
+  assert.equal(requestSavePrompt(page, 'ann@example.test', 'pw-3', retry, send, 2000, first, true), false);
+  assert.equal(requestSavePrompt(page, 'ann@example.test', 'pw-3', retry, send, 3000, corrected, true), true);
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].usernameIsEmail, true);
+  assert.ok(!JSON.stringify(retry).includes('Anna'), 'the dedupe state keeps no field value');
+  assert.equal(requestSavePrompt(page, 'me', 'pw-4', {}, send, 1000), true);
+  assert.equal(Object.hasOwn(messages[2], 'usernameIsEmail'), false);
+
   // The localized hints the detector relies on.
   const node = (attrs) => ({ name: '', id: '', labels: [], getAttribute: (name) => attrs[name] ?? null, ...attrs });
   assert.equal(formDetection.identityFieldHint(node({ name: 'given-name' })), 'givenName');
