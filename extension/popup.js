@@ -1071,7 +1071,7 @@ if (typeof document !== 'undefined') {
   }
 
   function updateUnlockButtons() {
-    unlockSubmitBtn.disabled = unlockBusy || retryDeadline !== 0;
+    unlockSubmitBtn.disabled = unlockBusy || retryDeadline !== 0 || !unlockPassword.value;
     unlockDeviceBtn.disabled = unlockBusy;
   }
 
@@ -1190,7 +1190,7 @@ if (typeof document !== 'undefined') {
   }
 
   submitUnlockPassword = function () {
-    if (lockedMode !== 'locked' || unlockSubmitBtn.disabled) return;
+    if (lockedMode !== 'locked' || unlockSubmitBtn.disabled || !unlockPassword.value) return;
     const password = unlockPassword.value;
     unlockPassword.value = '';
     setReveal(false);
@@ -1203,6 +1203,7 @@ if (typeof document !== 'undefined') {
     return runUnlock({ type: 'unlockWithDevice' });
   };
 
+  unlockPassword.addEventListener('input', updateUnlockButtons);
   unlockForm.addEventListener('submit', (event) => {
     event.preventDefault();
     void submitUnlockPassword();

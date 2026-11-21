@@ -18,6 +18,7 @@ function lockedPopup({ password, device, options, browse } = {}) {
 
 function submit(h, password = 'example') {
   h.el('unlock-password').value = password;
+  h.fire('unlock-password', 'input');
   h.fire('unlock-form', 'submit');
 }
 
@@ -36,6 +37,22 @@ test('lockedPanelModel covers every mode', () => {
     assert.equal(model.launchAction, action);
     assert.equal(model.helperKey, helper);
   }
+});
+
+test('the arrow and Enter cannot submit an empty password', async () => {
+  const h = lockedPopup();
+  await flush();
+  const arrow = h.el('unlock-submit-btn');
+  assert.equal(arrow.disabled, true);
+  h.fire('unlock-form', 'submit');
+  h.el('unlock-password').value = ' ';
+  h.fire('unlock-password', 'input');
+  assert.equal(arrow.disabled, false, 'spaces may be part of a password');
+  h.el('unlock-password').value = '';
+  h.fire('unlock-password', 'input');
+  assert.equal(arrow.disabled, true);
+  h.fire('unlock-form', 'submit');
+  assert.ok(!h.sent.some((message) => message.type === 'unlockWithPassword'));
 });
 
 test('submit clears the password input before the reply', async () => {
@@ -69,6 +86,8 @@ test('a throttle from the reply or options disables submit until the backoff end
     await flush();
     if (!fromOptions) submit(h);
     await flush();
+    h.el('unlock-password').value = 'next attempt';
+    h.fire('unlock-password', 'input');
     assert.equal(h.el('unlock-submit-btn').disabled, true);
     assert.match(h.el('unlock-error').textContent, /2 s/);
     await h.advance(1000);
