@@ -29,12 +29,16 @@ pub(crate) fn unlock_with_password(ctx: &Ctx<'_>, password: WirePassword) -> Res
     if password.char_len() > MAX_PASSWORD_CHARS {
         return error("invalid request");
     }
-    match ctx.throttle.attempt(|| {
-        ctx.deps
-            .unlocker
-            .unlock_with_password(password.into_secret())
-    }) {
+    match ctx.throttle.attempt(
+        || ctx.deps.session.is_unlocked(),
+        || {
+            ctx.deps
+                .unlocker
+                .unlock_with_password(password.into_secret())
+        },
+    ) {
         PasswordAttempt::Unlocked => Response::Unlocked,
+        PasswordAttempt::NotNeeded => Response::UnlockNotNeeded,
         PasswordAttempt::WrongPassword => Response::WrongPassword,
         PasswordAttempt::Throttled { retry_after_secs } => {
             Response::UnlockThrottled { retry_after_secs }

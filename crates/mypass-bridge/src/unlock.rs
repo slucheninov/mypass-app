@@ -39,6 +39,7 @@ pub trait VaultUnlocker: Send + Sync {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PasswordAttempt {
     Unlocked,
+    NotNeeded,
     WrongPassword,
     Throttled { retry_after_secs: u64 },
     InApp,
@@ -85,9 +86,14 @@ impl UnlockThrottle {
 
     pub fn attempt(
         &self,
+        is_unlocked: impl FnOnce() -> bool,
         try_unlock: impl FnOnce() -> Result<(), UnlockFailure>,
     ) -> PasswordAttempt {
         let _attempt = self.attempts.lock().unwrap_or_else(PoisonError::into_inner);
+        // A preceding attempt may have finished while this request was waiting.
+        if is_unlocked() {
+            return PasswordAttempt::NotNeeded;
+        }
         let generation = {
             let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             if let Some(retry_after_secs) = state.retry_after_secs(self.scheduler.monotonic_now()) {
@@ -149,7 +155,7 @@ impl VaultUnlocker for NoUnlocker {
     }
 
     fn unlock_with_device(&self) -> Result<(), UnlockFailure> {
-        Err(UnlockFailure::DeviceUnavailable)
+        Err(UnlockFailure::Failed)
     }
 
     fn device_offer(&self) -> DeviceOffer {
@@ -173,7 +179,7 @@ mod tests {
     }
 
     fn wrong(throttle: &UnlockThrottle) -> PasswordAttempt {
-        throttle.attempt(|| Err(UnlockFailure::WrongPassword))
+        throttle.attempt(|| false, || Err(UnlockFailure::WrongPassword))
     }
 
     fn four_wrong(throttle: &UnlockThrottle) {
@@ -217,7 +223,7 @@ mod tests {
         assert_eq!(wrong(&throttle), throttled(30));
         clock.advance(Duration::from_secs(10));
         assert_eq!(
-            throttle.attempt(|| panic!("attempt must not run")),
+            throttle.attempt(|| false, || panic!("attempt must not run")),
             throttled(20)
         );
         clock.advance(Duration::from_secs(20));
@@ -238,7 +244,10 @@ mod tests {
     fn success_resets_the_count() {
         let (_, throttle) = fixture();
         four_wrong(&throttle);
-        assert_eq!(throttle.attempt(|| Ok(())), PasswordAttempt::Unlocked);
+        assert_eq!(
+            throttle.attempt(|| false, || Ok(())),
+            PasswordAttempt::Unlocked
+        );
         four_wrong(&throttle);
     }
 
@@ -257,10 +266,13 @@ mod tests {
         let (_, throttle) = fixture();
         four_wrong(&throttle);
         assert_eq!(
-            throttle.attempt(|| {
-                throttle.reset();
-                Ok(())
-            }),
+            throttle.attempt(
+                || false,
+                || {
+                    throttle.reset();
+                    Ok(())
+                }
+            ),
             PasswordAttempt::Unlocked
         );
         four_wrong(&throttle);
@@ -277,13 +289,16 @@ mod tests {
                 .map(|_| {
                     scope.spawn(|| {
                         start.wait();
-                        throttle.attempt(|| {
-                            assert_eq!(active.fetch_add(1, SeqCst), 0);
-                            calls.fetch_add(1, SeqCst);
-                            std::thread::yield_now();
-                            active.fetch_sub(1, SeqCst);
-                            Err(UnlockFailure::WrongPassword)
-                        })
+                        throttle.attempt(
+                            || false,
+                            || {
+                                assert_eq!(active.fetch_add(1, SeqCst), 0);
+                                calls.fetch_add(1, SeqCst);
+                                std::thread::yield_now();
+                                active.fetch_sub(1, SeqCst);
+                                Err(UnlockFailure::WrongPassword)
+                            },
+                        )
                     })
                 })
                 .collect();
@@ -297,6 +312,18 @@ mod tests {
             );
         });
         assert_eq!(calls.load(SeqCst), 5);
+    }
+
+    #[test]
+    fn vault_unlocked_while_an_attempt_waits_skips_the_unlocker_and_backoff() {
+        let (_, throttle) = fixture();
+        four_wrong(&throttle);
+        assert_eq!(wrong(&throttle), throttled(30));
+        assert_eq!(
+            throttle.attempt(|| true, || panic!("unlocked vault must skip the unlocker")),
+            PasswordAttempt::NotNeeded,
+        );
+        assert_eq!(throttle.retry_after_secs(), Some(30));
     }
 
     #[test]
