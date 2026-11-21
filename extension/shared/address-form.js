@@ -115,6 +115,24 @@ var mypassAddressForm = (() => {
         && item.token === b.controls[index].token && item.signature === b.controls[index].signature));
   }
 
+  function optionDisabled(option) {
+    return option.disabled || option.parentElement?.disabled;
+  }
+
+  function fillable(node) {
+    if (node.value === '') return true;
+    if (node.tagName !== 'SELECT') return false;
+    const options = Array.from(node.options);
+    const selected = options.find((option) => option.selected);
+    if (!selected) return false;
+    if (optionDisabled(selected)) return true;
+    // A single-line select without a selected attribute defaults to its first
+    // enabled option. Use that too when checking for a changed selection.
+    const defaultOption = options.findLast((option) => option.defaultSelected)
+      ?? (node.size <= 1 ? options.find((option) => !optionDisabled(option)) : undefined);
+    return selected === defaultOption;
+  }
+
   function valueFor(control, address) {
     let value = control.token === 'street-address'
       ? [address.addressLine1, address.addressLine2].filter((part) => typeof part === 'string' && part.trim()).join(control.node.tagName.toLowerCase() === 'textarea' ? '\n' : ', ')
@@ -129,8 +147,7 @@ var mypassAddressForm = (() => {
     if (control.token === 'country' && address.countryName) candidates.push(address.countryName);
     if (control.token === 'country-name' && address.countryCode) candidates.push(address.countryCode);
     const normalize = (text) => String(text).trim().toLowerCase();
-    const matches = Array.from(control.node.options).filter((option) => !option.disabled
-      && !(option.parentElement && option.parentElement.disabled)
+    const matches = Array.from(control.node.options).filter((option) => !optionDisabled(option)
       && candidates.some((candidate) => normalize(candidate) === normalize(option.value)
         || normalize(candidate) === normalize(option.textContent)));
     return matches.length === 1 ? matches[0].value : null;
@@ -181,12 +198,12 @@ var mypassAddressForm = (() => {
       // input/change handlers may synchronously replace other controls. Recheck
       // before each write instead of following stale references into a new form.
       if (!valid()) return { type: 'error', code: 'address_form_changed', filled };
-      if (control.node.value !== '') continue;
+      if (!fillable(control.node)) continue;
       // Earlier change handlers can repopulate a dependent select without
       // replacing its node. Match the current options now, never a cached value
       // that could clear the select after its option was removed.
       const value = valueFor(control, profile);
-      if (value === null) continue;
+      if (value === null || value === control.node.value) continue;
       setValue(control.node, value);
       filled += 1;
     }

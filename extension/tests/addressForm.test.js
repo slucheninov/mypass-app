@@ -1,11 +1,12 @@
 const assert = require('node:assert/strict');
+const { test } = require('node:test');
 const addressForm = require('../shared/address-form.js');
 
 function fixture() {
   const doc = { activeElement: null, nodes: [], defaultView: { getComputedStyle: () => ({ visibility: 'visible', display: 'block', opacity: '1' }) },
     querySelectorAll() { return this.nodes; } };
   function field(autocomplete, options = {}) {
-    const node = { autocomplete, tagName: 'INPUT', type: 'text', name: '', id: '', value: '',
+    const node = { autocomplete, tagName: 'INPUT', type: 'text', name: '', id: '', value: '', size: 0,
       isConnected: true, disabled: false, readOnly: false, ownerDocument: doc, form: null,
       getAttribute(name) { return this[name] || null; }, closest() { return null; }, matches() { return false; },
       getBoundingClientRect() { return { width: 100, height: 30 }; }, ...options };
@@ -21,6 +22,59 @@ const address = { fullName: 'Example Person', givenName: '', familyName: '', org
 function fill(doc, groups, id = '0', profile = address, write = (node, value) => { node.value = value; }) {
   return addressForm.apply(doc, groups, id, profile, write);
 }
+
+for (const defaultSelected of [true, false]) {
+  test(`fills the ${defaultSelected ? 'explicit' : 'implicit'} country default before matching the region`, () => {
+    const { doc, field } = fixture();
+    field('address-line1');
+    const region = field('address-level1', { tagName: 'SELECT', value: 'CA', options: [
+      { value: 'CA', textContent: 'California', selected: true, defaultSelected: false }
+    ] });
+    const country = field('country', { tagName: 'SELECT', value: 'US', options: [
+      { value: 'US', textContent: 'United States', selected: true, defaultSelected },
+      { value: 'PL', textContent: 'Poland', selected: false, defaultSelected: false }
+    ] });
+    const result = fill(doc, addressForm.collect(doc), '0', address, (node, value) => {
+      node.value = value;
+      if (node === country) {
+        region.value = 'XX';
+        region.options = [
+          { value: 'XX', textContent: 'Other', selected: true, defaultSelected: false },
+          { value: 'SR', textContent: 'Some Region', selected: false, defaultSelected: false }
+        ];
+      }
+    });
+    assert.equal(country.value, 'PL');
+    assert.equal(region.value, 'SR');
+    assert.equal(result.filled, 3);
+  });
+}
+
+for (const defaultSelected of [true, false]) {
+  test(`preserves a user selection that differs from the ${defaultSelected ? 'explicit' : 'implicit'} default`, () => {
+    const { doc, field } = fixture();
+    field('address-line1');
+    const country = field('country', { tagName: 'SELECT', value: 'DE', options: [
+      { value: 'US', textContent: 'United States', selected: false, defaultSelected },
+      { value: 'DE', textContent: 'Germany', selected: true, defaultSelected: false },
+      { value: 'PL', textContent: 'Poland', selected: false, defaultSelected: false }
+    ] });
+    assert.equal(fill(doc, addressForm.collect(doc)).filled, 1);
+    assert.equal(country.value, 'DE');
+  });
+}
+
+test('fills a selected disabled placeholder with a nonempty value', () => {
+  const { doc, field } = fixture();
+  field('address-line1');
+  const country = field('country', { tagName: 'SELECT', value: 'choose', options: [
+    { value: 'choose', textContent: 'Choose a country', selected: true, defaultSelected: false, disabled: true },
+    { value: 'PL', textContent: 'Poland', selected: false, defaultSelected: true }
+  ] });
+  assert.equal(fill(doc, addressForm.collect(doc)).filled, 2);
+  assert.equal(country.value, 'PL');
+});
+
 {
   const { doc, field } = fixture();
   field('email'); field('username'); field('one-time-code');
