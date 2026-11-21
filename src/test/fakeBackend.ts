@@ -438,6 +438,11 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       publish("openEntryEvent", { id, edit });
       return null;
     },
+    // Like Rust: only an unlocked session asks the main window for a new login.
+    appNewEntry: () => {
+      if (state.session.state === "unlocked") publish("newEntryEvent", null);
+      return null;
+    },
     appOpenSettings: () => null,
     // Only the call log matters: the window and the quit flow live in Rust.
     appQuit: () => null,

@@ -40,6 +40,7 @@ pub fn commands() -> Commands<tauri::Wry> {
     use commands::{device, platform, settings, sidebar, sync, update, vault};
     collect_commands![
         app::app_info,
+        app::app_new_entry,
         app::app_open_entry,
         app::app_open_settings,
         app::app_quit,
@@ -136,16 +137,17 @@ pub fn commands() -> Commands<tauri::Wry> {
 /// bindings exporter go through it, so the generated TypeScript can never drift from the app.
 pub fn specta_builder() -> Builder<tauri::Wry> {
     use events::{
-        BridgeChangedEvent, ClipboardClearedEvent, OpenEntryEvent, PairingChallengeEvent,
-        ProposalEvent, SaveStateChanged, SessionChanged, SettingsChanged, SettingsPaneEvent,
-        ShortcutConflictEvent, StorageStatusChanged, SyncStatusChanged, UnlockRequestedEvent,
-        UpdateChanged, VaultChanged,
+        BridgeChangedEvent, ClipboardClearedEvent, NewEntryEvent, OpenEntryEvent,
+        PairingChallengeEvent, ProposalEvent, SaveStateChanged, SessionChanged, SettingsChanged,
+        SettingsPaneEvent, ShortcutConflictEvent, StorageStatusChanged, SyncStatusChanged,
+        UnlockRequestedEvent, UpdateChanged, VaultChanged,
     };
     Builder::<tauri::Wry>::new()
         .commands(commands())
         .events(collect_events![
             BridgeChangedEvent,
             ClipboardClearedEvent,
+            NewEntryEvent,
             OpenEntryEvent,
             PairingChallengeEvent,
             ProposalEvent,
@@ -292,8 +294,8 @@ mod tests {
         assert_eq!(panel["visible"], false);
         assert_eq!(panel["alwaysOnTop"], true);
         assert_eq!(panel["skipTaskbar"], true);
-        assert_eq!(panel["width"], 320);
-        assert_eq!(panel["height"], 440);
+        assert_eq!(panel["width"], 340);
+        assert_eq!(panel["height"], 520);
     }
 
     pub(super) fn command_names() -> Vec<String> {
@@ -415,6 +417,7 @@ mod tests {
             "shortcut-conflict-event"
         );
         assert_eq!(events::OpenEntryEvent::NAME, "open-entry-event");
+        assert_eq!(events::NewEntryEvent::NAME, "new-entry-event");
         assert_eq!(
             events::PairingChallengeEvent::NAME,
             "pairing-challenge-event"

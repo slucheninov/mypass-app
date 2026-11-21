@@ -6,6 +6,8 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 /** Commands */
 export const commands = {
 	appInfo: () => typedError<AppInfo, ApiError>(__TAURI_INVOKE("app_info")),
+	/**  The tray panel's "+": the main window opens the editor for a new login. */
+	appNewEntry: () => typedError<null, ApiError>(__TAURI_INVOKE("app_new_entry")),
 	appOpenEntry: (id: string, edit: boolean) => typedError<null, ApiError>(__TAURI_INVOKE("app_open_entry", { id, edit })),
 	/**  Shows the settings window (General pane). */
 	appOpenSettings: () => typedError<null, ApiError>(__TAURI_INVOKE("app_open_settings")),
@@ -145,6 +147,7 @@ export const commands = {
 export const events = {
 	bridgeChangedEvent: makeEvent<BridgeChangedEvent, BridgeChangedEvent>("bridge-changed-event"),
 	clipboardClearedEvent: makeEvent<ClipboardClearedEvent, ClipboardClearedEvent>("clipboard-cleared-event"),
+	newEntryEvent: makeEvent<NewEntryEvent, NewEntryEvent>("new-entry-event"),
 	openEntryEvent: makeEvent<OpenEntryEvent, OpenEntryEvent>("open-entry-event"),
 	pairingChallengeEvent: makeEvent<PairingChallengeEvent_Serialize, PairingChallengeEvent_Deserialize>("pairing-challenge-event"),
 	proposalEvent: makeEvent<ProposalEvent_Serialize, ProposalEvent_Deserialize>("proposal-event"),
@@ -921,6 +924,12 @@ export type LockReason = "manual" | "idle" | "sleep" | "screenLock" | "hotkey" |
 export type LoginItemStatus = "enabled" | "disabled" | "requiresApproval" | "notFound" | "unsupported";
 
 export type MigrationStrategy = "seedRemote" | "merge" | "adoptRemote" | "overwriteRemote";
+
+/**
+ *  The main window should open the editor for a new login (the tray panel's "+"). Sent to the main
+ *  window only; it carries nothing, the main window builds the new item itself.
+ */
+export type NewEntryEvent = null;
 
 /**  Why device unlock cannot be offered right now. */
 export type OfferBlock = 

@@ -2,6 +2,7 @@ import { screen, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { formatDate } from "../lib/i18n/format";
+import { formatShortcut } from "../lib/shortcuts";
 import { toasts } from "../lib/stores/toasts.svelte";
 import { expectNoAxeViolations } from "../test/axe";
 import { FIXTURE_LOGIN_PASSWORD, FIXTURE_MASTER_PASSWORD, makeEntry } from "../test/fixtures";
@@ -15,6 +16,14 @@ async function unlockedTray(prepare?: (fake: FakeBackend) => void) {
   const app = await renderTrayPanel({}, prepare);
   await screen.findByRole("list", { name: "Recent items" });
   return { ...app, user: userEvent.setup() };
+}
+
+/** The names of the menu rows, in order, with `-` for a separator. */
+function menuLayout(): string[] {
+  const menu = screen.getByRole("navigation", { name: "MyPass" });
+  return Array.from(menu.querySelectorAll("button, hr")).map((el) =>
+    el.tagName === "HR" ? "-" : (el.querySelector(".label")?.textContent ?? ""),
+  );
 }
 
 async function openGithub(prepare?: (fake: FakeBackend) => void) {
@@ -44,10 +53,20 @@ describe("tray panel, locked", () => {
     expect(screen.queryByRole("list", { name: "Recent items" })).toBeNull();
   });
 
-  it("tray_open_mypass_calls_app_show_main", async () => {
+  it("the_locked_panel_shows_the_main_unlock_card_and_only_settings_and_quit", async () => {
     const { fake } = await renderTrayPanel({ session: "locked" });
-    await userEvent.setup().click(await screen.findByRole("button", { name: "Open MyPass" }));
-    await waitFor(() => expect(calls(fake, "appShowMain")).toHaveLength(1));
+    await screen.findByLabelText("Master password");
+    const vault = fake.state.session.vaultPath ?? "";
+    expect(screen.getByRole("heading", { name: vault.split("/").pop() })).toBeTruthy();
+    expect(screen.getByTestId("vault-status").dataset.status).toBe("connected");
+    expect(screen.getByRole("button", { name: "Show password" })).toBeTruthy();
+    expect(menuLayout()).toEqual(["Settings", "Quit"]);
+    expect(screen.queryByRole("button", { name: "Lock" })).toBeNull();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    await user.click(screen.getByRole("button", { name: "Quit" }));
+    await waitFor(() => expect(calls(fake, "appOpenSettings")).toHaveLength(1));
+    expect(calls(fake, "appQuit")).toHaveLength(1);
   });
 
   it("tray_no_vault_shows_no_password_field", async () => {
@@ -55,6 +74,7 @@ describe("tray panel, locked", () => {
     expect(await screen.findByText("No vault is open")).toBeTruthy();
     expect(screen.queryByLabelText("Master password")).toBeNull();
     expect(screen.queryByRole("button", { name: "Unlock" })).toBeNull();
+    expect(menuLayout()).toEqual(["Open MyPass", "-", "Settings", "Quit"]);
     await userEvent.setup().click(screen.getByRole("button", { name: "Open MyPass" }));
     await waitFor(() => expect(calls(fake, "appShowMain")).toHaveLength(1));
   });
@@ -96,10 +116,18 @@ describe("tray panel, unlocked list", () => {
     expect(list.textContent).not.toContain(FIXTURE_LOGIN_PASSWORD);
   });
 
-  it("the_panel_never_fetches_the_entry_list", async () => {
+  it("the_panel_fetches_the_entry_list_only_to_search", async () => {
     const { fake } = await unlockedTray();
     expect(calls(fake, "entryList")).toHaveLength(0);
     expect(calls(fake, "sidebarGet")).toHaveLength(0);
+  });
+
+  it("each_recent_row_shows_the_letter_avatar_title_and_user_name", async () => {
+    await unlockedTray();
+    const row = screen.getByRole("button", { name: "GitHub" });
+    expect(row.querySelector(".avatar")?.textContent).toBe("G");
+    expect(row.textContent).toContain("octo");
+    expect(row.getAttribute("aria-describedby")).toBeTruthy();
   });
 
   it("an_empty_vault_says_so_instead_of_an_empty_list", async () => {
@@ -116,10 +144,25 @@ describe("tray panel, unlocked list", () => {
     expect(await screen.findByLabelText("Master password")).toBeTruthy();
   });
 
+  it("the_unlocked_menu_is_open_then_lock_settings_quit", async () => {
+    await unlockedTray();
+    expect(menuLayout()).toEqual(["Open MyPass", "-", "Lock", "Settings", "Quit"]);
+  });
+
+  it("the_menu_shows_the_configured_global_shortcuts_beside_open_and_lock", async () => {
+    await unlockedTray((f) => {
+      f.state.settings.shortcutLock = "CommandOrControl+Shift+L";
+      f.state.settings.shortcutShow = "";
+    });
+    const lock = screen.getByRole("button", { name: "Lock" });
+    expect(lock.querySelector(".shortcut")?.textContent).toBe(formatShortcut("CommandOrControl+Shift+L", "macos"));
+    expect(screen.getByRole("button", { name: "Open MyPass" }).querySelector(".shortcut")).toBeNull();
+  });
+
   it("tray_settings_and_quit_call_their_commands", async () => {
     const { fake, user } = await unlockedTray();
     await user.click(screen.getByRole("button", { name: "Settings" }));
-    await user.click(screen.getByRole("button", { name: "Quit MyPass" }));
+    await user.click(screen.getByRole("button", { name: "Quit" }));
     await waitFor(() => expect(calls(fake, "appOpenSettings")).toHaveLength(1));
     expect(calls(fake, "appQuit")).toHaveLength(1);
   });
@@ -127,6 +170,15 @@ describe("tray panel, unlocked list", () => {
   it("tray_open_mypass_calls_app_show_main_when_unlocked", async () => {
     const { fake, user } = await unlockedTray();
     await user.click(screen.getByRole("button", { name: "Open MyPass" }));
+    await waitFor(() => expect(calls(fake, "appShowMain")).toHaveLength(1));
+  });
+
+  it("the_header_buttons_open_a_new_login_and_the_main_window", async () => {
+    const { fake, user } = await unlockedTray();
+    expect(screen.getByRole("heading", { name: "Passwords" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "New Login" }));
+    await waitFor(() => expect(calls(fake, "appNewEntry")).toHaveLength(1));
+    await user.click(screen.getByRole("button", { name: "Open main window" }));
     await waitFor(() => expect(calls(fake, "appShowMain")).toHaveLength(1));
   });
 
@@ -179,7 +231,9 @@ describe("tray panel, compact detail", () => {
     expect(detail.textContent).not.toContain(FIXTURE_LOGIN_PASSWORD);
     expect(calls(fake, "entryReveal")).toHaveLength(0);
     expect(within(detail).getByRole("group", { name: "Website" }).textContent).toContain("https://github.com");
-    expect(within(detail).getByRole("group", { name: "Modified" }).textContent).toContain(formatDate(GITHUB_MODIFIED));
+    expect(within(detail).getByText(`Last modified: ${formatDate(GITHUB_MODIFIED)}`)).toBeTruthy();
+    expect(within(detail).getByRole("heading", { name: "GitHub" })).toBeTruthy();
+    expect(detail.querySelector(".avatar")?.textContent).toBe("G");
     expect(within(detail).getByRole("button", { name: "Edit" })).toBeTruthy();
   });
 
@@ -254,8 +308,8 @@ describe("tray panel, compact detail", () => {
     });
     await user.click(await screen.findByRole("button", { name: "Bare" }));
     const detail = await screen.findByRole("region", { name: "Bare" });
-    await within(detail).findByRole("group", { name: "Modified" });
-    for (const name of ["Username", "Website", "One-time code"]) {
+    await within(detail).findByText(/^Last modified:/);
+    for (const name of ["Username", "Password", "Website", "One-time code", "Passkey"]) {
       expect(within(detail).queryByRole("group", { name })).toBeNull();
     }
   });
@@ -266,6 +320,34 @@ describe("tray panel, compact detail", () => {
     await user.click(within(detail).getByRole("button", { name: "Edit" }));
     await waitFor(() => expect(calls(fake, "appOpenEntry")).toHaveLength(1));
     expect(calls(fake, "appOpenEntry")[0]?.args).toEqual({ id: "e-github", edit: true });
+  });
+
+  it("a_passkey_shows_its_creation_date_and_nothing_to_copy", async () => {
+    const created = 1_750_000_000_000;
+    const { user } = await unlockedTray((f) => {
+      f.state.entries.push(
+        makeEntry({
+          id: "pk",
+          title: "Shopify",
+          username: "ann",
+          modified: 1_800_000_000_000,
+          passkey: { relyingParty: "shopify.com", username: "ann", created, usable: true },
+        }),
+      );
+    });
+    await user.click(await screen.findByRole("button", { name: "Shopify" }));
+    const detail = await screen.findByRole("region", { name: "Shopify" });
+    const passkey = await within(detail).findByRole("group", { name: "Passkey" });
+    expect(passkey.textContent).toContain(`Created ${formatDate(created)}`);
+    expect(within(passkey).queryByRole("button")).toBeNull();
+  });
+
+  it("the_detail_hides_the_menu_and_open_main_window_shows_the_entry", async () => {
+    const { fake, detail, user } = await openGithub();
+    await within(detail).findByText("octo");
+    expect(screen.queryByRole("navigation", { name: "MyPass" })).toBeNull();
+    await user.click(within(detail).getByRole("button", { name: "Open main window" }));
+    await waitFor(() => expect(calls(fake, "appOpenEntry")[0]?.args).toEqual({ id: "e-github", edit: false }));
   });
 
   it("tray_back_returns_to_list", async () => {
@@ -325,6 +407,71 @@ describe("tray panel, hide without visibilitychange", () => {
     await user.type(input, "half-typed");
     window.dispatchEvent(new Event("blur"));
     await waitFor(() => expect(input.value).toBe(""));
+  });
+});
+
+describe("tray panel, search", () => {
+  const results = () => screen.findByRole("list", { name: "Search results" });
+
+  it("typing_filters_by_title_user_name_and_website_through_entry_list", async () => {
+    const { fake, user } = await unlockedTray();
+    const search = screen.getByRole("searchbox", { name: "Search" });
+    await user.type(search, "lab");
+    let list = await results();
+    await waitFor(() => expect(within(list).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["GitLab"]));
+    expect(calls(fake, "entryList").at(-1)?.args).toEqual({
+      query: { scope: { kind: "category", category: "all" }, search: "lab", sort: "title", order: "ascending" },
+    });
+    await user.clear(search);
+    await user.type(search, "octo");
+    list = await results();
+    await waitFor(() => expect(within(list).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["GitHub", "GitLab"]));
+    await user.clear(search);
+    await user.type(search, "github.com");
+    list = await results();
+    await waitFor(() => expect(within(list).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["GitHub"]));
+  });
+
+  it("no_match_says_no_results_and_escape_returns_to_the_recents", async () => {
+    const { user } = await unlockedTray();
+    const search = screen.getByRole("searchbox", { name: "Search" }) as HTMLInputElement;
+    await user.type(search, "zzz-nothing");
+    expect(await screen.findByText("No results")).toBeTruthy();
+    await user.keyboard("{Escape}");
+    expect(search.value).toBe("");
+    expect(await screen.findByRole("list", { name: "Recent items" })).toBeTruthy();
+  });
+
+  it("enter_opens_the_first_match_and_back_keeps_the_search", async () => {
+    const { user } = await unlockedTray();
+    const search = screen.getByRole("searchbox", { name: "Search" });
+    await user.type(search, "lab");
+    await waitFor(async () => expect(within(await results()).getAllByRole("button")).toHaveLength(1));
+    await user.keyboard("{Enter}");
+    const detail = await screen.findByRole("region", { name: "GitLab" });
+    await within(detail).findByText("octo-lab");
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(((await screen.findByRole("searchbox", { name: "Search" })) as HTMLInputElement).value).toBe("lab");
+  });
+
+  it("hiding_the_window_clears_the_search", async () => {
+    const { user } = await unlockedTray();
+    await user.type(screen.getByRole("searchbox", { name: "Search" }), "lab");
+    await results();
+    window.dispatchEvent(new Event("blur"));
+    expect(await screen.findByRole("list", { name: "Recent items" })).toBeTruthy();
+    expect((screen.getByRole("searchbox", { name: "Search" }) as HTMLInputElement).value).toBe("");
+  });
+
+  it("a_lock_drops_the_search", async () => {
+    const { fake, user } = await unlockedTray();
+    await user.type(screen.getByRole("searchbox", { name: "Search" }), "lab");
+    await results();
+    fake.handlers.vaultLock({});
+    expect(await screen.findByLabelText("Master password")).toBeTruthy();
+    fake.handlers.vaultUnlock({ password: FIXTURE_MASTER_PASSWORD });
+    expect(await screen.findByRole("list", { name: "Recent items" })).toBeTruthy();
+    expect((screen.getByRole("searchbox", { name: "Search" }) as HTMLInputElement).value).toBe("");
   });
 });
 

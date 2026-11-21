@@ -558,5 +558,10 @@
   "Most Used First": "Häufigste zuerst",
   "Least Used First": "Seltenste zuerst",
   "A to Z": "A → Z",
-  "Z to A": "Z → A"
+  "Z to A": "Z → A",
+  "Passwords": "Passwörter",
+  "Open main window": "Hauptfenster öffnen",
+  "Search results": "Suchergebnisse",
+  "Last modified: %@": "Zuletzt geändert: {0}",
+  "Created %@": "Erstellt am {0}"
 }

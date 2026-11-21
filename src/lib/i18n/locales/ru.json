@@ -558,5 +558,10 @@
   "Most Used First": "Сначала частые",
   "Least Used First": "Сначала редкие",
   "A to Z": "А → Я",
-  "Z to A": "Я → А"
+  "Z to A": "Я → А",
+  "Passwords": "Пароли",
+  "Open main window": "Открыть главное окно",
+  "Search results": "Результаты поиска",
+  "Last modified: %@": "Последнее изменение: {0}",
+  "Created %@": "Создано {0}"
 }

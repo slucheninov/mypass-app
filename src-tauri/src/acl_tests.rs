@@ -108,6 +108,7 @@ const SETTINGS: &[&str] = &[
 
 const TRAY_PANEL: &[&str] = &[
     "app_info",
+    "app_new_entry",
     "app_open_entry",
     "app_open_settings",
     "app_quit",
@@ -116,10 +117,12 @@ const TRAY_PANEL: &[&str] = &[
     "device_unlock_status",
     "entry_copy",
     "entry_get",
+    "entry_list",
     "entry_recent",
     "entry_reveal",
     "entry_totp",
     "entry_touch",
+    "platform_keyboard_layout",
     "settings_get",
     "update_open_release",
     "update_status",

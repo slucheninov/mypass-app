@@ -49,6 +49,11 @@ pub struct OpenEntryEvent {
     pub edit: bool,
 }
 
+/// The main window should open the editor for a new login (the tray panel's "+"). Sent to the main
+/// window only; it carries nothing, the main window builds the new item itself.
+#[derive(Serialize, Deserialize, specta::Type, tauri_specta::Event, Clone, PartialEq, Debug)]
+pub struct NewEntryEvent;
+
 impl From<mypass_session::OpenEntryEvent> for OpenEntryEvent {
     fn from(e: mypass_session::OpenEntryEvent) -> Self {
         Self {
