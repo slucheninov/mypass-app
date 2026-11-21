@@ -180,10 +180,10 @@ impl BridgeUi for TauriBridgeUi {
     fn pairing_code(&self, _c: &PairingChallenge) {
         // The challenge itself reached the webview through the change hook.
         self.pairing_window.raise();
-        // A lock between the code's creation and this raise already ran its observer: do not leave
-        // the window pinned on top with no code to show.
-        if self.core.session.status().state != SessionState::Unlocked {
-            self.pairing.cancel();
+        // A cancellation between challenge creation and this raise may already have lowered
+        // the window. Check the challenge itself, which can be active over the unlock screen.
+        if self.pairing.active().is_none() {
+            self.pairing_window.lower();
         }
         // Nothing notifies when a code simply runs out, so look again right after its deadline.
         let pairing = Arc::downgrade(&self.pairing);
@@ -492,7 +492,7 @@ fn start_bridge_with_kind(
                     focus.reset();
                     return;
                 }
-                // A lock ends the pairing (the code cannot be shown) and the unlock throttle.
+                // A lock transition dismisses an active challenge.
                 if let Some(pairing) = weak.upgrade() {
                     pairing.cancel();
                 }
@@ -1183,6 +1183,16 @@ mod tests {
             .filter(|(op, _, _)| op == "show")
             .count();
         assert_eq!(shows, 2);
+    }
+
+    #[test]
+    fn pairing_code_while_locked_keeps_the_challenge_and_raises_the_window() {
+        let f = fixture(true);
+        f.w.core.vault_lock().unwrap();
+        start_pairing(&f);
+        assert!(f.handle().pairing.active().is_some());
+        assert_eq!(f.on_top(), [true]);
+        assert!(lock(&f.events.challenges).last().unwrap().is_some());
     }
 
     #[test]
