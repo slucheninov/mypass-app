@@ -77,7 +77,7 @@ describe("main window event bridge", () => {
 
   it("new_entry_event_opens_the_editor_for_a_new_login", async () => {
     const { fake } = await mainApp();
-    await fake.emit("newEntryEvent", null);
+    await fake.emit("newEntryEvent", { entryType: "login" });
     await waitFor(() => expect(navigation.presentation).toBe("create"));
     expect(navigation.editModel?.id ?? null).toBeNull();
     expect(navigation.editModel?.entryType).toBe("login");
@@ -86,7 +86,7 @@ describe("main window event bridge", () => {
 
   it("new_entry_event_while_locked_opens_nothing", async () => {
     const { fake } = await mainApp("locked");
-    await fake.emit("newEntryEvent", null);
+    await fake.emit("newEntryEvent", { entryType: "login" });
     await new Promise((r) => setTimeout(r, 50));
     expect(navigation.presentation).toBe("browse");
     expect(calls(fake, "entryNewModel")).toHaveLength(0);

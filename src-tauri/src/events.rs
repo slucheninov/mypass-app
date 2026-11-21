@@ -49,11 +49,6 @@ pub struct OpenEntryEvent {
     pub edit: bool,
 }
 
-/// The main window should open the editor for a new login (the tray panel's "+"). Sent to the main
-/// window only; it carries nothing, the main window builds the new item itself.
-#[derive(Serialize, Deserialize, specta::Type, tauri_specta::Event, Clone, PartialEq, Debug)]
-pub struct NewEntryEvent;
-
 impl From<mypass_session::OpenEntryEvent> for OpenEntryEvent {
     fn from(e: mypass_session::OpenEntryEvent) -> Self {
         Self {
@@ -96,10 +91,10 @@ pub struct ProposalEvent {
     pub entry_id: Option<String>,
 }
 
-/// The browser extension asked the main window to start a new entry of `entry_type` (only the
-/// kinds the bridge cannot create itself: an address or a files item). The main window runs its
-/// own "+" menu action, right away when unlocked, otherwise after the next unlock (if that comes
-/// soon). Sent to the main window only.
+/// The main window should start a new entry of `entry_type`: a login from the tray panel's "+", or
+/// a kind the bridge cannot create itself (an address or a files item) from the browser extension.
+/// The main window runs its own "+" menu action, right away when unlocked, otherwise after the next
+/// unlock (if that comes soon). Sent to the main window only; it carries no secret.
 #[derive(Serialize, Deserialize, specta::Type, tauri_specta::Event, Clone, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct NewEntryEvent {

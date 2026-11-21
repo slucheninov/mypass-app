@@ -38,8 +38,8 @@ async function openEntry({ id, edit }: OpenEntryEvent): Promise<void> {
  *  moved on, and an editor appearing out of nowhere after a later unlock would only surprise. */
 export const PENDING_NEW_ENTRY_MS = 120_000;
 
-/** The browser extension's "+" menu asked for a new address or files item (`NewEntryEvent`); the
- *  backend already brought the window forward. Unlocked, it runs the toolbar's own New action now
+/** The tray panel's "+" (a login) or the browser extension's "+" menu (an address or files item)
+ *  asked for a new entry (`NewEntryEvent`); the backend already brought the window forward. Unlocked, it runs the toolbar's own New action now
  *  (so a dirty editor asks "Discard changes?" first). Locked or without a vault, the request waits
  *  for the next unlock, within `PENDING_NEW_ENTRY_MS`; a newer request replaces it. The pending
  *  value is only an entry type, no secret, and lives in this listener's closure. */
@@ -73,7 +73,7 @@ function toastConflict({ shortcut }: ShortcutConflictEvent): void {
 
 /**
  * The main window's backend events as UI: the clipboard clear, the tray panel's open-entry request,
- * the browser extension's new-entry request and the hotkeys that could not be registered. The conflict listener is registered BEFORE the
+ * the new-entry request of the tray panel and the browser extension and the hotkeys that could not be registered. The conflict listener is registered BEFORE the
  * backlog is taken (`shortcut_conflicts_take` empties it), so none is lost or shown twice (R12).
  * The failed-save toast lives in the session store. Returns the function that stops the listeners.
  */

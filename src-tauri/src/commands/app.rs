@@ -4,7 +4,7 @@ use crate::events::{NewEntryEvent, OpenEntryEvent, SettingsPaneEvent};
 use crate::shell::WindowOps;
 use crate::state::{AppState, EditorDirty, ShellState};
 use mypass_session::dto::AppInfo;
-use mypass_session::{ApiError, AppCore, SessionState};
+use mypass_session::{ApiError, AppCore, EntryTypeDto, SessionState};
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_specta::Event;
 
@@ -55,7 +55,9 @@ pub fn new_entry(
     for result in [windows.show(MAIN_WINDOW), windows.focus(MAIN_WINDOW)] {
         result.map_err(super::internal)?;
     }
-    Ok(Some(NewEntryEvent))
+    Ok(Some(NewEntryEvent {
+        entry_type: EntryTypeDto::Login,
+    }))
 }
 
 /// The tray panel's "+": the main window opens the editor for a new login.
@@ -287,7 +289,12 @@ mod tests {
     fn new_entry_shows_and_focuses_main_only_while_unlocked() {
         let w = open_world();
         let windows = FakeWindowOps::default();
-        assert_eq!(new_entry(&w.core, &windows).unwrap(), Some(NewEntryEvent));
+        assert_eq!(
+            new_entry(&w.core, &windows).unwrap(),
+            Some(NewEntryEvent {
+                entry_type: EntryTypeDto::Login
+            })
+        );
         let calls: Vec<_> = windows
             .calls()
             .into_iter()

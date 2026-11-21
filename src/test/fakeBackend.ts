@@ -440,7 +440,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     },
     // Like Rust: only an unlocked session asks the main window for a new login.
     appNewEntry: () => {
-      if (state.session.state === "unlocked") publish("newEntryEvent", null);
+      if (state.session.state === "unlocked") publish("newEntryEvent", { entryType: "login" });
       return null;
     },
     appOpenSettings: () => null,
