@@ -2,8 +2,8 @@
   import { api } from "../lib/api";
   import type { EntryTypeDto } from "../lib/bindings";
   import { t } from "../lib/i18n/index.svelte";
+  import { currentGroup, startNewEntry } from "../lib/new-entry";
   import { openVaultFromDialog } from "../lib/open-flow";
-  import { lockGuard } from "../lib/lock-guard";
   import { entries } from "../lib/stores/entries.svelte";
   import { navigation } from "../lib/stores/navigation.svelte";
   import { session } from "../lib/stores/session.svelte";
@@ -46,11 +46,6 @@
     { id: "kdbx", label: t("Open Existing .kdbx…") },
   ]);
 
-  /** The group a new item or group lands in: the selected group, else the backend's default. */
-  function currentGroup(): string | null {
-    return navigation.scope.kind === "group" ? navigation.scope.groupId : null;
-  }
-
   async function createItem(id: string) {
     if (id === "group") {
       onnewgroup(currentGroup());
@@ -60,12 +55,7 @@
       generatorOpen = true;
       return;
     }
-    const unchanged = lockGuard();
-    await toasts.guard(async () => {
-      const model = await api.entryNewModel(id as EntryTypeDto, currentGroup());
-      // A lock that landed meanwhile must not leave an editor behind for the next unlock.
-      if (unchanged()) navigation.requestOpenEditor(model);
-    });
+    await startNewEntry(id as EntryTypeDto);
   }
 
   async function importItem(id: string) {

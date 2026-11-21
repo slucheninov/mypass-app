@@ -1,7 +1,8 @@
 import { api } from "../api";
-import { events, type OpenEntryEvent, type ShortcutConflictEvent } from "../bindings";
+import { events, type EntryTypeDto, type NewEntryEvent, type OpenEntryEvent, type ShortcutConflictEvent } from "../bindings";
 import { t } from "../i18n/index.svelte";
 import { lockGuard } from "../lock-guard";
+import { startNewEntry } from "../new-entry";
 import { quietly } from "../unlisten";
 import { navigation } from "./navigation.svelte";
 import { session } from "./session.svelte";
@@ -33,13 +34,46 @@ async function openEntry({ id, edit }: OpenEntryEvent): Promise<void> {
   if (navigation.editModel?.id === id) navigation.select(id);
 }
 
+/** How long a new-entry request that arrived while locked waits for the unlock. Past it the user has
+ *  moved on, and an editor appearing out of nowhere after a later unlock would only surprise. */
+export const PENDING_NEW_ENTRY_MS = 120_000;
+
+/** The browser extension's "+" menu asked for a new address or files item (`NewEntryEvent`); the
+ *  backend already brought the window forward. Unlocked, it runs the toolbar's own New action now
+ *  (so a dirty editor asks "Discard changes?" first). Locked or without a vault, the request waits
+ *  for the next unlock, within `PENDING_NEW_ENTRY_MS`; a newer request replaces it. The pending
+ *  value is only an entry type, no secret, and lives in this listener's closure. */
+function newEntryBridge(): { request: (e: NewEntryEvent) => void; stop: () => void } {
+  let pending: { type: EntryTypeDto; at: number } | null = null;
+  const off = session.onChange((next, prev) => {
+    if (next !== "unlocked" || prev === "unlocked" || !pending) return;
+    const { type, at } = pending;
+    pending = null;
+    if (Date.now() - at <= PENDING_NEW_ENTRY_MS) void startNewEntry(type);
+  });
+  return {
+    request: ({ entryType }) => {
+      if (session.status.state === "unlocked") {
+        pending = null;
+        void startNewEntry(entryType);
+      } else {
+        pending = { type: entryType, at: Date.now() };
+      }
+    },
+    stop: () => {
+      pending = null;
+      off();
+    },
+  };
+}
+
 function toastConflict({ shortcut }: ShortcutConflictEvent): void {
   toasts.push("error", `${shortcut}: ${t("That shortcut is already in use")}`);
 }
 
 /**
- * The main window's backend events as UI: the clipboard clear, the tray panel's open-entry request
- * and the hotkeys that could not be registered. The conflict listener is registered BEFORE the
+ * The main window's backend events as UI: the clipboard clear, the tray panel's open-entry request,
+ * the browser extension's new-entry request and the hotkeys that could not be registered. The conflict listener is registered BEFORE the
  * backlog is taken (`shortcut_conflicts_take` empties it), so none is lost or shown twice (R12).
  * The failed-save toast lives in the session store. Returns the function that stops the listeners.
  */
@@ -57,6 +91,9 @@ export function startEventBridge(): () => void {
   };
   keep(events.clipboardClearedEvent.listen(() => toasts.push("info", t("Clipboard cleared"))));
   keep(events.openEntryEvent.listen((e) => void openEntry(e.payload)));
+  const newEntry = newEntryBridge();
+  offs.push(newEntry.stop);
+  keep(events.newEntryEvent.listen((e) => newEntry.request(e.payload)));
   void events.shortcutConflictEvent
     .listen((e) => toastConflict(e.payload))
     .then(async (off) => {
