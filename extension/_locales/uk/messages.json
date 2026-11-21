@@ -472,9 +472,6 @@
   "lockFailed": {
     "message": "Не вдалося заблокувати MyPass. Відкрийте програму й спробуйте ще раз."
   },
-  "more": {
-    "message": "Більше"
-  },
   "passwordGenerator": {
     "message": "Генератор паролів"
   },

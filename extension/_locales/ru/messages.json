@@ -472,9 +472,6 @@
   "lockFailed": {
     "message": "Не удалось заблокировать MyPass. Откройте приложение и повторите попытку."
   },
-  "more": {
-    "message": "Ещё"
-  },
   "passwordGenerator": {
     "message": "Генератор паролей"
   },

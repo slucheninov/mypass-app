@@ -476,9 +476,6 @@
   "lockFailed": {
     "message": "Could not lock MyPass. Open the app and try again."
   },
-  "more": {
-    "message": "More"
-  },
   "passwordGenerator": {
     "message": "Password generator"
   },

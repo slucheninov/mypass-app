@@ -472,9 +472,6 @@
   "lockFailed": {
     "message": "MyPass konnte nicht gesperrt werden. Öffne die App und versuche es erneut."
   },
-  "more": {
-    "message": "Mehr"
-  },
   "passwordGenerator": {
     "message": "Passwortgenerator"
   },

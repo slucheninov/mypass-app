@@ -247,20 +247,8 @@
       margin: 0 0 8px;
       padding: 0;
     }
-    #popup-menu {
-      box-sizing: border-box;
-      background: var(--mp-bg);
-      margin: -16px;
-      padding: 16px;
-      max-height: 560px;
-      overflow: auto;
-    }
-    /* The open menu replaces the page, so the popup height follows that page. */
-    #panel-shell:has(#popup-menu:not([hidden])) > :not(#popup-menu) {
-      display: none !important;
-    }
-    .popup-menu-row,
-    .popup-menu-back {
+    .plus-menu-row,
+    .plus-menu-back {
       display: flex;
       align-items: center;
       width: 100%;
@@ -277,21 +265,21 @@
       border-radius: 8px;
       cursor: pointer;
     }
-    .popup-menu-back {
+    .plus-menu-back {
       font-weight: 600;
       margin-bottom: 4px;
     }
-    .popup-menu-row:hover,
-    .popup-menu-back:hover,
-    .popup-menu-row:focus-visible,
-    .popup-menu-back:focus-visible {
+    .plus-menu-row:hover,
+    .plus-menu-back:hover,
+    .plus-menu-row:focus-visible,
+    .plus-menu-back:focus-visible {
       background: var(--mp-fill);
       outline: none;
     }
-    .popup-menu-row {
+    .plus-menu-row {
       gap: 10px;
     }
-    .popup-menu-icon {
+    .plus-menu-icon {
       width: 18px;
       height: 18px;
       display: inline-flex;
@@ -300,10 +288,10 @@
       flex-shrink: 0;
       color: var(--mp-text);
     }
-    .popup-menu-icon svg {
+    .plus-menu-icon svg {
       display: block;
     }
-    .popup-menu-drill::after {
+    .plus-menu-drill::after {
       content: "›";
       margin-left: auto;
       color: var(--mp-muted);
@@ -377,8 +365,7 @@
       background: var(--mp-fill, #f5f5f7);
       cursor: pointer;
     }
-    #category-menu,
-    #add-entry-menu {
+    #category-menu {
       position: absolute;
       z-index: 2;
       left: 0;
@@ -391,11 +378,26 @@
       padding: 4px;
     }
     #add-entry-menu {
-      left: auto;
-      right: 0;
-      width: 228px;
-      top: 36px;
+      box-sizing: border-box;
+      width: min(100%, 252px);
+      margin: 8px 0 0 auto;
       padding: 6px;
+      background: var(--mp-bg);
+      border: 1px solid var(--mp-hairline);
+      border-radius: 10px;
+    }
+    #add-entry-menu .panel-helper {
+      padding: 0 10px;
+      margin-bottom: 8px;
+    }
+    #panel-shell:has(#add-entry-menu:not([hidden])) > :not(#browser-chrome),
+    #browser-chrome:has(#add-entry-menu:not([hidden])) #category-wrap {
+      display: none;
+    }
+    .menu-separator {
+      border: 0;
+      border-top: 1px solid var(--mp-hairline);
+      margin: 6px 8px;
     }
     .category-option {
       display: block;
@@ -548,13 +550,6 @@
   <div id="panel-shell">
     <div id="browser-chrome" hidden>
       <div class="browser-tools">
-        <button id="popup-menu-btn" type="button" class="icon-btn" aria-expanded="false" aria-controls="popup-menu" data-i18n-title="more" data-i18n-aria-label="more">
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-            <circle cx="5.5" cy="12" r="1.8" fill="currentColor"></circle>
-            <circle cx="12" cy="12" r="1.8" fill="currentColor"></circle>
-            <circle cx="18.5" cy="12" r="1.8" fill="currentColor"></circle>
-          </svg>
-        </button>
         <input id="vault-search" type="search" autocomplete="off" data-i18n-placeholder="search">
         <button id="open-generator-btn" type="button" class="icon-btn" data-i18n-aria-label="passwordGenerator">
           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
@@ -566,8 +561,20 @@
             <circle cx="15.8" cy="15.8" r="1.3" fill="currentColor"></circle>
           </svg>
         </button>
-        <button id="add-entry-btn" type="button" class="icon-btn" data-i18n-aria-label="addItem">+</button>
-        <div id="add-entry-menu" hidden></div>
+        <button id="add-entry-btn" type="button" class="icon-btn" aria-expanded="false" aria-controls="add-entry-menu" data-i18n-aria-label="addItem">+</button>
+      </div>
+      <div id="add-entry-menu" hidden>
+        <div id="plus-menu-root">
+          <div id="plus-entry-actions"></div>
+          <hr class="menu-separator">
+          <button id="lock-vault-btn" type="button" class="plus-menu-row"><span class="plus-menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5zm3 8H9V7a3 3 0 0 1 6 0v3z"/></svg></span><span data-i18n="lockMyPass"></span></button>
+          <button id="plus-menu-help-btn" type="button" class="plus-menu-row plus-menu-drill"><span class="plus-menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm.1 15.4a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5zM14.2 8.3c0 1.1-.55 1.75-1.6 2.4-.65.42-.9.75-.9 1.3v.4h-1.7v-.55c0-1.1.5-1.75 1.55-2.4.6-.4 1-.75 1-1.25 0-.65-.52-1.1-1.25-1.1-.8 0-1.32.48-1.42 1.2l-1.68-.3c.25-1.7 1.6-2.7 3.2-2.7 1.9 0 3.2 1.2 3.2 3z"/></svg></span><span data-i18n="help"></span></button>
+          <p id="lock-vault-error" class="panel-helper" role="status" hidden></p>
+        </div>
+        <div id="plus-menu-help" hidden>
+          <button id="plus-menu-help-back" type="button" class="plus-menu-back" data-i18n="helpBack"></button>
+          <p class="panel-helper" data-i18n="helpText"></p>
+        </div>
       </div>
       <div id="category-wrap" class="category-wrap">
         <button id="category-btn" type="button" data-i18n="categoryFavorites"></button>
@@ -691,17 +698,7 @@
       <p id="passkey-proxy-status" class="panel-helper"></p>
       <p id="browser-manager-status" class="panel-helper"></p>
     </aside>
-    <div id="popup-menu" hidden>
-      <div id="popup-menu-root">
-        <button id="lock-vault-btn" type="button" class="popup-menu-row"><span class="popup-menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5zm3 8H9V7a3 3 0 0 1 6 0v3z"/></svg></span><span data-i18n="lockMyPass"></span></button>
-        <button id="popup-menu-help-btn" type="button" class="popup-menu-row popup-menu-drill"><span class="popup-menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm.1 15.4a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5zM14.2 8.3c0 1.1-.55 1.75-1.6 2.4-.65.42-.9.75-.9 1.3v.4h-1.7v-.55c0-1.1.5-1.75 1.55-2.4.6-.4 1-.75 1-1.25 0-.65-.52-1.1-1.25-1.1-.8 0-1.32.48-1.42 1.2l-1.68-.3c.25-1.7 1.6-2.7 3.2-2.7 1.9 0 3.2 1.2 3.2 3z"/></svg></span><span data-i18n="help"></span></button>
-        <p id="lock-vault-error" class="panel-helper" role="status" hidden></p>
-      </div>
-      <div id="popup-menu-help" hidden>
-        <button id="popup-menu-help-back" type="button" class="popup-menu-back" data-i18n="helpBack"></button>
-        <p class="panel-helper" data-i18n="helpText"></p>
-      </div>
-    </div>
+
   </div>
   <script src="shared/i18n.js"></script>
   <script src="shared/entry-visuals.js"></script>

@@ -631,18 +631,19 @@ if (typeof document !== 'undefined') {
   const passkeyPickerPanel = document.getElementById('passkey-picker-panel');
   const passkeyPickerListEl = document.getElementById('passkey-picker-list');
   const browserChrome = document.getElementById('browser-chrome');
-  const popupMenu = document.getElementById('popup-menu');
-  const popupMenuBtn = document.getElementById('popup-menu-btn');
-  const popupMenuViews = {
-    root: document.getElementById('popup-menu-root'),
-    help: document.getElementById('popup-menu-help')
-  };
   const vaultSearch = document.getElementById('vault-search');
   const categoryBtn = document.getElementById('category-btn');
   const categoryWrap = document.getElementById('category-wrap');
   const categoryMenu = document.getElementById('category-menu');
   const addEntryBtn = document.getElementById('add-entry-btn');
   const addEntryMenu = document.getElementById('add-entry-menu');
+  const plusRoot = document.getElementById('plus-menu-root');
+  const plusHelp = document.getElementById('plus-menu-help');
+  const plusActions = document.getElementById('plus-entry-actions');
+  const helpBtn = document.getElementById('plus-menu-help-btn');
+  const helpBack = document.getElementById('plus-menu-help-back');
+  const lockVaultBtn = document.getElementById('lock-vault-btn');
+  const lockErrorEl = document.getElementById('lock-vault-error');
   const openGeneratorBtn = document.getElementById('open-generator-btn');
 
   const addTotpSection = document.getElementById('add-totp-section');
@@ -698,18 +699,22 @@ if (typeof document !== 'undefined') {
 
   const PASSKEY_PANELS = ['passkey-failure', 'passkey-checking', 'passkey-save', 'passkey-replace', 'passkey-use', 'passkey-picker'];
 
-  function showMenuView(name) {
-    Object.keys(popupMenuViews).forEach((key) => {
-      popupMenuViews[key].hidden = key !== name;
-    });
+  function showPlusMenuView(help) {
+    plusRoot.hidden = help;
+    plusHelp.hidden = !help;
   }
 
-  function closePopupMenu() {
-    popupMenu.hidden = true;
-    popupMenuBtn.setAttribute('aria-expanded', 'false');
-    const lockError = document.getElementById('lock-vault-error');
-    if (lockError) lockError.hidden = true;
-    showMenuView('root');
+  function openPlusMenu() {
+    categoryMenu.hidden = true;
+    showPlusMenuView(false);
+    lockErrorEl.hidden = true;
+    addEntryMenu.hidden = false;
+    addEntryBtn.setAttribute('aria-expanded', 'true');
+  }
+
+  function closePlusMenu() {
+    addEntryMenu.hidden = true;
+    addEntryBtn.setAttribute('aria-expanded', 'false');
   }
 
   function showPanel(name) {
@@ -737,9 +742,8 @@ if (typeof document !== 'undefined') {
     addEntryBtn.hidden = !browse;
     categoryWrap.hidden = !browse;
     if (!browse) {
-      closePopupMenu();
+      closePlusMenu();
       categoryMenu.hidden = true;
-      addEntryMenu.hidden = true;
     }
     switch (name) {
       case 'prompt':
@@ -1371,8 +1375,8 @@ if (typeof document !== 'undefined') {
     });
   }
 
-  function buildAddMenu() {
-    addEntryMenu.innerHTML = '';
+  function buildAddEntryMenu() {
+    plusActions.innerHTML = '';
     const icons = {
       Login: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M14.2 3.2a6.3 6.3 0 0 0-5.9 8.3L3.2 16.6V21h4.2l1.3-1.3v-2.2h2.2l1.2-1.2a6.3 6.3 0 1 0 2.1-13.1zm1.5 5.1a1.35 1.35 0 1 1 0 2.7 1.35 1.35 0 0 1 0-2.7z"/></svg>',
       Card: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="2.2" y="5" width="19.6" height="14" rx="2.4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M2.2 9.6h19.6" stroke="currentColor" stroke-width="1.8"/></svg>',
@@ -1396,12 +1400,12 @@ if (typeof document !== 'undefined') {
       button.appendChild(icon);
       button.appendChild(label);
       button.addEventListener('click', () => openAddEntry(choice.type));
-      addEntryMenu.appendChild(button);
+      plusActions.appendChild(button);
     });
   }
 
   function openAddEntry(entryType) {
-    addEntryMenu.hidden = true;
+    closePlusMenu();
     const params = new URLSearchParams({ type: entryType });
     if (entryType === 'Login' && isSiteUrl(currentTabUrl)) params.set('url', currentTabUrl);
     const height = entryType === 'Notes' ? 640 : entryType === 'Card' ? 680 : 760;
@@ -1410,7 +1414,7 @@ if (typeof document !== 'undefined') {
 
   function openGenerator() {
     categoryMenu.hidden = true;
-    addEntryMenu.hidden = true;
+    closePlusMenu();
     const params = new URLSearchParams({ purpose: 'autofill' });
     if (isSiteUrl(currentTabUrl)) params.set('url', currentTabUrl);
     openCenteredExtensionWindow('generator.html?' + params.toString(), 420, 640);
@@ -1874,16 +1878,22 @@ if (typeof document !== 'undefined') {
 
   generatePasswordBtn.onclick = () => handleGeneratePasswordClick(currentTabUrl);
 
-  buildAddMenu();
+  buildAddEntryMenu();
   categoryBtn.addEventListener('click', () => {
-    addEntryMenu.hidden = true;
+    closePlusMenu();
     categoryMenu.hidden = !categoryMenu.hidden;
   });
   addEntryBtn.addEventListener('click', () => {
-    categoryMenu.hidden = true;
-    addEntryMenu.hidden = !addEntryMenu.hidden;
+    if (addEntryMenu.hidden) openPlusMenu();
+    else closePlusMenu();
+  });
+  addEntryMenu.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    closePlusMenu();
+    addEntryBtn.focus?.();
   });
   vaultSearch.addEventListener('input', () => {
+    closePlusMenu();
     const query = vaultSearch.value.trim();
     if (!query) {
       selectCategory(selectedCategory, { keepSearch: true });
@@ -1892,33 +1902,26 @@ if (typeof document !== 'undefined') {
     querySearch(query);
   });
   openGeneratorBtn.addEventListener('click', openGenerator);
-  popupMenuBtn.addEventListener('click', () => {
-    if (!popupMenu.hidden) {
-      closePopupMenu();
-      return;
-    }
-    categoryMenu.hidden = true;
-    addEntryMenu.hidden = true;
-    showMenuView('root');
-    popupMenu.hidden = false;
-    popupMenuBtn.setAttribute('aria-expanded', 'true');
+  helpBtn.addEventListener('click', () => {
+    showPlusMenuView(true);
+    helpBack.focus?.();
   });
-  document.getElementById('popup-menu-help-btn').addEventListener('click', () => showMenuView('help'));
-  document.getElementById('popup-menu-help-back').addEventListener('click', () => showMenuView('root'));
-  document.getElementById('lock-vault-btn').addEventListener('click', () => {
-    const button = document.getElementById('lock-vault-btn');
-    const el = document.getElementById('lock-vault-error');
-    button.disabled = true;
-    el.hidden = true;
+  helpBack.addEventListener('click', () => {
+    showPlusMenuView(false);
+    helpBtn.focus?.();
+  });
+  lockVaultBtn.addEventListener('click', () => {
+    lockVaultBtn.disabled = true;
+    lockErrorEl.hidden = true;
     chrome.runtime.sendMessage({ type: 'lockVault' }, (result) => {
       void chrome.runtime.lastError;
-      button.disabled = false;
-      if (result && (result.type === 'ok' || result.type === 'locked')) {
+      lockVaultBtn.disabled = false;
+      if (result?.type === 'ok' || result?.type === 'locked') {
         presentLockedPanel();
         return;
       }
-      el.hidden = false;
-      el.textContent = result && result.type === 'pairingRequired'
+      lockErrorEl.hidden = false;
+      lockErrorEl.textContent = result?.type === 'pairingRequired'
         ? i18n.t('connectBrowserFirst')
         : i18n.t('lockFailed');
     });
