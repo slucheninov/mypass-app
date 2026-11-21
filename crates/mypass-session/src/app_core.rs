@@ -2168,6 +2168,57 @@ mod tests {
     }
 
     #[test]
+    fn address_copy_and_reveal_accept_only_known_fields() {
+        let f = fx_open();
+        let root = Uuid::parse_str(&f.root()).unwrap();
+        let mut model = new_model(EntryTypeDto::Address, root);
+        model.address.as_mut().unwrap().city = "Springfield".into();
+        let id = f.core.entry_save(model).unwrap();
+
+        let city = FieldRef::Address {
+            name: "city".into(),
+        };
+        f.core.entry_copy(&id, city.clone()).unwrap();
+        assert_eq!(f.fake.clipboard.contents().as_deref(), Some("Springfield"));
+        assert_eq!(f.core.entry_reveal(&id, city).unwrap(), "Springfield");
+
+        let unknown = FieldRef::Address {
+            name: "unknown".into(),
+        };
+        assert_eq!(
+            code(f.core.entry_copy(&id, unknown.clone())),
+            ErrorCode::InvalidInput
+        );
+        assert_eq!(
+            code(f.core.entry_reveal(&id, unknown)),
+            ErrorCode::InvalidInput
+        );
+        assert_eq!(f.fake.clipboard.contents().as_deref(), Some("Springfield"));
+    }
+
+    #[test]
+    fn entry_copy_can_select_a_secondary_url() {
+        let f = fx_open();
+        let root = Uuid::parse_str(&f.root()).unwrap();
+        let mut model = new_model(EntryTypeDto::Login, root);
+        model.title = "Sites".into();
+        model.urls = vec!["https://first.test".into(), "https://second.test".into()];
+        let id = f.core.entry_save(model).unwrap();
+
+        f.core
+            .entry_copy(&id, FieldRef::UrlAt { index: 1 })
+            .unwrap();
+        assert_eq!(
+            f.fake.clipboard.contents().as_deref(),
+            Some("https://second.test")
+        );
+        assert_eq!(
+            code(f.core.entry_copy(&id, FieldRef::UrlAt { index: 2 })),
+            ErrorCode::NotFound
+        );
+    }
+
+    #[test]
     fn entry_copy_clears_after_30s_via_manual_scheduler() {
         let f = fx_open();
         let id = f.login("Mail", "hunter2");

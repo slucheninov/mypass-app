@@ -13,6 +13,7 @@
   import FieldRow from "../lib/ui/FieldRow.svelte";
   import IconButton from "../lib/ui/IconButton.svelte";
   import type { MenuItem } from "../lib/ui/menu";
+  import CopyFieldValue from "./CopyFieldValue.svelte";
   import { copyField } from "./detail-actions";
 
   type Props = {
@@ -30,8 +31,10 @@
     largeTypeAfterReveal?: boolean;
     copyable?: boolean;
     onlargetype: (field: FieldRef) => void;
-    /** Custom value markup (links, a one-time code); replaces `text` and the mask. */
+    /** Non-interactive value markup (such as a one-time code); replaces `text` and the mask. */
     children?: Snippet;
+    /** A value with its own controls, such as a list of websites with separate open links. */
+    valueWithActions?: Snippet;
     /** Extra buttons after Copy. */
     extra?: Snippet;
   };
@@ -46,6 +49,7 @@
     copyable = true,
     onlargetype,
     children,
+    valueWithActions,
     extra,
   }: Props = $props();
 
@@ -88,16 +92,26 @@
   }
 </script>
 
+{#snippet value()}
+  {#if children}
+    {@render children()}
+  {:else if secret}
+    <span class:mono={shown !== null}>{shown ?? mask}</span>
+  {:else}
+    {text}
+  {/if}
+{/snippet}
+
 <!-- The menu is an extra path to actions the buttons already offer, so the row itself is not a widget. -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_static_element_interactions -->
 <div class="line" role="group" aria-label={label} {oncontextmenu} {onkeydown}>
   <FieldRow {label}>
-    {#if children}
-      {@render children()}
-    {:else if secret}
-      <span class="secret" class:mono={shown !== null}>{shown ?? mask}</span>
+    {#if valueWithActions}
+      {@render valueWithActions()}
+    {:else if copyable}
+      <CopyFieldValue onclick={copy}>{@render value()}</CopyFieldValue>
     {:else}
-      {text}
+      {@render value()}
     {/if}
     {#snippet actions()}
       {#if secret}

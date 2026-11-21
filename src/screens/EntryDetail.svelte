@@ -212,7 +212,7 @@
       {#if detail.entryType === "login"}
         <LoginDetail {detail} {group} onlargetype={showLargeType} onchangewebsite={changeWebsite} />
       {:else if detail.entryType === "address" && detail.address}
-        <AddressDetail address={detail.address} />
+        <AddressDetail entryId={id} address={detail.address} onlargetype={showLargeType} />
       {:else if detail.entryType === "card" && detail.card}
         <CardDetail entryId={id} card={detail.card} {group} onlargetype={showLargeType} />
       {/if}

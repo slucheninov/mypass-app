@@ -94,6 +94,7 @@
   "Copied": "Copied",
   "Copied.": "Copied.",
   "Copied. The clipboard clears in %lld s.": "Copied. The clipboard clears in {0} s.",
+  "Click to copy": "Click to copy",
   "Copy": "Copy",
   "Copy password": "Copy password",
   "Copy username": "Copy username",

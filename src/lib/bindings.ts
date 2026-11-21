@@ -727,7 +727,7 @@ export type ErrorCode = "locked" | "noVault" | "wrongPassword" | "alreadyExists"
 "retainedCopyRefused" | "internal";
 
 /**  A single field to reveal or copy. `Totp` resolves to the current code. */
-export type FieldRef = { kind: "username" } | { kind: "password" } | { kind: "url" } | { kind: "notesBody" } | { kind: "cardNumber" } | { kind: "cardCvv" } | { kind: "totp" } | { kind: "custom"; key: string };
+export type FieldRef = { kind: "username" } | { kind: "password" } | { kind: "url" } | { kind: "urlAt"; index: number } | { kind: "notesBody" } | { kind: "cardNumber" } | { kind: "cardCvv" } | { kind: "address"; name: string } | { kind: "totp" } | { kind: "custom"; key: string };
 
 /**  Probe consumes a grant and returns a fresh grant for the user's strategy decision. */
 export type FolderProbe = FolderProbe_Serialize | FolderProbe_Deserialize;

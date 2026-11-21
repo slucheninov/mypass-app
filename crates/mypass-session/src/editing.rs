@@ -629,9 +629,21 @@ fn plain_value(entry: &Entry, field: &FieldRef) -> Result<Zeroizing<String>, Ses
         FieldRef::Url => Ok(Zeroizing::new(
             entry.urls().into_iter().next().unwrap_or_default(),
         )),
+        FieldRef::UrlAt { index } => entry
+            .urls()
+            .into_iter()
+            .nth(*index as usize)
+            .map(Zeroizing::new)
+            .ok_or(SessionError::NotFound),
         FieldRef::NotesBody => plain(notes_key(entry.entry_type())),
         FieldRef::CardNumber => plain(CARD_NUMBER),
         FieldRef::CardCvv => plain(CARD_CVV),
+        FieldRef::Address { name } => {
+            if !ADDRESS_FIELDS.contains(&name.as_str()) {
+                return Err(SessionError::InvalidInput("unknown address field".into()));
+            }
+            plain(&format!("{ADDRESS_PREFIX}{name}"))
+        }
         FieldRef::Totp => Err(SessionError::InvalidInput(
             "a one-time code is computed from the current entry only".into(),
         )),

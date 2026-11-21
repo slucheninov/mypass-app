@@ -1,12 +1,15 @@
 <script lang="ts">
-  // The non-empty fields of an address. There is no backend copy for these fields, so the rows
-  // are plain selectable text.
-  import type { AddressDto } from "../lib/bindings";
+  import type { AddressDto, FieldRef } from "../lib/bindings";
   import { t } from "../lib/i18n/index.svelte";
-  import FieldRow from "../lib/ui/FieldRow.svelte";
+  import DetailField from "./DetailField.svelte";
 
-  let { address }: { address: AddressDto } = $props();
+  let { address, entryId, onlargetype }: {
+    address: AddressDto;
+    entryId: string;
+    onlargetype: (field: FieldRef) => void;
+  } = $props();
 
+  const countryKey = $derived(address.countryName.trim() ? "countryName" : "countryCode");
   const rows = $derived(
     [
       { key: "label", label: t("Label"), value: address.label },
@@ -19,7 +22,7 @@
       { key: "city", label: t("City"), value: address.city },
       { key: "region", label: t("Region"), value: address.region },
       { key: "postalCode", label: t("Postal Code"), value: address.postalCode },
-      { key: "country", label: t("Country"), value: address.countryName || address.countryCode },
+      { key: countryKey, label: t("Country"), value: address[countryKey] },
       { key: "phone", label: t("Phone"), value: address.phone },
       { key: "email", label: t("Email"), value: address.email },
     ].filter((r) => r.value.trim() !== ""),
@@ -27,7 +30,5 @@
 </script>
 
 {#each rows as row (row.key)}
-  <div role="group" aria-label={row.label}>
-    <FieldRow label={row.label}>{row.value}</FieldRow>
-  </div>
+  <DetailField label={row.label} {entryId} field={{ kind: "address", name: row.key }} text={row.value} {onlargetype} />
 {/each}

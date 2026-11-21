@@ -556,9 +556,11 @@ pub enum FieldRef {
     Username,
     Password,
     Url,
+    UrlAt { index: u32 },
     NotesBody,
     CardNumber,
     CardCvv,
+    Address { name: String },
     Totp,
     Custom { key: String },
 }

@@ -94,6 +94,7 @@
   "Copied": "Kopiert",
   "Copied.": "Kopiert.",
   "Copied. The clipboard clears in %lld s.": "Kopiert. Die Zwischenablage wird in {0} s geleert.",
+  "Click to copy": "Zum Kopieren klicken",
   "Copy": "Kopieren",
   "Copy password": "Passwort kopieren",
   "Copy username": "Benutzernamen kopieren",
