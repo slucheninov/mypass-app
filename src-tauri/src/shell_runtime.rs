@@ -468,11 +468,10 @@ fn apply_startup_ui(handle: &AppHandle, core: &Arc<AppCore>, settings: &Settings
     if let Some(gate) = handle.try_state::<Arc<ConflictGate>>() {
         emit_conflicts(handle, gate.submit(hotkeys::register_all(handle, settings)));
     }
-    let show = !cfg!(windows)
-        || crate::windows_boot::show_main_on_start(
-            &std::env::args().collect::<Vec<_>>(),
-            tray_visible(handle),
-        );
+    // The Dock can reopen the app on macOS. On Windows a hidden launch needs a tray icon.
+    let can_reopen = !cfg!(windows) || tray_visible(handle);
+    let show =
+        crate::windows_boot::show_main_on_start(&std::env::args().collect::<Vec<_>>(), can_reopen);
     if show {
         if let Some(shell) = handle.try_state::<ShellState>() {
             let _ = show_main(shell.windows.as_ref());

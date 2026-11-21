@@ -460,6 +460,7 @@ fn start_bridge_with_kind(
     let registration = Arc::new(Mutex::new(None));
     let thread = {
         let registrar = Arc::clone(&platform.host_registrar);
+        let paths = core.paths().clone();
         let slot = Arc::clone(&registration);
         std::thread::Builder::new()
             .name("mypass-host-register".into())
@@ -467,6 +468,9 @@ fn start_bridge_with_kind(
                 let suppressed = lock(&registration_gate);
                 if !*suppressed {
                     *lock(&slot) = register_hosts(registrar.as_ref(), bundled_host.as_deref());
+                    if let Some(target) = mypass_platform::app_launch::current_app_target() {
+                        let _ = mypass_platform::app_launch::write_app_location(&paths, &target);
+                    }
                 }
                 drop(suppressed);
                 events.bridge_changed();

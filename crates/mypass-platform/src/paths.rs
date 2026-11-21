@@ -158,7 +158,13 @@ pub struct AppPaths {
     layout: Layout,
 }
 
+pub(crate) const APP_LOCATION_FILE: &str = "app-location.json";
+
 impl AppPaths {
+    pub fn app_location_file(&self) -> PathBuf {
+        self.host_dir.join(APP_LOCATION_FILE)
+    }
+
     /// The macOS layout below `home` (the one constructor tests use over a temporary folder).
     /// `config_dir` and `data_dir` are both `<home>/Library/Application Support/com.mypass.app`.
     pub fn macos(home: &Path) -> Self {
