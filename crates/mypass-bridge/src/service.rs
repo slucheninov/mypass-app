@@ -250,7 +250,7 @@ impl BridgeService {
             Request::UnlockWithDevice { .. } => session_ops::unlock_with_device(ctx),
             Request::GetUnlockOptions { .. } => session_ops::get_unlock_options(ctx),
             Request::LockVault { .. } => session_ops::lock_vault(ctx),
-            Request::OpenApp { .. } => session_ops::open_app(ctx),
+            Request::OpenApp { new_entry, .. } => session_ops::open_app(ctx, *new_entry),
             Request::OpenBrowserSettings { .. } => session_ops::open_browser_settings(ctx),
             Request::ReportBrowserDiagnostics {
                 report, pairing, ..

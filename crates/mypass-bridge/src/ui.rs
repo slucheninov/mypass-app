@@ -8,6 +8,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::pairing::PairingChallenge;
+use crate::protocol::NewEntryKind;
 
 /// The complete UI surface of the bridge. Passkey ceremonies need no UI call of their own (the
 /// consent is a click in the extension popup); only the toggle reaches the app's windows.
@@ -19,6 +20,9 @@ pub trait BridgeUi: Send + Sync {
     fn save_totp_proposal(&self, id: &str, url: &str, entry_id: Option<Uuid>);
     fn unlock_requested(&self);
     fn open_app_requested(&self);
+    /// Like `open_app_requested`, and the main window should start a new entry of `kind` (as if
+    /// the user chose it from its "+" menu).
+    fn new_entry_requested(&self, kind: NewEntryKind);
     fn open_browser_settings_requested(&self);
     fn credential_filled(&self, id: Uuid);
     /// The extension changed the app-side passkey toggle (`PasskeyService`, only on a real

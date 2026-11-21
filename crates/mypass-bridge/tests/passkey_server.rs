@@ -25,7 +25,7 @@ use mypass_bridge::diagnostics::DiagnosticsStore;
 use mypass_bridge::endpoint::{generate_token, new_nonce, verify_proof, EndpointStore, Handshake};
 use mypass_bridge::pairing::{PairedBrowserStore, PairingChallenge, PairingManager, StartOutcome};
 use mypass_bridge::passkeys::{PasskeyContext, PasskeyHandler, PasskeyService};
-use mypass_bridge::protocol::{Request, Response};
+use mypass_bridge::protocol::{NewEntryKind, Request, Response};
 use mypass_bridge::server::{Handler, LoopbackServer, ServerConfig};
 use mypass_bridge::service::{BridgeDeps, BridgeService};
 use mypass_bridge::ui::{BridgeUi, ProposalStore};
@@ -79,6 +79,7 @@ impl BridgeUi for QuietUi {
     fn save_totp_proposal(&self, _id: &str, _url: &str, _entry_id: Option<Uuid>) {}
     fn unlock_requested(&self) {}
     fn open_app_requested(&self) {}
+    fn new_entry_requested(&self, _kind: NewEntryKind) {}
     fn open_browser_settings_requested(&self) {}
     fn credential_filled(&self, _id: Uuid) {}
 }

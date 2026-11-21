@@ -136,16 +136,17 @@ pub fn commands() -> Commands<tauri::Wry> {
 /// bindings exporter go through it, so the generated TypeScript can never drift from the app.
 pub fn specta_builder() -> Builder<tauri::Wry> {
     use events::{
-        BridgeChangedEvent, ClipboardClearedEvent, OpenEntryEvent, PairingChallengeEvent,
-        ProposalEvent, SaveStateChanged, SessionChanged, SettingsChanged, SettingsPaneEvent,
-        ShortcutConflictEvent, StorageStatusChanged, SyncStatusChanged, UnlockRequestedEvent,
-        UpdateChanged, VaultChanged,
+        BridgeChangedEvent, ClipboardClearedEvent, NewEntryEvent, OpenEntryEvent,
+        PairingChallengeEvent, ProposalEvent, SaveStateChanged, SessionChanged, SettingsChanged,
+        SettingsPaneEvent, ShortcutConflictEvent, StorageStatusChanged, SyncStatusChanged,
+        UnlockRequestedEvent, UpdateChanged, VaultChanged,
     };
     Builder::<tauri::Wry>::new()
         .commands(commands())
         .events(collect_events![
             BridgeChangedEvent,
             ClipboardClearedEvent,
+            NewEntryEvent,
             OpenEntryEvent,
             PairingChallengeEvent,
             ProposalEvent,
@@ -415,6 +416,7 @@ mod tests {
             "shortcut-conflict-event"
         );
         assert_eq!(events::OpenEntryEvent::NAME, "open-entry-event");
+        assert_eq!(events::NewEntryEvent::NAME, "new-entry-event");
         assert_eq!(
             events::PairingChallengeEvent::NAME,
             "pairing-challenge-event"

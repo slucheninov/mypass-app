@@ -145,6 +145,7 @@ export const commands = {
 export const events = {
 	bridgeChangedEvent: makeEvent<BridgeChangedEvent, BridgeChangedEvent>("bridge-changed-event"),
 	clipboardClearedEvent: makeEvent<ClipboardClearedEvent, ClipboardClearedEvent>("clipboard-cleared-event"),
+	newEntryEvent: makeEvent<NewEntryEvent, NewEntryEvent>("new-entry-event"),
 	openEntryEvent: makeEvent<OpenEntryEvent, OpenEntryEvent>("open-entry-event"),
 	pairingChallengeEvent: makeEvent<PairingChallengeEvent_Serialize, PairingChallengeEvent_Deserialize>("pairing-challenge-event"),
 	proposalEvent: makeEvent<ProposalEvent_Serialize, ProposalEvent_Deserialize>("proposal-event"),
@@ -921,6 +922,16 @@ export type LockReason = "manual" | "idle" | "sleep" | "screenLock" | "hotkey" |
 export type LoginItemStatus = "enabled" | "disabled" | "requiresApproval" | "notFound" | "unsupported";
 
 export type MigrationStrategy = "seedRemote" | "merge" | "adoptRemote" | "overwriteRemote";
+
+/**
+ *  The browser extension asked the main window to start a new entry of `entry_type` (only the
+ *  kinds the bridge cannot create itself: an address or a files item). The main window runs its
+ *  own "+" menu action, right away when unlocked, otherwise after the next unlock (if that comes
+ *  soon). Sent to the main window only.
+ */
+export type NewEntryEvent = {
+	entryType: EntryTypeDto,
+};
 
 /**  Why device unlock cannot be offered right now. */
 export type OfferBlock = 
