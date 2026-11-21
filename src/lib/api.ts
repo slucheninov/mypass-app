@@ -169,6 +169,7 @@ export const api = {
   syncDisplacedStatus: wrap(commands.syncDisplacedStatus),
   syncNow: wrap(commands.syncNow),
   syncStatus: wrap(commands.syncStatus),
+  traySearch: wrap(commands.traySearch),
   vaultCreate: wrap(commands.vaultCreate),
   vaultFindFiles: wrap(commands.vaultFindFiles),
   vaultForget: wrap(commands.vaultForget),

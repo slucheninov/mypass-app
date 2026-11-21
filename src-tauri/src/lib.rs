@@ -38,7 +38,7 @@ fn app_context() -> tauri::Context<tauri::Wry> {
 /// Every command, in one place (the tests read their names from here).
 pub fn commands() -> Commands<tauri::Wry> {
     use commands::{app, attachment, backup, browser, draft, entry, generator, group, import};
-    use commands::{device, platform, settings, sidebar, sync, update, vault};
+    use commands::{device, platform, settings, sidebar, sync, tray, update, vault};
     collect_commands![
         app::app_info,
         app::app_new_entry,
@@ -118,6 +118,7 @@ pub fn commands() -> Commands<tauri::Wry> {
         sync::sync_displaced_status,
         sync::sync_now,
         sync::sync_status,
+        tray::tray_search,
         vault::vault_create,
         vault::vault_find_files,
         vault::vault_forget,
@@ -317,7 +318,7 @@ mod tests {
 
     #[test]
     fn command_names_follow_domain_verb_convention() {
-        const DOMAINS: [&str; 17] = [
+        const DOMAINS: [&str; 18] = [
             "vault",
             "entry",
             "group",
@@ -335,6 +336,7 @@ mod tests {
             "sync",
             "device",
             "update",
+            "tray",
         ];
         let names = command_names();
         assert!(!names.is_empty());

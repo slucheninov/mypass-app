@@ -7,7 +7,7 @@
   // the session and to a hide.
   import { onMount } from "svelte";
   import { api } from "../lib/api";
-  import { events, type EntryQuery, type EntrySummary } from "../lib/bindings";
+  import { events, type EntrySummary } from "../lib/bindings";
   import { t } from "../lib/i18n/index.svelte";
   import { lockGuard } from "../lib/lock-guard";
   import { platform } from "../lib/platform.svelte";
@@ -27,8 +27,6 @@
   import TrayUpdateRow from "./TrayUpdateRow.svelte";
 
   const RECENT_LIMIT = 5;
-  /** A search lists at most this many matches; the main window has the full list. */
-  const RESULT_LIMIT = 50;
   const SEARCH_DELAY_MS = 120;
 
   let recents = $state<EntrySummary[]>([]);
@@ -66,8 +64,9 @@
     searchTimer = null;
   }
 
-  /** Runs the search for the current text: title, user name, websites and the other visible
-   *  fields, through the same backend query as the main window's search field. */
+  /** Runs the search for the current text through `tray_search`: the main window's matching
+   *  (title, user name, websites, the other visible fields) over the live entries only, never the
+   *  recycle bin, at most 50 (the main window has the full list). */
   async function runSearch(): Promise<void> {
     stopSearchTimer();
     const text = query.trim();
@@ -77,15 +76,9 @@
       return;
     }
     const unchanged = lockGuard();
-    const request: EntryQuery = {
-      scope: { kind: "category", category: "all" },
-      search: text,
-      sort: "title",
-      order: "ascending",
-    };
     try {
-      const list = await api.entryList(request);
-      if (mine === searches && unchanged()) results = list.slice(0, RESULT_LIMIT);
+      const list = await api.traySearch(text);
+      if (mine === searches && unchanged()) results = list;
     } catch (e) {
       if (mine === searches && unchanged()) toasts.reportError(e);
     }

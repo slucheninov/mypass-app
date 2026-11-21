@@ -116,9 +116,10 @@ describe("tray panel, unlocked list", () => {
     expect(list.textContent).not.toContain(FIXTURE_LOGIN_PASSWORD);
   });
 
-  it("the_panel_fetches_the_entry_list_only_to_search", async () => {
+  it("the_panel_never_fetches_the_general_entry_list", async () => {
     const { fake } = await unlockedTray();
     expect(calls(fake, "entryList")).toHaveLength(0);
+    expect(calls(fake, "traySearch")).toHaveLength(0);
     expect(calls(fake, "sidebarGet")).toHaveLength(0);
   });
 
@@ -413,15 +414,14 @@ describe("tray panel, hide without visibilitychange", () => {
 describe("tray panel, search", () => {
   const results = () => screen.findByRole("list", { name: "Search results" });
 
-  it("typing_filters_by_title_user_name_and_website_through_entry_list", async () => {
+  it("typing_filters_by_title_user_name_and_website_through_tray_search", async () => {
     const { fake, user } = await unlockedTray();
     const search = screen.getByRole("searchbox", { name: "Search" });
     await user.type(search, "lab");
     let list = await results();
     await waitFor(() => expect(within(list).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["GitLab"]));
-    expect(calls(fake, "entryList").at(-1)?.args).toEqual({
-      query: { scope: { kind: "category", category: "all" }, search: "lab", sort: "title", order: "ascending" },
-    });
+    expect(calls(fake, "traySearch").at(-1)?.args).toEqual({ query: "lab" });
+    expect(calls(fake, "entryList")).toHaveLength(0);
     await user.clear(search);
     await user.type(search, "octo");
     list = await results();

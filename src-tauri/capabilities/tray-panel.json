@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "tray-panel",
-  "description": "Permissions of the tray panel: events and only the app commands used by its compact UI. The tray and its menus are built from Rust.",
+  "description": "Permissions of the tray panel: events and only the app commands used by its compact UI. It searches through tray_search (never the recycle bin), not entry_list. The tray and its menus are built from Rust.",
   "windows": ["tray-panel"],
   "permissions": [
     "core:event:default",
@@ -15,13 +15,13 @@
     "allow-device-unlock-status",
     "allow-entry-copy",
     "allow-entry-get",
-    "allow-entry-list",
     "allow-entry-recent",
     "allow-entry-reveal",
     "allow-entry-totp",
     "allow-entry-touch",
     "allow-platform-keyboard-layout",
     "allow-settings-get",
+    "allow-tray-search",
     "allow-update-open-release",
     "allow-update-status",
     "allow-vault-lock",
