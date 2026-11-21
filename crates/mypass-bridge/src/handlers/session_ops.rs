@@ -16,7 +16,7 @@ use super::text::{
     MAX_USERNAME_CHARS,
 };
 use crate::pairing::StartOutcome;
-use crate::protocol::{BrowserDiagnosticsReport, Response, WirePassword};
+use crate::protocol::{BrowserDiagnosticsReport, NewEntryKind, Response, WirePassword};
 use crate::service::Ctx;
 use crate::ui::Proposal;
 use crate::unlock::{PasswordAttempt, UnlockFailure};
@@ -207,8 +207,11 @@ pub(crate) fn lock_vault(ctx: &Ctx<'_>) -> Response {
     Response::Acknowledged
 }
 
-pub(crate) fn open_app(ctx: &Ctx<'_>) -> Response {
-    ctx.deps.ui.open_app_requested();
+pub(crate) fn open_app(ctx: &Ctx<'_>, new_entry: Option<NewEntryKind>) -> Response {
+    match new_entry {
+        None => ctx.deps.ui.open_app_requested(),
+        Some(kind) => ctx.deps.ui.new_entry_requested(kind),
+    }
     Response::Acknowledged
 }
 
@@ -511,6 +514,49 @@ mod tests {
         assert!(f.ui.calls().is_empty());
         assert_eq!(ask(&f, "openApp"), Response::Acknowledged);
         assert_eq!(f.ui.calls(), ["open_app_requested"]);
+    }
+
+    #[test]
+    fn open_app_with_new_entry_asks_the_ui_for_that_entry_kind_even_while_locked() {
+        let open = |kind, pairing: Option<String>| Request::OpenApp {
+            token: String::new(),
+            new_entry: Some(kind),
+            pairing,
+        };
+        let f = fx();
+        f.session.lock(LockReason::Manual);
+        // Unpaired: refused before the UI hears of it.
+        assert_eq!(
+            f.svc.handle(open(NewEntryKind::Address, None)),
+            Response::PairingRequired
+        );
+        assert!(f.ui.calls().is_empty());
+        // Paired and locked: answered, the window comes forward with the request.
+        assert_eq!(
+            f.svc
+                .handle(open(NewEntryKind::Address, Some(f.secret.clone()))),
+            Response::Acknowledged
+        );
+        assert_eq!(
+            f.svc
+                .handle(open(NewEntryKind::Files, Some(f.secret.clone()))),
+            Response::Acknowledged
+        );
+        assert_eq!(
+            f.ui.details(),
+            ["new_entry_requested Address", "new_entry_requested Files"]
+        );
+        // Without `newEntry` only the window is shown.
+        assert_eq!(ask(&f, "openApp"), Response::Acknowledged);
+        assert_eq!(f.ui.calls().last().unwrap(), "open_app_requested");
+        // Unlocked: the same.
+        let f = fx();
+        assert_eq!(
+            f.svc
+                .handle(open(NewEntryKind::Files, Some(f.secret.clone()))),
+            Response::Acknowledged
+        );
+        assert_eq!(f.ui.details(), ["new_entry_requested Files"]);
     }
 
     #[test]

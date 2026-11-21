@@ -926,10 +926,14 @@ export type LoginItemStatus = "enabled" | "disabled" | "requiresApproval" | "not
 export type MigrationStrategy = "seedRemote" | "merge" | "adoptRemote" | "overwriteRemote";
 
 /**
- *  The main window should open the editor for a new login (the tray panel's "+"). Sent to the main
- *  window only; it carries nothing, the main window builds the new item itself.
+ *  The browser extension asked the main window to start a new entry of `entry_type` (only the
+ *  kinds the bridge cannot create itself: an address or a files item). The main window runs its
+ *  own "+" menu action, right away when unlocked, otherwise after the next unlock (if that comes
+ *  soon). Sent to the main window only.
  */
-export type NewEntryEvent = null;
+export type NewEntryEvent = {
+	entryType: EntryTypeDto,
+};
 
 /**  Why device unlock cannot be offered right now. */
 export type OfferBlock = 

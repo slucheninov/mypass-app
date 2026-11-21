@@ -1,12 +1,23 @@
 import { screen, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { PENDING_NEW_ENTRY_MS } from "../lib/stores/events";
 import { navigation } from "../lib/stores/navigation.svelte";
 import { toasts } from "../lib/stores/toasts.svelte";
 import { createFakeBackend, apiError } from "../test/fakeBackend";
+import { FIXTURE_MASTER_PASSWORD } from "../test/fixtures";
 import { calls, renderMainApp } from "../test/mainApp";
 
-afterEach(() => navigation.reset());
+afterEach(() => {
+  navigation.reset();
+  vi.restoreAllMocks();
+});
+
+async function unlock(user: ReturnType<typeof userEvent.setup>) {
+  await user.type(await screen.findByLabelText("Master password"), FIXTURE_MASTER_PASSWORD);
+  await user.click(screen.getByRole("button", { name: "Unlock" }));
+  await screen.findByRole("listbox");
+}
 
 async function mainApp(session: "unlocked" | "locked" = "unlocked") {
   const fake = createFakeBackend({ session });
@@ -117,6 +128,83 @@ describe("main window event bridge", () => {
     await user.click(within(dialog).getByRole("button", { name: "Discard" }));
     await waitFor(() => expect(navigation.editModel?.id).toBe("e-gitlab"));
     expect(navigation.selectedId).toBe("e-gitlab");
+  });
+
+  it.each(["address", "files"] as const)("new_entry_event_opens_a_new_%s_editor_like_the_toolbar", async (entryType) => {
+    const { fake } = await mainApp();
+    await fake.emit("newEntryEvent", { entryType });
+    await waitFor(() => expect(navigation.presentation).not.toBe("browse"));
+    expect(navigation.editModel?.entryType).toBe(entryType);
+    expect(navigation.editModel?.id).toBeNull();
+    expect(calls(fake, "entryNewModel").map((c) => c.args)).toEqual([{ entryType, groupId: null }]);
+  });
+
+  it("new_entry_event_lands_in_the_selected_group_like_the_toolbar", async () => {
+    const { fake } = await mainApp();
+    navigation.setScope({ kind: "group", groupId: "group-work" });
+    await fake.emit("newEntryEvent", { entryType: "files" });
+    await waitFor(() => expect(navigation.editModel?.entryType).toBe("files"));
+    expect(calls(fake, "entryNewModel")[0]?.args).toEqual({ entryType: "files", groupId: "group-work" });
+  });
+
+  it("new_entry_event_over_a_dirty_editor_asks_before_replacing_it", async () => {
+    const user = userEvent.setup();
+    const { fake } = await mainApp();
+    await fake.emit("openEntryEvent", { id: "e-github", edit: true });
+    await waitFor(() => expect(navigation.editModel?.id).toBe("e-github"));
+    await user.type(await screen.findByRole("textbox", { name: "Title" }), " changed");
+    await fake.emit("newEntryEvent", { entryType: "address" });
+    const dialog = await screen.findByRole("dialog", { name: "Discard changes?" });
+    expect(navigation.editModel?.id).toBe("e-github");
+    await user.click(within(dialog).getByRole("button", { name: "Keep editing" }));
+    expect(navigation.editModel?.id).toBe("e-github");
+    expect((screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toContain("changed");
+    // Asked again, Discard opens the new address.
+    await fake.emit("newEntryEvent", { entryType: "address" });
+    await user.click(within(await screen.findByRole("dialog", { name: "Discard changes?" })).getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(navigation.editModel?.entryType).toBe("address"));
+    expect(navigation.editModel?.id).toBeNull();
+  });
+
+  it("new_entry_event_while_locked_opens_the_editor_after_the_unlock", async () => {
+    const user = userEvent.setup();
+    const { fake } = await mainApp("locked");
+    await fake.emit("newEntryEvent", { entryType: "address" });
+    // The newest request wins.
+    await fake.emit("newEntryEvent", { entryType: "files" });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(calls(fake, "entryNewModel")).toHaveLength(0);
+    expect(screen.getByTestId("unlock-screen")).toBeTruthy();
+    await unlock(user);
+    await waitFor(() => expect(navigation.editModel?.entryType).toBe("files"));
+    expect(calls(fake, "entryNewModel")).toHaveLength(1);
+  });
+
+  it("new_entry_event_while_locked_is_dropped_after_its_wait_runs_out", async () => {
+    const user = userEvent.setup();
+    const { fake } = await mainApp("locked");
+    const start = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(start);
+    await fake.emit("newEntryEvent", { entryType: "files" });
+    now.mockReturnValue(start + PENDING_NEW_ENTRY_MS + 1);
+    await unlock(user);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(calls(fake, "entryNewModel")).toHaveLength(0);
+    expect(navigation.presentation).toBe("browse");
+  });
+
+  it("a_pending_new_entry_runs_once_and_not_again_on_a_later_unlock", async () => {
+    const user = userEvent.setup();
+    const { fake } = await mainApp("locked");
+    await fake.emit("newEntryEvent", { entryType: "address" });
+    await unlock(user);
+    await waitFor(() => expect(navigation.editModel?.entryType).toBe("address"));
+    await fake.handlers.vaultLock({});
+    await screen.findByTestId("unlock-screen");
+    await unlock(user);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(calls(fake, "entryNewModel")).toHaveLength(1);
+    expect(navigation.presentation).toBe("browse");
   });
 
   it("the_conflict_listener_is_registered_before_the_backlog_is_taken", async () => {

@@ -401,6 +401,12 @@
   "newNote": {
     "message": "New note"
   },
+  "newAddress": {
+    "message": "New address"
+  },
+  "newFile": {
+    "message": "New file"
+  },
   "totpInvalid": {
     "message": "Enter a valid authenticator URL or secret key"
   },
@@ -482,6 +488,9 @@
   },
   "addItem": {
     "message": "Add item"
+  },
+  "moreActions": {
+    "message": "More"
   },
   "sendCode": {
     "message": "Send"

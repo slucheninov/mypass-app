@@ -2,6 +2,9 @@ const NATIVE_HOST_NAME = "com.mypass.chromehost";
 const PAIRING_STORAGE_KEY = "pairingSecret";
 const PAIRING_STARTED_AT_KEY = "pairingStartedAt";
 let pendingPairingStart = null;
+// The entry kinds `openApp` may ask the app's main window to start (`newEntry`).
+const OPEN_APP_NEW_ENTRY_KINDS = Object.freeze(["Address", "Files"]);
+
 const knownTypes = [
   "getCredentials", "getFavorites", "listEntries", "searchEntries", "createEntry", "addEntryIdentifier",
   "fillCredential", "getTotp", "proposeSaveLogin", "proposeSaveTotp",
@@ -1639,9 +1642,19 @@ function handleRuntimeMessage(message, sender, sendResponse) {
     return true;
   }
   // Popup or options page gesture only. A website must not be able to pull the vault window forward.
+  // The popup's "+" menu may also ask the main window to start a new address or files item (kinds
+  // the bridge cannot create itself); only those two values travel, anything else is refused here.
   if (message && message.type === "openApp") {
     if (!isAddressPopup(sender) && !isOptionsPage(sender)) return false;
-    sendNativeMessageWithPairing({ type: "openApp" }).then(sendResponse);
+    const request = { type: "openApp" };
+    if (message.newEntry !== undefined) {
+      if (!isAddressPopup(sender) || !OPEN_APP_NEW_ENTRY_KINDS.includes(message.newEntry)) {
+        sendResponse({ type: "error", message: "invalid_request" });
+        return true;
+      }
+      request.newEntry = message.newEntry;
+    }
+    sendNativeMessageWithPairing(request).then(sendResponse);
     return true;
   }
   if (message?.type === "launchApp") {

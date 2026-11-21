@@ -183,6 +183,7 @@ fn request_cases() -> Vec<(Request, &'static str)> {
         (
             Request::OpenApp {
                 token: t(),
+                new_entry: None,
                 pairing: None,
             },
             r#"{"type":"openApp","token":"tok-1"}"#,
@@ -363,6 +364,53 @@ fn request_types_are_distinct_and_match_the_tags() {
 #[test]
 fn unknown_request_type_fails_to_decode() {
     assert!(serde_json::from_str::<Request>(r#"{"type":"nope","token":"t"}"#).is_err());
+}
+
+#[test]
+fn open_app_new_entry_round_trips_and_rejects_unknown_kinds() {
+    for (kind, wire) in [
+        (NewEntryKind::Address, "Address"),
+        (NewEntryKind::Files, "Files"),
+    ] {
+        let golden =
+            format!(r#"{{"type":"openApp","token":"t","newEntry":"{wire}","pairing":"p"}}"#);
+        let request = Request::OpenApp {
+            token: "t".into(),
+            new_entry: Some(kind),
+            pairing: Some("p".into()),
+        };
+        assert_eq!(serde_json::from_str::<Request>(&golden).unwrap(), request);
+        let golden_value: Value = serde_json::from_str(&golden).unwrap();
+        assert!(json_eq(
+            &serde_json::to_value(&request).unwrap(),
+            &golden_value
+        ));
+    }
+    // Absent and null both mean "only show the window".
+    for frame in [
+        r#"{"type":"openApp","token":"t"}"#,
+        r#"{"type":"openApp","token":"t","newEntry":null}"#,
+    ] {
+        assert_eq!(
+            serde_json::from_str::<Request>(frame).unwrap(),
+            Request::OpenApp {
+                token: "t".into(),
+                new_entry: None,
+                pairing: None,
+            }
+        );
+    }
+    // Only the two kinds the bridge cannot create, spelled exactly; anything else is malformed.
+    for bad in [
+        "Login", "Card", "Notes", "address", "files", "ADDRESS", "", "Group",
+    ] {
+        let frame = format!(r#"{{"type":"openApp","token":"t","newEntry":"{bad}"}}"#);
+        assert!(serde_json::from_str::<Request>(&frame).is_err(), "{bad}");
+    }
+    for bad in ["1", "true", "[]", r#"{"kind":"Address"}"#] {
+        let frame = format!(r#"{{"type":"openApp","token":"t","newEntry":{bad}}}"#);
+        assert!(serde_json::from_str::<Request>(&frame).is_err(), "{bad}");
+    }
 }
 
 #[test]

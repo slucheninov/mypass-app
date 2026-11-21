@@ -7,8 +7,8 @@
 
 use crate::commands::browser::PairingChallengeDto;
 use crate::events::{
-    BridgeChangedEvent, PairingChallengeEvent, ProposalEvent, ProposalKind, SettingsChanged,
-    UnlockRequestedEvent,
+    BridgeChangedEvent, NewEntryEvent, PairingChallengeEvent, ProposalEvent, ProposalKind,
+    SettingsChanged, UnlockRequestedEvent,
 };
 use crate::lifecycle::ExitOutcome;
 use crate::shell::WindowOps;
@@ -18,12 +18,13 @@ use mypass_bridge::pairing::{
     PairedBrowserStore, PairingChallenge, PairingError, PairingManager, PAIRING_CODE_TTL,
 };
 use mypass_bridge::passkeys::PasskeyService;
+use mypass_bridge::protocol::NewEntryKind;
 use mypass_bridge::server::{LoopbackServer, ServerConfig, ServerError};
 use mypass_bridge::service::{BridgeDeps, BridgeService};
 use mypass_bridge::ui::{BridgeUi, ProposalStore};
 use mypass_platform::{HostRegistrationReport, NativeHostRegistrar, SecretStore};
 use mypass_session::session::SessionEvent;
-use mypass_session::{AppCore, SessionState, Settings};
+use mypass_session::{AppCore, EntryTypeDto, SessionState, Settings};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -81,6 +82,8 @@ pub trait BridgeEvents: Send + Sync {
     fn proposal(&self, event: ProposalEvent);
     /// A browser asked for an unlock.
     fn unlock_requested(&self);
+    /// A browser asked the main window to start a new entry of `entry_type`. Main window only.
+    fn new_entry(&self, entry_type: EntryTypeDto);
     /// Opens the settings window, at `pane` when given.
     fn open_settings(&self, pane: Option<&str>);
     /// The settings changed outside the settings commands (the extension's passkey toggle).
@@ -104,6 +107,9 @@ impl BridgeEvents for TauriBridgeEvents {
     }
     fn unlock_requested(&self) {
         let _ = UnlockRequestedEvent.emit(&self.0);
+    }
+    fn new_entry(&self, entry_type: EntryTypeDto) {
+        let _ = NewEntryEvent { entry_type }.emit_to(&self.0, MAIN);
     }
     fn open_settings(&self, pane: Option<&str>) {
         let _ = crate::commands::app::open_settings(&self.0, pane);
@@ -156,6 +162,14 @@ pub fn pairing_changed(
         window.lower();
     }
     events.bridge_changed();
+}
+
+/// The editor type the main window starts for an extension `newEntry` request.
+fn new_entry_type(kind: NewEntryKind) -> EntryTypeDto {
+    match kind {
+        NewEntryKind::Address => EntryTypeDto::Address,
+        NewEntryKind::Files => EntryTypeDto::Files,
+    }
 }
 
 /// What the bridge asks of the app's UI.
@@ -233,6 +247,14 @@ impl BridgeUi for TauriBridgeUi {
 
     fn open_app_requested(&self) {
         self.show_main();
+    }
+
+    fn new_entry_requested(&self, kind: NewEntryKind) {
+        // The main window stays alive while hidden (closing it only hides it), so its listener
+        // hears the event whether or not the window was visible. Locked, it keeps the request
+        // until the next unlock; the window itself decides, the backend keeps no pending state.
+        self.show_main();
+        self.events.new_entry(new_entry_type(kind));
     }
 
     fn open_browser_settings_requested(&self) {
@@ -770,6 +792,7 @@ pub(crate) mod test_support {
         pub proposals: Mutex<Vec<ProposalEvent>>,
         pub panes: Mutex<Vec<Option<String>>>,
         pub settings: Mutex<Vec<Settings>>,
+        pub new_entries: Mutex<Vec<EntryTypeDto>>,
     }
 
     impl RecordingEvents {
@@ -792,6 +815,10 @@ pub(crate) mod test_support {
         }
         fn unlock_requested(&self) {
             lock(&self.log).push("unlock_requested".into());
+        }
+        fn new_entry(&self, entry_type: EntryTypeDto) {
+            lock(&self.log).push("new_entry".into());
+            lock(&self.new_entries).push(entry_type);
         }
         fn open_settings(&self, pane: Option<&str>) {
             lock(&self.log).push("open_settings".into());
@@ -1265,12 +1292,50 @@ mod tests {
         let before = f.windows.calls().len();
         let r = f.handle().service.handle(Request::OpenApp {
             token: "t".into(),
+            new_entry: None,
             pairing: Some(secret),
         });
         assert_eq!(r, mypass_bridge::protocol::Response::Acknowledged);
         let calls: Vec<_> = f.windows.calls().into_iter().skip(before).collect();
         let ops: Vec<_> = calls.iter().map(|(op, _, _)| op.as_str()).collect();
         assert_eq!(ops, ["show", "focus"]);
+    }
+
+    #[test]
+    fn open_app_with_new_entry_shows_main_window_and_emits_the_entry_type() {
+        for locked in [false, true] {
+            let f = fixture(true);
+            let secret = pair(&f);
+            if locked {
+                f.w.core.vault_lock().unwrap();
+            }
+            let before = f.windows.calls().len();
+            for kind in [NewEntryKind::Address, NewEntryKind::Files] {
+                let r = f.handle().service.handle(Request::OpenApp {
+                    token: "t".into(),
+                    new_entry: Some(kind),
+                    pairing: Some(secret.clone()),
+                });
+                assert_eq!(r, mypass_bridge::protocol::Response::Acknowledged);
+            }
+            let calls: Vec<_> = f.windows.calls().into_iter().skip(before).collect();
+            let ops: Vec<_> = calls.iter().map(|(op, _, _)| op.as_str()).collect();
+            assert_eq!(ops, ["show", "focus", "show", "focus"], "locked: {locked}");
+            assert_eq!(
+                *lock(&f.events.new_entries),
+                [EntryTypeDto::Address, EntryTypeDto::Files],
+                "locked: {locked}"
+            );
+        }
+        // A plain open shows the window and starts nothing.
+        let f = fixture(true);
+        let secret = pair(&f);
+        f.handle().service.handle(Request::OpenApp {
+            token: "t".into(),
+            new_entry: None,
+            pairing: Some(secret),
+        });
+        assert!(lock(&f.events.new_entries).is_empty());
     }
 
     #[test]

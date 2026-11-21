@@ -397,6 +397,12 @@
   "newNote": {
     "message": "Новая заметка"
   },
+  "newAddress": {
+    "message": "Новый адрес"
+  },
+  "newFile": {
+    "message": "Новый файл"
+  },
   "totpInvalid": {
     "message": "Введите действительный URL аутентификатора или секретный ключ"
   },
@@ -478,6 +484,9 @@
   },
   "addItem": {
     "message": "Добавить запись"
+  },
+  "moreActions": {
+    "message": "Ещё"
   },
   "sendCode": {
     "message": "Отправить"

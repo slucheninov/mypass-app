@@ -122,6 +122,30 @@ const { getBrowserManagerDiagnostics, reportBrowserDiagnostics, handleRuntimeMes
     }), true);
   });
   assert.equal(sent.at(-1).type, 'openApp');
+  assert.equal('newEntry' in sent.at(-1), false, 'a plain open carries no newEntry');
+  const popupSender = { id: 'extension-id', url: 'chrome-extension://extension-id/popup.html' };
+  const optionsSender = { id: 'extension-id', tab: { id: 5 }, url: 'chrome-extension://extension-id/app/app.html' };
+  for (const newEntry of ['Address', 'Files']) {
+    await new Promise((resolve) => {
+      assert.equal(handleRuntimeMessage({ type: 'openApp', newEntry, extra: 'dropped' }, popupSender, (response) => {
+        assert.equal(response.type, 'ok');
+        resolve();
+      }), true);
+    });
+    assert.deepEqual(sent.at(-1), { type: 'openApp', newEntry, pairing: 'test-pairing' });
+  }
+  const beforeBadNewEntry = sent.length;
+  for (const newEntry of ['Login', 'Card', 'Notes', 'address', '', null, 1, { type: 'Address' }]) {
+    let reply = null;
+    assert.equal(handleRuntimeMessage({ type: 'openApp', newEntry }, popupSender, (response) => { reply = response; }), true);
+    assert.deepEqual(reply, { type: 'error', message: 'invalid_request' }, String(newEntry));
+  }
+  // Only the popup may ask for a new entry; the options page may only open the app.
+  let optionsReply = null;
+  assert.equal(handleRuntimeMessage({ type: 'openApp', newEntry: 'Files' }, optionsSender, (response) => { optionsReply = response; }), true);
+  assert.deepEqual(optionsReply, { type: 'error', message: 'invalid_request' });
+  assert.equal(handleRuntimeMessage({ type: 'openApp', newEntry: 'Files' }, website, () => {}), false);
+  assert.equal(sent.length, beforeBadNewEntry, 'no refused newEntry reaches the app');
   await noteFilledCredential({
     type: 'credential', username: 'alice', password: 's3cret-password', urls: ['https://bank.example', 'https://pay.bank.example']
   }, 'https://bank.example/login');

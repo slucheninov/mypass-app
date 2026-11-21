@@ -229,6 +229,11 @@ pub enum Request {
     },
     OpenApp {
         token: String,
+        /// Also start a new entry of this kind in the main window (absent: only show it). The
+        /// kinds the bridge cannot create itself (an address, a files item needing the app's own
+        /// file dialog); any other value fails to decode, so the request is refused as malformed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        new_entry: Option<NewEntryKind>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pairing: Option<String>,
     },
@@ -570,6 +575,15 @@ pub enum PermissionState {
     Granted,
     Unavailable,
     NotGranted,
+}
+
+/// The entry kinds `openApp` can ask the main window to start (`newEntry`). Spelled as the
+/// extension's entry types (`"Address"`, `"Files"`); deliberately only the kinds that
+/// `createEntry` refuses, so the popup creates every other kind itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NewEntryKind {
+    Address,
+    Files,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -122,6 +122,9 @@ impl BridgeUi for RecordingUi {
     fn open_app_requested(&self) {
         self.note("open_app_requested");
     }
+    fn new_entry_requested(&self, _kind: mypass_bridge::protocol::NewEntryKind) {
+        self.note("new_entry_requested");
+    }
     fn open_browser_settings_requested(&self) {
         self.note("open_browser_settings_requested");
     }

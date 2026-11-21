@@ -96,6 +96,16 @@ pub struct ProposalEvent {
     pub entry_id: Option<String>,
 }
 
+/// The browser extension asked the main window to start a new entry of `entry_type` (only the
+/// kinds the bridge cannot create itself: an address or a files item). The main window runs its
+/// own "+" menu action, right away when unlocked, otherwise after the next unlock (if that comes
+/// soon). Sent to the main window only.
+#[derive(Serialize, Deserialize, specta::Type, tauri_specta::Event, Clone, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct NewEntryEvent {
+    pub entry_type: mypass_session::EntryTypeDto,
+}
+
 /// A browser asked for an unlock. Payload-free; the unlock screen (stage 5) listens to it.
 #[derive(Serialize, Deserialize, specta::Type, tauri_specta::Event, Clone, Debug)]
 pub struct UnlockRequestedEvent;
