@@ -1,10 +1,10 @@
 //! `app_*`: app-level commands (version, activity, windows, reveal in the file manager).
 
-use crate::events::{OpenEntryEvent, SettingsPaneEvent};
+use crate::events::{NewEntryEvent, OpenEntryEvent, SettingsPaneEvent};
 use crate::shell::WindowOps;
 use crate::state::{AppState, EditorDirty, ShellState};
 use mypass_session::dto::AppInfo;
-use mypass_session::{ApiError, AppCore};
+use mypass_session::{ApiError, AppCore, SessionState};
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_specta::Event;
 
@@ -41,6 +41,36 @@ pub fn open_entry(
         result.map_err(super::internal)?;
     }
     Ok(Some(request.into()))
+}
+
+/// Asks the main window for a new login; while unlocked, shows and focuses the main window and
+/// returns the event to emit to it. `None` (locked, no vault) leaves every window alone.
+pub fn new_entry(
+    core: &AppCore,
+    windows: &dyn WindowOps,
+) -> Result<Option<NewEntryEvent>, ApiError> {
+    if core.vault_status()?.state != SessionState::Unlocked {
+        return Ok(None);
+    }
+    for result in [windows.show(MAIN_WINDOW), windows.focus(MAIN_WINDOW)] {
+        result.map_err(super::internal)?;
+    }
+    Ok(Some(NewEntryEvent))
+}
+
+/// The tray panel's "+": the main window opens the editor for a new login.
+#[tauri::command]
+#[specta::specta]
+pub fn app_new_entry(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    shell: State<'_, ShellState>,
+) -> Result<(), ApiError> {
+    if let Some(event) = new_entry(&state.0, shell.windows.as_ref())? {
+        // A window that is gone is not an error of the request.
+        let _ = event.emit_to(&app, MAIN_WINDOW);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -248,6 +278,30 @@ mod tests {
                 ("focus".to_owned(), "main".to_owned())
             ]
         );
+    }
+
+    #[test]
+    fn new_entry_shows_and_focuses_main_only_while_unlocked() {
+        let w = open_world();
+        let windows = FakeWindowOps::default();
+        assert_eq!(new_entry(&w.core, &windows).unwrap(), Some(NewEntryEvent));
+        let calls: Vec<_> = windows
+            .calls()
+            .into_iter()
+            .map(|(op, label, _)| (op, label))
+            .collect();
+        assert_eq!(
+            calls,
+            vec![
+                ("show".to_owned(), "main".to_owned()),
+                ("focus".to_owned(), "main".to_owned())
+            ]
+        );
+
+        let closed = world();
+        let untouched = FakeWindowOps::default();
+        assert_eq!(new_entry(&closed.core, &untouched).unwrap(), None);
+        assert!(untouched.calls().is_empty());
     }
 
     #[test]

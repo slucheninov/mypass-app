@@ -22,8 +22,8 @@
       {
         "label": "tray-panel",
         "title": "MyPass",
-        "width": 320,
-        "height": 440,
+        "width": 340,
+        "height": 520,
         "decorations": false,
         "visible": false,
         "alwaysOnTop": true,

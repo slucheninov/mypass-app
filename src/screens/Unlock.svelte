@@ -2,24 +2,20 @@
   // The welcome screen offers recent vaults and create / open / find. The locked screen shows
   // the vault card with the master password field. The password is an uncontrolled input read
   // once on submit and emptied at once; it is never kept in state.
-  import { onMount, tick } from "svelte";
+  import { onMount } from "svelte";
   import { events } from "../lib/bindings";
   import { device } from "../lib/stores/device.svelte";
-  import { api, errorMessage } from "../lib/api";
+  import { api } from "../lib/api";
   import type { RecentVaultDto } from "../lib/bindings";
-  import { formatBytes, formatDate } from "../lib/i18n/format";
   import { t } from "../lib/i18n/index.svelte";
   import { openVaultAtPath, openVaultFromDialog } from "../lib/open-flow";
-  import { platform } from "../lib/platform.svelte";
   import { session } from "../lib/stores/session.svelte";
   import Button from "../lib/ui/Button.svelte";
   import Icon from "../lib/ui/Icon.svelte";
-  import PasswordField from "../lib/ui/PasswordField.svelte";
   import CreateVault from "./CreateVault.svelte";
   import FindVaults from "./FindVaults.svelte";
-  import KeyboardLayoutBadge from "./KeyboardLayoutBadge.svelte";
-  import UnlockExtras from "./UnlockExtras.svelte";
-  import { connectedInfo, fileNameOf, folderOf, statusKind, statusLabel } from "./vault-status";
+  import UnlockCard from "./UnlockCard.svelte";
+  import { folderOf } from "./vault-status";
 
   onMount(() => {
     let active = true;
@@ -38,20 +34,12 @@
     return () => { active = false; off?.(); };
   });
 
-  let field: PasswordField | undefined = $state();
-  let hasPassword = $state(false);
-  let error = $state<string | null>(null);
-  let busy = $state(false);
   let showCreate = $state(false);
   let showFind = $state(false);
   let recents = $state<RecentVaultDto[]>([]);
 
   const status = $derived(session.status);
   const path = $derived(status.vaultPath ?? "");
-  const kind = $derived(statusKind(status.fileStatus));
-  const info = $derived(connectedInfo(status.fileStatus));
-  // A file that is gone cannot be unlocked; an unreadable one is left to the backend to explain.
-  const canUnlock = $derived(hasPassword && !busy && kind !== "missing");
   const featured = $derived(status.state === "noVault" ? recents.find((r) => r.exists) : undefined);
   const others = $derived(recents.filter((r) => r.path !== (featured?.path ?? status.vaultPath)));
 
@@ -77,24 +65,6 @@
     if (recentsScope === null) return;
     void loadRecents();
   });
-
-  async function submit(event: SubmitEvent): Promise<void> {
-    event.preventDefault();
-    if (!canUnlock || !field) return;
-    const password = field.take();
-    if (password === "") return;
-    busy = true;
-    error = null;
-    try {
-      await session.unlock(password);
-    } catch (e) {
-      error = errorMessage(e);
-      await tick();
-      field?.focus();
-    } finally {
-      busy = false;
-    }
-  }
 
   async function forget(recent: RecentVaultDto): Promise<void> {
     try {
@@ -156,43 +126,7 @@
       </div>
     </section>
   {:else}
-    <section class="card">
-      <div class="vault">
-        <Icon name="lock" size={28} />
-        <div class="names">
-          <h1>{fileNameOf(path)}</h1>
-          <div class="folder">{folderOf(path)}</div>
-        </div>
-      </div>
-      {#if kind}
-        <div class="state" data-testid="vault-status" data-status={kind}>
-          <span class="dot {kind}" aria-hidden="true"></span>
-          <span>{statusLabel(kind)}</span>
-        </div>
-      {/if}
-      {#if info}
-        <div class="meta">
-          {#if info.size !== null}<span>{formatBytes(info.size)}</span>{/if}
-          {#if info.modified}<span>{t("Modified %@", [formatDate(info.modified)])}</span>{/if}
-        </div>
-      {/if}
-      <form onsubmit={submit}>
-        <PasswordField
-          bind:this={field}
-          label={t("Master password")}
-          toggle
-          focusOnMount
-          oninput={(length) => {
-            hasPassword = length > 0;
-            error = null;
-          }}
-        />
-        <KeyboardLayoutBadge />
-        {#if error}<p class="error" role="alert">{error}</p>{/if}
-        <Button type="submit" variant="primary" disabled={!canUnlock}>{t("Unlock")}</Button>
-      </form>
-      <UnlockExtras available={platform.deviceUnlockAvailable} />
-    </section>
+    <UnlockCard />
     {@render recentList()}
     <Button variant="plain" onclick={() => void openVaultFromDialog()}>{t("Open another vault…")}</Button>
   {/if}
@@ -267,72 +201,6 @@
     color: var(--accent-text);
     font-weight: 600;
   }
-  .card {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    width: min(360px, 100%);
-    padding: 20px;
-    border: var(--sep);
-    border-radius: 10px;
-    background: var(--list-bg);
-  }
-  .vault {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-  .names {
-    min-width: 0;
-  }
-  h1 {
-    margin: 0;
-    font-size: 16px;
-    overflow-wrap: anywhere;
-  }
-  .folder {
-    color: var(--text-2);
-    font-size: 12px;
-    overflow-wrap: anywhere;
-  }
-  .state {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-  }
-  .dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-  }
-  .dot.connected {
-    background: #2e9d57;
-  }
-  .dot.missing {
-    background: #d98a00;
-  }
-  .dot.unreadable {
-    background: var(--danger);
-  }
-  .dot.downloading {
-    background: #2f7fd9;
-  }
-  .meta {
-    display: flex;
-    gap: 12px;
-    color: var(--text-2);
-    font-size: 12px;
-  }
-  form {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .error {
-    margin: 0;
-    color: var(--danger);
-  }
   .recents {
     width: 100%;
     max-width: 360px;
@@ -379,6 +247,14 @@
   }
   .name {
     font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+  .names {
+    min-width: 0;
+  }
+  .folder {
+    color: var(--text-2);
+    font-size: 12px;
     overflow-wrap: anywhere;
   }
 </style>

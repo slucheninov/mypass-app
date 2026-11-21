@@ -33,13 +33,28 @@ async function openEntry({ id, edit }: OpenEntryEvent): Promise<void> {
   if (navigation.editModel?.id === id) navigation.select(id);
 }
 
+/** Opens the editor for a new login (the tray panel's "+"). A locked session ignores it; an editor
+ *  with unsaved changes is asked about through `requestOpenEditor`, like an open-entry request. */
+async function newEntry(): Promise<void> {
+  if (session.status.state !== "unlocked") return;
+  const unchanged = lockGuard();
+  let model;
+  try {
+    model = await api.entryNewModel("login", null);
+  } catch (e) {
+    toasts.reportError(e);
+    return;
+  }
+  if (unchanged()) navigation.requestOpenEditor(model);
+}
+
 function toastConflict({ shortcut }: ShortcutConflictEvent): void {
   toasts.push("error", `${shortcut}: ${t("That shortcut is already in use")}`);
 }
 
 /**
- * The main window's backend events as UI: the clipboard clear, the tray panel's open-entry request
- * and the hotkeys that could not be registered. The conflict listener is registered BEFORE the
+ * The main window's backend events as UI: the clipboard clear, the tray panel's open-entry and
+ * new-entry requests and the hotkeys that could not be registered. The conflict listener is registered BEFORE the
  * backlog is taken (`shortcut_conflicts_take` empties it), so none is lost or shown twice (R12).
  * The failed-save toast lives in the session store. Returns the function that stops the listeners.
  */
@@ -57,6 +72,7 @@ export function startEventBridge(): () => void {
   };
   keep(events.clipboardClearedEvent.listen(() => toasts.push("info", t("Clipboard cleared"))));
   keep(events.openEntryEvent.listen((e) => void openEntry(e.payload)));
+  keep(events.newEntryEvent.listen(() => void newEntry()));
   void events.shortcutConflictEvent
     .listen((e) => toastConflict(e.payload))
     .then(async (off) => {
