@@ -8,7 +8,8 @@ use crate::pairing::PairingManager;
 use crate::pairing::{PairedBrowserStore, PairingChallenge, StartOutcome};
 use crate::passkeys::{PasskeyContext, PasskeyHandler, PasskeyService};
 use crate::protocol::{
-    BrowserDiagnosticsReport, ExtensionScanState, PermissionState, ProxyState, Request, Response,
+    BrowserDiagnosticsReport, ExtensionScanState, NewEntryKind, PermissionState, ProxyState,
+    Request, Response,
 };
 use crate::service::{BridgeDeps, BridgeService};
 use crate::ui::{BridgeUi, ProposalStore};
@@ -71,6 +72,9 @@ impl BridgeUi for RecordingUi {
     }
     fn open_app_requested(&self) {
         self.note("open_app_requested");
+    }
+    fn new_entry_requested(&self, kind: NewEntryKind) {
+        self.note_with("new_entry_requested", &format!("{kind:?}"));
     }
     fn open_browser_settings_requested(&self) {
         self.note("open_browser_settings_requested");
@@ -348,6 +352,8 @@ pub(crate) fn all_requests(pairing: Option<&str>) -> Vec<Request> {
             url: s(),
             username: s(),
             password: s(),
+            extra_fields: Vec::new(),
+            username_is_email: false,
             pairing: p(),
         },
         Request::AddEntryIdentifier {
@@ -383,6 +389,7 @@ pub(crate) fn all_requests(pairing: Option<&str>) -> Vec<Request> {
         },
         Request::OpenApp {
             token: t(),
+            new_entry: None,
             pairing: p(),
         },
         Request::OpenBrowserSettings {

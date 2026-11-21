@@ -91,6 +91,14 @@ pub struct ProposalEvent {
     pub entry_id: Option<String>,
 }
 
+/// A new-entry request is waiting (`AppCore::new_entry_requests`): a login from the tray panel's
+/// "+", or a kind the bridge cannot create itself (an address or a files item) from the browser
+/// extension. Payload-free, only a nudge: the main window takes the request with
+/// `app_take_new_entry` (main window only) and runs its own "+" menu action. Any webview may emit
+/// this event, so it must never carry the request itself; a forged one finds nothing to take.
+#[derive(Serialize, Deserialize, specta::Type, tauri_specta::Event, Clone, PartialEq, Debug)]
+pub struct NewEntryEvent;
+
 /// A browser asked for an unlock. Payload-free; the unlock screen (stage 5) listens to it.
 #[derive(Serialize, Deserialize, specta::Type, tauri_specta::Event, Clone, Debug)]
 pub struct UnlockRequestedEvent;

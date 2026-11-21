@@ -350,6 +350,51 @@ function dispatch(message, sender) {
   assert.strictEqual((await dispatch({ type: 'consumePrompt', promptId, action: 'save' }, uiSender)).code, 'prompt_gone', 'second consume finds nothing');
   assert.strictEqual(log.native.filter((m) => m.type === 'proposeSaveLogin').length, 1, 'saved exactly once');
 
+  // --- a registration form: its extra fields travel with the login, names only to the UI ---
+  const FORM_FIELDS = [
+    { kind: 'givenName', label: 'First name', value: 'Ann' },
+    { kind: 'phone', label: 'Phone', value: '+380501234567' },
+    { kind: 'other', label: 'Nickname', value: 'annie-the-unique' },
+  ];
+  session = {};
+  await dispatch({ ...loginRequest, fields: FORM_FIELDS }, contentSender());
+  const registration = await dispatch({ type: 'getPrompt', tabId: 7 }, uiSender);
+  assert.deepStrictEqual(registration.prompt.fields, FORM_FIELDS.map(({ kind, label }) => ({ kind, label })),
+    'the UI sees which fields travel, never their values');
+  assert.ok(!deepStrings(registration).join('\n').includes('annie-the-unique'), 'no extra value reaches the UI');
+  resetLogs();
+  const registrationId = (await bg.readPrompts())[0].id;
+  assert.deepStrictEqual(await dispatch({ type: 'consumePrompt', promptId: registrationId, action: 'save' }, uiSender),
+    { type: 'saveProposalAccepted' });
+  const registered = log.native.find((m) => m.type === 'proposeSaveLogin');
+  assert.deepStrictEqual(registered.extraFields, FORM_FIELDS, 'the checked fields become extraFields');
+  assert.strictEqual(proposal.extraFields, undefined, 'a plain login sends no extraFields');
+  // A list the bridge would refuse is refused before any record exists.
+  const tooMany = Array.from({ length: 25 }, (_, i) => ({ kind: 'other', label: 'Field ' + i, value: 'v' }));
+  for (const fields of [tooMany, [{ kind: 'creditCard', label: '', value: 'x' }], [{ kind: 'other', label: '', value: 'x' }],
+    [{ kind: 'email', label: 'MyPass.Address.email', value: 'a@b.test' }], [{ kind: 'city', label: '', value: 'two\nlines' }],
+    [{ kind: 'city', label: '', value: 'x'.repeat(513) }], [{ kind: 'city', label: 'y'.repeat(65), value: 'x' }],
+    [{ kind: 'city', label: '', value: '   ' }], 'not a list']) {
+    session = {};
+    assert.strictEqual((await dispatch({ ...loginRequest, fields }, contentSender())).code, 'prompt_rejected');
+    assert.strictEqual((await bg.readPrompts()).length, 0);
+  }
+  session = {};
+
+  // The username typed into the form's email field travels as such, so the app can give an
+  // Address entry made from the form that email; anything but a boolean refuses the prompt.
+  await dispatch({ ...loginRequest, fields: FORM_FIELDS, usernameIsEmail: true }, contentSender());
+  resetLogs();
+  assert.deepStrictEqual(await dispatch({ type: 'consumePrompt', promptId: (await bg.readPrompts())[0].id, action: 'save' }, uiSender),
+    { type: 'saveProposalAccepted' });
+  assert.strictEqual(log.native.find((m) => m.type === 'proposeSaveLogin').usernameIsEmail, true);
+  assert.strictEqual(registered.usernameIsEmail, undefined, 'absent unless the username was the email');
+  for (const usernameIsEmail of ['yes', 1, null]) {
+    session = {};
+    assert.strictEqual((await dispatch({ ...loginRequest, usernameIsEmail }, contentSender())).code, 'prompt_rejected');
+  }
+  session = {};
+
   // dismiss sends nothing to the app
   await dispatch(loginRequest, contentSender());
   resetLogs();

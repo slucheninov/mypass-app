@@ -4,7 +4,7 @@
 //! (the pattern `mypass-kdbx` uses for `FailingFileIo`); never enabled in a shipped build.
 
 use crate::{
-    Browser, BrowserRegistration, ClipboardStamp, DeviceUnlock, DeviceUnlockAvailability,
+    AppIcon, Browser, BrowserRegistration, ClipboardStamp, DeviceUnlock, DeviceUnlockAvailability,
     DeviceUnlockMode, HostRegistrationReport, KeyboardLayout, LaunchAtLogin, LoginItemStatus,
     NativeHostRegistrar, Platform, PlatformError, PlatformResult, RegistrationState, SecretStore,
     SecureClipboard, Subscription, SystemEvent, SystemEvents,
@@ -594,6 +594,43 @@ impl std::fmt::Debug for FakeKeyboardLayout {
     }
 }
 
+/// [`AppIcon`] that records every icon it was asked to show; the appearance is set by
+/// [`FakeAppIcon::set_system_dark`].
+#[derive(Debug, Default)]
+pub struct FakeAppIcon {
+    system_dark: Mutex<bool>,
+    shown: Mutex<Vec<Vec<u8>>>,
+}
+
+impl FakeAppIcon {
+    pub fn new(system_dark: bool) -> Arc<Self> {
+        Arc::new(Self {
+            system_dark: Mutex::new(system_dark),
+            shown: Mutex::new(Vec::new()),
+        })
+    }
+
+    pub fn set_system_dark(&self, dark: bool) {
+        *lock(&self.system_dark) = dark;
+    }
+
+    /// Every PNG passed to `set_png`, oldest first.
+    pub fn shown(&self) -> Vec<Vec<u8>> {
+        lock(&self.shown).clone()
+    }
+}
+
+impl AppIcon for FakeAppIcon {
+    fn system_dark(&self) -> PlatformResult<bool> {
+        Ok(*lock(&self.system_dark))
+    }
+
+    fn set_png(&self, png: &[u8]) -> PlatformResult<()> {
+        lock(&self.shown).push(png.to_vec());
+        Ok(())
+    }
+}
+
 /// A [`Platform`] made of fakes, plus typed handles to drive them.
 #[derive(Debug)]
 pub struct FakePlatform {
@@ -606,10 +643,11 @@ pub struct FakePlatform {
     pub host_registrar: Arc<FakeHostRegistrar>,
     pub launch_at_login: Arc<FakeLaunchAtLogin>,
     pub keyboard_layout: Arc<FakeKeyboardLayout>,
+    pub app_icon: Arc<FakeAppIcon>,
 }
 
 /// What `AppCore` tests and stages 3 to 6 build on: device unlock available with biometrics, launch
-/// at login off, keyboard layout `EN`.
+/// at login off, keyboard layout `EN`, light OS appearance.
 pub fn fake_platform() -> FakePlatform {
     let events = FakeSystemEvents::new();
     let clipboard = FakeClipboard::new();
@@ -620,6 +658,7 @@ pub fn fake_platform() -> FakePlatform {
     let host_registrar = FakeHostRegistrar::new();
     let launch_at_login = FakeLaunchAtLogin::new(false);
     let keyboard_layout = FakeKeyboardLayout::new(Some("EN"));
+    let app_icon = FakeAppIcon::new(false);
     let platform = Platform {
         events: events.clone(),
         clipboard: clipboard.clone(),
@@ -629,6 +668,7 @@ pub fn fake_platform() -> FakePlatform {
         host_registrar: host_registrar.clone(),
         launch_at_login: launch_at_login.clone(),
         keyboard_layout: keyboard_layout.clone(),
+        app_icon: app_icon.clone(),
     };
     FakePlatform {
         platform,
@@ -640,6 +680,7 @@ pub fn fake_platform() -> FakePlatform {
         host_registrar,
         launch_at_login,
         keyboard_layout,
+        app_icon,
     }
 }
 
@@ -657,6 +698,17 @@ mod tests {
             seen,
             Arc::new(move |v: T| sink_seen.lock().unwrap().push(v)),
         )
+    }
+
+    #[test]
+    fn fake_app_icon_records_icons_and_reports_the_set_appearance() {
+        let icon = FakeAppIcon::new(false);
+        assert_eq!(icon.system_dark(), Ok(false));
+        icon.set_system_dark(true);
+        assert_eq!(icon.system_dark(), Ok(true));
+        icon.set_png(b"a").unwrap();
+        icon.set_png(b"b").unwrap();
+        assert_eq!(icon.shown(), vec![b"a".to_vec(), b"b".to_vec()]);
     }
 
     #[test]

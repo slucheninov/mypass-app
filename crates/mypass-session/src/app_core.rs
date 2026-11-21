@@ -221,6 +221,8 @@ pub struct AppCore {
     pub clipboard: ClipboardService,
     pub backups: BackupManager,
     pub unlock_requests: UnlockRequestState,
+    /// The one pending request for the main window to start a new entry (tray, extension).
+    pub new_entry_requests: crate::new_entry_request::NewEntryRequestState,
     /// Device unlock (status, enrolment, the explicit prompt); observes the session.
     pub device_unlock: DeviceUnlockService,
     /// Secondary-folder sync (status, `sync_now`, disconnect); observes the session.
@@ -325,6 +327,8 @@ impl AppCore {
             settings.clone(),
         );
         let unlock_requests = UnlockRequestState::new(scheduler.clone());
+        let new_entry_requests =
+            crate::new_entry_request::NewEntryRequestState::new(scheduler.clone());
         let device_unlock = DeviceUnlockService::new(
             session.clone(),
             settings.clone(),
@@ -351,6 +355,7 @@ impl AppCore {
             backups: session.backups(),
             secondary,
             unlock_requests,
+            new_entry_requests,
             device_unlock,
             session,
             settings,

@@ -6,6 +6,8 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 /** Commands */
 export const commands = {
 	appInfo: () => typedError<AppInfo, ApiError>(__TAURI_INVOKE("app_info")),
+	/**  The tray panel's "+": the main window opens the editor for a new login. */
+	appNewEntry: () => typedError<null, ApiError>(__TAURI_INVOKE("app_new_entry")),
 	appOpenEntry: (id: string, edit: boolean) => typedError<null, ApiError>(__TAURI_INVOKE("app_open_entry", { id, edit })),
 	/**  Shows the settings window (General pane). */
 	appOpenSettings: () => typedError<null, ApiError>(__TAURI_INVOKE("app_open_settings")),
@@ -23,12 +25,17 @@ export const commands = {
 	 */
 	appSetEditorDirty: (dirty: boolean) => typedError<null, ApiError>(__TAURI_INVOKE("app_set_editor_dirty", { dirty })),
 	appShowMain: () => typedError<null, ApiError>(__TAURI_INVOKE("app_show_main")),
+	/**
+	 *  The main window takes the pending new-entry request: after its listener is registered, on
+	 *  each `NewEntryEvent` and after an unlock. Main window only (capability and label).
+	 */
+	appTakeNewEntry: () => typedError<EntryTypeDto | null, ApiError>(__TAURI_INVOKE("app_take_new_entry")),
 	attachmentExport: (entryId: string, name: string) => typedError<boolean, ApiError>(__TAURI_INVOKE("attachment_export", { entryId, name })),
 	attachmentPick: () => typedError<PickedFile[], ApiError>(__TAURI_INVOKE("attachment_pick")),
 	backupList: () => typedError<BackupStatus_Serialize, ApiError>(__TAURI_INVOKE("backup_list")),
 	backupRestore: (id: string) => typedError<null, ApiError>(__TAURI_INVOKE("backup_restore", { id })),
 	browserPairingCancel: () => typedError<null, ApiError>(__TAURI_INVOKE("browser_pairing_cancel")),
-	browserProposalTake: (id: string) => typedError<EntryEditModel_Serialize, ApiError>(__TAURI_INVOKE("browser_proposal_take", { id })),
+	browserProposalTake: (id: string) => typedError<BrowserProposal_Serialize, ApiError>(__TAURI_INVOKE("browser_proposal_take", { id })),
 	browserReinstallHost: () => typedError<BrowserRegistrationDto_Serialize[], ApiError>(__TAURI_INVOKE("browser_reinstall_host")),
 	browserResetPairings: () => typedError<null, ApiError>(__TAURI_INVOKE("browser_reset_pairings")),
 	browserRevoke: (id: string) => typedError<null, ApiError>(__TAURI_INVOKE("browser_revoke", { id })),
@@ -122,6 +129,7 @@ export const commands = {
 	syncDisplacedStatus: () => typedError<DisplacedCopies_Serialize, ApiError>(__TAURI_INVOKE("sync_displaced_status")),
 	syncNow: () => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_now")),
 	syncStatus: () => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_status")),
+	traySearch: (query: string) => typedError<EntrySummary[], ApiError>(__TAURI_INVOKE("tray_search", { query })),
 	vaultCreate: (path: string, password: string, name: string) => typedError<SessionStatus_Serialize, ApiError>(__TAURI_INVOKE("vault_create", { path, password, name })),
 	vaultFindFiles: () => typedError<FoundVaultFileDto[], ApiError>(__TAURI_INVOKE("vault_find_files")),
 	vaultForget: (path: string) => typedError<null, ApiError>(__TAURI_INVOKE("vault_forget", { path })),
@@ -145,6 +153,7 @@ export const commands = {
 export const events = {
 	bridgeChangedEvent: makeEvent<BridgeChangedEvent, BridgeChangedEvent>("bridge-changed-event"),
 	clipboardClearedEvent: makeEvent<ClipboardClearedEvent, ClipboardClearedEvent>("clipboard-cleared-event"),
+	newEntryEvent: makeEvent<NewEntryEvent, NewEntryEvent>("new-entry-event"),
 	openEntryEvent: makeEvent<OpenEntryEvent, OpenEntryEvent>("open-entry-event"),
 	pairingChallengeEvent: makeEvent<PairingChallengeEvent_Serialize, PairingChallengeEvent_Deserialize>("pairing-challenge-event"),
 	proposalEvent: makeEvent<ProposalEvent_Serialize, ProposalEvent_Deserialize>("proposal-event"),
@@ -276,6 +285,38 @@ export type BrowserDiagnosticsDto_Serialize = {
 	extensionScanState: string,
 	enabledManagers: string[],
 	receivedAt: number | null,
+};
+
+/**
+ *  A taken save proposal: the editor model, the extra values of a registration form the user may
+ *  keep or drop (each becomes a custom field of the model), and a prefilled Address entry when the
+ *  form had an address no Address entry of the vault holds yet (created only when the user ticks
+ *  it). Empty extras and no address for a plain login or a one-time-password proposal.
+ */
+export type BrowserProposal = BrowserProposal_Serialize | BrowserProposal_Deserialize;
+
+/**
+ *  A taken save proposal: the editor model, the extra values of a registration form the user may
+ *  keep or drop (each becomes a custom field of the model), and a prefilled Address entry when the
+ *  form had an address no Address entry of the vault holds yet (created only when the user ticks
+ *  it). Empty extras and no address for a plain login or a one-time-password proposal.
+ */
+export type BrowserProposal_Deserialize = {
+	model: EntryEditModel_Deserialize,
+	extraFields: ProposalField[],
+	address?: EntryEditModel_Deserialize | null,
+};
+
+/**
+ *  A taken save proposal: the editor model, the extra values of a registration form the user may
+ *  keep or drop (each becomes a custom field of the model), and a prefilled Address entry when the
+ *  form had an address no Address entry of the vault holds yet (created only when the user ticks
+ *  it). Empty extras and no address for a plain login or a one-time-password proposal.
+ */
+export type BrowserProposal_Serialize = {
+	model: EntryEditModel_Serialize,
+	extraFields: ProposalField[],
+	address: EntryEditModel_Serialize | null,
 };
 
 /**  One browser's native messaging registration (`state`: `ok`, `missing`, `stale` or `error`). */
@@ -922,6 +963,15 @@ export type LoginItemStatus = "enabled" | "disabled" | "requiresApproval" | "not
 
 export type MigrationStrategy = "seedRemote" | "merge" | "adoptRemote" | "overwriteRemote";
 
+/**
+ *  A new-entry request is waiting (`AppCore::new_entry_requests`): a login from the tray panel's
+ *  "+", or a kind the bridge cannot create itself (an address or a files item) from the browser
+ *  extension. Payload-free, only a nudge: the main window takes the request with
+ *  `app_take_new_entry` (main window only) and runs its own "+" menu action. Any webview may emit
+ *  this event, so it must never carry the request itself; a forged one finds nothing to take.
+ */
+export type NewEntryEvent = null;
+
 /**  Why device unlock cannot be offered right now. */
 export type OfferBlock = 
 /**  Both toggles are off. */
@@ -1100,6 +1150,22 @@ export type ProposalEvent_Serialize = {
 	username: string | null,
 	entryId: string | null,
 };
+
+/**
+ *  One extra value of a registration form, offered as a custom field of the new login. The value
+ *  is wiped on drop; `Debug` hides it.
+ */
+export type ProposalField = {
+	kind: ProposalFieldKind,
+	label: string,
+	value: string,
+};
+
+/**
+ *  What a value captured from a registration form is; the review names it in the UI language
+ *  (only `Other` keeps the page's label). Mirrors `mypass_bridge::protocol::ExtraFieldKind`.
+ */
+export type ProposalFieldKind = "name" | "givenName" | "familyName" | "email" | "phone" | "birthday" | "username" | "organization" | "addressLine1" | "addressLine2" | "city" | "region" | "postalCode" | "country" | "other";
 
 /**  What a save proposal is about. */
 export type ProposalKind = "login" | "totp";

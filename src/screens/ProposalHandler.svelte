@@ -12,40 +12,68 @@
   // - The backend keeps a proposal for 120 s from when it asked for it. A waiting proposal (and a
   //   held model) is dropped at the same age: the toast goes, the held password is overwritten and
   //   no take is attempted. A take that still answers not-found says so in one specific message.
+  //   Each proposal has its own expiry, and it only ever drops that proposal: never an earlier
+  //   one already taken and open in the review or the editor.
+  // - A proposal that arrives while a take or the review's Address save is running waits too, and
+  //   is picked up when that work is done (shown, or parked behind the editor it opened).
   // - Proposals are not throttled by the backend, so only the LATEST one is kept: a burst leaves
   //   one waiting proposal, one toast and at most one editor. A replaced proposal is never taken
   //   (taking it only to drop it would pull its password into the webview); the backend expires it
   //   after 120 s, keeps at most 8 and wipes what it drops.
+  // - A registration form proposal (extra form values, or an address the vault does not hold yet)
+  //   first shows the review dialog: the user unticks what not to keep and may also create an
+  //   Address entry. The kept values become custom fields of the editor model; nothing is saved
+  //   before the editor's Save, apart from the Address entry the user ticked. While the review is
+  //   open it blocks a newer proposal like an editor does.
   import { onDestroy, onMount } from "svelte";
   import { api, ApiFailure } from "../lib/api";
-  import { events, type EntryEditModel_Serialize, type ProposalEvent_Deserialize } from "../lib/bindings";
+  import {
+    events,
+    type BrowserProposal_Serialize,
+    type EntryEditModel_Serialize,
+    type ProposalEvent_Deserialize,
+  } from "../lib/bindings";
   import { t } from "../lib/i18n/index.svelte";
   import { lockGuard } from "../lib/lock-guard";
+  import { proposalCustomFields } from "../lib/proposal-fields";
   import { listenTo } from "../lib/stores/browser.svelte";
   import { navigation } from "../lib/stores/navigation.svelte";
   import { toasts } from "../lib/stores/toasts.svelte";
+  import ProposalReview from "./ProposalReview.svelte";
 
   /** How long the backend keeps a proposal (`ProposalStore`). */
   const PROPOSAL_TTL_MS = 120_000;
 
   // Ids and URLs only, no secret.
-  let pending = $state<ProposalEvent_Deserialize | null>(null);
+  // Raw: compared by identity with the event the timer and the take hold.
+  let pending = $state.raw<ProposalEvent_Deserialize | null>(null);
   // True once the proposal had to wait behind an editor; it then opens when the editor is gone.
   let deferred = $state(false);
   // The taken model of `pending`, when the editor turned dirty during the take. A secret.
-  let held: EntryEditModel_Serialize | null = null;
+  let held: BrowserProposal_Serialize | null = null;
+  // The taken proposal under review (raw: its secrets are overwritten in place, never proxied).
+  let review = $state.raw<BrowserProposal_Serialize | null>(null);
   // State, so the effect below runs again when a take finishes behind a closed editor.
   let busy = $state(false);
   let toastId: number | null = null;
   let expiry: ReturnType<typeof setTimeout> | null = null;
 
   const blocked = () =>
-    navigation.presentation !== "browse" &&
-    navigation.editModel !== null &&
-    (navigation.editorSource === "browser" || navigation.editorDirty?.() === true);
+    review !== null ||
+    (navigation.presentation !== "browse" &&
+      navigation.editModel !== null &&
+      (navigation.editorSource === "browser" || navigation.editorDirty?.() === true));
+
+  /** Overwrites what a taken proposal holds before it is let go. */
+  function scrub(proposal: BrowserProposal_Serialize | null) {
+    if (!proposal) return;
+    scrubModel(proposal.model);
+    scrubModel(proposal.address);
+    for (const field of proposal.extraFields) field.value = "";
+  }
 
   /** Overwrites what a model holds secret before it is let go. */
-  function scrub(model: EntryEditModel_Serialize | null) {
+  function scrubModel(model: EntryEditModel_Serialize | null) {
     if (!model) return;
     model.password = "";
     model.totp = "";
@@ -54,6 +82,9 @@
       model.card.number = "";
       model.card.cvv = "";
     }
+    // A prefilled Address entry from a registration form: personal data, also let go wiped.
+    const address: Record<string, string> | null = model.address;
+    if (address) for (const key of Object.keys(address)) address[key] = "";
   }
 
   function dismissToast() {
@@ -67,8 +98,22 @@
     toastId = toasts.push("info", t("Saving from your browser is waiting"), { sticky: true });
   }
 
+  /** Lets go of everything: the waiting proposal, its held model and the one under review. */
   function forget() {
     if (expiry !== null) clearTimeout(expiry);
+    expiry = null;
+    scrub(held);
+    held = null;
+    scrub(review);
+    review = null;
+    pending = null;
+    deferred = false;
+    dismissToast();
+  }
+
+  /** The backend dropped `event`: so does the queue, if it still waits. The review is not its. */
+  function expire(event: ProposalEvent_Deserialize) {
+    if (pending !== event) return;
     expiry = null;
     scrub(held);
     held = null;
@@ -83,13 +128,18 @@
     held = null;
     pending = event;
     if (expiry !== null) clearTimeout(expiry);
-    expiry = setTimeout(forget, PROPOSAL_TTL_MS);
+    expiry = setTimeout(() => expire(event), PROPOSAL_TTL_MS);
     arrive();
   }
 
   /** Shows `pending` now, or parks it behind the editor. */
   function arrive() {
-    if (busy || !pending) return;
+    if (!pending) return;
+    if (busy) {
+      // A take or the review's save is running: the proposal is picked up when it is done.
+      deferred = true;
+      return;
+    }
     if (blocked()) {
       deferred = true;
       showWaiting();
@@ -113,11 +163,11 @@
 
   async function show(event: ProposalEvent_Deserialize) {
     const unchanged = lockGuard();
-    let model = held;
+    let taken = held;
     held = null;
-    if (!model) {
+    if (!taken) {
       try {
-        model = await api.browserProposalTake(event.id);
+        taken = await api.browserProposalTake(event.id);
       } catch (e) {
         if (unchanged()) {
           if (e instanceof ApiFailure && e.code === "notFound") toasts.push("error", t("This browser request has expired"));
@@ -128,17 +178,17 @@
       }
     }
     if (!unchanged()) {
-      scrub(model);
+      scrub(taken);
       return;
     }
     if (pending !== event) {
       // A newer proposal replaced this one while it was on its way: the newest wins.
-      scrub(model);
+      scrub(taken);
       return;
     }
     if (blocked()) {
       // The user started typing meanwhile: nothing is replaced and nothing is asked.
-      held = model;
+      held = taken;
       deferred = true;
       showWaiting();
       return;
@@ -148,12 +198,51 @@
     pending = null;
     deferred = false;
     dismissToast();
-    navigation.openEditor(model, "browser");
+    if (taken.extraFields.length > 0 || taken.address) review = taken;
+    else navigation.openEditor(taken.model, "browser");
+  }
+
+  /** Continue in the review: the kept values join the model, the ticked address is saved, the editor opens. */
+  async function confirmReview(keep: boolean[], withAddress: boolean) {
+    const proposal = review;
+    if (!proposal || busy) return;
+    review = null;
+    busy = true;
+    const unchanged = lockGuard();
+    try {
+      const kept = proposal.extraFields.filter((_, i) => keep[i] === true);
+      const model = proposal.model;
+      model.customFields = [...model.customFields, ...proposalCustomFields(kept, model.customFields)];
+      if (withAddress && proposal.address) {
+        try {
+          await api.entrySave(proposal.address);
+        } catch (e) {
+          // The login still opens: the address can be added by hand.
+          if (unchanged()) toasts.reportError(e);
+        }
+      }
+      for (const field of proposal.extraFields) field.value = "";
+      scrubModel(proposal.address);
+      if (!unchanged()) {
+        scrubModel(model);
+        return;
+      }
+      navigation.openEditor(model, "browser");
+    } finally {
+      busy = false;
+    }
+    // A proposal that arrived during the save: shown now, or parked behind the editor just opened.
+    if (unchanged() && pending) arrive();
+  }
+
+  function cancelReview() {
+    scrub(review);
+    review = null;
   }
 
   $effect(() => {
     // Every dependency is read first: a short-circuit would drop `presentation` from the set.
-    const idle = navigation.presentation === "browse" && !busy;
+    const idle = navigation.presentation === "browse" && !busy && review === null;
     if (idle && pending && deferred) void open();
   });
 
@@ -161,3 +250,7 @@
   // Also covers a lock: the Shell, and with it this component, goes away.
   onDestroy(forget);
 </script>
+
+{#if review}
+  <ProposalReview proposal={review} onconfirm={(keep, withAddress) => void confirmReview(keep, withAddress)} oncancel={cancelReview} />
+{/if}

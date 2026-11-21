@@ -2,6 +2,9 @@ const NATIVE_HOST_NAME = "com.mypass.chromehost";
 const PAIRING_STORAGE_KEY = "pairingSecret";
 const PAIRING_STARTED_AT_KEY = "pairingStartedAt";
 let pendingPairingStart = null;
+// The entry kinds `openApp` may ask the app's main window to start (`newEntry`).
+const OPEN_APP_NEW_ENTRY_KINDS = Object.freeze(["Address", "Files"]);
+
 const knownTypes = [
   "getCredentials", "getFavorites", "listEntries", "searchEntries", "createEntry", "addEntryIdentifier",
   "fillCredential", "getTotp", "proposeSaveLogin", "proposeSaveTotp",
@@ -1085,6 +1088,57 @@ async function fillSelectedAddress(message) {
       ? result.code : 'address_page_changed');
 }
 
+// --- Registration form identity fill -------------------------------------------------------
+//
+// The inline identity icon of a registration form (content.js, top frame only) lists the vault's
+// Address entries and fills the form from the chosen one. Unlike the popup-only browse views this
+// is asked by a content script, so every request must come from the top frame of an https page
+// whose url the message names, with the address switch on (re-read here, never trusted from the
+// page). The list carries only id, title and the person's name; the fill answers to the very
+// document that asked (sendResponse), with the address fields only.
+const IDENTITY_LIST_LIMIT = 50;
+const IDENTITY_ADDRESS_FIELDS = Object.freeze(["fullName", "givenName", "familyName", "organization",
+  "addressLine1", "addressLine2", "city", "region", "postalCode", "countryCode", "countryName", "phone", "email"]);
+
+function isIdentitySender(message, sender) {
+  return !!(isContentScriptSender(sender) && sender.frameId === 0 && typeof sender.documentId === "string"
+    && sender.documentId && typeof sender.url === "string" && urlMatch.isHttpsAddressPage(sender.url)
+    && urlMatch.fillTargetMatches(message.url, sender.url));
+}
+
+async function identitySuggestions() {
+  if (!(await readAutofillSettings()).showAddresses) return addressError("address_disabled");
+  const response = await sendNativeMessageWithPairing({ type: "listEntries", category: "addresses" });
+  if (response && ["locked", "pairingRequired"].includes(response.type)) return { type: response.type };
+  if (!response || response.type !== "credentialList" || !Array.isArray(response.credentials)) {
+    return addressError("address_unavailable");
+  }
+  const entries = response.credentials
+    .filter((entry) => entry && typeof entry.id === "string" && entry.id.length <= 64 && typeof entry.title === "string")
+    .slice(0, IDENTITY_LIST_LIMIT)
+    .map((entry) => ({
+      id: entry.id,
+      title: entry.title.slice(0, 200),
+      username: typeof entry.username === "string" ? entry.username.slice(0, 200) : "",
+    }));
+  return { type: "identityList", entries };
+}
+
+async function identityFill(message, sender) {
+  if (typeof message.id !== "string" || !message.id || message.id.length > 64) return addressError("address_unavailable");
+  if (!(await readAutofillSettings()).showAddresses) return addressError("address_disabled");
+  const response = await sendNativeMessageWithPairing({ type: "fillAddress", id: message.id, url: sender.url });
+  if (response && ["locked", "pairingRequired"].includes(response.type)) return { type: response.type };
+  if (!response || response.type !== "address" || !response.address || typeof response.address.id !== "string"
+    || response.address.id.toLowerCase() !== message.id.toLowerCase()) return addressError("address_unavailable");
+  const address = {};
+  for (const key of IDENTITY_ADDRESS_FIELDS) {
+    const value = response.address[key];
+    address[key] = typeof value === "string" ? value.slice(0, 1024) : "";
+  }
+  return { type: "identity", address };
+}
+
 // --- Pending prompts: save a login, save a 2FA seed, open settings ---------------------------
 //
 // The background owns every prompt record. A content script only *asks* (requestPrompt /
@@ -1279,7 +1333,8 @@ async function createPrompt(kind, message, sender) {
     if (kind === "saveTotp" && !settings.offerSaveTotp) return { type: "ok", created: false };
   }
   const payload = kind === "saveLogin"
-    ? { username: message.username, password: message.password }
+    ? { username: message.username, password: message.password, fields: message.fields,
+      usernameIsEmail: message.usernameIsEmail }
     : kind === "saveTotp" ? { otpauthOrSecret: message.otpauthOrSecret } : {};
   const record = promptRecords.create(kind, sender, payload, Date.now());
   if (!record) return { type: "error", code: "prompt_rejected" };
@@ -1529,6 +1584,13 @@ async function consumePrompt(message, sender) {
       type: "proposeSaveLogin", url: record.pageUrl,
       username: record.payload.username, password: record.payload.password
     };
+    // A registration form's other values, checked when the record was made; the app shows them
+    // for review before anything is saved.
+    if (Array.isArray(record.payload.fields) && record.payload.fields.length > 0) {
+      nativeMessage.extraFields = record.payload.fields;
+    }
+    // The username was the form's email: an Address entry made from the form gets it too.
+    if (record.payload.usernameIsEmail === true) nativeMessage.usernameIsEmail = true;
   } else {
     // The chosen account must be one the app offers for this page right now; the popup's word
     // for it is not enough.
@@ -1605,6 +1667,15 @@ function wirePromptCleanup() {
 if (typeof chrome !== "undefined" && chrome.runtime && chrome.storage) wirePromptCleanup();
 
 function handleRuntimeMessage(message, sender, sendResponse) {
+  if (message && (message.type === "getIdentitySuggestions" || message.type === "fillIdentity")) {
+    if (!isIdentitySender(message, sender)) {
+      sendResponse(addressError("address_unauthorized"));
+      return true;
+    }
+    const operation = message.type === "getIdentitySuggestions" ? identitySuggestions() : identityFill(message, sender);
+    operation.then(sendResponse).catch(() => sendResponse(addressError("address_unavailable")));
+    return true;
+  }
   if (message && message.type === 'addressFormReport') {
     sendResponse(acceptAddressReport(message, sender));
     return true;
@@ -1639,9 +1710,19 @@ function handleRuntimeMessage(message, sender, sendResponse) {
     return true;
   }
   // Popup or options page gesture only. A website must not be able to pull the vault window forward.
+  // The popup's "+" menu may also ask the main window to start a new address or files item (kinds
+  // the bridge cannot create itself); only those two values travel, anything else is refused here.
   if (message && message.type === "openApp") {
     if (!isAddressPopup(sender) && !isOptionsPage(sender)) return false;
-    sendNativeMessageWithPairing({ type: "openApp" }).then(sendResponse);
+    const request = { type: "openApp" };
+    if (message.newEntry !== undefined) {
+      if (!isAddressPopup(sender) || !OPEN_APP_NEW_ENTRY_KINDS.includes(message.newEntry)) {
+        sendResponse({ type: "error", message: "invalid_request" });
+        return true;
+      }
+      request.newEntry = message.newEntry;
+    }
+    sendNativeMessageWithPairing(request).then(sendResponse);
     return true;
   }
   if (message?.type === "launchApp") {

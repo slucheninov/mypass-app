@@ -20,9 +20,40 @@ var mypassPromptRecord = (function () {
   var PROMPT_KINDS = ['saveLogin', 'saveTotp', 'settings'];
   var MAX_FIELD = 2048;
   var MAX_PASSWORD = 1024;
+  // A registration form's extra values (registration-form.js `capture`), held to the bridge's
+  // limits (session_ops.rs `checked_extras`): a list that would be refused there is refused here.
+  var EXTRA_FIELD_KINDS = ['name', 'givenName', 'familyName', 'email', 'phone', 'birthday', 'username',
+    'organization', 'addressLine1', 'addressLine2', 'city', 'region', 'postalCode', 'country', 'other'];
+  var MAX_EXTRA_FIELDS = 24;
+  var MAX_EXTRA_LABEL = 64;
+  var MAX_EXTRA_VALUE = 512;
+  var RESERVED_LABEL_PREFIXES = ['mypass.', 'kpex_', 'kp2a_'];
+  var UNSAFE_CHAR = /[\p{Cc}\p{Cf}]/u;
 
   function isString(value, max) {
     return typeof value === 'string' && value.length <= max;
+  }
+
+  function isCleanLine(value, max) {
+    return typeof value === 'string' && Array.from(value).length <= max && !UNSAFE_CHAR.test(value);
+  }
+
+  // The checked copy of `fields`, or null when the list or any field breaks a rule.
+  function checkFields(fields) {
+    if (!Array.isArray(fields) || fields.length > MAX_EXTRA_FIELDS) return null;
+    var out = [];
+    for (var i = 0; i < fields.length; i += 1) {
+      var field = fields[i];
+      if (!field || typeof field !== 'object' || EXTRA_FIELD_KINDS.indexOf(field.kind) === -1) return null;
+      if (!isCleanLine(field.label, MAX_EXTRA_LABEL) || !isCleanLine(field.value, MAX_EXTRA_VALUE)) return null;
+      var label = field.label.trim();
+      var value = field.value.trim();
+      var lowered = label.toLowerCase();
+      if (!value || (field.kind === 'other' && !label)) return null;
+      if (RESERVED_LABEL_PREFIXES.some(function (prefix) { return lowered.indexOf(prefix) === 0; })) return null;
+      out.push({ kind: field.kind, label: label, value: value });
+    }
+    return out;
   }
 
   function newId() {
@@ -58,6 +89,13 @@ var mypassPromptRecord = (function () {
       if (!isString(input.password, MAX_PASSWORD) || !input.password) return null;
       if (input.username !== undefined && !isString(input.username, MAX_FIELD)) return null;
       data = { username: input.username || '', password: input.password };
+      if (input.fields !== undefined) {
+        var fields = checkFields(input.fields);
+        if (!fields) return null;
+        if (fields.length) data.fields = fields;
+      }
+      if (input.usernameIsEmail !== undefined && typeof input.usernameIsEmail !== 'boolean') return null;
+      if (input.usernameIsEmail === true && data.username) data.usernameIsEmail = true;
     } else if (kind === 'saveTotp') {
       if (!isString(input.otpauthOrSecret, MAX_FIELD) || !input.otpauthOrSecret) return null;
       data = { otpauthOrSecret: input.otpauthOrSecret };
@@ -179,6 +217,10 @@ var mypassPromptRecord = (function () {
     if (record.kind === 'saveLogin') {
       view.username = record.payload.username;
       view.passwordDetected = true;
+      // Names only: the values stay in the record until the app shows them for review.
+      if (Array.isArray(record.payload.fields) && record.payload.fields.length) {
+        view.fields = record.payload.fields.map(function (field) { return { kind: field.kind, label: field.label }; });
+      }
     } else if (record.kind === 'saveTotp') {
       view.label = totpLabel(record.payload.otpauthOrSecret);
       view.secretDetected = true;
@@ -190,6 +232,8 @@ var mypassPromptRecord = (function () {
     PROMPT_TTL_MS: PROMPT_TTL_MS,
     PROMPT_STORAGE_KEY: PROMPT_STORAGE_KEY,
     PROMPT_KINDS: PROMPT_KINDS,
+    MAX_EXTRA_FIELDS: MAX_EXTRA_FIELDS,
+    checkFields: checkFields,
     create: create,
     isExpired: isExpired,
     prune: prune,

@@ -24,7 +24,9 @@ mypass-bridge = { path = "../crates/mypass-bridge" }
 # The only crate that enables the HTTP client (`github` feature, R23); the update service that
 # builds the `GitHubReleaseClient` lands with the app wiring.
 mypass-update = { path = "../crates/mypass-update", features = ["github"] }
-tauri.workspace = true
+# `image-png` decodes the tray icons (the macOS template and the Windows key) and the
+# theme-following app icons (the macOS Dock and the Windows window icons).
+tauri = { workspace = true, features = ["image-png"] }
 tauri-specta.workspace = true
 specta.workspace = true
 specta-typescript.workspace = true
@@ -35,9 +37,6 @@ zeroize.workspace = true
 uuid.workspace = true
 sys-locale.workspace = true
 thiserror.workspace = true
-
-[target.'cfg(target_os = "macos")'.dependencies]
-tauri = { workspace = true, features = ["image-png"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance.workspace = true

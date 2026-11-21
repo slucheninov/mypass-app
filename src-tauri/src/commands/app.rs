@@ -1,10 +1,10 @@
 //! `app_*`: app-level commands (version, activity, windows, reveal in the file manager).
 
-use crate::events::{OpenEntryEvent, SettingsPaneEvent};
+use crate::events::{NewEntryEvent, OpenEntryEvent, SettingsPaneEvent};
 use crate::shell::WindowOps;
 use crate::state::{AppState, EditorDirty, ShellState};
 use mypass_session::dto::AppInfo;
-use mypass_session::{ApiError, AppCore};
+use mypass_session::{ApiError, AppCore, EntryTypeDto, SessionState};
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_specta::Event;
 
@@ -41,6 +41,60 @@ pub fn open_entry(
         result.map_err(super::internal)?;
     }
     Ok(Some(request.into()))
+}
+
+/// Asks the main window for a new login: while unlocked, records the request
+/// (`AppCore::new_entry_requests`), shows and focuses the main window and returns the nudge to
+/// emit to it. `None` (locked, no vault) records nothing and leaves every window alone.
+pub fn new_entry(
+    core: &AppCore,
+    windows: &dyn WindowOps,
+) -> Result<Option<NewEntryEvent>, ApiError> {
+    if core.vault_status()?.state != SessionState::Unlocked {
+        return Ok(None);
+    }
+    core.new_entry_requests.request(EntryTypeDto::Login);
+    for result in [windows.show(MAIN_WINDOW), windows.focus(MAIN_WINDOW)] {
+        result.map_err(super::internal)?;
+    }
+    Ok(Some(NewEntryEvent))
+}
+
+/// The tray panel's "+": the main window opens the editor for a new login.
+#[tauri::command]
+#[specta::specta]
+pub fn app_new_entry(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    shell: State<'_, ShellState>,
+) -> Result<(), ApiError> {
+    if let Some(event) = new_entry(&state.0, shell.windows.as_ref())? {
+        // A window that is gone is not an error of the request; it takes the request once it
+        // listens again.
+        let _ = event.emit_to(&app, MAIN_WINDOW);
+    }
+    Ok(())
+}
+
+/// Takes the pending new-entry request for the main window (`label`): the entry type, at most
+/// once, and only while unlocked (locked, the request keeps waiting for the unlock within its
+/// TTL). Any other window gets `None` and leaves the request alone.
+pub fn take_new_entry(core: &AppCore, label: &str) -> Result<Option<EntryTypeDto>, ApiError> {
+    if label != MAIN_WINDOW || core.vault_status()?.state != SessionState::Unlocked {
+        return Ok(None);
+    }
+    Ok(core.new_entry_requests.take())
+}
+
+/// The main window takes the pending new-entry request: after its listener is registered, on
+/// each `NewEntryEvent` and after an unlock. Main window only (capability and label).
+#[tauri::command]
+#[specta::specta]
+pub fn app_take_new_entry(
+    state: State<'_, AppState>,
+    webview: tauri::Webview,
+) -> Result<Option<EntryTypeDto>, ApiError> {
+    take_new_entry(&state.0, webview.label())
 }
 
 #[tauri::command]
@@ -165,12 +219,15 @@ pub fn open_settings(app: &AppHandle, pane: Option<&str>) -> Result<(), ApiError
                     .data_dir
                     .join("webview2"),
             );
-            builder
+            let window = builder
                 .title("MyPass")
                 .inner_size(640.0, 520.0)
                 .visible(false)
                 .build()
-                .map_err(|e| super::internal(e.to_string()))?
+                .map_err(|e| super::internal(e.to_string()))?;
+            // A new window starts with the bundle icon; Windows shows the theme's one.
+            crate::shell_runtime::refresh_app_icon(app, true);
+            window
         }
     };
     window.show().map_err(|e| super::internal(e.to_string()))?;
@@ -248,6 +305,97 @@ mod tests {
                 ("focus".to_owned(), "main".to_owned())
             ]
         );
+    }
+
+    #[test]
+    fn new_entry_shows_and_focuses_main_only_while_unlocked() {
+        let w = open_world();
+        let windows = FakeWindowOps::default();
+        assert_eq!(new_entry(&w.core, &windows).unwrap(), Some(NewEntryEvent));
+        assert!(w.core.new_entry_requests.is_pending());
+        let calls: Vec<_> = windows
+            .calls()
+            .into_iter()
+            .map(|(op, label, _)| (op, label))
+            .collect();
+        assert_eq!(
+            calls,
+            vec![
+                ("show".to_owned(), "main".to_owned()),
+                ("focus".to_owned(), "main".to_owned())
+            ]
+        );
+
+        let closed = world();
+        let untouched = FakeWindowOps::default();
+        assert_eq!(new_entry(&closed.core, &untouched).unwrap(), None);
+        assert!(untouched.calls().is_empty());
+    }
+
+    #[test]
+    fn a_locked_tray_request_records_nothing() {
+        let w = open_world();
+        w.core.vault_lock().unwrap();
+        assert_eq!(new_entry(&w.core, &FakeWindowOps::default()).unwrap(), None);
+        assert!(!w.core.new_entry_requests.is_pending());
+    }
+
+    #[test]
+    fn the_main_window_takes_the_tray_request_once() {
+        let w = open_world();
+        new_entry(&w.core, &FakeWindowOps::default()).unwrap();
+        assert_eq!(
+            take_new_entry(&w.core, MAIN_WINDOW).unwrap(),
+            Some(EntryTypeDto::Login)
+        );
+        assert_eq!(take_new_entry(&w.core, MAIN_WINDOW).unwrap(), None);
+    }
+
+    #[test]
+    fn only_the_main_window_may_take_a_request() {
+        let w = open_world();
+        w.core.new_entry_requests.request(EntryTypeDto::Files);
+        for label in [SETTINGS_WINDOW, crate::tray::PANEL_WINDOW, "other"] {
+            assert_eq!(take_new_entry(&w.core, label).unwrap(), None, "{label}");
+        }
+        assert_eq!(
+            take_new_entry(&w.core, MAIN_WINDOW).unwrap(),
+            Some(EntryTypeDto::Files)
+        );
+    }
+
+    #[test]
+    fn a_request_waits_while_locked_and_is_taken_after_the_unlock() {
+        let w = open_world();
+        w.core.vault_lock().unwrap();
+        w.core.new_entry_requests.request(EntryTypeDto::Address);
+        assert_eq!(take_new_entry(&w.core, MAIN_WINDOW).unwrap(), None);
+        assert!(w.core.new_entry_requests.is_pending(), "locked: kept");
+        w.core
+            .vault_unlock(secrecy::SecretString::from("pw"))
+            .unwrap();
+        assert_eq!(
+            take_new_entry(&w.core, MAIN_WINDOW).unwrap(),
+            Some(EntryTypeDto::Address)
+        );
+    }
+
+    #[test]
+    fn a_request_older_than_its_ttl_is_not_taken() {
+        let w = open_world();
+        w.core.new_entry_requests.request(EntryTypeDto::Files);
+        w.clock.advance(
+            mypass_session::new_entry_request::NewEntryRequestState::TTL
+                + std::time::Duration::from_secs(1),
+        );
+        assert_eq!(take_new_entry(&w.core, MAIN_WINDOW).unwrap(), None);
+    }
+
+    #[test]
+    fn without_a_vault_nothing_is_taken() {
+        let w = world();
+        w.core.new_entry_requests.request(EntryTypeDto::Files);
+        assert_eq!(take_new_entry(&w.core, MAIN_WINDOW).unwrap(), None);
     }
 
     #[test]

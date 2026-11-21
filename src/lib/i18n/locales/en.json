@@ -558,5 +558,14 @@
   "Most Used First": "Most Used First",
   "Least Used First": "Least Used First",
   "A to Z": "A → Z",
-  "Z to A": "Z → A"
+  "Z to A": "Z → A",
+  "Passwords": "Passwords",
+  "Open main window": "Open main window",
+  "Search results": "Search results",
+  "Last modified: %@": "Last modified: {0}",
+  "Created %@": "Created {0}",
+  "Birthday": "Birthday",
+  "Review form fields": "Review form fields",
+  "Choose the form fields to keep with the new login.": "Choose the form fields to keep with the new login.",
+  "Also create an Address entry": "Also create an Address entry"
 }

@@ -9,6 +9,7 @@ const MAIN: &[&str] = &[
     "app_open_settings",
     "app_record_activity",
     "app_set_editor_dirty",
+    "app_take_new_entry",
     "attachment_export",
     "attachment_pick",
     "browser_pairing_cancel",
@@ -108,6 +109,7 @@ const SETTINGS: &[&str] = &[
 
 const TRAY_PANEL: &[&str] = &[
     "app_info",
+    "app_new_entry",
     "app_open_entry",
     "app_open_settings",
     "app_quit",
@@ -120,7 +122,9 @@ const TRAY_PANEL: &[&str] = &[
     "entry_reveal",
     "entry_totp",
     "entry_touch",
+    "platform_keyboard_layout",
     "settings_get",
+    "tray_search",
     "update_open_release",
     "update_status",
     "vault_lock",
@@ -209,6 +213,9 @@ fn tray_panel_cannot_configure_device_move_vault_read_passkeys_or_take_proposals
             "allow-vault-location-change",
             "allow-entry-passkey-details",
             "allow-browser-proposal-take",
+            // The general list takes any query, the Deleted category included; the tray panel
+            // searches through `tray_search` only.
+            "allow-entry-list",
         ] {
             assert_ne!(id, forbidden);
         }

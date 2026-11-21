@@ -213,6 +213,31 @@ fn malformed_json_gets_malformed_request_and_stays_open() {
 }
 
 #[test]
+fn open_app_with_an_unknown_new_entry_kind_is_malformed_and_never_handled() {
+    let (s, _, calls) = start();
+    let mut c = authed(&s);
+    let handled = calls.load(Ordering::SeqCst);
+    let token = s.endpoint().token.clone();
+    for kind in ["\"Login\"", "\"address\"", "1"] {
+        send(
+            &mut c,
+            &format!(r#"{{"type":"openApp","token":"{token}","newEntry":{kind}}}"#),
+        );
+        assert_eq!(
+            recv(&mut c).unwrap(),
+            r#"{"type":"error","message":"malformed request"}"#
+        );
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), handled);
+    send(
+        &mut c,
+        &format!(r#"{{"type":"openApp","token":"{token}","newEntry":"Files"}}"#),
+    );
+    assert_eq!(recv(&mut c).unwrap(), r#"{"type":"ok"}"#);
+    assert_eq!(calls.load(Ordering::SeqCst), handled + 1);
+}
+
+#[test]
 fn oversized_frame_gets_error_and_close() {
     let (s, _, _) = start_with(ServerConfig {
         max_frame: 1024,

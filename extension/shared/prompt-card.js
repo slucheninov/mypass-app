@@ -151,6 +151,11 @@ var mypassPromptCard = (function () {
     if (isLogin) {
       field(doc, details, i18n.t('username'), view.username || i18n.t('promptNone'));
       field(doc, details, i18n.t('password'), '••••••••');
+      // A registration form: how many other values travel with the login. MyPass shows each one
+      // and lets the user drop it before anything is saved.
+      if (Array.isArray(view.fields) && view.fields.length) {
+        field(doc, details, i18n.t('promptFormFields'), i18n.t('promptFormFieldsCount', String(view.fields.length)));
+      }
     } else {
       field(doc, details, i18n.t('detailAccount'), view.label);
     }

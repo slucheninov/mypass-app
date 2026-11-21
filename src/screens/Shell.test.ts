@@ -96,6 +96,16 @@ describe("sidebar collapse", () => {
     expect(localStorage.getItem("layout.sidebarCollapsed")).toBe("false");
   });
 
+  it("the_sidebar_toggle_glyph_matches_the_other_toolbar_icons", async () => {
+    await shell();
+    const glyph = (name: string) => screen.getByRole("button", { name }).querySelector("svg");
+    // The thin sidebar outline is drawn larger than the 16 px glyphs to carry the same weight,
+    // inside the same 26 px button.
+    expect(glyph("Hide sidebar")?.getAttribute("width")).toBe("18");
+    expect(glyph("Lock")?.getAttribute("width")).toBe("16");
+    expect(glyph("Settings")?.getAttribute("width")).toBe("16");
+  });
+
   it("stored_collapsed_state_is_restored", async () => {
     localStorage.setItem("layout.sidebarCollapsed", "true");
     await shell();

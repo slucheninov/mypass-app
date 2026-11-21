@@ -9,6 +9,7 @@ import { emit } from "@tauri-apps/api/event";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type {
   AddressDto,
+  EntryTypeDto,
   ApiError,
   HistoryReveal,
   DeviceUnlockStatus_Serialize,
@@ -18,6 +19,7 @@ import type {
   BackupItem,
   BrowserRegistrationDto_Serialize,
   BrowserStatus_Serialize,
+  BrowserProposal_Serialize,
   EntryEditModel_Serialize,
   CsvPreview,
   commands,
@@ -125,7 +127,7 @@ export interface FakeState {
   /** What `browser_reinstall_host` answers. */
   browserReinstall: BrowserRegistrationDto_Serialize[];
   /** Save proposals by id: `browser_proposal_take` hands one out once, like the Rust store. */
-  proposals: Record<string, EntryEditModel_Serialize>;
+  proposals: Record<string, BrowserProposal_Serialize>;
   session: SessionStatus_Serialize;
   settings: Settings_Serialize;
   entries: FixtureEntry[];
@@ -182,6 +184,9 @@ export interface FakeState {
   csvFailure: ApiError | null;
   /** What the next `shortcut_conflicts_take` returns (and empties). */
   shortcutConflicts: ShortcutConflictEvent[];
+  /** Like `AppCore::new_entry_requests` (without its TTL, which Rust tests pin): the one pending
+   *  new-entry request, taken by `appTakeNewEntry`. */
+  newEntryRequest: EntryTypeDto | null;
   /** Ids `entry_touch` was called with, in order. */
   touched: string[];
   /** What `sync_status` answers; `sync_now` and `sync_disconnect_secondary` edit it. */
@@ -254,6 +259,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     csvFailure: null,
     touched: [],
     shortcutConflicts: [],
+    newEntryRequest: null,
     sync: { state: "off" },
     displaced: { count: 0, copies: [], unavailable: [] },
   };
@@ -437,6 +443,22 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       if (!state.entries.some((e) => e.summary.id === id)) return null;
       publish("openEntryEvent", { id, edit });
       return null;
+    },
+    // Like Rust: only an unlocked session records a request for a new login, then nudges the main
+    // window (a payload-free event) to take it.
+    appNewEntry: () => {
+      if (state.session.state === "unlocked") {
+        state.newEntryRequest = "login";
+        publish("newEntryEvent", null);
+      }
+      return null;
+    },
+    // Like Rust: taken at most once, and only while unlocked (locked, the request keeps waiting).
+    appTakeNewEntry: () => {
+      if (state.session.state !== "unlocked") return null;
+      const taken = state.newEntryRequest;
+      state.newEntryRequest = null;
+      return taken;
     },
     appOpenSettings: () => null,
     // Only the call log matters: the window and the quit flow live in Rust.
@@ -1056,6 +1078,17 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     updateDismiss: () => { state.update.banner = null; publish("updateChanged", structuredClone(state.update)); return null; },
     updateOpenRelease: () => null,
     syncStatus: () => structuredClone(state.sync),
+    // The backend's `tray_search`: every live entry, title order, never the recycle bin, at most 50.
+    traySearch: ({ query }) => {
+      requireUnlocked();
+      if (query.trim() === "") return [];
+      const all = listEntries(
+        state.entries,
+        { scope: { kind: "category", category: "all" }, search: query.trim(), sort: "title", order: "ascending" },
+        state.groups,
+      );
+      return all.filter((e) => !e.inRecycleBin).slice(0, 50);
+    },
     syncDisplacedStatus: () => structuredClone(state.displaced),
     syncDisplacedDelete: ({ id }) => {
       if (state.session.state !== "unlocked") throw apiError("locked");

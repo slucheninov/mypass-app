@@ -32,8 +32,17 @@ pub fn entry_recent(state: State<'_, AppState>, limit: u32) -> Result<Vec<EntryS
 
 #[tauri::command]
 #[specta::specta]
-pub fn entry_get(state: State<'_, AppState>, id: String) -> Result<EntryDetailDto, ApiError> {
-    state.0.entry_get(&id)
+pub fn entry_get(
+    state: State<'_, AppState>,
+    webview: tauri::Webview,
+    id: String,
+) -> Result<EntryDetailDto, ApiError> {
+    let detail = state.0.entry_get(&id)?;
+    // The tray panel never sees the recycle bin (`tray::tray_access`), here from the same read.
+    if detail.in_recycle_bin && webview.label() == crate::tray::PANEL_WINDOW {
+        return Err(super::tray::not_found());
+    }
+    Ok(detail)
 }
 
 /// The passkey with its credential id, after the user's explicit click on the Passkey row;
@@ -49,7 +58,12 @@ pub fn entry_passkey_details(
 
 #[tauri::command]
 #[specta::specta]
-pub fn entry_totp(state: State<'_, AppState>, id: String) -> Result<TotpDto, ApiError> {
+pub fn entry_totp(
+    state: State<'_, AppState>,
+    webview: tauri::Webview,
+    id: String,
+) -> Result<TotpDto, ApiError> {
+    super::tray::tray_access(&state.0, webview.label(), &id, Some(&FieldRef::Totp))?;
     state.0.entry_totp(&id)
 }
 
@@ -58,15 +72,23 @@ pub fn entry_totp(state: State<'_, AppState>, id: String) -> Result<TotpDto, Api
 #[specta::specta]
 pub fn entry_reveal(
     state: State<'_, AppState>,
+    webview: tauri::Webview,
     id: String,
     field: FieldRef,
 ) -> Result<SecretText, ApiError> {
+    super::tray::tray_access(&state.0, webview.label(), &id, Some(&field))?;
     state.0.entry_reveal(&id, field)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn entry_copy(state: State<'_, AppState>, id: String, field: FieldRef) -> Result<(), ApiError> {
+pub fn entry_copy(
+    state: State<'_, AppState>,
+    webview: tauri::Webview,
+    id: String,
+    field: FieldRef,
+) -> Result<(), ApiError> {
+    super::tray::tray_access(&state.0, webview.label(), &id, Some(&field))?;
     state.0.entry_copy(&id, field)
 }
 

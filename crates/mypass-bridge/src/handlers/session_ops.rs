@@ -6,19 +6,25 @@
 
 use std::time::{Duration, UNIX_EPOCH};
 
+use mypass_core::entry_ext::{EntryExt, EntryType};
 use mypass_core::matcher::credential_candidates;
+use mypass_session::queries::address_of;
 use mypass_session::session::LockReason;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+use super::browse::live_entries;
 use super::text::{
     is_clean_line, is_clean_text, MAX_OTP_CHARS, MAX_PASSWORD_CHARS, MAX_URL_CHARS,
     MAX_USERNAME_CHARS,
 };
 use crate::pairing::StartOutcome;
-use crate::protocol::{BrowserDiagnosticsReport, Response, WirePassword};
+use crate::protocol::{
+    BrowserDiagnosticsReport, ExtraFieldKind, NewEntryKind, ProposalExtraField, Response,
+    WirePassword,
+};
 use crate::service::Ctx;
-use crate::ui::Proposal;
+use crate::ui::{Proposal, ProposalExtra};
 use crate::unlock::{PasswordAttempt, UnlockFailure};
 use crate::views::{error, pairing_error_response, parse_wire_id};
 
@@ -93,11 +99,90 @@ fn withdraw(ctx: &Ctx<'_>, id: &str) -> Response {
     Response::Locked
 }
 
+/// Most extra values one registration form may send.
+pub(crate) const MAX_EXTRA_FIELDS: usize = 24;
+/// Longest readable label of an extra value, in characters.
+pub(crate) const MAX_EXTRA_LABEL_CHARS: usize = 64;
+/// Longest extra value, in characters (a street address joined into one line fits).
+pub(crate) const MAX_EXTRA_VALUE_CHARS: usize = 512;
+
+/// Label prefixes of fields the app or KeePass clients own. An `Other` value is stored under its
+/// label, so a page must never be able to aim it at one of those.
+const RESERVED_LABEL_PREFIXES: [&str; 3] = ["mypass.", "kpex_", "kp2a_"];
+
+/// Checks every extra value against the limits. One bad value refuses the whole proposal, so a page
+/// never gets a partial save it did not ask for.
+fn checked_extras(fields: &[ProposalExtraField]) -> Option<Vec<ProposalExtra>> {
+    if fields.len() > MAX_EXTRA_FIELDS {
+        return None;
+    }
+    fields
+        .iter()
+        .map(|field| {
+            // The raw text is checked before it is trimmed, exactly like the extension's background
+            // (prompt-record.js `checkFields`): a control character or an over-long value that
+            // trimming would hide still refuses the proposal.
+            if !is_clean_line(&field.label, MAX_EXTRA_LABEL_CHARS)
+                || !is_clean_line(&field.value, MAX_EXTRA_VALUE_CHARS)
+            {
+                return None;
+            }
+            let label = field.label.trim();
+            let value = field.value.trim();
+            let lowered = label.to_lowercase();
+            let label_ok = (field.kind != ExtraFieldKind::Other || !label.is_empty())
+                && !RESERVED_LABEL_PREFIXES
+                    .iter()
+                    .any(|p| lowered.starts_with(p));
+            (label_ok && !value.is_empty()).then(|| ProposalExtra {
+                kind: field.kind,
+                label: label.to_owned(),
+                value: Zeroizing::new(value.to_owned()),
+            })
+        })
+        .collect()
+}
+
+/// Case and whitespace folded, so "12  Main St" and "12 main st" are the same address line.
+fn folded(s: &str) -> String {
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// Whether `address` holds every captured address part (a country may match the code or the name).
+fn holds_address(address: &mypass_session::dto::AddressDto, extras: &[ProposalExtra]) -> bool {
+    extras.iter().filter(|x| x.kind.is_address_part()).all(|x| {
+        let wanted = folded(&x.value);
+        let stored: &[&str] = match x.kind {
+            ExtraFieldKind::AddressLine1 => &[&address.address_line1],
+            ExtraFieldKind::AddressLine2 => &[&address.address_line2],
+            ExtraFieldKind::City => &[&address.city],
+            ExtraFieldKind::Region => &[&address.region],
+            ExtraFieldKind::PostalCode => &[&address.postal_code],
+            ExtraFieldKind::Country => &[&address.country_code, &address.country_name],
+            ExtraFieldKind::Name
+            | ExtraFieldKind::GivenName
+            | ExtraFieldKind::FamilyName
+            | ExtraFieldKind::Email
+            | ExtraFieldKind::Phone
+            | ExtraFieldKind::Birthday
+            | ExtraFieldKind::Username
+            | ExtraFieldKind::Organization
+            | ExtraFieldKind::Other => &[],
+        };
+        stored.iter().any(|s| folded(s) == wanted)
+    })
+}
+
 pub(crate) fn propose_save_login(
     ctx: &Ctx<'_>,
     url: &str,
     username: &str,
     password: &str,
+    extra_fields: &[ProposalExtraField],
+    username_is_email: bool,
 ) -> Response {
     if !is_clean_line(url, MAX_URL_CHARS)
         || !is_clean_line(username, MAX_USERNAME_CHARS)
@@ -105,10 +190,31 @@ pub(crate) fn propose_save_login(
     {
         return error(INVALID);
     }
+    let Some(extras) = checked_extras(extra_fields) else {
+        return error(INVALID);
+    };
+    // An Address entry is offered only for a form with address parts that no live Address entry
+    // already holds.
+    let offer_address = if extras.iter().any(|x| x.kind.is_address_part()) {
+        match ctx.deps.session.with_db(|db| {
+            !live_entries(db).into_iter().any(|(e, _)| {
+                e.entry_type() == EntryType::Address && holds_address(&address_of(e), &extras)
+            })
+        }) {
+            Ok(offer) => offer,
+            Err(_) => return Response::Locked,
+        }
+    } else {
+        false
+    };
     let id = ctx.deps.proposals.put(Proposal::Login {
         url: url.to_owned(),
         username: username.to_owned(),
         password: Zeroizing::new(password.to_owned()),
+        extras,
+        offer_address,
+        // Only meaningful with a username to copy.
+        username_is_email: username_is_email && !username.trim().is_empty(),
     });
     // A lock that raced the gate has already cleared the store; a proposal stored after it must not
     // outlive it.
@@ -207,8 +313,11 @@ pub(crate) fn lock_vault(ctx: &Ctx<'_>) -> Response {
     Response::Acknowledged
 }
 
-pub(crate) fn open_app(ctx: &Ctx<'_>) -> Response {
-    ctx.deps.ui.open_app_requested();
+pub(crate) fn open_app(ctx: &Ctx<'_>, new_entry: Option<NewEntryKind>) -> Response {
+    match new_entry {
+        None => ctx.deps.ui.open_app_requested(),
+        Some(kind) => ctx.deps.ui.new_entry_requested(kind),
+    }
     Response::Acknowledged
 }
 
@@ -250,6 +359,7 @@ mod tests {
     use super::*;
     use crate::pairing::START_MIN_INTERVAL;
     use crate::protocol::Request;
+    use crate::protocol::{ExtraFieldKind, ProposalExtraField};
     use crate::testing::{
         all_requests, error_message, fx, named, report, resets_timer, sample_fx, send, Fx,
     };
@@ -297,6 +407,8 @@ mod tests {
             url: "https://a.example/login".into(),
             username: "alice".into(),
             password,
+            extra_fields: Vec::new(),
+            username_is_email: false,
             pairing,
         }
     }
@@ -325,6 +437,9 @@ mod tests {
             url,
             username,
             password,
+            extras,
+            offer_address,
+            username_is_email,
         }) = f.proposals.take(&id)
         else {
             panic!("no login proposal");
@@ -333,6 +448,9 @@ mod tests {
             (url.as_str(), username.as_str(), password.as_str()),
             ("https://a.example/login", "alice", pw)
         );
+        assert!(extras.is_empty());
+        assert!(!offer_address);
+        assert!(!username_is_email);
         assert!(f.proposals.take(&id).is_none());
     }
 
@@ -345,6 +463,8 @@ mod tests {
             url,
             username: "u".into(),
             password: "pw".into(),
+            extra_fields: Vec::new(),
+            username_is_email: false,
             pairing,
         });
         assert_eq!(r, Response::SaveProposalAccepted);
@@ -353,6 +473,8 @@ mod tests {
             url: "x".repeat(MAX_URL_CHARS + 1),
             username: "u".into(),
             password: "pw".into(),
+            extra_fields: Vec::new(),
+            username_is_email: false,
             pairing,
         });
         assert_eq!(error_message(&r), "invalid request");
@@ -365,6 +487,242 @@ mod tests {
             let r = send(&f, propose_login(&pw));
             assert_eq!(error_message(&r), "invalid request");
         }
+        assert!(f.ui.calls().is_empty());
+    }
+
+    fn extra(kind: ExtraFieldKind, label: &str, value: &str) -> ProposalExtraField {
+        ProposalExtraField {
+            kind,
+            label: label.into(),
+            value: value.into(),
+        }
+    }
+
+    fn propose_with(
+        fields: Vec<ProposalExtraField>,
+    ) -> impl FnOnce(String, Option<String>) -> Request {
+        move |token, pairing| Request::ProposeSaveLogin {
+            token,
+            url: "https://shop.example/register".into(),
+            username: "ann@example.com".into(),
+            password: "N3w-Passw0rd".into(),
+            extra_fields: fields,
+            username_is_email: false,
+            pairing,
+        }
+    }
+
+    #[test]
+    fn propose_save_login_keeps_that_the_username_is_the_email() {
+        let f = fx();
+        let flagged = |username: &'static str| {
+            move |token, pairing| Request::ProposeSaveLogin {
+                token,
+                url: "https://shop.example/register".into(),
+                username: username.into(),
+                password: "N3w-Passw0rd".into(),
+                extra_fields: vec![extra(ExtraFieldKind::City, "City", "Lviv")],
+                username_is_email: true,
+                pairing,
+            }
+        };
+        let flag = |f: &Fx| {
+            let id = last_arg(f, "save_login_proposal");
+            match f.proposals.take(&id) {
+                Some(Proposal::Login {
+                    username_is_email, ..
+                }) => username_is_email,
+                _ => panic!("no login proposal"),
+            }
+        };
+        assert_eq!(
+            send(&f, flagged("ann@example.com")),
+            Response::SaveProposalAccepted
+        );
+        assert!(flag(&f));
+        assert_eq!(send(&f, flagged("")), Response::SaveProposalAccepted);
+        assert!(!flag(&f), "no username, nothing to copy");
+    }
+
+    /// The stored extras (kind, label, value) and whether an Address entry is offered.
+    fn stored_extras(f: &Fx) -> (Vec<(ExtraFieldKind, String, String)>, bool) {
+        let id = last_arg(f, "save_login_proposal");
+        let Some(Proposal::Login {
+            extras,
+            offer_address,
+            ..
+        }) = f.proposals.take(&id)
+        else {
+            panic!("no login proposal");
+        };
+        let rows = extras
+            .iter()
+            .map(|x| (x.kind, x.label.clone(), String::clone(&x.value)))
+            .collect();
+        (rows, offer_address)
+    }
+
+    #[test]
+    fn propose_save_login_keeps_the_checked_extra_fields_trimmed() {
+        let (f, _) = sample_fx();
+        let r = send(
+            &f,
+            propose_with(vec![
+                extra(ExtraFieldKind::GivenName, " First name ", " Ann "),
+                extra(ExtraFieldKind::Phone, "Phone", "+380501234567"),
+                extra(ExtraFieldKind::Other, "Nickname", "annie"),
+            ]),
+        );
+        assert_eq!(r, Response::SaveProposalAccepted);
+        // The UI call still carries only the id, the URL and the username.
+        assert!(f.ui.details().iter().all(|d| !d.contains("annie")));
+        let (rows, offer_address) = stored_extras(&f);
+        assert_eq!(
+            rows,
+            [
+                (ExtraFieldKind::GivenName, "First name".into(), "Ann".into()),
+                (
+                    ExtraFieldKind::Phone,
+                    "Phone".into(),
+                    "+380501234567".into()
+                ),
+                (ExtraFieldKind::Other, "Nickname".into(), "annie".into()),
+            ]
+        );
+        assert!(!offer_address, "no address part, no Address entry offered");
+    }
+
+    #[test]
+    fn an_address_is_offered_only_when_no_address_entry_holds_it() {
+        let (f, _) = sample_fx();
+        // The sample vault's "Home Address" is in Kyiv: case and spacing do not matter.
+        send(
+            &f,
+            propose_with(vec![extra(ExtraFieldKind::City, "City", "  KYIV ")]),
+        );
+        assert_eq!(
+            stored_extras(&f),
+            (
+                vec![(ExtraFieldKind::City, "City".into(), "KYIV".into())],
+                false
+            )
+        );
+        send(
+            &f,
+            propose_with(vec![extra(ExtraFieldKind::City, "City", "Lviv")]),
+        );
+        assert!(stored_extras(&f).1, "a new city is a new address");
+        // Every captured part must be held: Kyiv plus a postal code the entry lacks is new.
+        send(
+            &f,
+            propose_with(vec![
+                extra(ExtraFieldKind::City, "City", "Kyiv"),
+                extra(ExtraFieldKind::PostalCode, "ZIP", "01001"),
+            ]),
+        );
+        assert!(stored_extras(&f).1);
+    }
+
+    #[test]
+    fn extra_fields_at_the_limits_are_accepted() {
+        let f = fx();
+        let fields = (0..MAX_EXTRA_FIELDS)
+            .map(|i| {
+                extra(
+                    ExtraFieldKind::Other,
+                    &format!("{i:0>width$}", width = MAX_EXTRA_LABEL_CHARS),
+                    &"v".repeat(MAX_EXTRA_VALUE_CHARS),
+                )
+            })
+            .collect();
+        assert_eq!(
+            send(&f, propose_with(fields)),
+            Response::SaveProposalAccepted
+        );
+        assert_eq!(stored_extras(&f).0.len(), MAX_EXTRA_FIELDS);
+    }
+
+    #[test]
+    fn one_bad_extra_field_refuses_the_whole_proposal() {
+        let f = fx();
+        let too_many = (0..=MAX_EXTRA_FIELDS)
+            .map(|_| extra(ExtraFieldKind::Other, "Field", "v"))
+            .collect::<Vec<_>>();
+        let long_label = "l".repeat(MAX_EXTRA_LABEL_CHARS + 1);
+        let long_value = "v".repeat(MAX_EXTRA_VALUE_CHARS + 1);
+        let cases = vec![
+            too_many,
+            vec![extra(ExtraFieldKind::City, &long_label, "Kyiv")],
+            vec![extra(ExtraFieldKind::City, "City", &long_value)],
+            vec![extra(ExtraFieldKind::City, "City", "   ")],
+            vec![extra(ExtraFieldKind::Other, "  ", "value")],
+            vec![extra(ExtraFieldKind::Other, "MyPass.EntryType", "Card")],
+            vec![extra(
+                ExtraFieldKind::Other,
+                "KPEX_PASSKEY_PRIVATE_KEY_PEM",
+                "x",
+            )],
+            vec![extra(
+                ExtraFieldKind::Other,
+                "kp2a_url",
+                "https://evil.example",
+            )],
+            vec![extra(ExtraFieldKind::Phone, "Phone", "1\u{0007}2")],
+            vec![extra(ExtraFieldKind::Other, "Line\nbreak", "v")],
+            vec![
+                extra(ExtraFieldKind::GivenName, "First name", "Ann"),
+                extra(ExtraFieldKind::Phone, "Phone", "1\u{0000}"),
+            ],
+        ];
+        for fields in cases {
+            let r = send(&f, propose_with(fields));
+            assert_eq!(error_message(&r), "invalid request");
+        }
+        assert!(f.ui.calls().is_empty(), "nothing was proposed");
+    }
+
+    /// The raw label and value are checked before they are trimmed, like the extension's background
+    /// does: trimming must not turn a refused field into an accepted one.
+    #[test]
+    fn extra_fields_are_checked_before_they_are_trimmed() {
+        let f = fx();
+        let padded_value = format!(" {} ", "v".repeat(MAX_EXTRA_VALUE_CHARS));
+        let padded_label = format!(" {} ", "l".repeat(MAX_EXTRA_LABEL_CHARS));
+        let cases = vec![
+            vec![extra(ExtraFieldKind::GivenName, "First name", "\tAnn")],
+            vec![extra(ExtraFieldKind::GivenName, "First name", "Ann\n")],
+            vec![extra(
+                ExtraFieldKind::GivenName,
+                "First name\u{0085}",
+                "Ann",
+            )],
+            vec![extra(ExtraFieldKind::City, "City", &padded_value)],
+            vec![extra(ExtraFieldKind::City, &padded_label, "Kyiv")],
+        ];
+        for fields in cases {
+            let r = send(&f, propose_with(fields));
+            assert_eq!(error_message(&r), "invalid request");
+        }
+        assert!(f.ui.calls().is_empty(), "nothing was proposed");
+    }
+
+    #[test]
+    fn a_proposal_with_extra_fields_is_gated_like_any_other() {
+        let f = fx();
+        let fields = || vec![extra(ExtraFieldKind::GivenName, "First name", "Ann")];
+        // No pairing secret: refused before the handler.
+        let r = f.svc.handle(Request::ProposeSaveLogin {
+            token: "tok".into(),
+            url: "https://shop.example/register".into(),
+            username: "u".into(),
+            password: "pw".into(),
+            extra_fields: fields(),
+            username_is_email: false,
+            pairing: None,
+        });
+        assert_eq!(r, Response::PairingRequired);
+        f.session.lock(LockReason::Manual);
+        assert_eq!(send(&f, propose_with(fields())), Response::Locked);
         assert!(f.ui.calls().is_empty());
     }
 
@@ -395,7 +753,7 @@ mod tests {
         // Called directly, past the gate: the handler notices the lock itself.
         let ctx = f.svc.ctx_for_test();
         assert_eq!(
-            propose_save_login(&ctx, "https://a.example", "u", "pw"),
+            propose_save_login(&ctx, "https://a.example", "u", "pw", &[], false),
             Response::Locked
         );
         assert_eq!(
@@ -511,6 +869,49 @@ mod tests {
         assert!(f.ui.calls().is_empty());
         assert_eq!(ask(&f, "openApp"), Response::Acknowledged);
         assert_eq!(f.ui.calls(), ["open_app_requested"]);
+    }
+
+    #[test]
+    fn open_app_with_new_entry_asks_the_ui_for_that_entry_kind_even_while_locked() {
+        let open = |kind, pairing: Option<String>| Request::OpenApp {
+            token: String::new(),
+            new_entry: Some(kind),
+            pairing,
+        };
+        let f = fx();
+        f.session.lock(LockReason::Manual);
+        // Unpaired: refused before the UI hears of it.
+        assert_eq!(
+            f.svc.handle(open(NewEntryKind::Address, None)),
+            Response::PairingRequired
+        );
+        assert!(f.ui.calls().is_empty());
+        // Paired and locked: answered, the window comes forward with the request.
+        assert_eq!(
+            f.svc
+                .handle(open(NewEntryKind::Address, Some(f.secret.clone()))),
+            Response::Acknowledged
+        );
+        assert_eq!(
+            f.svc
+                .handle(open(NewEntryKind::Files, Some(f.secret.clone()))),
+            Response::Acknowledged
+        );
+        assert_eq!(
+            f.ui.details(),
+            ["new_entry_requested Address", "new_entry_requested Files"]
+        );
+        // Without `newEntry` only the window is shown.
+        assert_eq!(ask(&f, "openApp"), Response::Acknowledged);
+        assert_eq!(f.ui.calls().last().unwrap(), "open_app_requested");
+        // Unlocked: the same.
+        let f = fx();
+        assert_eq!(
+            f.svc
+                .handle(open(NewEntryKind::Files, Some(f.secret.clone()))),
+            Response::Acknowledged
+        );
+        assert_eq!(f.ui.details(), ["new_entry_requested Files"]);
     }
 
     #[test]

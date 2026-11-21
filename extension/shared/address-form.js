@@ -256,6 +256,6 @@ var mypassAddressForm = (() => {
     return filled ? { type: 'addressFilled', filled } : { type: 'error', code: 'address_no_values' };
   }
 
-  return { collect, describe, apply, setNativeAddressValue };
+  return { collect, describe, apply, setNativeAddressValue, valueFor, withNameParts, fillable };
 })();
 if (typeof module !== 'undefined') module.exports = mypassAddressForm;

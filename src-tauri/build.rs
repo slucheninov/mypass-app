@@ -41,6 +41,7 @@ fn main() {
     // Keep this list explicit: the guards compare it to the registered command snapshot.
     let attributes = attributes.app_manifest(tauri_build::AppManifest::new().commands(&[
         "app_info",
+        "app_new_entry",
         "app_open_entry",
         "app_open_settings",
         "app_quit",
@@ -48,6 +49,7 @@ fn main() {
         "app_reveal_backups",
         "app_set_editor_dirty",
         "app_show_main",
+        "app_take_new_entry",
         "attachment_export",
         "attachment_pick",
         "backup_list",
@@ -112,6 +114,7 @@ fn main() {
         "sync_displaced_status",
         "sync_now",
         "sync_status",
+        "tray_search",
         "update_check_now",
         "update_dismiss",
         "update_open_release",

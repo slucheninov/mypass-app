@@ -9,10 +9,10 @@
 use crate::bridge::{BridgeHandle, BridgeState, StartFailure};
 use crate::state::AppState;
 use mypass_bridge::pairing::{PairingChallenge, PairingError};
-use mypass_bridge::protocol::BrowserDiagnosticsReport;
-use mypass_bridge::ui::Proposal;
+use mypass_bridge::protocol::{BrowserDiagnosticsReport, ExtraFieldKind};
+use mypass_bridge::ui::{Proposal, ProposalExtra};
 use mypass_platform::{BrowserRegistration, NativeHostRegistrar};
-use mypass_session::dto::{EntryEditModel, EntryTypeDto};
+use mypass_session::dto::{AddressDto, EntryEditModel, EntryTypeDto};
 use mypass_session::{ApiError, AppCore, ErrorCode};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -318,12 +318,228 @@ fn host_of(url: &str) -> String {
     mypass_core::matcher::host_of(url).unwrap_or_else(|| url.to_owned())
 }
 
-/// The editor model of a proposal. The proposal is spent by this call.
+/// What a value captured from a registration form is; the review names it in the UI language
+/// (only `Other` keeps the page's label). Mirrors `mypass_bridge::protocol::ExtraFieldKind`.
+#[derive(Serialize, Deserialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum ProposalFieldKind {
+    Name,
+    GivenName,
+    FamilyName,
+    Email,
+    Phone,
+    Birthday,
+    Username,
+    Organization,
+    AddressLine1,
+    AddressLine2,
+    City,
+    Region,
+    PostalCode,
+    Country,
+    Other,
+}
+
+impl From<ExtraFieldKind> for ProposalFieldKind {
+    fn from(kind: ExtraFieldKind) -> Self {
+        match kind {
+            ExtraFieldKind::Name => Self::Name,
+            ExtraFieldKind::GivenName => Self::GivenName,
+            ExtraFieldKind::FamilyName => Self::FamilyName,
+            ExtraFieldKind::Email => Self::Email,
+            ExtraFieldKind::Phone => Self::Phone,
+            ExtraFieldKind::Birthday => Self::Birthday,
+            ExtraFieldKind::Username => Self::Username,
+            ExtraFieldKind::Organization => Self::Organization,
+            ExtraFieldKind::AddressLine1 => Self::AddressLine1,
+            ExtraFieldKind::AddressLine2 => Self::AddressLine2,
+            ExtraFieldKind::City => Self::City,
+            ExtraFieldKind::Region => Self::Region,
+            ExtraFieldKind::PostalCode => Self::PostalCode,
+            ExtraFieldKind::Country => Self::Country,
+            ExtraFieldKind::Other => Self::Other,
+        }
+    }
+}
+
+/// One extra value of a registration form, offered as a custom field of the new login. The value
+/// is wiped on drop; `Debug` hides it.
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposalField {
+    pub kind: ProposalFieldKind,
+    pub label: String,
+    pub value: String,
+}
+
+impl Drop for ProposalField {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.value);
+    }
+}
+
+impl std::fmt::Debug for ProposalField {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProposalField")
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A taken save proposal: the editor model, the extra values of a registration form the user may
+/// keep or drop (each becomes a custom field of the model), and a prefilled Address entry when the
+/// form had an address no Address entry of the vault holds yet (created only when the user ticks
+/// it). Empty extras and no address for a plain login or a one-time-password proposal.
+#[derive(Serialize, Deserialize, specta::Type, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserProposal {
+    pub model: EntryEditModel,
+    pub extra_fields: Vec<ProposalField>,
+    pub address: Option<EntryEditModel>,
+}
+
+/// A country value of two letters is a country code, anything else its name.
+fn is_country_code(value: &str) -> bool {
+    value.len() == 2 && value.chars().all(|c| c.is_ascii_alphabetic())
+}
+
+/// The Address entry a registration form's values make, titled after the person (or the site).
+/// `login_email` is the username when it was typed into the form's email field: the form then has
+/// no separate email value, and the address gets it unless an email extra came too.
+fn address_model(
+    core: &AppCore,
+    url: &str,
+    extras: &[ProposalExtra],
+    login_email: Option<&str>,
+) -> Result<EntryEditModel, ApiError> {
+    let mut model = core.entry_new_model(EntryTypeDto::Address, None)?;
+    let mut address = model
+        .address
+        .take()
+        .unwrap_or_else(|| AddressDto::with_label("Home"));
+    for extra in extras {
+        let value = extra.value.as_str();
+        let slot = match extra.kind {
+            ExtraFieldKind::Name => &mut address.full_name,
+            ExtraFieldKind::GivenName => &mut address.given_name,
+            ExtraFieldKind::FamilyName => &mut address.family_name,
+            ExtraFieldKind::Organization => &mut address.organization,
+            ExtraFieldKind::AddressLine1 => &mut address.address_line1,
+            ExtraFieldKind::AddressLine2 => &mut address.address_line2,
+            ExtraFieldKind::City => &mut address.city,
+            ExtraFieldKind::Region => &mut address.region,
+            ExtraFieldKind::PostalCode => &mut address.postal_code,
+            ExtraFieldKind::Country if is_country_code(value) => &mut address.country_code,
+            ExtraFieldKind::Country => &mut address.country_name,
+            ExtraFieldKind::Phone => &mut address.phone,
+            ExtraFieldKind::Email => &mut address.email,
+            ExtraFieldKind::Birthday | ExtraFieldKind::Username | ExtraFieldKind::Other => continue,
+        };
+        // The first value of a kind wins, like the first matching field of a form.
+        if slot.is_empty() {
+            *slot = if extra.kind == ExtraFieldKind::Country && is_country_code(value) {
+                value.to_ascii_uppercase()
+            } else {
+                value.to_owned()
+            };
+        }
+    }
+    if let Some(email) = login_email {
+        if address.email.is_empty() {
+            email.clone_into(&mut address.email);
+        }
+    }
+    if address.full_name.is_empty() {
+        address.full_name = [address.given_name.as_str(), address.family_name.as_str()]
+            .iter()
+            .filter(|part| !part.is_empty())
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" ");
+    }
+    model.title = if address.full_name.is_empty() {
+        host_of(url)
+    } else {
+        address.full_name.clone()
+    };
+    model.address = Some(address);
+    Ok(model)
+}
+
+/// A new login for `url`, titled after its host.
+fn new_login(core: &AppCore, url: &str) -> Result<EntryEditModel, ApiError> {
+    let mut model = core.entry_new_model(EntryTypeDto::Login, None)?;
+    model.title = host_of(url);
+    model.urls = vec![url.to_owned()];
+    Ok(model)
+}
+
+fn login_proposal(
+    core: &AppCore,
+    url: &str,
+    username: &str,
+    password: &str,
+    extras: &[ProposalExtra],
+    offer_address: bool,
+    username_is_email: bool,
+) -> Result<BrowserProposal, ApiError> {
+    let mut model = new_login(core, url)?;
+    model.username = username.to_owned();
+    model.password = password.to_owned();
+    let address = if offer_address {
+        let login_email = (username_is_email && !username.is_empty()).then_some(username);
+        Some(address_model(core, url, extras, login_email)?)
+    } else {
+        None
+    };
+    let extra_fields = extras
+        .iter()
+        .map(|x| ProposalField {
+            kind: x.kind.into(),
+            label: x.label.clone(),
+            value: String::clone(&x.value),
+        })
+        .collect();
+    Ok(BrowserProposal {
+        model,
+        extra_fields,
+        address,
+    })
+}
+
+fn totp_proposal(
+    core: &AppCore,
+    url: &str,
+    otp: &str,
+    entry_id: Option<uuid::Uuid>,
+) -> Result<BrowserProposal, ApiError> {
+    let existing = match entry_id {
+        Some(entry) => match core.entry_edit_model(&entry.simple().to_string()) {
+            Ok(model) => Some(model),
+            // The entry was deleted meanwhile: the secret still gets a new login.
+            Err(e) if e.code == ErrorCode::NotFound => None,
+            Err(e) => return Err(e),
+        },
+        None => None,
+    };
+    let mut model = match existing {
+        Some(model) => model,
+        None => new_login(core, url)?,
+    };
+    model.totp = otp.to_owned();
+    Ok(BrowserProposal {
+        model,
+        extra_fields: Vec::new(),
+        address: None,
+    })
+}
+
+/// The editor model of a proposal, with its extra values. The proposal is spent by this call.
 pub fn proposal_take(
     core: &AppCore,
     state: &BridgeState,
     id: &str,
-) -> Result<EntryEditModel, ApiError> {
+) -> Result<BrowserProposal, ApiError> {
     // Not taken while locked: a lock clears the proposals anyway, and a failed read must not eat it.
     super::ensure_unlocked(core)?;
     let handle = running(state)?;
@@ -331,40 +547,24 @@ pub fn proposal_take(
         code: ErrorCode::NotFound,
         message: String::new(),
     })?;
-    let new_login = |url: &str| -> Result<EntryEditModel, ApiError> {
-        let mut model = core.entry_new_model(EntryTypeDto::Login, None)?;
-        model.title = host_of(url);
-        model.urls = vec![url.to_owned()];
-        Ok(model)
-    };
     let built = match &proposal {
         Proposal::Login {
             url,
             username,
             password,
-        } => {
-            let mut model = new_login(url)?;
-            model.username = username.clone();
-            model.password = String::clone(password);
-            Ok(model)
-        }
-        Proposal::Totp { url, otp, entry_id } => {
-            let existing = match *entry_id {
-                Some(entry) => match core.entry_edit_model(&entry.simple().to_string()) {
-                    Ok(model) => Some(model),
-                    // The entry was deleted meanwhile: the secret still gets a new login.
-                    Err(e) if e.code == ErrorCode::NotFound => None,
-                    Err(e) => return Err(e),
-                },
-                None => None,
-            };
-            let mut model = match existing {
-                Some(model) => model,
-                None => new_login(url)?,
-            };
-            model.totp = String::clone(otp);
-            Ok(model)
-        }
+            extras,
+            offer_address,
+            username_is_email,
+        } => login_proposal(
+            core,
+            url,
+            username,
+            password,
+            extras,
+            *offer_address,
+            *username_is_email,
+        ),
+        Proposal::Totp { url, otp, entry_id } => totp_proposal(core, url, otp, *entry_id),
     };
     if built.is_err() {
         // A failed read must not eat the proposal (it gets a new id; the webview shows the error).
@@ -459,7 +659,7 @@ pub fn browser_proposal_take(
     app_state: State<'_, AppState>,
     state: State<'_, BridgeState>,
     id: String,
-) -> Result<EntryEditModel, ApiError> {
+) -> Result<BrowserProposal, ApiError> {
     proposal_take(&app_state.0, &state, &id)
 }
 
@@ -827,6 +1027,9 @@ mod tests {
             url: "https://www.example.com/login".into(),
             username: "me".into(),
             password: Zeroizing::new("hunter2".into()),
+            extras: Vec::new(),
+            offer_address: false,
+            username_is_email: false,
         })
     }
 
@@ -834,7 +1037,7 @@ mod tests {
     fn proposal_take_returns_edit_model_once_and_then_not_found() {
         let f = fixture(true);
         let id = put_login(&f);
-        let model = proposal_take(&f.w.core, &f.state, &id).unwrap();
+        let model = proposal_take(&f.w.core, &f.state, &id).unwrap().model;
         assert_eq!(model.password, "hunter2");
         let err = proposal_take(&f.w.core, &f.state, &id).unwrap_err();
         assert_eq!(err.code, ErrorCode::NotFound);
@@ -844,7 +1047,10 @@ mod tests {
     fn proposal_take_login_prefills_title_username_url() {
         let f = fixture(true);
         let id = put_login(&f);
-        let model = proposal_take(&f.w.core, &f.state, &id).unwrap();
+        let taken = proposal_take(&f.w.core, &f.state, &id).unwrap();
+        assert!(taken.extra_fields.is_empty());
+        assert!(taken.address.is_none());
+        let model = taken.model;
         assert_eq!(model.id, None);
         assert_eq!(model.entry_type, EntryTypeDto::Login);
         assert_eq!(model.title, "www.example.com");
@@ -867,7 +1073,7 @@ mod tests {
             otp: Zeroizing::new("JBSWY3DPEHPK3PXP".into()),
             entry_id: Some(entry_uuid),
         });
-        let taken = proposal_take(&f.w.core, &f.state, &id).unwrap();
+        let taken = proposal_take(&f.w.core, &f.state, &id).unwrap().model;
         assert_eq!(taken.id.as_deref(), Some(entry.as_str()));
         assert_eq!(taken.title, "Mail");
         assert_eq!(taken.totp, "JBSWY3DPEHPK3PXP");
@@ -881,10 +1087,125 @@ mod tests {
             otp: Zeroizing::new("JBSWY3DPEHPK3PXP".into()),
             entry_id: None,
         });
-        let taken = proposal_take(&f.w.core, &f.state, &id).unwrap();
+        let taken = proposal_take(&f.w.core, &f.state, &id).unwrap().model;
         assert_eq!(taken.id, None);
         assert_eq!(taken.title, "mail.example");
         assert_eq!(taken.totp, "JBSWY3DPEHPK3PXP");
+    }
+
+    fn extra(kind: ExtraFieldKind, label: &str, value: &str) -> ProposalExtra {
+        ProposalExtra {
+            kind,
+            label: label.into(),
+            value: Zeroizing::new(value.into()),
+        }
+    }
+
+    fn put_registration(f: &crate::bridge::test_support::Fixture, offer_address: bool) -> String {
+        put_registration_with(f, offer_address, false)
+    }
+
+    fn put_registration_with(
+        f: &crate::bridge::test_support::Fixture,
+        offer_address: bool,
+        username_is_email: bool,
+    ) -> String {
+        f.handle().proposals.put(Proposal::Login {
+            url: "https://shop.example/register".into(),
+            username: "ann@example.com".into(),
+            password: Zeroizing::new("N3w-Passw0rd".into()),
+            extras: vec![
+                extra(ExtraFieldKind::GivenName, "First name", "Ann"),
+                extra(ExtraFieldKind::FamilyName, "Last name", "Lee"),
+                extra(ExtraFieldKind::Phone, "Phone", "+380501234567"),
+                extra(ExtraFieldKind::AddressLine1, "Street", "1 Main St"),
+                extra(ExtraFieldKind::City, "City", "Lviv"),
+                extra(ExtraFieldKind::Country, "Country", "ua"),
+                extra(ExtraFieldKind::Other, "Nickname", "annie"),
+            ],
+            offer_address,
+            username_is_email,
+        })
+    }
+
+    #[test]
+    fn proposal_take_hands_out_the_extra_fields_beside_the_login() {
+        let f = fixture(true);
+        let id = put_registration(&f, false);
+        let taken = proposal_take(&f.w.core, &f.state, &id).unwrap();
+        assert_eq!(taken.model.username, "ann@example.com");
+        assert_eq!(taken.model.password, "N3w-Passw0rd");
+        // The extras are not custom fields yet: the review decides which ones become fields.
+        assert!(taken.model.custom_fields.is_empty());
+        let rows: Vec<_> = taken
+            .extra_fields
+            .iter()
+            .map(|x| (x.kind, x.label.as_str(), x.value.as_str()))
+            .collect();
+        assert_eq!(rows.len(), 7);
+        assert_eq!(rows[0], (ProposalFieldKind::GivenName, "First name", "Ann"));
+        assert_eq!(rows[6], (ProposalFieldKind::Other, "Nickname", "annie"));
+        assert!(
+            taken.address.is_none(),
+            "no Address entry when none is offered"
+        );
+        assert!(!format!("{:?}", taken.extra_fields).contains("annie"));
+    }
+
+    #[test]
+    fn proposal_take_prefills_an_address_entry_when_one_is_offered() {
+        let f = fixture(true);
+        let id = put_registration(&f, true);
+        let address = proposal_take(&f.w.core, &f.state, &id)
+            .unwrap()
+            .address
+            .expect("an address model");
+        assert_eq!(address.id, None);
+        assert_eq!(address.entry_type, EntryTypeDto::Address);
+        assert_eq!(address.title, "Ann Lee");
+        let dto = address.address.as_ref().unwrap();
+        assert_eq!(
+            (
+                dto.full_name.as_str(),
+                dto.given_name.as_str(),
+                dto.family_name.as_str(),
+                dto.address_line1.as_str(),
+                dto.city.as_str(),
+                dto.country_code.as_str(),
+                dto.country_name.as_str(),
+                dto.phone.as_str(),
+            ),
+            (
+                "Ann Lee",
+                "Ann",
+                "Lee",
+                "1 Main St",
+                "Lviv",
+                "UA",
+                "",
+                "+380501234567"
+            )
+        );
+        // The model saves as it is: the user only ticks the box.
+        let saved = f.w.core.entry_save(address).unwrap();
+        assert!(!saved.is_empty());
+    }
+
+    #[test]
+    fn an_address_entry_gets_the_email_that_was_typed_as_the_username() {
+        let f = fixture(true);
+        let id = put_registration_with(&f, true, true);
+        let taken = proposal_take(&f.w.core, &f.state, &id).unwrap();
+        assert_eq!(taken.model.username, "ann@example.com");
+        let address = taken.address.expect("an address model");
+        assert_eq!(address.address.as_ref().unwrap().email, "ann@example.com");
+        // Without the flag the username is not taken for an email.
+        let id = put_registration_with(&f, true, false);
+        let address = proposal_take(&f.w.core, &f.state, &id)
+            .unwrap()
+            .address
+            .expect("an address model");
+        assert_eq!(address.address.as_ref().unwrap().email, "");
     }
 
     #[test]

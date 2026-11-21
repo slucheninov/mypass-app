@@ -224,8 +224,17 @@ impl BridgeService {
                 url,
                 username,
                 password,
+                extra_fields,
+                username_is_email,
                 ..
-            } => session_ops::propose_save_login(ctx, url, username, password),
+            } => session_ops::propose_save_login(
+                ctx,
+                url,
+                username,
+                password,
+                extra_fields,
+                *username_is_email,
+            ),
             Request::AddEntryIdentifier {
                 id,
                 url,
@@ -250,7 +259,7 @@ impl BridgeService {
             Request::UnlockWithDevice { .. } => session_ops::unlock_with_device(ctx),
             Request::GetUnlockOptions { .. } => session_ops::get_unlock_options(ctx),
             Request::LockVault { .. } => session_ops::lock_vault(ctx),
-            Request::OpenApp { .. } => session_ops::open_app(ctx),
+            Request::OpenApp { new_entry, .. } => session_ops::open_app(ctx, *new_entry),
             Request::OpenBrowserSettings { .. } => session_ops::open_browser_settings(ctx),
             Request::ReportBrowserDiagnostics {
                 report, pairing, ..
@@ -812,6 +821,9 @@ mod tests {
             url: "https://a.example".into(),
             username: "u".into(),
             password: Zeroizing::new("pw".into()),
+            extras: Vec::new(),
+            offer_address: false,
+            username_is_email: false,
         });
         f.svc
             .handle(named("getPasskeyProxyStatus", Some(&f.secret)));

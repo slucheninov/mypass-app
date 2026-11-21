@@ -109,6 +109,14 @@ function categoryTitle(categoryId) {
 // chrome://extensions, the new tab, and a tab with no URL have nothing to
 // autofill. The popup lists favorites there instead of treating the missing
 // page as "MyPass not found".
+// The Lock row's shortcut hint: the key chrome.commands reports for the lock-vault command, or
+// nothing when the user has not assigned one (the row then shows no hint at all).
+function lockShortcutLabel(commands) {
+  const list = Array.isArray(commands) ? commands : [];
+  const command = list.find((item) => item && item.name === 'lock-vault');
+  return command && typeof command.shortcut === 'string' ? command.shortcut.trim() : '';
+}
+
 function isSiteUrl(url) {
   if (!url || typeof url !== 'string') return false;
   try {
@@ -642,13 +650,16 @@ if (typeof document !== 'undefined') {
   const categoryMenu = document.getElementById('category-menu');
   const addEntryBtn = document.getElementById('add-entry-btn');
   const addEntryMenu = document.getElementById('add-entry-menu');
-  const plusRoot = document.getElementById('plus-menu-root');
-  const plusHelp = document.getElementById('plus-menu-help');
-  const plusActions = document.getElementById('plus-entry-actions');
-  const helpBtn = document.getElementById('plus-menu-help-btn');
-  const helpBack = document.getElementById('plus-menu-help-back');
+  const moreMenuBtn = document.getElementById('more-menu-btn');
+  const moreMenu = document.getElementById('more-menu');
+  const openAppMenuBtn = document.getElementById('open-app-menu-btn');
   const lockVaultBtn = document.getElementById('lock-vault-btn');
+  const lockShortcutHint = document.getElementById('lock-shortcut-hint');
+  const helpMenuBtn = document.getElementById('help-menu-btn');
+  const helpPopover = document.getElementById('help-popover');
+  const helpBackBtn = document.getElementById('help-back-btn');
   const lockErrorEl = document.getElementById('lock-vault-error');
+  let addEntryItems = [];
   const openGeneratorBtn = document.getElementById('open-generator-btn');
 
   const addTotpSection = document.getElementById('add-totp-section');
@@ -704,22 +715,87 @@ if (typeof document !== 'undefined') {
 
   const PASSKEY_PANELS = ['passkey-failure', 'passkey-checking', 'passkey-save', 'passkey-replace', 'passkey-use', 'passkey-picker'];
 
-  function showPlusMenuView(help) {
-    plusRoot.hidden = help;
-    plusHelp.hidden = !help;
+  // The two header dropdowns ("+" and "more") share one keyboard model, the WAI-ARIA menu
+  // button: the button opens its menu and focuses the first row (ArrowUp: the last row), the
+  // arrows and Home/End move between rows, Escape closes and returns focus to the button, Tab
+  // closes. Only one dropdown (or the help card) is open at a time.
+  function dropdownMenu(button, menu, items) {
+    function rows() {
+      return items().filter((item) => item && !item.hidden && !item.disabled);
+    }
+    function focusAt(index) {
+      const list = rows();
+      if (list.length) list[(index + list.length) % list.length].focus?.();
+    }
+    function open(focusIndex) {
+      closeHeaderMenus();
+      categoryMenu.hidden = true;
+      lockErrorEl.hidden = true;
+      menu.hidden = false;
+      button.setAttribute('aria-expanded', 'true');
+      focusAt(focusIndex);
+    }
+    function close(returnFocus) {
+      if (menu.hidden) return;
+      menu.hidden = true;
+      button.setAttribute('aria-expanded', 'false');
+      if (returnFocus) button.focus?.();
+    }
+    button.addEventListener('click', () => {
+      if (menu.hidden) open(0);
+      else close(false);
+    });
+    button.addEventListener('keydown', (event) => {
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+      event.preventDefault?.();
+      open(event.key === 'ArrowUp' ? -1 : 0);
+    });
+    menu.addEventListener('keydown', (event) => {
+      const current = rows().indexOf(event.target);
+      switch (event.key) {
+        case 'ArrowDown':
+          event.preventDefault?.();
+          focusAt(current + 1);
+          break;
+        case 'ArrowUp':
+          event.preventDefault?.();
+          focusAt(current < 0 ? -1 : current - 1);
+          break;
+        case 'Home':
+          event.preventDefault?.();
+          focusAt(0);
+          break;
+        case 'End':
+          event.preventDefault?.();
+          focusAt(-1);
+          break;
+        case 'Escape':
+          event.preventDefault?.();
+          close(true);
+          break;
+        case 'Tab':
+          close(false);
+          break;
+        default:
+          break;
+      }
+    });
+    return { open, close };
   }
 
-  function openPlusMenu() {
-    categoryMenu.hidden = true;
-    showPlusMenuView(false);
-    lockErrorEl.hidden = true;
-    addEntryMenu.hidden = false;
-    addEntryBtn.setAttribute('aria-expanded', 'true');
+  const addEntryDropdown = dropdownMenu(addEntryBtn, addEntryMenu, () => addEntryItems);
+  const moreDropdown = dropdownMenu(moreMenuBtn, moreMenu, () => [openAppMenuBtn, lockVaultBtn, helpMenuBtn]);
+
+  function closeHelp(returnFocus) {
+    if (helpPopover.hidden) return;
+    helpPopover.hidden = true;
+    if (returnFocus) moreMenuBtn.focus?.();
   }
 
-  function closePlusMenu() {
-    addEntryMenu.hidden = true;
-    addEntryBtn.setAttribute('aria-expanded', 'false');
+  function closeHeaderMenus() {
+    addEntryDropdown.close(false);
+    moreDropdown.close(false);
+    closeHelp(false);
   }
 
   function showPanel(name) {
@@ -745,9 +821,11 @@ if (typeof document !== 'undefined') {
     vaultSearch.hidden = !browse;
     openGeneratorBtn.hidden = !browse;
     addEntryBtn.hidden = !browse;
+    moreMenuBtn.hidden = !browse;
     categoryWrap.hidden = !browse;
     if (!browse) {
-      closePlusMenu();
+      closeHeaderMenus();
+      lockErrorEl.hidden = true;
       categoryMenu.hidden = true;
     }
     switch (name) {
@@ -1404,45 +1482,79 @@ if (typeof document !== 'undefined') {
   }
 
   function buildAddEntryMenu() {
-    plusActions.innerHTML = '';
+    addEntryMenu.innerHTML = '';
+    addEntryItems = [];
     const icons = {
-      Login: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M14.2 3.2a6.3 6.3 0 0 0-5.9 8.3L3.2 16.6V21h4.2l1.3-1.3v-2.2h2.2l1.2-1.2a6.3 6.3 0 1 0 2.1-13.1zm1.5 5.1a1.35 1.35 0 1 1 0 2.7 1.35 1.35 0 0 1 0-2.7z"/></svg>',
-      Card: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="2.2" y="5" width="19.6" height="14" rx="2.4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M2.2 9.6h19.6" stroke="currentColor" stroke-width="1.8"/></svg>',
-      Notes: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M6 3.2h8.2L19.8 9v11.2a.8.8 0 0 1-.8.8H6a.8.8 0 0 1-.8-.8V4a.8.8 0 0 1 .8-.8z"/><path d="M14 3.6V9h5.2" fill="none" stroke="#fff" stroke-width="1.4"/><path d="M8 13.2h8M8 16.6h5.5" fill="none" stroke="#fff" stroke-width="1.4" stroke-linecap="round"/></svg>'
+      Login: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M14.2 3.2a6.3 6.3 0 0 0-5.9 8.3L3.2 16.6V21h4.2l1.3-1.3v-2.2h2.2l1.2-1.2a6.3 6.3 0 1 0 2.1-13.1zm1.5 5.1a1.35 1.35 0 1 1 0 2.7 1.35 1.35 0 0 1 0-2.7z"/></svg>',
+      Card: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="2.2" y="5" width="19.6" height="14" rx="2.4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M2.2 9.6h19.6" stroke="currentColor" stroke-width="1.8"/></svg>',
+      Notes: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><path d="M6.4 3.2h7.6l4.8 4.8v12.2a.6.6 0 0 1-.6.6H6.4a.6.6 0 0 1-.6-.6V3.8a.6.6 0 0 1 .6-.6z"/><path d="M13.6 3.6v4.8h4.8M8.8 13h6.4M8.8 16.4h4.2"/></svg>',
+      Address: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><path d="M12 21s6.75-6 6.75-11.25a6.75 6.75 0 0 0-13.5 0C5.25 15 12 21 12 21z"/><circle cx="12" cy="9.75" r="2.25"/></svg>',
+      Files: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><path d="M18.75 11.25l-7.5 7.5a4.5 4.5 0 0 1-6.36-6.36l8.25-8.25a3 3 0 0 1 4.24 4.24L9 16.8a1.5 1.5 0 0 1-2.12-2.12l7.05-7.05"/></svg>'
     };
+    // Login, card and note open the extension's own create window; an address and a files item
+    // (which needs the app's file dialog) open in MyPass, straight into its editor.
     [
       { type: 'Login', title: i18n.t('newLogin'), iconClass: 'add-entry-icon-login' },
       { type: 'Card', title: i18n.t('newCard'), iconClass: 'add-entry-icon-card' },
-      { type: 'Notes', title: i18n.t('newNote'), iconClass: 'add-entry-icon-note' }
+      { type: 'Notes', title: i18n.t('newNote'), iconClass: 'add-entry-icon-note' },
+      { type: 'Address', title: i18n.t('newAddress'), iconClass: 'add-entry-icon-address', inApp: true },
+      { type: 'Files', title: i18n.t('newFile'), iconClass: 'add-entry-icon-files', inApp: true }
     ].forEach((choice) => {
       const button = document.createElement('button');
       button.type = 'button';
-      button.className = 'add-entry-option';
+      button.className = 'mp-menu-item';
+      button.setAttribute('role', 'menuitem');
+      button.setAttribute('tabindex', '-1');
       const icon = document.createElement('span');
       icon.className = 'add-entry-icon ' + choice.iconClass;
       icon.setAttribute('aria-hidden', 'true');
       icon.innerHTML = icons[choice.type];
       const label = document.createElement('span');
-      label.className = 'add-entry-label';
+      label.className = 'mp-menu-label';
       label.textContent = choice.title;
       button.appendChild(icon);
       button.appendChild(label);
-      button.addEventListener('click', () => openAddEntry(choice.type));
-      plusActions.appendChild(button);
+      button.addEventListener('click', () => (choice.inApp ? openNewEntryInApp(choice.type) : openAddEntry(choice.type)));
+      addEntryMenu.appendChild(button);
+      addEntryItems.push(button);
     });
   }
 
   function openAddEntry(entryType) {
-    closePlusMenu();
+    closeHeaderMenus();
     const params = new URLSearchParams({ type: entryType });
     if (entryType === 'Login' && isSiteUrl(currentTabUrl)) params.set('url', currentTabUrl);
     const height = entryType === 'Notes' ? 640 : entryType === 'Card' ? 680 : 760;
     openCenteredExtensionWindow('create.html?' + params.toString(), 520, height);
   }
 
+  // Asks MyPass to come forward with a new entry of `entryType` in its editor. A locked app shows
+  // its unlock screen and opens the editor after the unlock. The popup closes once the app took
+  // the request; otherwise the failure is shown under the header, and an app that is not running
+  // gets the locked panel with its Launch button.
+  function openNewEntryInApp(entryType) {
+    closeHeaderMenus();
+    lockErrorEl.hidden = true;
+    void sendPopupMessage({ type: 'openApp', newEntry: entryType }).then((response) => {
+      if (response?.type === 'ok') {
+        window.close?.();
+        return;
+      }
+      if (isHostMissing(response)) {
+        presentLockedPanel('hostMissing');
+        return;
+      }
+      if (isAppConnectionError(response)) {
+        presentLockedPanel('notRunning');
+        return;
+      }
+      showMenuError(response?.type === 'pairingRequired' ? i18n.t('connectBrowserFirst') : i18n.t('openAppFailed'));
+    });
+  }
+
   function openGenerator() {
     categoryMenu.hidden = true;
-    closePlusMenu();
+    closeHeaderMenus();
     const params = new URLSearchParams({ purpose: 'autofill' });
     if (isSiteUrl(currentTabUrl)) params.set('url', currentTabUrl);
     openCenteredExtensionWindow('generator.html?' + params.toString(), 420, 640);
@@ -1908,20 +2020,11 @@ if (typeof document !== 'undefined') {
 
   buildAddEntryMenu();
   categoryBtn.addEventListener('click', () => {
-    closePlusMenu();
+    closeHeaderMenus();
     categoryMenu.hidden = !categoryMenu.hidden;
   });
-  addEntryBtn.addEventListener('click', () => {
-    if (addEntryMenu.hidden) openPlusMenu();
-    else closePlusMenu();
-  });
-  addEntryMenu.addEventListener('keydown', (event) => {
-    if (event.key !== 'Escape') return;
-    closePlusMenu();
-    addEntryBtn.focus?.();
-  });
   vaultSearch.addEventListener('input', () => {
-    closePlusMenu();
+    closeHeaderMenus();
     const query = vaultSearch.value.trim();
     if (!query) {
       selectCategory(selectedCategory, { keepSearch: true });
@@ -1930,29 +2033,63 @@ if (typeof document !== 'undefined') {
     querySearch(query);
   });
   openGeneratorBtn.addEventListener('click', openGenerator);
-  helpBtn.addEventListener('click', () => {
-    showPlusMenuView(true);
-    helpBack.focus?.();
+  // A press outside the header controls closes whatever dropdown is open.
+  document.addEventListener?.('pointerdown', (event) => {
+    const inside = [addEntryBtn, addEntryMenu, moreMenuBtn, moreMenu, helpPopover]
+      .some((node) => node.contains?.(event.target));
+    if (!inside) closeHeaderMenus();
   });
-  helpBack.addEventListener('click', () => {
-    showPlusMenuView(false);
-    helpBtn.focus?.();
+
+  function showMenuError(text) {
+    lockErrorEl.textContent = text;
+    lockErrorEl.hidden = false;
+  }
+
+  openAppMenuBtn.addEventListener('click', () => {
+    moreDropdown.close(false);
+    lockErrorEl.hidden = true;
+    void sendPopupMessage({ type: 'openApp' }).then((response) => {
+      if (response?.type === 'ok') {
+        window.close?.();
+        return;
+      }
+      showMenuError(response?.type === 'pairingRequired' ? i18n.t('connectBrowserFirst') : i18n.t('openAppFailed'));
+    });
+  });
+  helpMenuBtn.addEventListener('click', () => {
+    closeHeaderMenus();
+    helpPopover.hidden = false;
+    helpBackBtn.focus?.();
+  });
+  helpBackBtn.addEventListener('click', () => closeHelp(true));
+  helpPopover.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault?.();
+    closeHelp(true);
   });
   lockVaultBtn.addEventListener('click', () => {
+    if (lockVaultBtn.disabled) return;
     lockVaultBtn.disabled = true;
     lockErrorEl.hidden = true;
     chrome.runtime.sendMessage({ type: 'lockVault' }, (result) => {
       void chrome.runtime.lastError;
       lockVaultBtn.disabled = false;
+      moreDropdown.close(false);
       if (result?.type === 'ok' || result?.type === 'locked') {
         presentLockedPanel();
         return;
       }
-      lockErrorEl.hidden = false;
-      lockErrorEl.textContent = result?.type === 'pairingRequired'
+      showMenuError(result?.type === 'pairingRequired'
         ? i18n.t('connectBrowserFirst')
-        : i18n.t('lockFailed');
+        : i18n.t('lockFailed'));
+      moreMenuBtn.focus?.();
     });
+  });
+  chrome.commands?.getAll?.((commands) => {
+    void chrome.runtime.lastError;
+    const label = lockShortcutLabel(commands);
+    lockShortcutHint.textContent = label;
+    lockShortcutHint.hidden = !label;
   });
 
   // --- Page prompts (save login / save 2FA / settings) ---------------------------------
@@ -2104,6 +2241,7 @@ if (typeof document !== 'undefined') {
 
 if (typeof module !== 'undefined') {
   module.exports = {
+    lockShortcutLabel,
     classifyGetCredentialsResponse: bridgeStatus.classifyGetCredentialsResponse,
     isPairingChallengeFresh,
     normalizePairingCode,

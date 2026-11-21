@@ -375,7 +375,9 @@
   "pairingThrottled": {
     "message": "Слишком много попыток подключения. Подождите минуту и снова откройте это окно."
   },
-  "pairingNewCodeRequested": { "message": "Запрошен новый код. Проверьте MyPass." },
+  "pairingNewCodeRequested": {
+    "message": "Запрошен новый код. Проверьте MyPass."
+  },
   "pairingInvalidCode": {
     "message": "Код неверный или просрочен. Проверьте код в MyPass или снова откройте это окно."
   },
@@ -396,6 +398,12 @@
   },
   "newNote": {
     "message": "Новая заметка"
+  },
+  "newAddress": {
+    "message": "Новый адрес"
+  },
+  "newFile": {
+    "message": "Новый файл"
   },
   "totpInvalid": {
     "message": "Введите действительный URL аутентификатора или секретный ключ"
@@ -478,6 +486,9 @@
   },
   "addItem": {
     "message": "Добавить запись"
+  },
+  "moreActions": {
+    "message": "Ещё"
   },
   "sendCode": {
     "message": "Отправить"
@@ -1079,5 +1090,19 @@
   },
   "cvv": {
     "message": "CVV"
+  },
+  "panelNoAddresses": {
+    "message": "В MyPass нет адресов"
+  },
+  "promptFormFields": {
+    "message": "Поля формы"
+  },
+  "promptFormFieldsCount": {
+    "message": "$P1$, какие из них сохранить, вы выберете в MyPass",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
   }
 }

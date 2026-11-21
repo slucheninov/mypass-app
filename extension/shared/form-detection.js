@@ -352,6 +352,180 @@ function addressFieldHint(control) {
   return null;
 }
 
+// Registration (sign-up) forms. The identity kinds below are the `kind` values of the bridge's
+// `extraFields` (protocol.rs `ExtraFieldKind`); address parts come from addressFieldHint above.
+// Hints are normalized like addressFieldHint (NFKC, camelCase split, lowercase, punctuation to
+// spaces), so "firstName", "first_name" and "First name:" are all "first name", and an apostrophe
+// ("ім'я") becomes a space ("ім я"). Patterns match whole words of that text, in order: the
+// first kind that matches wins, so "user name" is a username before it is a name.
+function normalizedHint(value) {
+  return String(value || '').normalize('NFKC')
+    .replace(/([\p{Ll}\d])(\p{Lu})/gu, '$1 $2').toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+const WORD = (alternatives) => new RegExp('(?:^| )(?:' + alternatives + ')(?: |$)');
+
+// A field that holds a payment card, a one-time, verification or authentication code, a PIN, a
+// captcha, a token, a security answer, a bank or national id, a passport, a search query or a
+// coupon is never captured or filled, whatever else its hints or its autocomplete attribute say:
+// registration-form.js checks this before any positive hint.
+const SENSITIVE_FIELD_HINT = WORD([
+  'card(?: number| holder| name)?', 'credit ?card', 'cc(?: number| num| name| exp\\w*)?', 'cvv2?', 'cvc2?', 'csc', 'cid',
+  'exp(?:iry|iration)?(?: date| month| year)?', 'security code', 'verification(?: code)?', 'verify code',
+  'one ?time(?: code| password| passcode| pin)?', 'otp(?: code)?', 'totp', 'passcode',
+  'auth(?:entication|entificator)?(?: code)?', '2fa(?: code)?', 'mfa(?: code)?', 'two ?factor(?: code)?',
+  'sms code', 'confirmation code', 'captcha', 'recaptcha', 'pin(?: code| number)?', 'token', 'secret',
+  'security answer', 'answer', 'security question', 'iban', 'bic', 'swift', 'routing number', 'account number',
+  'ssn', 'social security(?: number)?', 'tax id', 'passport(?: number| no)?', 'search', 'query', 'coupon(?: code)?',
+  'promo(?: code)?', 'gift card', 'voucher(?: code)?', 'discount code',
+  'karte', 'kartennummer', 'kreditkarte', 'karteninhaber', 'prüfnummer', 'prüfziffer', 'sicherheitscode',
+  'gültig bis', 'bestätigungscode', 'verifizierungscode', 'authentifizierungscode', 'einmalcode',
+  'einmalpasswort', 'einmalkennwort', 'sicherheitsfrage', 'sicherheitsantwort', 'antwort', 'suche',
+  'gutschein(?:code)?', 'rabattcode', 'steuer ?id', 'steuernummer', 'reisepass(?:nummer)?',
+  'sozialversicherungsnummer', 'kontonummer', 'tan',
+  'картка', 'картки', 'номер картки', 'кредитна картка', 'код безпеки', 'код підтвердження',
+  'код автентифікації', 'код аутентифікації', 'одноразовий(?: код| пароль)?', 'пін(?: код)?', 'капча',
+  'токен', 'секретне питання', 'контрольне питання', 'відповідь', 'пошук', 'промокод', 'купон',
+  'паспорт', 'іпн', 'номер рахунку',
+  'карта', 'карты', 'номер карты', 'кредитная карта', 'код безопасности', 'код подтверждения',
+  'код аутентификации', 'одноразовый(?: код| пароль)?', 'пин(?: код)?', 'секретный вопрос',
+  'контрольный вопрос', 'ответ', 'поиск', 'инн', 'снилс', 'номер счета', 'номер счёта',
+].join('|'));
+
+// A password-type field that holds a card code, a PIN or a one-time code, not an account password.
+// Narrower than SENSITIVE_FIELD_HINT: "auth" or "secret" in a password field's name is common.
+const SENSITIVE_PASSWORD_HINT = WORD([
+  'card(?: number| code)?', 'credit ?card', 'cvv2?', 'cvc2?', 'csc', 'cid', 'security code', 'verification code',
+  'one ?time(?: code| password| passcode| pin)?', 'otp(?: code)?', 'pin(?: code| number)?', 'tan',
+  'prüfnummer', 'sicherheitscode', 'einmalcode', 'einmalpasswort',
+  'пін(?: код)?', 'код безпеки', 'одноразовий(?: код| пароль)?',
+  'пин(?: код)?', 'код безопасности', 'одноразовый(?: код| пароль)?',
+].join('|'));
+
+// A password field that holds the user's existing password (a change-password or re-auth form):
+// "current", "old" or "existing" password in the four languages. Registration forms never have one.
+const CURRENT_PASSWORD_HINT = WORD([
+  'current(?: password)?', 'old(?: password)?', 'existing(?: password)?', 'previous(?: password)?',
+  'present password', 'cur(?:r)? pass(?:word)?',
+  'aktuelles(?: passwort| kennwort)?', 'altes(?: passwort| kennwort)?', 'bisheriges(?: passwort| kennwort)?',
+  'derzeitiges(?: passwort| kennwort)?',
+  'поточний(?: пароль)?', 'старий(?: пароль)?', 'чинний(?: пароль)?', 'теперішній(?: пароль)?',
+  'текущий(?: пароль)?', 'старый(?: пароль)?', 'действующий(?: пароль)?', 'прежний(?: пароль)?',
+].join('|'));
+
+const IDENTITY_FIELD_HINTS = [
+  ['username', WORD([
+    'user ?name', 'user id', 'userid', 'login(?: name| id)?', 'nick ?name', 'screen name', 'account name', 'display name',
+    'benutzer(?: ?name)?', 'anmeldename', 'spitzname',
+    'логін', 'ім я користувача', 'нікнейм', 'псевдонім',
+    'логин', 'имя пользователя', 'никнейм', 'псевдоним',
+  ].join('|'))],
+  ['email', WORD([
+    'e ?mail(?: address| adresse)?', 'mail(?: address| adresse)', 'e ?mail ?adresse',
+    'електронна пошта', 'ел пошта', 'е пошта', 'пошта',
+    'электронная почта', 'эл почта', 'почта',
+  ].join('|'))],
+  ['phone', WORD([
+    'phone(?: number)?', 'telephone(?: number)?', 'tel', 'mobile(?: phone| number)?', 'cell(?: phone)?',
+    'telefon(?:nummer)?', 'handy(?:nummer)?', 'mobil(?:nummer|telefon)?', 'rufnummer',
+    'телефон', 'номер телефону', 'мобільний(?: телефон)?',
+    'номер телефона', 'мобильный(?: телефон)?',
+  ].join('|'))],
+  ['birthday', WORD([
+    'birthday', 'birth ?date', 'date of birth', 'dob', 'bday',
+    'geburtsdatum', 'geburtstag',
+    'дата народження', 'день народження',
+    'дата рождения', 'день рождения',
+  ].join('|'))],
+  ['familyName', WORD([
+    'last ?name', 'family ?name', 'surname', 'lname',
+    'nachname', 'familienname',
+    'прізвище', 'фамилия',
+  ].join('|'))],
+  ['givenName', WORD([
+    'first ?name', 'given ?name', 'forename', 'fname',
+    'vorname',
+    'ім я', 'имя',
+  ].join('|'))],
+  ['name', /^(?:name|your name|full ?name|vollständiger name|ihr name|vor und nachname|ваше ім я|повне ім я|піб|ваше имя|полное имя|фио)$/],
+  ['organization', WORD([
+    'company(?: name)?', 'organi[sz]ation', 'business name',
+    'firma', 'firmenname', 'unternehmen',
+    'компанія', 'організація', 'компания', 'организация',
+  ].join('|'))],
+];
+
+// The words of a button (or input value) that creates an account: a registration form's submit.
+const REGISTRATION_ACTION_TEXT = WORD([
+  'sign ?up', 'register', 'registration', 'create(?: an| your| my)? account', 'join(?: now| free)?', 'get started',
+  'open(?: an)? account',
+  'registrieren', 'registrierung', 'jetzt registrieren', 'konto (?:erstellen|anlegen|eröffnen)', 'kostenlos registrieren',
+  'зареєструватися', 'зареєструватись', 'реєстрація', 'створити (?:акаунт|обліковий запис)',
+  'зарегистрироваться', 'регистрация', 'создать (?:аккаунт|учетную запись|учётную запись)',
+].join('|'));
+
+// The texts that describe a control: name, id, aria-label, placeholder, associated labels.
+function controlHints(control) {
+  const labels = Array.from(control.labels || [], (label) => addressLabelText(label, control));
+  return [
+    control.getAttribute('name'), control.getAttribute('id'), control.getAttribute('aria-label'),
+    control.getAttribute('placeholder'), ...labels,
+  ].map(normalizedHint).filter(Boolean);
+}
+
+function isSensitiveFieldHint(control) {
+  return controlHints(control).some((hint) => SENSITIVE_FIELD_HINT.test(hint));
+}
+
+function isSensitivePasswordHint(control) {
+  return controlHints(control).some((hint) => SENSITIVE_PASSWORD_HINT.test(hint));
+}
+
+function isCurrentPasswordHint(control) {
+  return controlHints(control).some((hint) => CURRENT_PASSWORD_HINT.test(hint));
+}
+
+// Whether a control is really on screen, the way the address autofill decides it
+// (address-form.js `editable`): connected, not under [hidden], [inert] or aria-hidden="true",
+// no ancestor with display:none or opacity 0, visibility "visible", and a box of some size. No
+// offsetParent shortcut: a field inside an opacity:0 or visibility:hidden wrapper still has one.
+// Elements without those APIs (test doubles) are not shown.
+function isControlShown(control) {
+  if (!control || control.isConnected === false) return false;
+  if (typeof control.closest !== 'function' || control.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
+  const view = control.ownerDocument && control.ownerDocument.defaultView;
+  if (!view || typeof view.getComputedStyle !== 'function' || typeof control.getBoundingClientRect !== 'function') return false;
+  for (let node = control; node; node = node.parentElement) {
+    const style = view.getComputedStyle(node);
+    if (!style || style.display === 'none' || Number(style.opacity) === 0) return false;
+    if (node === control && style.visibility !== 'visible') return false;
+  }
+  const box = control.getBoundingClientRect();
+  return !!box && box.width > 0 && box.height > 0;
+}
+
+// Disabled itself or through a disabled <fieldset> (`:disabled` matches both).
+function isEffectivelyDisabled(control) {
+  if (!control) return true;
+  if (control.disabled === true) return true;
+  return typeof control.matches === 'function' && control.matches(':disabled');
+}
+
+// The identity kind of a control from its texts, or null. Sensitive fields are never classified.
+function identityFieldHint(control) {
+  const hints = controlHints(control);
+  if (hints.some((hint) => SENSITIVE_FIELD_HINT.test(hint))) return null;
+  for (const [kind, pattern] of IDENTITY_FIELD_HINTS) {
+    if (hints.some((hint) => pattern.test(hint))) return kind;
+  }
+  return null;
+}
+
+function isRegistrationActionText(text) {
+  return REGISTRATION_ACTION_TEXT.test(normalizedHint(text));
+}
+
 // Bare name for content.js. globalThis in a content script is the page, so
 // globalThis.findLoginForm is not this function (LinkedIn throws
 // "findLoginForm is not a function").
@@ -365,6 +539,13 @@ var mypassFormDetection = {
   findFillableFields,
   findLoginForm,
   addressFieldHint,
+  identityFieldHint,
+  isSensitiveFieldHint,
+  isSensitivePasswordHint,
+  isCurrentPasswordHint,
+  isControlShown,
+  isEffectivelyDisabled,
+  isRegistrationActionText,
 };
 
 if (typeof module !== 'undefined') {

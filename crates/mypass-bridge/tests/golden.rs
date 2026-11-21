@@ -127,6 +127,8 @@ fn request_cases() -> Vec<(Request, &'static str)> {
                 url: s("https://x.example"),
                 username: s("u"),
                 password: s("p"),
+                extra_fields: Vec::new(),
+                username_is_email: false,
                 pairing: None,
             },
             r#"{"type":"proposeSaveLogin","token":"tok-1","url":"https://x.example","username":"u","password":"p"}"#,
@@ -183,6 +185,7 @@ fn request_cases() -> Vec<(Request, &'static str)> {
         (
             Request::OpenApp {
                 token: t(),
+                new_entry: None,
                 pairing: None,
             },
             r#"{"type":"openApp","token":"tok-1"}"#,
@@ -363,6 +366,136 @@ fn request_types_are_distinct_and_match_the_tags() {
 #[test]
 fn unknown_request_type_fails_to_decode() {
     assert!(serde_json::from_str::<Request>(r#"{"type":"nope","token":"t"}"#).is_err());
+}
+
+#[test]
+fn open_app_new_entry_round_trips_and_rejects_unknown_kinds() {
+    for (kind, wire) in [
+        (NewEntryKind::Address, "Address"),
+        (NewEntryKind::Files, "Files"),
+    ] {
+        let golden =
+            format!(r#"{{"type":"openApp","token":"t","newEntry":"{wire}","pairing":"p"}}"#);
+        let request = Request::OpenApp {
+            token: "t".into(),
+            new_entry: Some(kind),
+            pairing: Some("p".into()),
+        };
+        assert_eq!(serde_json::from_str::<Request>(&golden).unwrap(), request);
+        let golden_value: Value = serde_json::from_str(&golden).unwrap();
+        assert!(json_eq(
+            &serde_json::to_value(&request).unwrap(),
+            &golden_value
+        ));
+    }
+    // Absent and null both mean "only show the window".
+    for frame in [
+        r#"{"type":"openApp","token":"t"}"#,
+        r#"{"type":"openApp","token":"t","newEntry":null}"#,
+    ] {
+        assert_eq!(
+            serde_json::from_str::<Request>(frame).unwrap(),
+            Request::OpenApp {
+                token: "t".into(),
+                new_entry: None,
+                pairing: None,
+            }
+        );
+    }
+    // Only the two kinds the bridge cannot create, spelled exactly; anything else is malformed.
+    for bad in [
+        "Login", "Card", "Notes", "address", "files", "ADDRESS", "", "Group",
+    ] {
+        let frame = format!(r#"{{"type":"openApp","token":"t","newEntry":"{bad}"}}"#);
+        assert!(serde_json::from_str::<Request>(&frame).is_err(), "{bad}");
+    }
+    for bad in ["1", "true", "[]", r#"{"kind":"Address"}"#] {
+        let frame = format!(r#"{{"type":"openApp","token":"t","newEntry":{bad}}}"#);
+        assert!(serde_json::from_str::<Request>(&frame).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn propose_save_login_extra_fields_round_trip_and_reject_unknown_kinds() {
+    let golden = r#"{"type":"proposeSaveLogin","token":"t","url":"https://x.example","username":"u","password":"p","extraFields":[{"kind":"givenName","label":"First name","value":"Ann"},{"kind":"addressLine1","label":"Street","value":"1 Main St"},{"kind":"other","label":"Nickname","value":"annie"}]}"#;
+    let request = Request::ProposeSaveLogin {
+        token: s("t"),
+        url: s("https://x.example"),
+        username: s("u"),
+        password: s("p"),
+        extra_fields: vec![
+            ProposalExtraField {
+                kind: ExtraFieldKind::GivenName,
+                label: s("First name"),
+                value: s("Ann"),
+            },
+            ProposalExtraField {
+                kind: ExtraFieldKind::AddressLine1,
+                label: s("Street"),
+                value: s("1 Main St"),
+            },
+            ProposalExtraField {
+                kind: ExtraFieldKind::Other,
+                label: s("Nickname"),
+                value: s("annie"),
+            },
+        ],
+        username_is_email: false,
+        pairing: None,
+    };
+    assert_eq!(serde_json::from_str::<Request>(golden).unwrap(), request);
+    let golden_value: Value = serde_json::from_str(golden).unwrap();
+    assert!(json_eq(
+        &serde_json::to_value(&request).unwrap(),
+        &golden_value
+    ));
+    // Every kind the extension sends decodes; anything else refuses the whole request.
+    for kind in [
+        "name",
+        "givenName",
+        "familyName",
+        "email",
+        "phone",
+        "birthday",
+        "username",
+        "organization",
+        "addressLine1",
+        "addressLine2",
+        "city",
+        "region",
+        "postalCode",
+        "country",
+        "other",
+    ] {
+        let frame = format!(
+            r#"{{"type":"proposeSaveLogin","token":"t","url":"u","username":"u","password":"p","extraFields":[{{"kind":"{kind}","label":"L","value":"v"}}]}}"#
+        );
+        assert!(serde_json::from_str::<Request>(&frame).is_ok(), "{kind}");
+    }
+    for bad in [
+        r#"[{"kind":"password","label":"L","value":"v"}]"#,
+        r#"[{"kind":"cardNumber","label":"L","value":"v"}]"#,
+        r#"[{"kind":"GivenName","label":"L","value":"v"}]"#,
+        r#"[{"kind":"givenName","value":"v"}]"#,
+        r#"[{"kind":"givenName","label":"L"}]"#,
+        r#"[{"kind":"givenName","label":"L","value":1}]"#,
+        r#"{"kind":"givenName","label":"L","value":"v"}"#,
+    ] {
+        let frame = format!(
+            r#"{{"type":"proposeSaveLogin","token":"t","url":"u","username":"u","password":"p","extraFields":{bad}}}"#
+        );
+        assert!(serde_json::from_str::<Request>(&frame).is_err(), "{bad}");
+    }
+    // Debug never shows a label or a value.
+    let debug = format!("{:?}", request);
+    assert!(!debug.contains("Ann") && !debug.contains("annie"));
+    let field = ProposalExtraField {
+        kind: ExtraFieldKind::Phone,
+        label: s("Phone"),
+        value: s("+380501234567"),
+    };
+    let debug = format!("{field:?}");
+    assert!(debug.contains("Phone") && !debug.contains("+380501234567"));
 }
 
 #[test]
@@ -959,6 +1092,8 @@ fn debug_output_prints_the_tag_only() {
             url: s("https://x.example"),
             username: s("alice-user"),
             password: s("hunter2"),
+            extra_fields: Vec::new(),
+            username_is_email: false,
             pairing: None,
         },
         Request::CompletePairing {
@@ -1025,4 +1160,34 @@ fn debug_output_prints_the_tag_only() {
     ] {
         assert!(!text.contains(leak), "{leak} leaked: {text}");
     }
+}
+
+#[test]
+fn propose_save_login_username_is_email_round_trips_and_defaults_to_false() {
+    let golden = r#"{"type":"proposeSaveLogin","token":"t","url":"https://x.example","username":"ann@example.test","password":"p","usernameIsEmail":true}"#;
+    let request = Request::ProposeSaveLogin {
+        token: s("t"),
+        url: s("https://x.example"),
+        username: s("ann@example.test"),
+        password: s("p"),
+        extra_fields: Vec::new(),
+        username_is_email: true,
+        pairing: None,
+    };
+    assert_eq!(serde_json::from_str::<Request>(golden).unwrap(), request);
+    let golden_value: Value = serde_json::from_str(golden).unwrap();
+    assert!(json_eq(
+        &serde_json::to_value(&request).unwrap(),
+        &golden_value
+    ));
+    // Absent means false, and false is not written.
+    let plain =
+        r#"{"type":"proposeSaveLogin","token":"t","url":"u","username":"u","password":"p"}"#;
+    let Request::ProposeSaveLogin {
+        username_is_email, ..
+    } = serde_json::from_str::<Request>(plain).unwrap()
+    else {
+        panic!("not a login proposal");
+    };
+    assert!(!username_is_email);
 }

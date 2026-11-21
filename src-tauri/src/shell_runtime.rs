@@ -8,6 +8,7 @@
 //! menu is built on the calling thread first. The quit flow runs on a worker thread because it
 //! flushes to disk and shows a blocking dialog.
 
+use crate::app_icon::{self, AppIconState};
 use crate::commands::app::{app_open_settings, open_entry, MAIN_WINDOW};
 use crate::events::ShortcutConflictEvent;
 use crate::hotkeys::{self, ConflictGate};
@@ -71,7 +72,7 @@ fn build_menu(app: &AppHandle, model: &TrayMenuModel) -> tauri::Result<Menu<Wry>
     Ok(menu)
 }
 
-/// Creates the tray icon (a template image on macOS) with `model`'s menu. Main thread only.
+/// Creates the tray icon (a template image on macOS, a green key on Windows) with `model`'s menu. Main thread only.
 fn create_tray(app: &AppHandle, model: &TrayMenuModel) -> tauri::Result<()> {
     if app.tray_by_id(TRAY_ID).is_some() {
         return apply_menu(app, model);
@@ -98,14 +99,19 @@ fn create_tray(app: &AppHandle, model: &TrayMenuModel) -> tauri::Result<()> {
                 toggle_panel(tray.app_handle(), rect, position);
             }
         });
-    #[cfg(target_os = "macos")]
-    let template =
-        tauri::image::Image::from_bytes(include_bytes!("../icons/tray-template.png")).ok();
-    #[cfg(not(target_os = "macos"))]
-    let template = None;
-
-    builder = builder.icon_as_template(template.is_some());
-    if let Some(icon) = template.or_else(|| app.default_window_icon().cloned()) {
+    // One upright key: a template on macOS (the menu bar tints it), a green key on Windows.
+    let custom =
+        crate::tray::tray_icon_png(crate::tray::TrayOs::current()).and_then(|(png, template)| {
+            tauri::image::Image::from_bytes(png)
+                .ok()
+                .map(|icon| (icon, template))
+        });
+    let (icon, template) = match custom {
+        Some((icon, template)) => (Some(icon), template),
+        None => (app.default_window_icon().cloned(), false),
+    };
+    builder = builder.icon_as_template(template);
+    if let Some(icon) = icon {
         builder = builder.icon(icon);
     }
     builder.build(app)?;
@@ -394,6 +400,8 @@ impl ShellTarget for TauriTarget {
 
     fn apply_theme(&self, theme: Theme) {
         self.on_main(move |app| app.set_theme(native_theme(theme)));
+        // Windows reports the new window themes later (`ThemeChanged`), which refreshes again.
+        refresh_app_icon(&self.app, false);
     }
 }
 
@@ -403,6 +411,67 @@ fn native_theme(theme: Theme) -> Option<tauri::Theme> {
         Theme::Light => Some(tauri::Theme::Light),
         Theme::Dark => Some(tauri::Theme::Dark),
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// App icon
+
+/// Shows the app icon of the effective theme (`app_icon.rs`) on the main thread; `force` applies
+/// it even when unchanged (a new window, or the framework's own dev-mode Dock icon at `Ready`).
+/// Posted, never awaited.
+pub fn refresh_app_icon<R: Runtime>(app: &tauri::AppHandle<R>, force: bool) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || apply_app_icon(&handle, force));
+}
+
+fn apply_app_icon<R: Runtime>(app: &tauri::AppHandle<R>, force: bool) {
+    let (Some(core), Some(shown)) = (app.try_state::<AppState>(), app.try_state::<AppIconState>())
+    else {
+        return;
+    };
+    let platform = core.0.platform();
+    let window_dark = app
+        .get_webview_window(MAIN_WINDOW)
+        .and_then(|window| window.theme().ok())
+        .map(|theme| theme == tauri::Theme::Dark);
+    let dark = app_icon::system_dark(platform.app_icon.system_dark().ok(), window_dark);
+    let variant = app_icon::app_icon_variant(core.0.settings.get().theme, dark);
+    if !shown.should_apply(variant, force) {
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    let _ = platform.app_icon.set_png(variant.png());
+    #[cfg(windows)]
+    if let Ok(image) = tauri::image::Image::from_bytes(variant.png()) {
+        let big = taskbar_icon(variant, &image);
+        for window in app.webview_windows().into_values() {
+            // tao's `set_icon` sets only ICON_SMALL (the title bar); the taskbar button and
+            // Alt+Tab show ICON_BIG, set through the platform crate.
+            let _ = window.set_icon(image.clone());
+            if let (Some(big), Ok(hwnd)) = (big, window.hwnd()) {
+                big.set_for_window(hwnd.0 as usize);
+            }
+        }
+    }
+}
+
+/// The big (taskbar) icon of `variant`, built once and kept for the process lifetime: a window
+/// keeps showing the handle it was given, so it is never destroyed while the app runs.
+#[cfg(windows)]
+fn taskbar_icon(
+    variant: app_icon::AppIconVariant,
+    image: &tauri::image::Image<'_>,
+) -> Option<&'static mypass_platform::windows::TaskbarIcon> {
+    use mypass_platform::windows::TaskbarIcon;
+    use std::sync::OnceLock;
+    static LIGHT: OnceLock<Option<TaskbarIcon>> = OnceLock::new();
+    static DARK: OnceLock<Option<TaskbarIcon>> = OnceLock::new();
+    let cell = match variant {
+        app_icon::AppIconVariant::Light => &LIGHT,
+        app_icon::AppIconVariant::Dark => &DARK,
+    };
+    cell.get_or_init(|| TaskbarIcon::from_rgba(image.rgba(), image.width(), image.height()).ok())
+        .as_ref()
 }
 
 fn emit_conflicts(app: &AppHandle, conflicts: Vec<ShortcutConflictEvent>) {
@@ -462,6 +531,8 @@ pub fn start(app: &tauri::App) {
     app.manage(watcher);
 
     app.set_theme(native_theme(settings.theme));
+    // The icon itself is applied at `RunEvent::Ready`, after the framework's own dev-mode icon.
+    app.manage(AppIconState::default());
     apply_startup_ui(&handle, &core, &settings);
 }
 
@@ -509,6 +580,8 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
                 tauri::async_runtime::spawn_blocking(move || watcher.check());
             }
         }
+        // The OS appearance (or the forced app theme) changed: the icon may follow.
+        (_, WindowEvent::ThemeChanged(_)) => refresh_app_icon(app, false),
         (PANEL_WINDOW, WindowEvent::CloseRequested { api, .. }) => {
             api.prevent_close();
             let _ = window.hide();
@@ -529,7 +602,8 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
     }
 }
 
-/// `RunEvent` handler: the quit flow (`ExitRequested`) and the Dock reopen. Generic over the
+/// `RunEvent` handler: the first app icon (`Ready`), the quit flow (`ExitRequested`) and the Dock
+/// reopen. Generic over the
 /// runtime so the tests drive it with the mock runtime.
 pub fn on_run_event<R: Runtime>(app: &tauri::AppHandle<R>, event: &RunEvent) {
     match event {
@@ -546,6 +620,7 @@ pub fn on_run_event<R: Runtime>(app: &tauri::AppHandle<R>, event: &RunEvent) {
                 }
             }
         }
+        RunEvent::Ready => refresh_app_icon(app, true),
         // Safety net for any exit that did not go through the quit flow; `shutdown` is idempotent.
         RunEvent::Exit => {
             if let Some(core) = app.try_state::<AppState>() {

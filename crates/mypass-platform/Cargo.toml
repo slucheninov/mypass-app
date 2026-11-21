@@ -73,6 +73,7 @@ objc2-foundation = { workspace = true, features = [
     "NSString",
     "NSThread",
     "NSURL",
+    "NSUserDefaults",
     "NSValue",
 ] }
 objc2-app-kit = { workspace = true, features = [
@@ -80,6 +81,8 @@ objc2-app-kit = { workspace = true, features = [
     "NSPasteboard",
     "NSAlert",
     "NSApplication",
+    "NSImage",
+    "NSResponder",
     "NSWindow",
     "NSRunningApplication",
     "NSWorkspace",

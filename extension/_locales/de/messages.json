@@ -375,7 +375,9 @@
   "pairingThrottled": {
     "message": "Zu viele Verbindungsversuche. Warte eine Minute und öffne dieses Fenster erneut."
   },
-  "pairingNewCodeRequested": { "message": "Ein neuer Code wurde angefordert. Prüfe MyPass." },
+  "pairingNewCodeRequested": {
+    "message": "Ein neuer Code wurde angefordert. Prüfe MyPass."
+  },
   "pairingInvalidCode": {
     "message": "Der Code ist ungültig oder abgelaufen. Prüfe ihn in MyPass oder öffne dieses Fenster erneut."
   },
@@ -396,6 +398,12 @@
   },
   "newNote": {
     "message": "Neue Notiz"
+  },
+  "newAddress": {
+    "message": "Neue Adresse"
+  },
+  "newFile": {
+    "message": "Neue Datei"
   },
   "totpInvalid": {
     "message": "Gib eine gültige Authenticator-URL oder einen geheimen Schlüssel ein"
@@ -478,6 +486,9 @@
   },
   "addItem": {
     "message": "Eintrag hinzufügen"
+  },
+  "moreActions": {
+    "message": "Mehr"
   },
   "sendCode": {
     "message": "Senden"
@@ -1079,5 +1090,19 @@
   },
   "cvv": {
     "message": "CVV"
+  },
+  "panelNoAddresses": {
+    "message": "Keine Adressen in MyPass"
+  },
+  "promptFormFields": {
+    "message": "Formularfelder"
+  },
+  "promptFormFieldsCount": {
+    "message": "$P1$, in MyPass wählst du, welche gespeichert werden",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
   }
 }

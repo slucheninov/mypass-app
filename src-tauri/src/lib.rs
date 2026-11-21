@@ -4,6 +4,7 @@
 //! `src/lib/bindings.ts` is generated from [`specta_builder`], never edited by hand; the command
 //! list is pinned by `tests/commands.snap`.
 
+pub mod app_icon;
 pub mod bridge;
 mod bridge_unlock;
 pub mod commands;
@@ -37,9 +38,10 @@ fn app_context() -> tauri::Context<tauri::Wry> {
 /// Every command, in one place (the tests read their names from here).
 pub fn commands() -> Commands<tauri::Wry> {
     use commands::{app, attachment, backup, browser, draft, entry, generator, group, import};
-    use commands::{device, platform, settings, sidebar, sync, update, vault};
+    use commands::{device, platform, settings, sidebar, sync, tray, update, vault};
     collect_commands![
         app::app_info,
+        app::app_new_entry,
         app::app_open_entry,
         app::app_open_settings,
         app::app_quit,
@@ -47,6 +49,7 @@ pub fn commands() -> Commands<tauri::Wry> {
         app::app_reveal_backups,
         app::app_set_editor_dirty,
         app::app_show_main,
+        app::app_take_new_entry,
         attachment::attachment_export,
         attachment::attachment_pick,
         backup::backup_list,
@@ -116,6 +119,7 @@ pub fn commands() -> Commands<tauri::Wry> {
         sync::sync_displaced_status,
         sync::sync_now,
         sync::sync_status,
+        tray::tray_search,
         vault::vault_create,
         vault::vault_find_files,
         vault::vault_forget,
@@ -136,16 +140,17 @@ pub fn commands() -> Commands<tauri::Wry> {
 /// bindings exporter go through it, so the generated TypeScript can never drift from the app.
 pub fn specta_builder() -> Builder<tauri::Wry> {
     use events::{
-        BridgeChangedEvent, ClipboardClearedEvent, OpenEntryEvent, PairingChallengeEvent,
-        ProposalEvent, SaveStateChanged, SessionChanged, SettingsChanged, SettingsPaneEvent,
-        ShortcutConflictEvent, StorageStatusChanged, SyncStatusChanged, UnlockRequestedEvent,
-        UpdateChanged, VaultChanged,
+        BridgeChangedEvent, ClipboardClearedEvent, NewEntryEvent, OpenEntryEvent,
+        PairingChallengeEvent, ProposalEvent, SaveStateChanged, SessionChanged, SettingsChanged,
+        SettingsPaneEvent, ShortcutConflictEvent, StorageStatusChanged, SyncStatusChanged,
+        UnlockRequestedEvent, UpdateChanged, VaultChanged,
     };
     Builder::<tauri::Wry>::new()
         .commands(commands())
         .events(collect_events![
             BridgeChangedEvent,
             ClipboardClearedEvent,
+            NewEntryEvent,
             OpenEntryEvent,
             PairingChallengeEvent,
             ProposalEvent,
@@ -292,8 +297,8 @@ mod tests {
         assert_eq!(panel["visible"], false);
         assert_eq!(panel["alwaysOnTop"], true);
         assert_eq!(panel["skipTaskbar"], true);
-        assert_eq!(panel["width"], 320);
-        assert_eq!(panel["height"], 440);
+        assert_eq!(panel["width"], 340);
+        assert_eq!(panel["height"], 520);
     }
 
     pub(super) fn command_names() -> Vec<String> {
@@ -314,7 +319,7 @@ mod tests {
 
     #[test]
     fn command_names_follow_domain_verb_convention() {
-        const DOMAINS: [&str; 17] = [
+        const DOMAINS: [&str; 18] = [
             "vault",
             "entry",
             "group",
@@ -332,6 +337,7 @@ mod tests {
             "sync",
             "device",
             "update",
+            "tray",
         ];
         let names = command_names();
         assert!(!names.is_empty());
@@ -415,6 +421,7 @@ mod tests {
             "shortcut-conflict-event"
         );
         assert_eq!(events::OpenEntryEvent::NAME, "open-entry-event");
+        assert_eq!(events::NewEntryEvent::NAME, "new-entry-event");
         assert_eq!(
             events::PairingChallengeEvent::NAME,
             "pairing-challenge-event"
