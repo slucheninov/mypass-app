@@ -63,6 +63,19 @@ function token(body: string, name: string): string {
   return m[1];
 }
 
+function composite(body: string, overlay: string, background: string): string {
+  const rgba = new RegExp(`${overlay}:\\s*rgba\\(([^)]+)\\)`).exec(body)?.[1];
+  if (!rgba) throw new Error(`token ${overlay} missing`);
+  const [red, green, blue, alpha] = rgba.split(",").map(Number);
+  if (alpha === undefined) throw new Error(`token ${overlay} has no alpha`);
+  return "#" + [red, green, blue].map((channel, index) => {
+    if (channel === undefined) throw new Error(`token ${overlay} is missing a channel`);
+    const offset = 1 + index * 2;
+    const below = parseInt(background.slice(offset, offset + 2), 16);
+    return Math.round(channel * alpha + below * (1 - alpha)).toString(16).padStart(2, "0");
+  }).join("");
+}
+
 describe("contrast", () => {
   const light = block(":root {");
   const dark = block(':root[data-theme="dark"]');
@@ -89,10 +102,16 @@ describe("contrast", () => {
   });
 
   it("favorite_star_reaches_non_text_contrast_in_light_and_both_dark_blocks", () => {
-    for (const body of [light, dark, media]) {
-      for (const pane of ["--bg", "--list-bg"]) {
-        expect(contrast(token(body, "--favorite"), token(body, pane))).toBeGreaterThanOrEqual(3);
+    for (const [theme, body] of [["light", light], ["forced dark", dark], ["system dark", media]] as const) {
+      const star = token(body, "--favorite");
+      const list = token(body, "--list-bg");
+      const detail = token(body, "--bg");
+      expect(contrast(star, list), `${theme} list`).toBeGreaterThanOrEqual(3);
+      expect(contrast(star, detail), `${theme} detail`).toBeGreaterThanOrEqual(3);
+      for (const overlay of ["--selected", "--hover"]) {
+        expect(contrast(star, composite(body, overlay, list)), `${theme} list ${overlay}`).toBeGreaterThanOrEqual(3);
       }
+      expect(contrast(star, composite(body, "--hover", detail)), `${theme} hovered detail`).toBeGreaterThanOrEqual(3);
     }
     expect(token(dark, "--favorite")).toBe(token(media, "--favorite"));
   });
