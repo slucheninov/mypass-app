@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick, type Snippet } from "svelte";
   import MenuList from "./MenuList.svelte";
-  import { fitInViewport, type MenuItem } from "./menu";
+  import { fitInViewport, type MenuEntry } from "./menu";
 
   let {
     items,
@@ -10,7 +10,7 @@
     label,
     align = "start",
   }: {
-    items: MenuItem[];
+    items: MenuEntry[];
     onselect: (id: string) => void;
     trigger: Snippet;
     /** Accessible name and tooltip of the trigger button, already translated; required when the trigger has no text. */

@@ -1,20 +1,21 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import Icon from "./Icon.svelte";
-  import type { MenuItem } from "./menu";
+  import type { MenuEntry, MenuItem } from "./menu";
 
   let {
     items,
     onselect,
     onclose,
-  }: { items: MenuItem[]; onselect: (id: string) => void; onclose: () => void } = $props();
+  }: { items: MenuEntry[]; onselect: (id: string) => void; onclose: () => void } = $props();
 
   const uid = $props.id();
   const headingId = (id: string) => `menu-heading-${uid}-${id}`;
   const focusable = (item: MenuItem) => !item.separator && !item.heading && !item.disabled;
-  const heading = $derived(items.find((i) => i.heading));
+  const rows = $derived(items.flatMap((item) => "choices" in item ? item.choices : [item]));
+  const heading = $derived(rows.find((i) => i.heading));
   // The left icon column is drawn only when some row has an icon, so text-only menus stay compact.
-  const withIcons = $derived(items.some((i) => i.icon));
+  const withIcons = $derived(rows.some((i) => i.icon));
 
   let list: HTMLElement | undefined = $state();
   let active = $state("");
@@ -71,6 +72,23 @@
   }
 </script>
 
+{#snippet row(item: MenuItem)}
+  <button
+    type="button"
+    role={item.checked === undefined ? "menuitem" : "menuitemradio"}
+    aria-checked={item.checked === undefined ? undefined : item.checked}
+    class:danger={item.danger}
+    aria-disabled={item.disabled ? "true" : undefined}
+    tabindex={active === item.id || (active === "" && item.id === rows.find(focusable)?.id) ? 0 : -1}
+    onfocus={() => (active = item.id)}
+    onclick={() => pick(item)}
+  >
+    {#if withIcons}<span class="icon">{#if item.icon}<Icon name={item.icon} />{/if}</span>{/if}
+    <span class="text">{item.label}</span>
+    {#if item.checked !== undefined}<span class="check">{#if item.checked}<Icon name="check" size={14} />{/if}</span>{/if}
+  </button>
+{/snippet}
+
 <div
   class="menu"
   role="menu"
@@ -80,33 +98,29 @@
   {onkeydown}
 >
   {#each items as item (item.id)}
-    {#if item.separator}
+    {#if "choices" in item}
+      <div class="group" role="group" aria-label={item.label}>
+        {#each item.choices as choice (choice.id)}
+          {@render row(choice)}
+        {/each}
+      </div>
+    {:else if item.separator}
       <div class="rule" role="separator"></div>
     {:else if item.heading}
       <div class="heading" role="presentation" id={headingId(item.id)}>{item.label}</div>
     {:else}
-    <button
-      type="button"
-      role={item.checked === undefined ? "menuitem" : "menuitemradio"}
-      aria-checked={item.checked === undefined ? undefined : item.checked}
-      class:danger={item.danger}
-      aria-disabled={item.disabled ? "true" : undefined}
-      tabindex={active === item.id || (active === "" && item.id === items.find(focusable)?.id) ? 0 : -1}
-      onfocus={() => (active = item.id)}
-      onclick={() => pick(item)}
-    >
-      {#if withIcons}<span class="icon">{#if item.icon}<Icon name={item.icon} />{/if}</span>{/if}
-      <span class="text">{item.label}</span>
-      {#if item.checked !== undefined}<span class="check">{#if item.checked}<Icon name="check" size={14} />{/if}</span>{/if}
-    </button>
+      {@render row(item)}
     {/if}
   {/each}
 </div>
 
 <style>
-  .menu {
+  .menu,
+  .group {
     display: flex;
     flex-direction: column;
+  }
+  .menu {
     min-width: 180px;
     padding: 4px;
     background: var(--bg);

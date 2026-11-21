@@ -16,6 +16,13 @@ export type MenuItem = {
   checked?: boolean;
 };
 
+/** A named set of mutually exclusive menu choices. */
+export type MenuEntry = MenuItem | {
+  id: string;
+  label: string;
+  choices: (MenuItem & { checked: boolean })[];
+};
+
 const MARGIN = 4;
 
 /** The top-left corner that keeps a `width` x `height` box inside the viewport (4 px margin). */

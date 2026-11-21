@@ -17,7 +17,7 @@
   import Button from "../lib/ui/Button.svelte";
   import ContextMenu from "../lib/ui/ContextMenu.svelte";
   import Icon from "../lib/ui/Icon.svelte";
-  import type { MenuItem } from "../lib/ui/menu";
+  import type { MenuEntry, MenuItem } from "../lib/ui/menu";
   import Menu from "../lib/ui/Menu.svelte";
   import Modal from "../lib/ui/Modal.svelte";
   import GroupPicker from "./GroupPicker.svelte";
@@ -63,15 +63,23 @@
   };
   const ORDERS = (key: SortKey): SortOrder[] => (key === "title" ? ["ascending", "descending"] : ["descending", "ascending"]);
 
-  const sortItems = $derived<MenuItem[]>([
+  const sortItems = $derived<MenuEntry[]>([
     { id: "heading", label: t("%lld items sorted by", items.length), heading: true },
-    ...SORT_KEYS.map((key) => ({ id: `key:${key}`, label: SORT_LABEL(key), checked: query.sort === key })),
+    {
+      id: "sort-key",
+      label: t("Sort by"),
+      choices: SORT_KEYS.map((key) => ({ id: `key:${key}`, label: SORT_LABEL(key), checked: query.sort === key })),
+    },
     { id: "sep", label: "", separator: true },
-    ...ORDERS(query.sort).map((order) => ({
-      id: `order:${order}`,
-      label: ORDER_LABEL(query.sort, order),
-      checked: query.order === order,
-    })),
+    {
+      id: "sort-order",
+      label: t("Sort order"),
+      choices: ORDERS(query.sort).map((order) => ({
+        id: `order:${order}`,
+        label: ORDER_LABEL(query.sort, order),
+        checked: query.order === order,
+      })),
+    },
   ]);
 
   function onsort(id: string) {

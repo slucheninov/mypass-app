@@ -232,19 +232,22 @@ describe("search", () => {
     await user.click(button);
     const menu = screen.getByRole("menu", { name: t("%lld items sorted by", 4) });
     const radio = (name: string) => within(menu).getByRole("menuitemradio", { name });
+    const sortBy = within(menu).getByRole("group", { name: t("Sort by") });
+    const sortOrder = within(menu).getByRole("group", { name: "Sort order" });
     expect(radio(t("Title")).getAttribute("aria-checked")).toBe("true");
     expect(radio(t("A to Z")).getAttribute("aria-checked")).toBe("true");
     expect(radio(t("Z to A")).getAttribute("aria-checked")).toBe("false");
-    await expectNoAxeViolations(screen.getByTestId("entry-list"));
-    expect(within(menu).getAllByRole("menuitemradio").map((r) => r.textContent?.trim())).toEqual([
+    expect(within(sortBy).getAllByRole("menuitemradio").map((r) => r.textContent?.trim())).toEqual([
       t("Title"),
       t("Date Created"),
       t("Date Modified"),
       t("Frequently Used"),
       t("Recently Used"),
-      t("A to Z"),
-      t("Z to A"),
     ]);
+    expect(within(sortOrder).getAllByRole("menuitemradio").map((r) => r.textContent?.trim())).toEqual([
+      t("A to Z"), t("Z to A"),
+    ]);
+    await expectNoAxeViolations(menu);
     await user.click(radio(t("Date Modified")));
     expect(screen.queryByRole("menu")).toBeNull();
     // A date starts newest first.
@@ -275,6 +278,10 @@ describe("search", () => {
     expect(document.activeElement?.textContent?.trim()).toBe(t("Title"));
     await user.keyboard("{ArrowDown}{ArrowDown}");
     expect(document.activeElement?.textContent?.trim()).toBe(t("Date Modified"));
+    await user.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}");
+    expect(document.activeElement?.textContent?.trim()).toBe(t("A to Z"));
+    await user.keyboard("{ArrowUp}");
+    expect(document.activeElement?.textContent?.trim()).toBe(t("Recently Used"));
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("menu")).toBeNull();
     await waitFor(() => expect(document.activeElement).toBe(button));
