@@ -375,6 +375,7 @@
   "pairingThrottled": {
     "message": "Слишком много попыток подключения. Подождите минуту и снова откройте это окно."
   },
+  "pairingNewCodeRequested": { "message": "Запрошен новый код. Проверьте MyPass." },
   "pairingInvalidCode": {
     "message": "Код неверный или просрочен. Проверьте код в MyPass или снова откройте это окно."
   },

@@ -30,6 +30,25 @@ test('a challenge younger than 120 seconds opens the code entry without starting
   assert.equal(h.el('code-entry').hidden, false);
 });
 
+test('a cancelled reused challenge requests a new code once and clears stale storage first', async () => {
+  const h = unpairedPopup({ startedAt: 81_000 });
+  await flush();
+  h.el('code-input').value = '123456';
+  h.fire('submit-code-btn', 'click');
+  await flush();
+  assert.equal(h.storage.pairingStartedAt, undefined);
+  assert.equal(countStarts(h), 1);
+  assert.equal(h.el('code-entry').hidden, false);
+  assert.equal(h.el('code-input').value, '');
+  assert.match(h.el('pairing-error').textContent, /new code was requested/i);
+
+  h.el('code-input').value = '654321';
+  h.fire('submit-code-btn', 'click');
+  await flush();
+  assert.equal(countStarts(h), 1);
+  assert.match(h.el('pairing-error').textContent, /incorrect|invalid|expired/i);
+});
+
 test('a challenge exactly 120 seconds old is refreshed', async () => {
   const h = unpairedPopup({ startedAt: 80_000 });
   await flush();

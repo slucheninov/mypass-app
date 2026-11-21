@@ -611,6 +611,7 @@ if (typeof document !== 'undefined') {
   const submitCodeBtn = document.getElementById('submit-code-btn');
   const pairingErrorEl = document.getElementById('pairing-error');
   let pairingChecked = false;
+  let reusedPairingChallenge = false;
 
   const passkeyCheckingPanel = document.getElementById('passkey-checking-panel');
   // A save-login / save-2FA / settings prompt raised by the page for this tab. Like a passkey
@@ -800,7 +801,8 @@ if (typeof document !== 'undefined') {
     if (!showPanel('pairing') || pairingChecked) return;
     pairingChecked = true;
     readPairingStartedAt((startedAt) => {
-      if (isPairingChallengeFresh(startedAt, Date.now())) revealCodeEntry();
+      reusedPairingChallenge = isPairingChallengeFresh(startedAt, Date.now());
+      if (reusedPairingChallenge) revealCodeEntry();
       else startPairingFlow();
     });
   }
@@ -1011,19 +1013,26 @@ if (typeof document !== 'undefined') {
     });
   };
 
-  function startPairingFlow() {
+  function startPairingFlow(replacing = false) {
     hidePairingPanel();
     chrome.runtime.sendMessage({ type: 'startPairing' }, (response) => {
       void chrome.runtime.lastError;
-      if (response?.type === 'pairingStarted') revealCodeEntry();
-      else setPairingError(i18n.t(pairingStartErrorKey(response)));
+      if (response?.type === 'pairingStarted') {
+        revealCodeEntry();
+        if (replacing) setPairingError(i18n.t('pairingNewCodeRequested'));
+      } else {
+        setPairingError(i18n.t(pairingStartErrorKey(response)));
+      }
     });
   }
 
   function submitPairingCode() {
+    if (codeEntry.hidden || submitCodeBtn.disabled) return;
+    submitCodeBtn.disabled = true;
     setPairingError('');
     const code = normalizePairingCode(codeInput.value);
     chrome.runtime.sendMessage({ type: 'completePairing', code }, (completeResp) => {
+      submitCodeBtn.disabled = false;
       if (completeResp && completeResp.type === 'paired') {
         clearPairingStartedAt(() => {
           hidePairingPanel();
@@ -1032,8 +1041,14 @@ if (typeof document !== 'undefined') {
         return;
       }
       if (completeResp && completeResp.type === 'error' && completeResp.message === 'invalid_code') {
+        const replaceChallenge = reusedPairingChallenge;
+        if (replaceChallenge) {
+          reusedPairingChallenge = false;
+          hidePairingPanel();
+        }
         clearPairingStartedAt(() => {
-          setPairingError(i18n.t('pairingInvalidCode'));
+          if (replaceChallenge) startPairingFlow(true);
+          else setPairingError(i18n.t('pairingInvalidCode'));
         });
         return;
       }

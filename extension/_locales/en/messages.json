@@ -379,6 +379,7 @@
   "pairingThrottled": {
     "message": "Too many pairing attempts. Wait a minute, then reopen this popup."
   },
+  "pairingNewCodeRequested": { "message": "A new code was requested. Check MyPass." },
   "pairingInvalidCode": {
     "message": "Invalid or expired code. Check the code in MyPass or reopen this popup."
   },
