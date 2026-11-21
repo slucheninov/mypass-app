@@ -4,6 +4,7 @@
 //! [`current`] wires the real implementations of the running OS; [`testing`] (behind the
 //! `test-util` feature) holds the fakes every other crate's tests build on.
 
+pub mod app_launch;
 pub mod dev_overrides;
 mod file_identity;
 #[cfg(windows)]

@@ -4,22 +4,35 @@
 //! Rust uses ReadFile/WriteFile directly for these pipes, without CRT text translation;
 //! no _setmode is needed. The relay explicitly flushes every complete response frame.
 use mypass_bridge::endpoint::EndpointStore;
-use mypass_bridge::relay::{load_endpoint, run_relay_verified, RelayOptions};
+use mypass_bridge::host_local::{run_host, LaunchResult};
+use mypass_bridge::relay::{load_endpoint, RelayOptions};
+use mypass_platform::app_launch::{launch_hidden, resolve_app};
 use mypass_platform::endpoint_store::{host_shared_store, running_store_kind, StoreSide};
 use mypass_platform::AppPaths;
 use std::io::{stdin, stdout};
 fn main() {
-    let loaded = AppPaths::resolve().ok().map(|paths| {
-        let (kind, store) = host_shared_store(&paths, None);
+    let paths = AppPaths::resolve().ok();
+    let loaded = paths.as_ref().map(|paths| {
+        let (kind, store) = host_shared_store(paths, None);
         (kind, load_endpoint(&EndpointStore::new(store)))
     });
     let (kind, endpoint) = loaded.unwrap_or((running_store_kind(StoreSide::Host), None));
     let pid = endpoint.as_ref().map_or(0, |record| record.pid);
-    let _ = run_relay_verified(
+    let _ = run_host(
         stdin().lock(),
         stdout(),
         endpoint,
         &RelayOptions::default(),
         &|port| mypass_platform::peer_process::endpoint_peer_is_trusted(kind, port, pid),
+        &|| {
+            let target = paths
+                .as_ref()
+                .and_then(|paths| resolve_app(&std::env::current_exe().ok()?, paths));
+            match target {
+                Some(target) if launch_hidden(&target).is_ok() => LaunchResult::Started,
+                Some(_) => LaunchResult::Failed,
+                None => LaunchResult::Unavailable,
+            }
+        },
     );
 }

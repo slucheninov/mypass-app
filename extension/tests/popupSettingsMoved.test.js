@@ -1,5 +1,5 @@
 // Settings live on the options page (app/app.html), not in the popup. The popup menu keeps
-// Lock and Help only; the moved controls keep their element ids and storage keys.
+// entry creation, Lock and Help; the moved controls keep their element ids and storage keys.
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -26,7 +26,6 @@ for (const id of movedIds.filter((id) => !id.startsWith('popup-menu-'))) {
 }
 
 assert.ok(popupHtml.includes('lock-vault-btn'));
-assert.ok(popupHtml.includes('popup-menu-help-btn'));
 
 for (const name of ['initAppearanceSettings', 'initNotificationSettings', 'initAutofillSettings', 'initSecuritySettings']) {
   assert.ok(!popupJs.includes(name), 'popup.js must not contain ' + name);
@@ -45,4 +44,61 @@ for (const src of ['autofill-settings', 'notification-settings', 'appearance-set
   assert.ok(appHtml.includes('../shared/' + src + '.js'), 'app.html loads ' + src);
 }
 
-console.log('popupSettingsMoved ok');
+const { test } = require('node:test');
+const { openPopup } = require('./popupHarness.js');
+
+function menuPopup(lock = { type: 'ok' }) {
+  return openPopup({ reply(message) {
+    if (message.type === 'getCredentials') return { type: 'credentialList', credentials: [] };
+    if (message.type === 'lockVault') return lock;
+    return {};
+  } });
+}
+
+test('the plus menu lists New login, New card, New note, a separator, Lock MyPass and Help', () => {
+  const h = menuPopup();
+  h.fire('add-entry-btn', 'click');
+  assert.deepStrictEqual(h.el('plus-entry-actions').children.map((row) => row.children[1].textContent),
+    ['New login', 'New card', 'New note']);
+  const root = popupHtml.match(/<div id="plus-menu-root">([\s\S]+?)<p id="lock-vault-error"/)?.[1];
+  assert.match(root, /id="plus-entry-actions"[\s\S]*<hr class="menu-separator"[\s\S]*id="lock-vault-btn"[\s\S]*id="plus-menu-help-btn"/);
+});
+
+test('Help opens the help view, Back returns to root, and reopening resets to root', () => {
+  const h = menuPopup();
+  h.fire('add-entry-btn', 'click');
+  assert.equal(h.el('add-entry-btn').getAttribute('aria-expanded'), 'true');
+  h.fire('plus-menu-help-btn', 'click');
+  assert.equal(h.el('plus-menu-help').hidden, false);
+  assert.equal(h.el('plus-menu-root').hidden, true);
+  h.fire('plus-menu-help-back', 'click');
+  assert.equal(h.el('plus-menu-help').hidden, true);
+  assert.equal(h.el('plus-menu-root').hidden, false);
+  h.fire('plus-menu-help-btn', 'click');
+  h.fire('add-entry-btn', 'click');
+  assert.equal(h.el('add-entry-menu').hidden, true);
+  h.fire('add-entry-btn', 'click');
+  assert.equal(h.el('plus-menu-root').hidden, false);
+  assert.equal(h.el('plus-menu-help').hidden, true);
+});
+
+test('Lock MyPass retains its replies and errors', () => {
+  for (const outcome of ['ok', 'locked', 'pairingRequired', 'error']) {
+    const h = menuPopup({ type: outcome });
+    h.fire('add-entry-btn', 'click');
+    h.fire('lock-vault-btn', 'click');
+    if (outcome === 'ok' || outcome === 'locked') {
+      assert.equal(h.el('locked-panel').hidden, false);
+      assert.equal(h.el('add-entry-menu').hidden, true);
+    } else {
+      assert.equal(h.el('add-entry-menu').hidden, false);
+      assert.equal(h.el('lock-vault-error').hidden, false);
+      assert.match(h.el('lock-vault-error').textContent, outcome === 'error' ? /lock/i : /Connect this browser/);
+    }
+  }
+});
+
+test('the generator remains and the more menu is gone', () => {
+  assert.match(popupHtml, /id="open-generator-btn"/);
+  assert.doesNotMatch(popupHtml, /id="(?:popup-menu-btn|popup-menu)"/);
+});

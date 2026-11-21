@@ -60,7 +60,7 @@ pub trait InstallDirectory {
     fn remove(&self, name: &str) -> PlatformResult<()>;
     fn names(&self) -> PlatformResult<Vec<String>>;
 }
-fn publish(dir: &dyn InstallDirectory, name: &str, bytes: &[u8]) -> PlatformResult<()> {
+pub(crate) fn publish(dir: &dyn InstallDirectory, name: &str, bytes: &[u8]) -> PlatformResult<()> {
     if dir.read(name)?.as_deref() == Some(bytes) {
         return Ok(());
     }

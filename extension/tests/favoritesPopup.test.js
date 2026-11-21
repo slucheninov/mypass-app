@@ -154,10 +154,10 @@ assert.ok(!sentMessages.some((message) => message.type === 'getCredentials'), 'a
 assert.strictEqual(elements['category-btn'].textContent, 'Favorites ▾');
 assert.strictEqual(elements['list-panel'].hidden, false);
 assert.strictEqual(elements['browser-chrome'].hidden, false);
-assert.strictEqual(elements['app-unavailable-panel'].hidden, true);
+assert.strictEqual(elements['locked-panel'].hidden, true);
 assert.strictEqual(elements['settings-panel'], undefined, 'settings are hosted by the native app');
-assert.strictEqual(elements['popup-menu'].hidden, true, 'the menu stays closed on the credential list');
-assert.strictEqual(elements['browser-chrome'].hidden, false, 'the gear stays with the search field');
+assert.strictEqual(elements['add-entry-menu'].hidden, true, 'the menu stays closed on the credential list');
+assert.strictEqual(elements['browser-chrome'].hidden, false, 'browse controls stay visible');
 
 const rows = elements['list'].children;
 assert.strictEqual(rows.length, 2);
@@ -193,7 +193,7 @@ assert.strictEqual(elements['vault-search'].value, '');
 
 elements['add-entry-btn'].listeners.click[0]();
 assert.strictEqual(elements['add-entry-menu'].hidden, false);
-const loginChoice = elements['add-entry-menu'].children.find((child) => hasText(child, 'New login'));
+const loginChoice = elements['plus-entry-actions'].children.find((child) => hasText(child, 'New login'));
 loginChoice.listeners.click[0]();
 assert.strictEqual(createdWindows.length, 1);
 assert.strictEqual(createdWindows[0].type, 'popup');
@@ -231,13 +231,13 @@ assert.ok(!sentMessages.some((message) => message.type === 'listEntries' && mess
 assert.strictEqual(elements['category-btn'].textContent, 'This site ▾');
 
 elements['add-entry-btn'].listeners.click[0]();
-elements['add-entry-menu'].children.find((child) => hasText(child, 'New login')).listeners.click[0]();
+elements['plus-entry-actions'].children.find((child) => hasText(child, 'New login')).listeners.click[0]();
 assert.ok(decodeURIComponent(createdWindows[0].url).includes('type=Login'));
 assert.ok(decodeURIComponent(createdWindows[0].url).includes('https://example.com/login'));
-elements['add-entry-menu'].children.find((child) => hasText(child, 'New card')).listeners.click[0]();
+elements['plus-entry-actions'].children.find((child) => hasText(child, 'New card')).listeners.click[0]();
 assert.ok(createdWindows[1].url.includes('type=Card'));
 assert.strictEqual(createdWindows[1].height, 680);
-elements['add-entry-menu'].children.find((child) => hasText(child, 'New note')).listeners.click[0]();
+elements['plus-entry-actions'].children.find((child) => hasText(child, 'New note')).listeners.click[0]();
 assert.ok(createdWindows[2].url.includes('type=Notes'));
 assert.strictEqual(createdWindows[2].height, 640);
 elements['open-generator-btn'].listeners.click[0]();
@@ -256,27 +256,21 @@ assert.ok(!html.includes('Watchtower') && !html.includes('favicon'));
 assert.ok(html.includes('data-i18n="lockMyPass"'));
 assert.ok(!html.includes('>Settings</button>'), 'the gear menu has no Settings row; settings live on the options page');
 assert.ok(html.includes('data-i18n="help"'));
-const searchAt = html.indexOf('id="vault-search"');
-const gearAt = html.indexOf('id="popup-menu-btn"');
-const generatorAt = html.indexOf('id="open-generator-btn"');
-assert.ok(gearAt !== -1 && gearAt < searchAt && searchAt < generatorAt, 'the menu button sits to the left of search');
 assert.ok(html.includes('id="vault-search"'));
 assert.ok(html.includes('id="open-generator-btn"'));
 assert.ok(html.includes('id="add-entry-btn"'));
 assert.ok(html.includes('data-i18n-aria-label="passwordGenerator"'));
-assert.ok(html.includes('data-i18n-aria-label="more"') && html.includes('data-i18n-title="more"'), 'the menu button is a neutral More button');
-assert.ok(!html.includes('MyPass menu'), 'the old gear label is gone');
-const moreBtn = html.slice(gearAt, html.indexOf('</button>', gearAt));
-assert.ok(moreBtn.includes('<circle') && !moreBtn.includes('M19.14 12.94'), 'More icon is dots, not the gear path');
+assert.ok(!html.includes('id="popup-menu-btn"'));
+assert.ok(!html.includes('id="popup-menu"'));
 
-elements['popup-menu-btn'].listeners.click[0]();
-assert.strictEqual(elements['popup-menu'].hidden, false);
-assert.strictEqual(elements['popup-menu-root'].hidden, false);
-assert.strictEqual(elements['popup-menu-btn']['aria-expanded'], 'true');
-elements['popup-menu-help-btn'].listeners.click[0]();
-assert.strictEqual(elements['popup-menu-help'].hidden, false);
-elements['popup-menu-help-back'].listeners.click[0]();
-assert.strictEqual(elements['popup-menu-root'].hidden, false);
+elements['add-entry-btn'].listeners.click[0]();
+assert.strictEqual(elements['add-entry-menu'].hidden, false);
+assert.strictEqual(elements['plus-menu-root'].hidden, false);
+assert.strictEqual(elements['add-entry-btn']['aria-expanded'], 'true');
+elements['plus-menu-help-btn'].listeners.click[0]();
+assert.strictEqual(elements['plus-menu-help'].hidden, false);
+elements['plus-menu-help-back'].listeners.click[0]();
+assert.strictEqual(elements['plus-menu-root'].hidden, false);
 lockVaultResponse = { type: 'pairingRequired' };
 elements['lock-vault-btn'].listeners.click[0]();
 assert.strictEqual(sentMessages.at(-1).type, 'lockVault');
@@ -286,7 +280,8 @@ assert.strictEqual(elements['list-panel'].hidden, false, 'a refused lock keeps t
 lockVaultResponse = { type: 'ok' };
 elements['lock-vault-btn'].listeners.click[0]();
 assert.strictEqual(elements['locked-panel'].hidden, false);
-assert.strictEqual(elements['popup-menu'].hidden, true, 'locking closes the menu');
+assert.strictEqual(elements['add-entry-menu'].hidden, true, 'locking closes the menu');
+siteProbe.stopLockedPolling();
 
 console.log('favoritesPopup.test.js: OK');
 

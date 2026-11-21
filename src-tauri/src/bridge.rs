@@ -180,10 +180,10 @@ impl BridgeUi for TauriBridgeUi {
     fn pairing_code(&self, _c: &PairingChallenge) {
         // The challenge itself reached the webview through the change hook.
         self.pairing_window.raise();
-        // A lock between the code's creation and this raise already ran its observer: do not leave
-        // the window pinned on top with no code to show.
-        if self.core.session.status().state != SessionState::Unlocked {
-            self.pairing.cancel();
+        // A cancellation between challenge creation and this raise may already have lowered
+        // the window. Check the challenge itself, which can be active over the unlock screen.
+        if self.pairing.active().is_none() {
+            self.pairing_window.lower();
         }
         // Nothing notifies when a code simply runs out, so look again right after its deadline.
         let pairing = Arc::downgrade(&self.pairing);
@@ -414,6 +414,7 @@ fn start_bridge_with_kind(
         diagnostics: Arc::clone(&diagnostics),
         proposals: Arc::clone(&proposals),
         ui: Arc::clone(&ui),
+        unlocker: Arc::new(crate::bridge_unlock::AppUnlocker::new(Arc::clone(core))),
         // The pending table is dropped on lock and on a vault switch by the observer that
         // `register_observer` adds below, once the server is up.
         passkeys: PasskeyService::with_presence(Arc::clone(&scheduler), ui, {
@@ -459,6 +460,7 @@ fn start_bridge_with_kind(
     let registration = Arc::new(Mutex::new(None));
     let thread = {
         let registrar = Arc::clone(&platform.host_registrar);
+        let paths = core.paths().clone();
         let slot = Arc::clone(&registration);
         std::thread::Builder::new()
             .name("mypass-host-register".into())
@@ -466,6 +468,9 @@ fn start_bridge_with_kind(
                 let suppressed = lock(&registration_gate);
                 if !*suppressed {
                     *lock(&slot) = register_hosts(registrar.as_ref(), bundled_host.as_deref());
+                    if let Some(target) = mypass_platform::app_launch::current_app_target() {
+                        let _ = mypass_platform::app_launch::write_app_location(&paths, &target);
+                    }
                 }
                 drop(suppressed);
                 events.bridge_changed();
@@ -491,7 +496,7 @@ fn start_bridge_with_kind(
                     focus.reset();
                     return;
                 }
-                // A lock ends the pairing (the code cannot be shown) and the unlock throttle.
+                // A lock transition dismisses an active challenge.
                 if let Some(pairing) = weak.upgrade() {
                     pairing.cancel();
                 }
@@ -953,13 +958,19 @@ mod tests {
     }
 
     #[test]
-    fn bridge_starts_while_locked_and_answers_locked() {
+    fn bridge_starts_while_locked_and_requires_pairing_before_locked_reply() {
         let f = unstarted(true, None);
         f.w.core.vault_lock().unwrap();
         f.state.start().unwrap();
         let reply = ask(
             &f.handle(),
             &serde_json::json!({"type": "getCredentials", "url": "https://a.example"}),
+        );
+        assert_eq!(reply["type"], "pairingRequired");
+        let secret = pair(&f);
+        let reply = ask(
+            &f.handle(),
+            &serde_json::json!({"type": "getCredentials", "url": "https://a.example", "pairing": secret}),
         );
         assert_eq!(reply["type"], "locked");
     }
@@ -982,7 +993,7 @@ mod tests {
             .all(|r| r.state == mypass_platform::RegistrationState::Error));
         f.w.core.vault_lock().unwrap();
         let reply = ask(&handle, &serde_json::json!({"type": "getFavorites"}));
-        assert_eq!(reply["type"], "locked");
+        assert_eq!(reply["type"], "pairingRequired");
     }
 
     #[test]
@@ -1179,6 +1190,16 @@ mod tests {
     }
 
     #[test]
+    fn pairing_code_while_locked_keeps_the_challenge_and_raises_the_window() {
+        let f = fixture(true);
+        f.w.core.vault_lock().unwrap();
+        start_pairing(&f);
+        assert!(f.handle().pairing.active().is_some());
+        assert_eq!(f.on_top(), [true]);
+        assert!(lock(&f.events.challenges).last().unwrap().is_some());
+    }
+
+    #[test]
     fn pairing_code_raises_and_pairing_finished_lowers_window() {
         let f = fixture(true);
         start_pairing(&f);
@@ -1311,8 +1332,14 @@ mod tests {
     fn bridge_keeps_serving_after_cancel_quit_and_stops_after_final_quit() {
         let f = fixture(true);
         f.w.core.vault_lock().unwrap();
+        let secret = pair(&f);
         let handle = f.handle();
-        let locked = || ask(&handle, &serde_json::json!({"type": "getFavorites"}));
+        let locked = || {
+            ask(
+                &handle,
+                &serde_json::json!({"type": "getFavorites", "pairing": secret}),
+            )
+        };
         // A quit that is cancelled: the bridge answers again once the session re-opens.
         f.w.core.begin_quit();
         on_quit_outcome(&f.state, ExitOutcome::Stay);

@@ -9,6 +9,7 @@
   import ToastHost from "../lib/ui/ToastHost.svelte";
   import OpenGuardHost from "../screens/OpenGuardHost.svelte";
   import OpenVaultSheet from "../screens/OpenVaultSheet.svelte";
+  import PairingCodeSheet from "../screens/PairingCodeSheet.svelte";
   import { navigation } from "../lib/stores/navigation.svelte";
   import DetailEmpty from "../screens/DetailEmpty.svelte";
   import EntryDetail from "../screens/EntryDetail.svelte";
@@ -87,6 +88,7 @@
     {/if}
   {/if}
 </main>
+<PairingCodeSheet />
 {#if session.pendingOpenPath !== null}
   <OpenVaultSheet path={session.pendingOpenPath} onclose={() => session.clearPendingOpen()} />
 {/if}

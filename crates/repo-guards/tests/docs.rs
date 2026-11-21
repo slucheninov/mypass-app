@@ -433,6 +433,34 @@ fn run_md_has_the_stage_3_sections_and_only_open_boxes() {
 }
 
 #[test]
+fn run_md_has_extension_popup_unlock_section() {
+    let run = read("RUN.md");
+    let heading = "## \u{420}\u{43e}\u{437}\u{431}\u{43b}\u{43e}\u{43a}\u{443}\u{432}\u{430}\u{43d}\u{43d}\u{44f} \u{437} \u{43f}\u{43e}\u{43f}\u{430}\u{43f}\u{430} \u{440}\u{43e}\u{437}\u{448}\u{438}\u{440}\u{435}\u{43d}\u{43d}\u{44f} (E1\u{2013}E10)";
+    assert_eq!(run.matches(heading).count(), 1);
+    let (_, rest) = run.split_once(heading).unwrap();
+    let section = rest.split("\n## ").next().unwrap();
+    let mut items = section.split("\n### E").skip(1);
+    for number in 1..=10 {
+        let item = items.next().unwrap();
+        assert!(
+            item.starts_with(&format!("{number} ")),
+            "missing or out-of-order E{number}"
+        );
+        assert!(item.contains("\u{41e}\u{447}\u{456}\u{43a}\u{443}\u{432}\u{430}\u{43d}\u{438}\u{439} \u{440}\u{435}\u{437}\u{443}\u{43b}\u{44c}\u{442}\u{430}\u{442}:"), "E{number} needs an expected result");
+        assert!(item.contains("- [ ]"), "E{number} needs a checklist item");
+    }
+    assert!(items.next().is_none());
+    assert!(!run.contains("\u{41c}\u{430}\u{439}\u{441}\u{442}\u{435}\u{440}-\u{43f}\u{430}\u{440}\u{43e}\u{43b}\u{44c} \u{43d}\u{456}\u{43a}\u{43e}\u{43b}\u{438} \u{43d}\u{435} \u{432}\u{432}\u{43e}\u{434}\u{438}\u{442}\u{44c}\u{441}\u{44f} \u{432} \u{431}\u{440}\u{430}\u{443}\u{437}\u{435}\u{440}\u{456}"));
+}
+
+#[test]
+fn agents_md_states_the_pairing_then_locked_gate_order() {
+    let agents = squash(&read("AGENTS.md"));
+    assert!(agents.contains("gate order is quitting, pairing, then locked"));
+    assert!(agents.contains("launchApp"));
+}
+
+#[test]
 fn run_md_has_the_stage_5_sections_and_only_open_boxes() {
     let run = read("RUN.md");
     for prefix in ["S", "C"] {

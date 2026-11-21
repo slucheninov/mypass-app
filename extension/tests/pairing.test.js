@@ -54,6 +54,7 @@ const now = 1_000_000;
 assert.strictEqual(isPairingChallengeFresh(now - 60_000, now), true);
 assert.strictEqual(isPairingChallengeFresh(now - PAIRING_CHALLENGE_TTL_MS, now), false);
 assert.strictEqual(isPairingChallengeFresh(undefined, now), false);
+assert.strictEqual(isPairingChallengeFresh(now + 1, now), false);
 assert.strictEqual(isPairingChallengeFresh(null, now), false);
 
 assert.strictEqual(normalizePairingCode('123 456'), '123456');
@@ -124,6 +125,29 @@ assert.strictEqual(detectBrowserName(), 'Chromium browser');
     const { knownTypes } = require('../background.js');
     assert.ok(knownTypes.includes('getTotp'), 'getTotp must be a known routed message type');
     console.log('pairing.test.js: getTotp knownTypes OK');
+  }
+
+  // MyPass may replace the popup's focus before Chrome delivers pairingStarted.
+  // The service worker still persists the timestamp and a reopening joins the same start.
+  {
+    const popup = { id: 'test', url: 'chrome-extension://test/popup.html' };
+    chrome.runtime.id = 'test';
+    chrome.runtime.getURL = (file) => `chrome-extension://test/${file}`;
+    const session = {};
+    chrome.storage.session = { set(items, cb) { Object.assign(session, items); cb(); } };
+    let completeStart;
+    const calls = [];
+    chrome.runtime.sendNativeMessage = (_, request, cb) => {
+      calls.push(request.type);
+      completeStart = cb;
+    };
+    handleRuntimeMessage({ type: 'startPairing' }, popup, () => {});
+    const reopened = new Promise((resolve) => handleRuntimeMessage({ type: 'startPairing' }, popup, resolve));
+    assert.deepStrictEqual(calls, ['startPairing']);
+    completeStart({ type: 'pairingStarted' });
+    assert.deepStrictEqual(await reopened, { type: 'pairingStarted' });
+    assert.ok(Number.isFinite(session.pairingStartedAt));
+    chrome.runtime.sendNativeMessage = originalNativeSend;
   }
 
   console.log('pairing.test.js OK');

@@ -546,14 +546,10 @@ impl VaultFile {
 
 pub(crate) const RENAME_RETRY_SCHEDULE_MS: [u64; 6] = [50, 100, 200, 400, 800, 1600];
 pub(crate) fn is_retryable_rename_error(e: &io::Error) -> bool {
-    if e.kind() == io::ErrorKind::PermissionDenied {
-        return true;
-    }
+    let retryable = e.kind() == io::ErrorKind::PermissionDenied;
     #[cfg(windows)]
-    if matches!(e.raw_os_error(), Some(5 | 32 | 33)) {
-        return true;
-    }
-    false
+    let retryable = retryable || matches!(e.raw_os_error(), Some(5 | 32 | 33));
+    retryable
 }
 fn retry_rename<T>(
     mut attempt: impl FnMut() -> io::Result<T>,

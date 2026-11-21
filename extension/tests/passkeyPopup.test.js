@@ -189,7 +189,7 @@ assert.strictEqual(elements['passkey-save-panel'].hidden, false);
 assert.strictEqual(elements['passkey-replace-panel'].hidden, true);
 assert.strictEqual(elements['list-panel'].hidden, true, 'a ceremony hides the ordinary credential list');
 assert.strictEqual(elements['add-totp-section'].hidden, true, 'a ceremony hides the Add-2FA section');
-assert.strictEqual(elements['popup-menu'].hidden, true, 'a ceremony closes the extension menu');
+assert.strictEqual(elements['add-entry-menu'].hidden, true, 'a ceremony closes the extension menu');
 assert.strictEqual(elements['browser-chrome'].hidden, true, 'a ceremony hides the menu button');
 assert.strictEqual(elements['passkey-save-summary'].textContent, 'A new entry will be created.');
 assert.deepStrictEqual(elements['passkey-save-detail'].children.slice(-4).map((el) => el.textContent), ['Website', 'example.com', 'Origin', 'https://example.com']);
@@ -333,14 +333,14 @@ console.log('passkeyPopup.test.js: refreshPasskeyProxy fires during an active ce
 
 resetPanels();
 sessionStore = {};
-elements['popup-menu'].hidden = true;
+elements['add-entry-menu'].hidden = true;
 initPasskeyPopupUI();
 assert.strictEqual(
   sentMessages.filter((m) => m.type === 'refreshPasskeyProxy').length, 1,
   'refreshPasskeyProxy must still fire when there is no pending ceremony'
 );
 assert.strictEqual(elements['browser-chrome'].hidden, false, 'the menu button stays available when idle');
-assert.strictEqual(elements['popup-menu'].hidden, true, 'the menu stays closed until the menu button is clicked');
+assert.strictEqual(elements['add-entry-menu'].hidden, true, 'the menu stays closed until the menu button is clicked');
 console.log('passkeyPopup.test.js: refreshPasskeyProxy fires and the idle popup still initializes OK');
 
 // --- ordinary credential list: passkey badge --------------------------------

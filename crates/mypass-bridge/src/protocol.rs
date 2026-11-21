@@ -7,12 +7,13 @@
 //! Secrets never reach `Debug` output: `Debug` for the requests and responses prints the message tag
 //! only, and the address and history item types hide their values.
 
-use std::fmt;
+use std::{borrow::Cow, fmt};
 
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 /// The wire `type` of every [`Request`] variant, in declaration order.
-pub const REQUEST_TYPES: [&str; 29] = [
+pub const REQUEST_TYPES: [&str; 32] = [
     "getCredentials",
     "getFavorites",
     "listEntries",
@@ -42,7 +43,61 @@ pub const REQUEST_TYPES: [&str; 29] = [
     "recordGeneratedPassword",
     "getGeneratedPasswordHistory",
     "deleteGeneratedPassword",
+    "unlockWithPassword",
+    "unlockWithDevice",
+    "getUnlockOptions",
 ];
+
+/// Inspect the tag without deserialising the other fields into serde's enum buffer.
+pub(crate) fn message_type(frame: &[u8]) -> Option<Cow<'_, str>> {
+    #[derive(Deserialize)]
+    struct MessageType<'a> {
+        #[serde(borrow, rename = "type")]
+        kind: Cow<'a, str>,
+    }
+
+    serde_json::from_slice::<MessageType<'_>>(frame)
+        .ok()
+        .map(|tag| tag.kind)
+}
+
+/// Master password received from the extension. Its backing string is wiped on drop.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct WirePassword(Zeroizing<String>);
+
+impl WirePassword {
+    pub fn new(password: String) -> Self {
+        Self(Zeroizing::new(password))
+    }
+
+    pub fn char_len(&self) -> usize {
+        self.0.chars().count()
+    }
+
+    #[cfg(feature = "server")]
+    pub fn into_secret(self) -> secrecy::SecretString {
+        // Copy into the final secret and let the Zeroizing string erase its allocation.
+        secrecy::SecretString::from(self.0.as_str())
+    }
+}
+
+impl fmt::Debug for WirePassword {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("WirePassword(<redacted>)")
+    }
+}
+
+impl Serialize for WirePassword {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for WirePassword {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer).map(Self::new)
+    }
+}
 
 /// A request from the extension. Every variant carries the endpoint `token`; the ones the Swift app
 /// accepts a pairing secret on end with `pairing`.
@@ -267,6 +322,22 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pairing: Option<String>,
     },
+    UnlockWithPassword {
+        token: String,
+        password: WirePassword,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pairing: Option<String>,
+    },
+    UnlockWithDevice {
+        token: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pairing: Option<String>,
+    },
+    GetUnlockOptions {
+        token: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pairing: Option<String>,
+    },
 }
 
 /// A response from the app. It never carries the endpoint token.
@@ -303,6 +374,20 @@ pub enum Response {
     SaveProposalAccepted,
     UnlockPresented,
     UnlockNotNeeded,
+    Unlocked,
+    WrongPassword,
+    UnlockThrottled {
+        retry_after_secs: u64,
+    },
+    DeviceUnlockUnavailable,
+    UnlockCancelled,
+    UnlockInApp,
+    UnlockOptions {
+        device_unlock: bool,
+        touch_id: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_after_secs: Option<u64>,
+    },
     PasskeyProxyStatus {
         unlocked: bool,
         paired: bool,
@@ -519,6 +604,10 @@ fn message_tag<T: Serialize>(value: &T) -> String {
         .ok()
         .and_then(|v| v.get("type").and_then(|t| t.as_str().map(str::to_owned)))
         .unwrap_or_default();
+    pascal_case(&tag)
+}
+
+fn pascal_case(tag: &str) -> String {
     let mut chars = tag.chars();
     match chars.next() {
         Some(first) => first.to_uppercase().chain(chars).collect(),
@@ -530,7 +619,7 @@ fn message_tag<T: Serialize>(value: &T) -> String {
 // a new field can never leak through a log line.
 impl fmt::Debug for Request {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Request::{} {{ .. }}", message_tag(self))
+        write!(f, "Request::{} {{ .. }}", pascal_case(self.name()))
     }
 }
 
@@ -562,5 +651,91 @@ impl fmt::Debug for ExtensionPasswordHistoryItem {
             .field("url", &self.url)
             .field("created_at", &self.created_at)
             .finish()
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)] // test-only
+mod unlock_protocol_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn unlock_requests_round_trip_with_camel_case_names() {
+        for name in ["unlockWithPassword", "unlockWithDevice", "getUnlockOptions"] {
+            let mut wire = json!({"type": name, "token": "t", "pairing": "p"});
+            if name == "unlockWithPassword" {
+                wire["password"] = json!("p\u{e9}");
+            }
+            let request: Request = serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!(request.name(), name);
+            assert_eq!(serde_json::to_value(request).unwrap(), wire);
+        }
+    }
+
+    #[test]
+    fn debug_of_unlock_with_password_never_contains_the_password() {
+        let sentinel = "hunter2-\u{1f511}";
+        let request = Request::UnlockWithPassword {
+            token: "t".into(),
+            password: WirePassword::new(sentinel.into()),
+            pairing: Some("pairing secret".into()),
+        };
+        let debug = format!("{request:?}");
+        assert!(debug.contains("UnlockWithPassword"));
+        assert!(!debug.contains(sentinel));
+        assert!(!debug.contains("pairing secret"));
+    }
+
+    #[test]
+    fn wire_password_debug_is_redacted() {
+        assert_eq!(
+            format!("{:?}", WirePassword::new("test secret".into())),
+            "WirePassword(<redacted>)"
+        );
+    }
+
+    #[test]
+    fn unlock_responses_serialise_to_the_spec_shapes() {
+        let cases = [
+            (Response::Unlocked, json!({"type": "unlocked"})),
+            (Response::WrongPassword, json!({"type": "wrongPassword"})),
+            (
+                Response::UnlockThrottled {
+                    retry_after_secs: 30,
+                },
+                json!({"type": "unlockThrottled", "retryAfterSecs": 30}),
+            ),
+            (
+                Response::DeviceUnlockUnavailable,
+                json!({"type": "deviceUnlockUnavailable"}),
+            ),
+            (
+                Response::UnlockCancelled,
+                json!({"type": "unlockCancelled"}),
+            ),
+            (Response::UnlockInApp, json!({"type": "unlockInApp"})),
+            (
+                Response::UnlockOptions {
+                    device_unlock: true,
+                    touch_id: true,
+                    retry_after_secs: None,
+                },
+                json!({"type": "unlockOptions", "deviceUnlock": true, "touchId": true}),
+            ),
+        ];
+        for (response, wire) in cases {
+            assert_eq!(serde_json::to_value(response).unwrap(), wire);
+        }
+    }
+
+    #[test]
+    fn request_types_lists_32_names_ending_with_the_unlock_requests() {
+        assert_eq!(REQUEST_TYPES.len(), 32);
+        assert!(REQUEST_TYPES.ends_with(&[
+            "unlockWithPassword",
+            "unlockWithDevice",
+            "getUnlockOptions"
+        ]));
     }
 }

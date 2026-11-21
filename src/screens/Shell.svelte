@@ -7,7 +7,6 @@
   import SplitPane from "../lib/ui/SplitPane.svelte";
   import WindowControls from "../lib/ui/WindowControls.svelte";
   import GroupEditor, { type GroupEditorTarget } from "./GroupEditor.svelte";
-  import PairingCodeSheet from "./PairingCodeSheet.svelte";
   import ProposalHandler from "./ProposalHandler.svelte";
   import Sidebar from "./Sidebar.svelte";
   import Toolbar from "./Toolbar.svelte";
@@ -150,7 +149,6 @@
 </div>
 
 <!-- Browser bridge, main window only: both die with the unlocked stretch, so a lock closes them. -->
-<PairingCodeSheet />
 <ProposalHandler />
 
 {#if editor}

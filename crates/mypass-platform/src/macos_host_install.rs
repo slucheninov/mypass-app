@@ -393,6 +393,14 @@ fn create_dir_private(dir: &Path) -> PlatformResult<()> {
         .map_err(|e| io_err("create directory", dir, &e))
 }
 
+pub(crate) fn write_app_location_record(paths: &AppPaths, bytes: &[u8]) -> PlatformResult<()> {
+    check_dir_chain(paths.home(), &paths.host_dir)?;
+    create_dir_private(&paths.host_dir)?;
+    let dest = paths.app_location_file();
+    check_file_dest(&dest)?;
+    write_atomic(&dest, bytes, 0o600)
+}
+
 /// Temp file in the destination folder (mode set at open), sync, rename onto `dest`.
 fn write_atomic(dest: &Path, bytes: &[u8], mode: u32) -> PlatformResult<()> {
     let dir = dest

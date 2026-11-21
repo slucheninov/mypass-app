@@ -92,7 +92,7 @@ describe("fake backend", () => {
       data: { version: expect.any(String), os: "windows", deviceUnlockAvailable: true },
     });
     // The main window's event bridge takes the startup hotkey conflicts when it mounts.
-    expect(fake.calls.map((c) => c.command)).toEqual(["appInfo", "shortcutConflictsTake"]);
+    expect(fake.calls.map((c) => c.command)).toEqual(["browserStatus", "appInfo", "shortcutConflictsTake"]);
   });
 
   it("platform_keyboard_layout_is_null_unless_configured", async () => {

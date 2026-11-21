@@ -1,20 +1,15 @@
 //! The bridge service: every request from the extension passes the gates here, then reaches its
 //! handler.
 //!
-//! Order (load-bearing, ported from the Swift app):
+//! Order:
 //! 1. quitting: every request is refused, so nothing mutates the vault during the quit flow;
-//! 2. locked: only the requests that touch no vault data are answered, the rest get `Locked`;
-//! 3. pairing: everything but the two handshake requests needs a paired browser;
+//! 2. pairing: everything but the two handshake requests needs a paired browser;
+//! 3. locked: only the requests allowed while locked are answered, the rest get `Locked`;
 //! 4. dispatch, an exhaustive `match` over the request enum (a new request must pick a handler);
 //! 5. a served request that is a deliberate user gesture resets the idle auto-lock timer.
 //!
-//! Why locked comes before pairing: the extension shows "unlock MyPass" the moment the vault is
-//! locked, before it has any reason to pair, and pairing is refused while locked, which gives the
-//! "unlock, then connect" flow (the pairing code is shown only to a user who can see the app). The
-//! price is a one-bit leak: a peer that holds the endpoint token but is not paired learns whether
-//! the vault is locked (`Locked` against `PairingRequired`). That bit is accepted; it matches the
-//! Swift app and reveals no vault data. The handlers re-check the lock under the session's own lock
-//! (`with_db`), so this gate is an early answer, never the guard of the data.
+//! Unpaired requests to vault operations reveal no lock state. The data handlers re-check the
+//! lock under the session's own lock (`with_db`).
 //!
 //! The bridge always searches with `SearchScope::Autofill`: free text the
 //! extension has no use for is never matched.
@@ -35,6 +30,7 @@ use crate::pairing::PairingManager;
 use crate::passkeys::{PasskeyContext, PasskeyHandler};
 use crate::protocol::{Request, Response};
 use crate::ui::{BridgeUi, ProposalStore};
+use crate::unlock::{UnlockThrottle, VaultUnlocker};
 use crate::views::error;
 
 /// Everything the service works with.
@@ -48,11 +44,13 @@ pub struct BridgeDeps {
     pub proposals: Arc<ProposalStore>,
     pub ui: Arc<dyn BridgeUi>,
     pub passkeys: Arc<dyn PasskeyHandler>,
+    pub unlocker: Arc<dyn VaultUnlocker>,
 }
 
 /// Built once per request and handed to the handler.
 pub(crate) struct Ctx<'a> {
     pub deps: &'a BridgeDeps,
+    pub throttle: &'a UnlockThrottle,
     /// The injected wall clock at the start of the request.
     pub now: SystemTime,
     /// Monotonic time of the last `requestUnlock` that was shown to the user (the debounce).
@@ -61,6 +59,7 @@ pub(crate) struct Ctx<'a> {
 
 pub struct BridgeService {
     deps: BridgeDeps,
+    throttle: Arc<UnlockThrottle>,
     last_unlock_request: Mutex<Option<Duration>>,
 }
 
@@ -84,6 +83,7 @@ impl BridgeService {
     /// start leaves no observer behind.
     pub fn new_unobserved(deps: BridgeDeps) -> Arc<Self> {
         Arc::new(Self {
+            throttle: Arc::new(UnlockThrottle::new(Arc::clone(&deps.scheduler))),
             deps,
             last_unlock_request: Mutex::new(None),
         })
@@ -91,6 +91,7 @@ impl BridgeService {
 
     /// Registers the session observer (call once).
     pub fn register_observer(&self) {
+        let throttle = Arc::clone(&self.throttle);
         let proposals = self.deps.proposals.clone();
         let passkeys = self.deps.passkeys.clone();
         // A direct switch from one unlocked vault to another emits only `StateChanged(Unlocked)`
@@ -116,6 +117,7 @@ impl BridgeService {
                         proposals.clear();
                         passkeys.on_session_locked();
                     } else {
+                        throttle.reset();
                         if open.is_some() && *open != status.vault_path {
                             proposals.clear();
                             passkeys.on_session_locked();
@@ -140,29 +142,31 @@ impl BridgeService {
             deps: &self.deps,
             now: self.deps.scheduler.wall_now(),
             last_unlock_request: &self.last_unlock_request,
+            throttle: &self.throttle,
         }
     }
 
     /// Answers one request. Never panics, never returns vault data to a locked, unpaired or
     /// quitting caller.
-    pub fn handle(&self, request: Request) -> Response {
+    pub fn handle(&self, mut request: Request) -> Response {
         let deps = &self.deps;
         if deps.session.is_quitting() {
             return error("MyPass is quitting");
+        }
+        if request.requires_pairing() && !deps.pairing.is_authorized(request.pairing()) {
+            return Response::PairingRequired;
         }
         let unlocked = deps.session.is_unlocked();
         if !unlocked && !request.is_answerable_while_locked() {
             return Response::Locked;
         }
-        if request.requires_pairing() && !deps.pairing.is_authorized(request.pairing()) {
-            return Response::PairingRequired;
-        }
         let ctx = Ctx {
             deps,
             now: deps.scheduler.wall_now(),
             last_unlock_request: &self.last_unlock_request,
+            throttle: &self.throttle,
         };
-        let response = Self::dispatch(&ctx, &request, unlocked);
+        let response = Self::dispatch(&ctx, &mut request, unlocked);
         self.note_activity(&request, &response);
         response
     }
@@ -174,7 +178,7 @@ impl BridgeService {
         }
     }
 
-    fn dispatch(ctx: &Ctx<'_>, request: &Request, unlocked: bool) -> Response {
+    fn dispatch(ctx: &Ctx<'_>, request: &mut Request, unlocked: bool) -> Response {
         match request {
             Request::GetCredentials { url, .. } => browse::get_credentials(ctx, url),
             Request::GetFavorites { .. } => browse::get_favorites(ctx),
@@ -240,12 +244,17 @@ impl BridgeService {
             }
             Request::CompletePairing { code, .. } => session_ops::complete_pairing(ctx, code),
             Request::RequestUnlock { .. } => session_ops::request_unlock(ctx),
+            Request::UnlockWithPassword { password, .. } => {
+                session_ops::unlock_with_password(ctx, std::mem::take(password))
+            }
+            Request::UnlockWithDevice { .. } => session_ops::unlock_with_device(ctx),
+            Request::GetUnlockOptions { .. } => session_ops::get_unlock_options(ctx),
             Request::LockVault { .. } => session_ops::lock_vault(ctx),
             Request::OpenApp { .. } => session_ops::open_app(ctx),
             Request::OpenBrowserSettings { .. } => session_ops::open_browser_settings(ctx),
-            Request::ReportBrowserDiagnostics { report, .. } => {
-                session_ops::report_browser_diagnostics(ctx, report, request.pairing())
-            }
+            Request::ReportBrowserDiagnostics {
+                report, pairing, ..
+            } => session_ops::report_browser_diagnostics(ctx, report, pairing.as_deref()),
             Request::GetPasskeyProxyStatus { .. }
             | Request::SetPasskeyProxyEnabled { .. }
             | Request::PasskeyCreate { .. }
@@ -317,6 +326,7 @@ mod tests {
             proposals,
             ui: f.ui.clone(),
             passkeys: recording.clone(),
+            unlocker: f.unlocker.clone(),
         });
         // A direct switch to another vault: its first `StateChanged` is already `Unlocked`.
         let dir = tempfile::tempdir().unwrap();
@@ -334,7 +344,7 @@ mod tests {
     #[test]
     fn request_table_matches_wire_types() {
         let all = all_requests(None);
-        assert_eq!(all.len(), 29);
+        assert_eq!(all.len(), 32);
         for (r, name) in all.iter().zip(REQUEST_TYPES) {
             assert_eq!(r.name(), name);
         }
@@ -370,16 +380,252 @@ mod tests {
     }
 
     #[test]
-    fn locked_gate_runs_before_pairing_gate() {
+    fn gate_order_is_quitting_then_pairing_then_locked() {
         let f = fx();
         f.session.lock(LockReason::Manual);
         assert_eq!(
             f.svc.handle(named("getCredentials", None)),
-            Response::Locked
+            Response::PairingRequired
         );
         assert_eq!(
-            f.svc.handle(named("openApp", None)),
-            Response::PairingRequired
+            f.svc.handle(named("getCredentials", Some(&f.secret))),
+            Response::Locked
+        );
+        f.session.begin_quit();
+        assert_eq!(
+            error_message(&f.svc.handle(named("getCredentials", None))),
+            "MyPass is quitting"
+        );
+    }
+
+    fn password_attempt(f: &Fx, password: &str, proof: Option<&str>) -> Response {
+        f.svc.handle(Request::UnlockWithPassword {
+            token: "tok".into(),
+            password: crate::protocol::WirePassword::new(password.into()),
+            pairing: proof.map(str::to_owned),
+        })
+    }
+
+    fn wrong_password(f: &Fx) -> Response {
+        f.unlocker
+            .script_password(Err(crate::unlock::UnlockFailure::WrongPassword));
+        password_attempt(f, "wrong", Some(&f.secret))
+    }
+
+    fn reach_backoff(f: &Fx) {
+        for _ in 0..4 {
+            assert_eq!(wrong_password(f), Response::WrongPassword);
+        }
+        assert_eq!(
+            wrong_password(f),
+            Response::UnlockThrottled {
+                retry_after_secs: 30
+            }
+        );
+    }
+
+    #[test]
+    fn unpaired_unlock_with_password_is_pairing_required_and_never_reaches_the_unlocker() {
+        let f = fx();
+        f.session.lock(LockReason::Manual);
+        assert_eq!(password_attempt(&f, "pw", None), Response::PairingRequired);
+        assert_eq!(f.unlocker.password_calls(), 0);
+    }
+
+    #[test]
+    fn quitting_refuses_unlock_requests() {
+        let f = fx();
+        f.session.lock(LockReason::Manual);
+        f.session.begin_quit();
+        for name in ["unlockWithPassword", "unlockWithDevice", "getUnlockOptions"] {
+            assert_eq!(
+                error_message(&f.svc.handle(named(name, Some(&f.secret)))),
+                "MyPass is quitting"
+            );
+        }
+        assert_eq!(f.unlocker.password_calls(), 0);
+        assert_eq!(f.unlocker.device_calls(), 0);
+    }
+
+    #[test]
+    fn paired_password_unlock_while_locked_answers_unlocked() {
+        let f = fx();
+        f.session.lock(LockReason::Manual);
+        f.unlocker.script_password(Ok(()));
+        assert_eq!(
+            password_attempt(&f, "pw", Some(&f.secret)),
+            Response::Unlocked
+        );
+        assert_eq!(f.unlocker.password_calls(), 1);
+    }
+
+    #[test]
+    fn wrong_password_then_fifth_is_throttled_over_the_bridge() {
+        let f = fx();
+        f.session.lock(LockReason::Manual);
+        reach_backoff(&f);
+        assert_eq!(
+            password_attempt(&f, "pw", Some(&f.secret)),
+            Response::UnlockThrottled {
+                retry_after_secs: 30
+            }
+        );
+        assert_eq!(f.unlocker.password_calls(), 5);
+    }
+
+    #[test]
+    fn unlock_when_already_unlocked_is_not_needed_and_skips_the_unlocker() {
+        let f = fx();
+        for name in ["unlockWithPassword", "unlockWithDevice"] {
+            assert_eq!(
+                f.svc.handle(named(name, Some(&f.secret))),
+                Response::UnlockNotNeeded
+            );
+        }
+        assert_eq!(f.unlocker.password_calls(), 0);
+        assert_eq!(f.unlocker.device_calls(), 0);
+    }
+
+    #[test]
+    fn overlong_password_is_invalid_request_and_not_counted() {
+        let f = fx();
+        f.session.lock(LockReason::Manual);
+        let long = "x".repeat(mypass_core::text::MAX_PASSWORD_CHARS + 1);
+        assert_eq!(
+            error_message(&password_attempt(&f, &long, Some(&f.secret))),
+            "invalid request"
+        );
+        assert_eq!(f.unlocker.password_calls(), 0);
+        reach_backoff(&f);
+    }
+
+    #[test]
+    fn in_app_failure_maps_to_unlock_in_app() {
+        let f = fx();
+        f.session.lock(LockReason::Manual);
+        f.unlocker
+            .script_password(Err(crate::unlock::UnlockFailure::InApp));
+        f.unlocker
+            .script_device(Err(crate::unlock::UnlockFailure::InApp));
+        for name in ["unlockWithPassword", "unlockWithDevice"] {
+            assert_eq!(
+                f.svc.handle(named(name, Some(&f.secret))),
+                Response::UnlockInApp
+            );
+        }
+    }
+
+    #[test]
+    fn device_unlock_maps_cancelled_and_unavailable() {
+        use crate::unlock::UnlockFailure;
+        let f = fx();
+        f.session.lock(LockReason::Manual);
+        let request = || named("unlockWithDevice", Some(&f.secret));
+        for (failure, response) in [
+            (UnlockFailure::Cancelled, Response::UnlockCancelled),
+            (
+                UnlockFailure::DeviceUnavailable,
+                Response::DeviceUnlockUnavailable,
+            ),
+            (UnlockFailure::Failed, error("unlock_failed")),
+        ] {
+            f.unlocker.script_device(Err(failure));
+            assert_eq!(f.svc.handle(request()), response);
+            f.sched.advance(Duration::from_secs(2));
+        }
+        reach_backoff(&f);
+        f.unlocker.script_device(Ok(()));
+        assert_eq!(f.svc.handle(request()), Response::Unlocked);
+        assert_eq!(wrong_password(&f), Response::WrongPassword);
+    }
+
+    #[test]
+    fn unpaired_unlock_options_are_pairing_required_while_locked() {
+        let f = fx();
+        f.session.lock(LockReason::Manual);
+        assert_eq!(
+            f.svc.handle(named("getUnlockOptions", None)),
+            Response::PairingRequired,
+        );
+    }
+
+    #[test]
+    fn repeated_device_requests_within_two_seconds_do_not_prompt_again() {
+        use crate::unlock::UnlockFailure;
+        let f = fx();
+        f.session.lock(LockReason::Manual);
+        let request = || named("unlockWithDevice", Some(&f.secret));
+        f.unlocker.script_device(Err(UnlockFailure::Cancelled));
+        f.unlocker
+            .script_device(Err(UnlockFailure::DeviceUnavailable));
+        assert_eq!(f.svc.handle(request()), Response::UnlockCancelled);
+        f.sched.advance(Duration::from_millis(1999));
+        assert_eq!(f.svc.handle(request()), Response::UnlockCancelled);
+        assert_eq!(f.unlocker.device_calls(), 1);
+        f.sched.advance(Duration::from_millis(1));
+        assert_eq!(f.svc.handle(request()), Response::DeviceUnlockUnavailable);
+        assert_eq!(f.unlocker.device_calls(), 2);
+    }
+
+    #[test]
+    fn unlock_options_reports_offer_and_running_backoff() {
+        let f = fx();
+        f.session.lock(LockReason::Manual);
+        f.unlocker.set_offer(crate::unlock::DeviceOffer {
+            offered: true,
+            touch_id: true,
+        });
+        let request = || named("getUnlockOptions", Some(&f.secret));
+        assert_eq!(
+            f.svc.handle(request()),
+            Response::UnlockOptions {
+                device_unlock: true,
+                touch_id: true,
+                retry_after_secs: None,
+            }
+        );
+        reach_backoff(&f);
+        assert_eq!(
+            f.svc.handle(request()),
+            Response::UnlockOptions {
+                device_unlock: true,
+                touch_id: true,
+                retry_after_secs: Some(30),
+            }
+        );
+    }
+
+    #[test]
+    fn session_unlock_resets_the_unlock_throttle() {
+        let f = fx();
+        f.session.lock(LockReason::Manual);
+        reach_backoff(&f);
+        f.session.unlock(secrecy::SecretString::from("pw")).unwrap();
+        f.session.lock(LockReason::Manual);
+        assert_eq!(wrong_password(&f), Response::WrongPassword);
+    }
+
+    #[test]
+    fn pairing_requests_are_answerable_while_locked() {
+        let f = fx();
+        f.session.lock(LockReason::Manual);
+        f.sched.advance(crate::pairing::START_MIN_INTERVAL);
+        assert_eq!(
+            f.svc.handle(named("startPairing", None)),
+            Response::PairingStarted
+        );
+        let displayed = f.ui.details().pop().unwrap();
+        let wrong = if displayed.ends_with("000000") {
+            "000001"
+        } else {
+            "000000"
+        };
+        assert_eq!(
+            error_message(&f.svc.handle(Request::CompletePairing {
+                token: "tok".into(),
+                code: wrong.into()
+            })),
+            "invalid_code"
         );
     }
 
@@ -395,7 +641,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(n, 54);
+        assert_eq!(n, 60);
     }
 
     #[test]

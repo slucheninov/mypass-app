@@ -31,7 +31,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `src-tauri` (package `mypass-app`, lib `mypass_app_lib`) | implemented | The Tauri 2 app shell: the typed commands and events (`tauri-specta`), capabilities, native file dialogs, plugins, tray, global hotkeys, single instance, quit flow, native-side i18n; a workspace member listed explicitly |
 | `mypass-bridge` | implemented | Browser bridge protocol, codec, endpoint, relay and loopback server (`server` feature, off for the host); the passkey service (`passkeys`) |
 | `mypass-host` | implemented | Native messaging host binary; never links the session, core or KDBX crates |
-| `extension/` | implemented | The Chromium extension (Manifest V3 JavaScript, vendored `vendor/jsQR.js`), with its 42 Node suites in `extension/tests/`, run by `scripts/test-extension.sh`; its text lives in `extension/_locales/{en,uk,ru,de}/messages.json` (`chrome.i18n`, read through `shared/i18n.js`, `en` is the default locale), pinned by `tests/locales.test.js` |
+| `extension/` | implemented | The Chromium extension (Manifest V3 JavaScript, vendored `vendor/jsQR.js`), with its 45 Node suites in `extension/tests/`, run by `scripts/test-extension.sh`; its text lives in `extension/_locales/{en,uk,ru,de}/messages.json` (`chrome.i18n`, read through `shared/i18n.js`, `en` is the default locale), pinned by `tests/locales.test.js` |
 
 ## Repo layout
 
@@ -53,9 +53,10 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `.github/workflows/release.yml` | Tag-driven macOS signed DMG and Windows unsigned ZIP: full tests, temporary Apple certificate import/cleanup, exact five draft assets verified, publish last |
 | `scripts/build-windows.sh`, `scripts/package-windows.sh` | Production x64 MSVC app/sidecar build, deterministic unsigned ZIP and sibling checksum |
 | `scripts/test-extension.sh` | Runs every `extension/tests/*.test.js` suite in its own node process (`--list` prints them); part of the `js` part |
+| `scripts/make-locked-icons.mjs` | Generates the four locked toolbar PNGs from the shipped key icons. A Node test compares the committed pixels with the generator |
 | `scripts/convert-xcstrings.mjs` | One-time converter of the old app's String Catalogs; its output (`src/lib/i18n/locales/{en,uk,ru}.json`, `src-tauri/resources/macos/{en,uk,ru}.lproj/InfoPlist.strings`) is then the hand-edited source of truth; `de.json` and `de.lproj` were written by hand and never went through it |
 | `.github/` | Workflows (`ci.yml`, `codeql.yml`), Dependabot config, issue forms, pull request template |
-| `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts), the Stage 2b UI walk-through and the Stage 3 browser bridge checklist (M1 to M14) and the Stage 4 passkey checklist (P1 to P13), Stage 5 checks (S1 to S21), cutover (C1 to C10) and Stage 6 Windows checks (W1 to W17) |
+| `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts), the Stage 2b UI walk-through and the Stage 3 browser bridge checklist (M1 to M14) and the Stage 4 passkey checklist (P1 to P13), Stage 5 checks (S1 to S21), cutover (C1 to C10) Stage 6 Windows checks (W1 to W17) and the extension popup checks (E1 to E10) |
 | `docs/implementation/ROADMAP.md` | The only tracked document under `docs/`: unfinished work |
 | `LICENSE`, `THIRD_PARTY_NOTICES.md` | Apache-2.0 and the notices for vendored data and linked crates |
 
@@ -359,8 +360,8 @@ change is done.
   live in the app-only Keychain and the host can never read them. A connection
   starts with a handshake: the host sends a hello with a fresh nonce, the server answers with an HMAC proof over
   the token, and only after the host verified it does the host send a token-bearing request, so a squatter on a stale
-  port never receives the token; unauthenticated connections have an absolute deadline. The gate order is quitting,
-  locked, then pairing; gating `match`es stay exhaustive (no wildcard arm), so a new request type is a compile error
+  port never receives the token. Unauthenticated connections have an absolute deadline. The gate order is quitting,
+  pairing, then locked. Gating `match`es stay exhaustive (no wildcard arm), so a new request type is a compile error
   until it is classified. Team-signed macOS builds store the endpoint in a Keychain item
   trusting the app and host team requirements and register the host inside the running bundle.
   Before sending a token-bearing request the signed host resolves the loopback listener PID via
@@ -369,6 +370,26 @@ change is done.
   retaining the same-user endpoint/host-replacement exposure. Signed-build residuals: PID reuse
   between lookup and verification, and the check-then-create Keychain ACL race; the earlier shared
   Keychain access-group idea was dropped.
+  The popup starts pairing automatically and can pair while the vault is locked. A lock transition dismisses
+  the code. Paired popups can unlock through the existing app-core password and macOS device-unlock operations.
+  From the fifth wrong password the bridge applies an in-memory, monotonic backoff starting at 30 seconds and
+  doubling up to 900 seconds. A successful unlock clears it. Popup device unlock permits one prompt
+  in flight and ignores requests within two seconds of the last prompt start. macOS enforces its
+  own authentication lockout. The popup clears the password field on submit.
+  The native host relays raw JSON values through zeroizing buffers, inserting its token without
+  decoding the password. The app decodes popup passwords directly into a zeroizing string and
+  passes them to the session in a `SecretString`. Serde can retain temporary scratch copies of
+  escaped passwords, and browser, OS and standard I/O buffers can retain copies. Logs and reply
+  details carry no master password.
+  The host handles `launchApp` locally, before the relay handshake. On macOS it prefers the bundle containing
+  the registered host. For an installed host copy, the app writes `app-location.json` in `AppPaths::host_dir`.
+  On macOS, the host checks the bundle's Info.plist for the MyPass bundle identifier. A same-user process can
+  replace the record with a path to another executable with an accepted MyPass name or a bundle claiming
+  that identifier, which the host could then launch.
+  - **Residual risks.** Pairing while locked requires the code shown by the app and can proceed
+    without the master password. Anyone with access to the unlocked OS session can pair another
+    browser profile. That profile can access vault data after the owner unlocks and can try
+    passwords at the bridge's throttled rate.
 - **Passkeys.** `mypass_core::passkey` holds the pure parts: request parsing and origin validation (`https` only,
   the rpId must be a registrable suffix of the origin host through the Public Suffix List, no IP literals, no
   localhost exception, so passkeys never work on `localhost`), the ES256 ceremonies (`perform_create`,

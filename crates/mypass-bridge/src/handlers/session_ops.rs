@@ -16,10 +16,69 @@ use super::text::{
     MAX_USERNAME_CHARS,
 };
 use crate::pairing::StartOutcome;
-use crate::protocol::{BrowserDiagnosticsReport, Response};
+use crate::protocol::{BrowserDiagnosticsReport, Response, WirePassword};
 use crate::service::Ctx;
 use crate::ui::Proposal;
+use crate::unlock::{PasswordAttempt, UnlockFailure};
 use crate::views::{error, pairing_error_response, parse_wire_id};
+
+pub(crate) fn unlock_with_password(ctx: &Ctx<'_>, password: WirePassword) -> Response {
+    if ctx.deps.session.is_unlocked() {
+        return Response::UnlockNotNeeded;
+    }
+    if password.char_len() > MAX_PASSWORD_CHARS {
+        return error("invalid request");
+    }
+    match ctx.throttle.attempt(
+        || ctx.deps.session.is_unlocked(),
+        || {
+            ctx.deps
+                .unlocker
+                .unlock_with_password(password.into_secret())
+        },
+    ) {
+        PasswordAttempt::Unlocked => Response::Unlocked,
+        PasswordAttempt::NotNeeded => Response::UnlockNotNeeded,
+        PasswordAttempt::WrongPassword => Response::WrongPassword,
+        PasswordAttempt::Throttled { retry_after_secs } => {
+            Response::UnlockThrottled { retry_after_secs }
+        }
+        PasswordAttempt::InApp => Response::UnlockInApp,
+        PasswordAttempt::Failed => error("unlock_failed"),
+    }
+}
+
+pub(crate) fn unlock_with_device(ctx: &Ctx<'_>) -> Response {
+    if ctx.deps.session.is_unlocked() {
+        return Response::UnlockNotNeeded;
+    }
+    ctx.throttle
+        .device_attempt(|| {
+            if ctx.deps.session.is_unlocked() {
+                return Response::UnlockNotNeeded;
+            }
+            match ctx.deps.unlocker.unlock_with_device() {
+                Ok(()) => {
+                    ctx.throttle.reset();
+                    Response::Unlocked
+                }
+                Err(UnlockFailure::Cancelled) => Response::UnlockCancelled,
+                Err(UnlockFailure::DeviceUnavailable) => Response::DeviceUnlockUnavailable,
+                Err(UnlockFailure::InApp) => Response::UnlockInApp,
+                Err(UnlockFailure::WrongPassword | UnlockFailure::Failed) => error("unlock_failed"),
+            }
+        })
+        .unwrap_or(Response::UnlockCancelled)
+}
+
+pub(crate) fn get_unlock_options(ctx: &Ctx<'_>) -> Response {
+    let offer = ctx.deps.unlocker.device_offer();
+    Response::UnlockOptions {
+        device_unlock: offer.offered && !ctx.deps.session.is_unlocked(),
+        touch_id: offer.touch_id,
+        retry_after_secs: ctx.throttle.retry_after_secs(),
+    }
+}
 
 const NOT_FOUND: &str = "entry not found or domain mismatch";
 const INVALID: &str = "invalid request";
@@ -536,15 +595,6 @@ mod tests {
         assert_eq!(code.len(), 6);
         assert!(code.chars().all(|c| c.is_ascii_digit()));
         assert!(!serde_json::to_string(&r).unwrap().contains(&code));
-    }
-
-    #[test]
-    fn start_pairing_while_locked_is_locked() {
-        let f = fx();
-        f.session.lock(LockReason::Manual);
-        f.sched.advance(START_MIN_INTERVAL);
-        assert_eq!(f.svc.handle(named("startPairing", None)), Response::Locked);
-        assert!(f.ui.calls().is_empty());
     }
 
     #[test]

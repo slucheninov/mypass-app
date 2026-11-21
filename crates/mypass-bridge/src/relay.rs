@@ -9,21 +9,24 @@
 //! extension sent) and is forwarded; a reader thread copies response frames to stdout.
 //!
 //! Output discipline: stdout carries frames only, nothing here prints, and no diagnostic names the
-//! token, a request or a response. The buffers that hold whole frames are wiped on drop
-//! (`Zeroizing`). Accepted residual: the serde value tree built while injecting the token, the
-//! reallocation copies of `read_to_end` and `to_vec`, and the token copy inside that tree are not
-//! wiped. The host lives for one message, and the endpoint decision (R1) already accepts that code
-//! running as the same user can read the token.
+//! token, a request or a response. The request framing buffers are wiped on drop and token
+//! injection borrows the JSON values as raw slices. The standard input buffer and temporary
+//! allocations inside the runtime or dependencies are outside this guarantee.
 
+use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpStream};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use serde::ser::{SerializeMap, Serializer as _};
+use serde_json::value::RawValue;
 use zeroize::Zeroizing;
 
-use crate::codec::{encode_frame, encode_frame_capped, read_frame, MAX_FRAME_BYTES};
+use crate::codec::{
+    encode_frame, encode_frame_capped, read_frame, read_zeroizing_frame, MAX_FRAME_BYTES,
+};
 use crate::endpoint::{new_nonce, verify_proof, Endpoint, EndpointStore, Handshake};
 
 /// Host-only error message: the app is not running, not reachable or not who it claims to be.
@@ -59,6 +62,8 @@ impl Default for RelayOptions {
 pub enum RelayOutcome {
     /// Chromium closed stdin and the relay drained.
     StdinClosed,
+    /// The host answered a host-local message.
+    HostHandled,
     /// No endpoint, no connection, or a peer that failed the handshake.
     AppNotRunning,
     /// stdin broke the framing (oversized or truncated frame); nothing more can be read.
@@ -80,17 +85,38 @@ pub enum RelayError {
 ///
 /// # Errors
 /// `Malformed` for bytes that are not JSON, `NotAnObject` for any other JSON value.
-pub fn inject_token(request_json: &[u8], token: &str) -> Result<Vec<u8>, RelayError> {
-    let mut value: serde_json::Value =
-        serde_json::from_slice(request_json).map_err(|_| RelayError::Malformed)?;
-    let serde_json::Value::Object(map) = &mut value else {
+pub fn inject_token(request_json: &[u8], token: &str) -> Result<Zeroizing<Vec<u8>>, RelayError> {
+    let text = std::str::from_utf8(request_json).map_err(|_| RelayError::Malformed)?;
+    if !text.trim_start().starts_with('{') {
+        serde_json::from_str::<&RawValue>(text).map_err(|_| RelayError::Malformed)?;
         return Err(RelayError::NotAnObject);
-    };
-    map.insert(
-        "token".to_owned(),
-        serde_json::Value::String(token.to_owned()),
-    );
-    serde_json::to_vec(&value).map_err(|_| RelayError::Malformed)
+    }
+
+    // Decode keys only. In particular serde never materialises the master password, including
+    // when its wire representation contains JSON escapes. Removing the decoded key also
+    // handles duplicate or escaped spellings of the extension's untrusted token.
+    let mut fields: BTreeMap<String, &RawValue> =
+        serde_json::from_str(text).map_err(|_| RelayError::Malformed)?;
+    fields.remove("token");
+
+    // The existing keys only get shorter or stay the same size when encoded compactly.
+    // Reserve for the original frame plus a comma, the new member and worst-case token escaping.
+    let capacity = request_json.len() + br#","token":"""#.len() + token.len() * 6;
+    let mut output = Zeroizing::new(Vec::with_capacity(capacity));
+    let mut serializer = serde_json::Serializer::new(&mut *output);
+    let mut object = serializer
+        .serialize_map(Some(fields.len() + 1))
+        .map_err(|_| RelayError::Malformed)?;
+    for (key, value) in fields {
+        object
+            .serialize_entry(&key, value)
+            .map_err(|_| RelayError::Malformed)?;
+    }
+    object
+        .serialize_entry("token", token)
+        .and_then(|()| object.end())
+        .map_err(|_| RelayError::Malformed)?;
+    Ok(output)
 }
 
 /// A framed `{"type":"error","message":..}`, the shape the app itself uses for errors.
@@ -301,11 +327,36 @@ pub fn run_relay<R: Read, W: Write + Send + 'static>(
 /// Production signed hosts supply a listener identity check, after connect and before any
 /// token-bearing request. The HMAC handshake is retained as an independent check.
 pub fn run_relay_verified<R: Read, W: Write + Send + 'static>(
+    stdin: R,
+    stdout: W,
+    endpoint: Option<Endpoint>,
+    opts: &RelayOptions,
+    verify_peer: &dyn Fn(u16) -> bool,
+) -> RelayOutcome {
+    run_relay_with_first_frame(stdin, stdout, endpoint, opts, verify_peer, None)
+}
+
+/// Open the endpoint socket and apply the host's listener identity policy.
+pub(crate) fn connect_verified(
+    port: u16,
+    timeout: Duration,
+    verify_peer: &dyn Fn(u16) -> bool,
+) -> Option<TcpStream> {
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let stream = TcpStream::connect_timeout(&addr, timeout).ok()?;
+    verify_peer(port).then_some(stream)
+}
+
+type InputFrame = io::Result<Option<Zeroizing<Vec<u8>>>>;
+
+/// Continue a normal relay after host-local dispatch has inspected the first frame.
+pub(crate) fn run_relay_with_first_frame<R: Read, W: Write + Send + 'static>(
     mut stdin: R,
     stdout: W,
     endpoint: Option<Endpoint>,
     opts: &RelayOptions,
     verify_peer: &dyn Fn(u16) -> bool,
+    mut first: Option<InputFrame>,
 ) -> RelayOutcome {
     let out = Arc::new(Mutex::new(stdout));
     let not_running = |out: &Mutex<W>| {
@@ -315,13 +366,10 @@ pub fn run_relay_verified<R: Read, W: Write + Send + 'static>(
     let Some(endpoint) = endpoint else {
         return not_running(&out);
     };
-    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, endpoint.port));
-    let Ok(mut stream) = TcpStream::connect_timeout(&addr, opts.connect_timeout) else {
+    let Some(mut stream) = connect_verified(endpoint.port, opts.connect_timeout, verify_peer)
+    else {
         return not_running(&out);
     };
-    if !verify_peer(endpoint.port) {
-        return not_running(&out);
-    }
     let _ = stream.set_nodelay(true);
     if !handshake(&mut stream, &endpoint.token, opts.connect_timeout) {
         let _ = stream.shutdown(Shutdown::Both);
@@ -349,8 +397,11 @@ pub fn run_relay_verified<R: Read, W: Write + Send + 'static>(
     };
 
     let outcome = loop {
-        let frame = match read_frame(&mut stdin, opts.max_frame) {
-            Ok(Some(frame)) => Zeroizing::new(frame),
+        let input = first
+            .take()
+            .unwrap_or_else(|| read_zeroizing_frame(&mut stdin, opts.max_frame));
+        let frame = match input {
+            Ok(Some(frame)) => frame,
             Ok(None) => {
                 drain(&shared, opts.drain_timeout);
                 break RelayOutcome::StdinClosed;
@@ -359,7 +410,6 @@ pub fn run_relay_verified<R: Read, W: Write + Send + 'static>(
             Err(e) => break RelayOutcome::Failed(format!("stdin: {}", e.kind())),
         };
         let framed = inject_token(&frame, &endpoint.token)
-            .map(Zeroizing::new)
             .ok()
             .and_then(|json| encode_frame_capped(&json, opts.max_frame).ok())
             .map(Zeroizing::new);
@@ -559,12 +609,28 @@ mod tests {
     }
 
     #[test]
+    fn injecting_password_request_preserves_raw_values_and_replaces_all_token_keys() {
+        let frame = br#"{
+            "type":"unlockWithPassword",
+            "password":"\u00e9\"\n",
+            "token":"discardMe","t\u006fken":"discardMeToo",
+            "extra":{"token":"keep","number":1.00e+0}
+        }"#;
+        let injected = inject_token(frame, "x\ny").unwrap();
+        let json = std::str::from_utf8(&injected).unwrap();
+        assert!(json.contains(r#""password":"\u00e9\"\n""#));
+        assert!(json.contains(r#""extra":{"token":"keep","number":1.00e+0}"#));
+        assert!(json.contains(r#""token":"x\ny""#));
+        assert!(!json.contains("discardMe"));
+    }
+
+    #[test]
     fn injector_rejects_malformed_json_and_non_object() {
         for bad in [&b"[1,2]"[..], b"\"s\"", b"42", b"null"] {
-            assert_eq!(inject_token(bad, "t"), Err(RelayError::NotAnObject));
+            assert_eq!(inject_token(bad, "t").unwrap_err(), RelayError::NotAnObject);
         }
         for bad in [&b"{\"type\":"[..], b"", b"not json", b"{\"a\":1} x"] {
-            assert_eq!(inject_token(bad, "t"), Err(RelayError::Malformed));
+            assert_eq!(inject_token(bad, "t").unwrap_err(), RelayError::Malformed);
         }
     }
 

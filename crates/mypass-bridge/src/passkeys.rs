@@ -273,7 +273,10 @@ impl PasskeyHandler for PasskeyService {
             | Request::GeneratePassword { .. }
             | Request::RecordGeneratedPassword { .. }
             | Request::GetGeneratedPasswordHistory { .. }
-            | Request::DeleteGeneratedPassword { .. } => error("unsupported request"),
+            | Request::DeleteGeneratedPassword { .. }
+            | Request::UnlockWithPassword { .. }
+            | Request::UnlockWithDevice { .. }
+            | Request::GetUnlockOptions { .. } => error("unsupported request"),
         }
     }
 

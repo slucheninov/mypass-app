@@ -5,6 +5,7 @@
 //! list is pinned by `tests/commands.snap`.
 
 pub mod bridge;
+mod bridge_unlock;
 pub mod commands;
 pub mod events;
 mod extension_copy;

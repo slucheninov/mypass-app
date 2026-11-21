@@ -12,6 +12,7 @@ use crate::protocol::{
 };
 use crate::service::{BridgeDeps, BridgeService};
 use crate::ui::{BridgeUi, ProposalStore};
+use crate::unlock::{DeviceOffer, UnlockFailure, VaultUnlocker};
 use mypass_kdbx::{Entry, PlainFileIo, Timestamp};
 use mypass_platform::testing::InMemorySecretStore;
 use mypass_session::autolock::AutoLock;
@@ -20,6 +21,7 @@ use mypass_session::session::{SessionDeps, VaultSession};
 use mypass_session::settings::{IdleTimeout, SettingsPatch, SettingsStore};
 use mypass_session::testing::fast_database;
 use secrecy::SecretString;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
@@ -97,8 +99,60 @@ impl PasskeyHandler for RecordingPasskeys {
     }
 }
 
+#[derive(Default)]
+pub(crate) struct FakeUnlocker {
+    passwords: Mutex<VecDeque<Result<(), UnlockFailure>>>,
+    devices: Mutex<VecDeque<Result<(), UnlockFailure>>>,
+    offer: Mutex<DeviceOffer>,
+    password_calls: AtomicUsize,
+    device_calls: AtomicUsize,
+}
+
+impl FakeUnlocker {
+    pub(crate) fn password_calls(&self) -> usize {
+        self.password_calls.load(Ordering::SeqCst)
+    }
+    pub(crate) fn device_calls(&self) -> usize {
+        self.device_calls.load(Ordering::SeqCst)
+    }
+    pub(crate) fn script_password(&self, result: Result<(), UnlockFailure>) {
+        self.passwords.lock().unwrap().push_back(result);
+    }
+    pub(crate) fn script_device(&self, result: Result<(), UnlockFailure>) {
+        self.devices.lock().unwrap().push_back(result);
+    }
+    pub(crate) fn set_offer(&self, offer: DeviceOffer) {
+        *self.offer.lock().unwrap() = offer;
+    }
+}
+
+impl VaultUnlocker for FakeUnlocker {
+    fn unlock_with_password(&self, _password: SecretString) -> Result<(), UnlockFailure> {
+        self.password_calls.fetch_add(1, Ordering::SeqCst);
+        self.passwords
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or(Err(UnlockFailure::Failed))
+    }
+
+    fn unlock_with_device(&self) -> Result<(), UnlockFailure> {
+        self.device_calls.fetch_add(1, Ordering::SeqCst);
+        self.devices
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or(Err(UnlockFailure::Failed))
+    }
+
+    fn device_offer(&self) -> DeviceOffer {
+        *self.offer.lock().unwrap()
+    }
+}
+
 pub(crate) struct Fx {
     pub(crate) svc: Arc<BridgeService>,
+    pub(crate) unlocker: Arc<FakeUnlocker>,
     pub(crate) session: VaultSession,
     pub(crate) sched: Arc<ManualScheduler>,
     pub(crate) ui: Arc<RecordingUi>,
@@ -179,6 +233,7 @@ fn fx_build(
     let ui = Arc::new(RecordingUi::default());
     let passkeys = make_passkeys(sched.clone(), ui.clone());
     let proposals = Arc::new(ProposalStore::new(sched.clone()));
+    let unlocker = Arc::new(FakeUnlocker::default());
     let svc = BridgeService::new(BridgeDeps {
         session: session.clone(),
         autolock,
@@ -189,6 +244,7 @@ fn fx_build(
         proposals: proposals.clone(),
         ui: ui.clone(),
         passkeys,
+        unlocker: unlocker.clone(),
     });
     session
         .create_vault_with(
@@ -199,6 +255,7 @@ fn fx_build(
         .unwrap();
     Fx {
         svc,
+        unlocker,
         session,
         sched,
         ui,
@@ -397,6 +454,19 @@ pub(crate) fn all_requests(pairing: Option<&str>) -> Vec<Request> {
         Request::DeleteGeneratedPassword {
             token: t(),
             id: s(),
+            pairing: p(),
+        },
+        Request::UnlockWithPassword {
+            token: t(),
+            password: crate::protocol::WirePassword::new(s()),
+            pairing: p(),
+        },
+        Request::UnlockWithDevice {
+            token: t(),
+            pairing: p(),
+        },
+        Request::GetUnlockOptions {
+            token: t(),
             pairing: p(),
         },
     ]

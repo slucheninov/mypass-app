@@ -9,6 +9,7 @@ pub mod endpoint;
 pub mod gating;
 #[cfg(feature = "server")]
 pub(crate) mod handlers;
+pub mod host_local;
 #[cfg(feature = "server")]
 pub mod pairing;
 #[cfg(feature = "server")]
@@ -23,6 +24,8 @@ pub mod service;
 mod testing;
 #[cfg(feature = "server")]
 pub mod ui;
+#[cfg(feature = "server")]
+pub mod unlock;
 #[cfg(feature = "server")]
 pub mod views;
 

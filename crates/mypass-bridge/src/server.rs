@@ -18,13 +18,14 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::{prelude::BASE64_STANDARD as B64, Engine};
-use zeroize::Zeroizing;
+use serde::Deserialize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::codec::{encode_frame, FrameReader, HEADER_LEN, MAX_FRAME_BYTES};
 use crate::endpoint::{
     generate_token, hello_proof, tokens_equal, Endpoint, EndpointStore, Handshake,
 };
-use crate::protocol::{Request, Response};
+use crate::protocol::{message_type, Request, Response, WirePassword};
 
 /// A peer nonce is 16 random bytes: 24 base64 characters with padding.
 const NONCE_CHARS: usize = 24;
@@ -325,7 +326,7 @@ fn serve(mut stream: TcpStream, shared: &Shared, accepted_at: Instant) {
     let mut partial_since: Option<Instant> = None;
     let mut fed: usize = 0;
     let mut consumed: usize = 0;
-    let mut buf = vec![0u8; 16 * 1024];
+    let mut buf = Zeroizing::new(vec![0u8; 16 * 1024]);
     loop {
         if shared.shutdown.load(Ordering::SeqCst) {
             return;
@@ -356,9 +357,13 @@ fn serve(mut stream: TcpStream, shared: &Shared, accepted_at: Instant) {
             Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => continue,
             Err(_) => return,
         };
-        let Some(chunk) = buf.get(..n) else { return };
+        let Some(chunk) = buf.get_mut(..n) else {
+            return;
+        };
         fed = fed.saturating_add(n);
-        let frames = match reader.feed(chunk) {
+        let decoded = reader.feed_zeroizing(chunk);
+        chunk.zeroize();
+        let frames = match decoded {
             Ok(f) => f,
             Err(_) => {
                 send(&mut stream, &error("frame too large"));
@@ -388,34 +393,61 @@ fn serve(mut stream: TcpStream, shared: &Shared, accepted_at: Instant) {
     }
 }
 
+// The derived, internally tagged Request materialises escaped strings in an intermediate
+// enum buffer. Decode the password request directly so the string goes into WirePassword
+// immediately. serde_json still uses its own scratch space to unescape JSON strings.
+#[derive(Deserialize)]
+struct PasswordRequest {
+    token: String,
+    password: WirePassword,
+    pairing: Option<String>,
+}
+
+fn decode_password_request(frame: &[u8]) -> Option<Request> {
+    let request: PasswordRequest = serde_json::from_slice(frame).ok()?;
+    Some(Request::UnlockWithPassword {
+        token: request.token,
+        password: request.password,
+        pairing: request.pairing,
+    })
+}
+
 fn handle_frame(stream: &mut TcpStream, shared: &Shared, frame: &[u8], state: &mut State) -> Flow {
-    match serde_json::from_slice::<Handshake>(frame) {
-        Ok(Handshake::Hello { nonce }) => {
-            // One proof per connection bounds the HMAC oracle.
-            let valid = *state == State::New
-                && nonce.len() == NONCE_CHARS
-                && B64
-                    .decode(nonce.as_bytes())
-                    .is_ok_and(|b| b.len() == NONCE_BYTES);
-            if !valid {
-                return Flow::Close;
+    let kind = message_type(frame);
+    if matches!(kind.as_deref(), Some("hello" | "helloAck")) {
+        match serde_json::from_slice::<Handshake>(frame) {
+            Ok(Handshake::Hello { nonce }) => {
+                // One proof per connection bounds the HMAC oracle.
+                let valid = *state == State::New
+                    && nonce.len() == NONCE_CHARS
+                    && B64
+                        .decode(nonce.as_bytes())
+                        .is_ok_and(|b| b.len() == NONCE_BYTES);
+                if !valid {
+                    return Flow::Close;
+                }
+                let proof = hello_proof(&shared.token, &nonce);
+                *state = State::HelloDone;
+                return flow(send(
+                    stream,
+                    &HelloReply::Ack(Handshake::HelloAck { proof }),
+                ));
             }
-            let proof = hello_proof(&shared.token, &nonce);
-            *state = State::HelloDone;
-            return flow(send(
-                stream,
-                &HelloReply::Ack(Handshake::HelloAck { proof }),
-            ));
+            // A client never sends the ack.
+            Ok(Handshake::HelloAck { .. }) => return Flow::Close,
+            Err(_) => {}
         }
-        // A client never sends the ack.
-        Ok(Handshake::HelloAck { .. }) => return Flow::Close,
-        Err(_) => {}
     }
     if *state == State::New {
         send(stream, &error("hello required"));
         return Flow::Close;
     }
-    let Ok(request) = serde_json::from_slice::<Request>(frame) else {
+    let request = match kind.as_deref() {
+        Some("unlockWithPassword") => decode_password_request(frame),
+        Some(_) => serde_json::from_slice(frame).ok(),
+        None => None,
+    };
+    let Some(request) = request else {
         if *state != State::Authenticated {
             return Flow::Close;
         }

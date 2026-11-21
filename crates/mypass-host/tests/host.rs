@@ -325,3 +325,18 @@ fn legacy_plaintext_endpoint_is_never_trusted() {
     assert_not_running(tmp.path());
     assert_no_connection(&listener);
 }
+
+#[test]
+fn host_binary_answers_launch_app_without_an_app() {
+    let dir = tempfile::tempdir().unwrap();
+    let (ok, stdout, stderr) = run(dir.path(), &frame_of(r#"{"type":"launchApp"}"#));
+    assert!(ok);
+    assert!(stderr.is_empty());
+    let mut output = stdout.as_slice();
+    let answer = read_frame(&mut output, MAX_FRAME_BYTES).unwrap().unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&answer).unwrap(),
+        serde_json::json!({"type":"error","message":"launch_unavailable"})
+    );
+    assert!(output.is_empty());
+}
