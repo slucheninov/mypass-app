@@ -193,6 +193,10 @@ pub enum Request {
         /// the whole proposal when a limit is exceeded.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         extra_fields: Vec<ProposalExtraField>,
+        /// The username was typed into the form's email field (the form had no username field), so
+        /// it is also the person's email: an Address entry made from the form gets it as its email.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        username_is_email: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pairing: Option<String>,
     },

@@ -182,6 +182,7 @@ pub(crate) fn propose_save_login(
     username: &str,
     password: &str,
     extra_fields: &[ProposalExtraField],
+    username_is_email: bool,
 ) -> Response {
     if !is_clean_line(url, MAX_URL_CHARS)
         || !is_clean_line(username, MAX_USERNAME_CHARS)
@@ -212,6 +213,8 @@ pub(crate) fn propose_save_login(
         password: Zeroizing::new(password.to_owned()),
         extras,
         offer_address,
+        // Only meaningful with a username to copy.
+        username_is_email: username_is_email && !username.trim().is_empty(),
     });
     // A lock that raced the gate has already cleared the store; a proposal stored after it must not
     // outlive it.
@@ -405,6 +408,7 @@ mod tests {
             username: "alice".into(),
             password,
             extra_fields: Vec::new(),
+            username_is_email: false,
             pairing,
         }
     }
@@ -435,6 +439,7 @@ mod tests {
             password,
             extras,
             offer_address,
+            username_is_email,
         }) = f.proposals.take(&id)
         else {
             panic!("no login proposal");
@@ -445,6 +450,7 @@ mod tests {
         );
         assert!(extras.is_empty());
         assert!(!offer_address);
+        assert!(!username_is_email);
         assert!(f.proposals.take(&id).is_none());
     }
 
@@ -458,6 +464,7 @@ mod tests {
             username: "u".into(),
             password: "pw".into(),
             extra_fields: Vec::new(),
+            username_is_email: false,
             pairing,
         });
         assert_eq!(r, Response::SaveProposalAccepted);
@@ -467,6 +474,7 @@ mod tests {
             username: "u".into(),
             password: "pw".into(),
             extra_fields: Vec::new(),
+            username_is_email: false,
             pairing,
         });
         assert_eq!(error_message(&r), "invalid request");
@@ -499,8 +507,41 @@ mod tests {
             username: "ann@example.com".into(),
             password: "N3w-Passw0rd".into(),
             extra_fields: fields,
+            username_is_email: false,
             pairing,
         }
+    }
+
+    #[test]
+    fn propose_save_login_keeps_that_the_username_is_the_email() {
+        let f = fx();
+        let flagged = |username: &'static str| {
+            move |token, pairing| Request::ProposeSaveLogin {
+                token,
+                url: "https://shop.example/register".into(),
+                username: username.into(),
+                password: "N3w-Passw0rd".into(),
+                extra_fields: vec![extra(ExtraFieldKind::City, "City", "Lviv")],
+                username_is_email: true,
+                pairing,
+            }
+        };
+        let flag = |f: &Fx| {
+            let id = last_arg(f, "save_login_proposal");
+            match f.proposals.take(&id) {
+                Some(Proposal::Login {
+                    username_is_email, ..
+                }) => username_is_email,
+                _ => panic!("no login proposal"),
+            }
+        };
+        assert_eq!(
+            send(&f, flagged("ann@example.com")),
+            Response::SaveProposalAccepted
+        );
+        assert!(flag(&f));
+        assert_eq!(send(&f, flagged("")), Response::SaveProposalAccepted);
+        assert!(!flag(&f), "no username, nothing to copy");
     }
 
     /// The stored extras (kind, label, value) and whether an Address entry is offered.
@@ -676,6 +717,7 @@ mod tests {
             username: "u".into(),
             password: "pw".into(),
             extra_fields: fields(),
+            username_is_email: false,
             pairing: None,
         });
         assert_eq!(r, Response::PairingRequired);
@@ -711,7 +753,7 @@ mod tests {
         // Called directly, past the gate: the handler notices the lock itself.
         let ctx = f.svc.ctx_for_test();
         assert_eq!(
-            propose_save_login(&ctx, "https://a.example", "u", "pw", &[]),
+            propose_save_login(&ctx, "https://a.example", "u", "pw", &[], false),
             Response::Locked
         );
         assert_eq!(

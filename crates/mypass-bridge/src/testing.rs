@@ -353,6 +353,7 @@ pub(crate) fn all_requests(pairing: Option<&str>) -> Vec<Request> {
             username: s(),
             password: s(),
             extra_fields: Vec::new(),
+            username_is_email: false,
             pairing: p(),
         },
         Request::AddEntryIdentifier {

@@ -1483,6 +1483,7 @@ mod tests {
             username: "me".into(),
             password: "hunter2-secret".into(),
             extra_fields: Vec::new(),
+            username_is_email: false,
             pairing: Some(secret),
         });
         assert_eq!(

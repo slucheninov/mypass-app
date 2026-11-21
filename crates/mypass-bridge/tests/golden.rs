@@ -128,6 +128,7 @@ fn request_cases() -> Vec<(Request, &'static str)> {
                 username: s("u"),
                 password: s("p"),
                 extra_fields: Vec::new(),
+                username_is_email: false,
                 pairing: None,
             },
             r#"{"type":"proposeSaveLogin","token":"tok-1","url":"https://x.example","username":"u","password":"p"}"#,
@@ -439,6 +440,7 @@ fn propose_save_login_extra_fields_round_trip_and_reject_unknown_kinds() {
                 value: s("annie"),
             },
         ],
+        username_is_email: false,
         pairing: None,
     };
     assert_eq!(serde_json::from_str::<Request>(golden).unwrap(), request);
@@ -1091,6 +1093,7 @@ fn debug_output_prints_the_tag_only() {
             username: s("alice-user"),
             password: s("hunter2"),
             extra_fields: Vec::new(),
+            username_is_email: false,
             pairing: None,
         },
         Request::CompletePairing {
@@ -1157,4 +1160,34 @@ fn debug_output_prints_the_tag_only() {
     ] {
         assert!(!text.contains(leak), "{leak} leaked: {text}");
     }
+}
+
+#[test]
+fn propose_save_login_username_is_email_round_trips_and_defaults_to_false() {
+    let golden = r#"{"type":"proposeSaveLogin","token":"t","url":"https://x.example","username":"ann@example.test","password":"p","usernameIsEmail":true}"#;
+    let request = Request::ProposeSaveLogin {
+        token: s("t"),
+        url: s("https://x.example"),
+        username: s("ann@example.test"),
+        password: s("p"),
+        extra_fields: Vec::new(),
+        username_is_email: true,
+        pairing: None,
+    };
+    assert_eq!(serde_json::from_str::<Request>(golden).unwrap(), request);
+    let golden_value: Value = serde_json::from_str(golden).unwrap();
+    assert!(json_eq(
+        &serde_json::to_value(&request).unwrap(),
+        &golden_value
+    ));
+    // Absent means false, and false is not written.
+    let plain =
+        r#"{"type":"proposeSaveLogin","token":"t","url":"u","username":"u","password":"p"}"#;
+    let Request::ProposeSaveLogin {
+        username_is_email, ..
+    } = serde_json::from_str::<Request>(plain).unwrap()
+    else {
+        panic!("not a login proposal");
+    };
+    assert!(!username_is_email);
 }

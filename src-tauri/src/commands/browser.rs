@@ -404,10 +404,13 @@ fn is_country_code(value: &str) -> bool {
 }
 
 /// The Address entry a registration form's values make, titled after the person (or the site).
+/// `login_email` is the username when it was typed into the form's email field: the form then has
+/// no separate email value, and the address gets it unless an email extra came too.
 fn address_model(
     core: &AppCore,
     url: &str,
     extras: &[ProposalExtra],
+    login_email: Option<&str>,
 ) -> Result<EntryEditModel, ApiError> {
     let mut model = core.entry_new_model(EntryTypeDto::Address, None)?;
     let mut address = model
@@ -439,6 +442,11 @@ fn address_model(
             } else {
                 value.to_owned()
             };
+        }
+    }
+    if let Some(email) = login_email {
+        if address.email.is_empty() {
+            email.clone_into(&mut address.email);
         }
     }
     if address.full_name.is_empty() {
@@ -473,12 +481,14 @@ fn login_proposal(
     password: &str,
     extras: &[ProposalExtra],
     offer_address: bool,
+    username_is_email: bool,
 ) -> Result<BrowserProposal, ApiError> {
     let mut model = new_login(core, url)?;
     model.username = username.to_owned();
     model.password = password.to_owned();
     let address = if offer_address {
-        Some(address_model(core, url, extras)?)
+        let login_email = (username_is_email && !username.is_empty()).then_some(username);
+        Some(address_model(core, url, extras, login_email)?)
     } else {
         None
     };
@@ -544,7 +554,16 @@ pub fn proposal_take(
             password,
             extras,
             offer_address,
-        } => login_proposal(core, url, username, password, extras, *offer_address),
+            username_is_email,
+        } => login_proposal(
+            core,
+            url,
+            username,
+            password,
+            extras,
+            *offer_address,
+            *username_is_email,
+        ),
         Proposal::Totp { url, otp, entry_id } => totp_proposal(core, url, otp, *entry_id),
     };
     if built.is_err() {
@@ -1010,6 +1029,7 @@ mod tests {
             password: Zeroizing::new("hunter2".into()),
             extras: Vec::new(),
             offer_address: false,
+            username_is_email: false,
         })
     }
 
@@ -1082,6 +1102,14 @@ mod tests {
     }
 
     fn put_registration(f: &crate::bridge::test_support::Fixture, offer_address: bool) -> String {
+        put_registration_with(f, offer_address, false)
+    }
+
+    fn put_registration_with(
+        f: &crate::bridge::test_support::Fixture,
+        offer_address: bool,
+        username_is_email: bool,
+    ) -> String {
         f.handle().proposals.put(Proposal::Login {
             url: "https://shop.example/register".into(),
             username: "ann@example.com".into(),
@@ -1096,6 +1124,7 @@ mod tests {
                 extra(ExtraFieldKind::Other, "Nickname", "annie"),
             ],
             offer_address,
+            username_is_email,
         })
     }
 
@@ -1160,6 +1189,23 @@ mod tests {
         // The model saves as it is: the user only ticks the box.
         let saved = f.w.core.entry_save(address).unwrap();
         assert!(!saved.is_empty());
+    }
+
+    #[test]
+    fn an_address_entry_gets_the_email_that_was_typed_as_the_username() {
+        let f = fixture(true);
+        let id = put_registration_with(&f, true, true);
+        let taken = proposal_take(&f.w.core, &f.state, &id).unwrap();
+        assert_eq!(taken.model.username, "ann@example.com");
+        let address = taken.address.expect("an address model");
+        assert_eq!(address.address.as_ref().unwrap().email, "ann@example.com");
+        // Without the flag the username is not taken for an email.
+        let id = put_registration_with(&f, true, false);
+        let address = proposal_take(&f.w.core, &f.state, &id)
+            .unwrap()
+            .address
+            .expect("an address model");
+        assert_eq!(address.address.as_ref().unwrap().email, "");
     }
 
     #[test]

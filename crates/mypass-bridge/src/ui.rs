@@ -41,6 +41,8 @@ pub enum Proposal {
         /// The form had address parts and no Address entry of the vault holds them, so the user
         /// may also create one (an unchecked option in the review).
         offer_address: bool,
+        /// The username came from the form's email field, so it is the person's email too.
+        username_is_email: bool,
     },
     Totp {
         url: String,
@@ -179,6 +181,7 @@ mod tests {
             password: Zeroizing::new("pw".into()),
             extras: Vec::new(),
             offer_address: false,
+            username_is_email: false,
         }
     }
 
