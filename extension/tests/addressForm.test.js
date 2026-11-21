@@ -14,9 +14,10 @@ function fixture() {
   }
   return { doc, field };
 }
-const address = { fullName: 'Example Person', givenName: '', familyName: '',
+const address = { fullName: 'Example Person', givenName: '', familyName: '', organization: 'Example Ltd',
   addressLine1: '12 Example Street', addressLine2: 'Unit 4', city: 'Sample City',
-  countryCode: 'PL', countryName: 'Poland', email: 'demo@example.test', postalCode: '00-001' };
+  region: 'Some Region', countryCode: 'PL', countryName: 'Poland', phone: '+48 123456789',
+  email: 'demo@example.test', postalCode: '00-001' };
 function fill(doc, groups, id = '0', profile = address, write = (node, value) => { node.value = value; }) {
   return addressForm.apply(doc, groups, id, profile, write);
 }
@@ -63,7 +64,7 @@ function fill(doc, groups, id = '0', profile = address, write = (node, value) =>
   assert.equal(fill(doc, addressForm.collect(doc), '0', { ...address, postalCode: '' }).filled, 2);
   assert.equal(street.value, '12 Example Street\nUnit 4');
   assert.equal(email.value, address.email);
-  assert.equal(name.value, 'Keep name', 'full name is never split into a given name');
+  assert.equal(name.value, 'Keep name', 'an existing name is preserved even with a full name on file');
   assert.equal(postal.value, 'Keep postal', 'blank profile data does not erase fields');
 }
 {
@@ -75,10 +76,92 @@ function fill(doc, groups, id = '0', profile = address, write = (node, value) =>
   assert.equal(fill(doc, addressForm.collect(doc)).filled, 2);
   assert.equal(country.value, 'PL', 'country code can match even when labels are localized');
   country.options = [{ value: 'custom', textContent: 'Poland' }];
+  country.value = '';
   fill(doc, addressForm.collect(doc)); assert.equal(country.value, 'custom');
   country.options = [{ value: 'US', textContent: 'United States' }];
   country.value = 'unchanged';
   fill(doc, addressForm.collect(doc)); assert.equal(country.value, 'unchanged', 'no guessed country');
+}
+{
+  const { doc, field } = fixture();
+  const street = field('shipping address-line1', { name: 'zip' });
+  const secondLine = field('', { name: 'checkout[shipping_address][address2]' });
+  const first = field('shipping given-name');
+  const last = field('', { id: 'shippingLastName' });
+  const postal = field('shipping postal-code', { value: 'Already typed' });
+  const phone = field('shipping mobile tel', { type: 'tel' });
+  const email = field('shipping email', { type: 'email' });
+  const region = field('', { id: 'shipping-state', tagName: 'SELECT', options: [
+    { value: 'SR', textContent: 'SOME REGION' }, { value: 'XX', textContent: 'Other' }
+  ] });
+  const billing = field('', { name: 'billing-address1' });
+  field('', { name: 'billing-city' });
+  const groups = addressForm.collect(doc);
+  assert.equal(groups.length, 2);
+  assert.equal(fill(doc, groups, '0', { ...address, fullName: 'Ada Byron Lovelace' }).filled, 7);
+  assert.deepEqual([street, secondLine, first, last, postal, phone, email, region, billing].map(node => node.value),
+    [address.addressLine1, address.addressLine2, 'Ada', 'Byron Lovelace', 'Already typed',
+      address.phone, address.email, 'SR', '']);
+}
+{
+  const { doc, field } = fixture();
+  const street = field('', { name: 'address1' });
+  const given = field('given-name');
+  const family = field('family-name');
+  const otp = field('one-time-code', { name: 'phone', type: 'tel' });
+  fill(doc, addressForm.collect(doc), '0', { ...address, fullName: 'Cher', givenName: 'Explicit' });
+  assert.equal(street.value, address.addressLine1);
+  assert.equal(given.value, 'Explicit');
+  assert.equal(family.value, '', 'a mononym supplies no family name');
+  assert.equal(otp.value, '', 'an explicit non-address autocomplete wins over a conflicting name');
+}
+{
+  const { doc, field } = fixture();
+  const street = field('address-line1');
+  const country = field('country', { tagName: 'SELECT', value: 'DE', options: [
+    { value: 'pl', textContent: 'Polska' }, { value: 'DE', textContent: 'Germany' }
+  ] });
+  const city = field('address-level2');
+  fill(doc, addressForm.collect(doc), '0', address, (node, value) => {
+    node.value = value;
+    if (node === street) city.value = 'Set during input';
+  });
+  assert.equal(city.value, 'Set during input', 'check whether each field is empty at the time of the write');
+  assert.equal(country.value, 'DE', 'a selected country is preserved');
+  country.value = '';
+  assert.equal(fill(doc, addressForm.collect(doc)).filled, 1);
+  assert.equal(country.value, 'pl', 'option codes are matched case-insensitively');
+  assert.equal(fill(doc, addressForm.collect(doc)).code, 'address_no_values');
+}
+{
+  const { doc, field } = fixture();
+  field('address-line1');
+  const region = field('address-level1', { tagName: 'SELECT', options: [] });
+  const country = field('', { tagName: 'SELECT', textContent: 'Select a countryPoland',
+    options: [{ value: 'PL', textContent: 'Poland' }] });
+  country.labels = [{ textContent: 'CountrySelect a countryPoland', contains: (node) => node === country,
+    childNodes: [{ textContent: 'Country' }, country] }];
+  assert.equal(fill(doc, addressForm.collect(doc), '0', address, (node, value) => {
+    node.value = value;
+    if (node === country) region.options = [{ value: 'some region', textContent: 'Local region name' }];
+  }).filled, 3, 'country is filled before looking up dependent region options');
+  assert.equal(country.value, 'PL');
+  assert.equal(region.value, 'some region');
+}
+{
+  const { doc, field } = fixture();
+  const values = new WeakMap();
+  class Input {
+    set value(value) { values.set(this, value); }
+  }
+  doc.defaultView.HTMLInputElement = Input;
+  doc.defaultView.Event = Event;
+  const events = [];
+  const street = field('address-line1', { dispatchEvent(event) {
+    events.push([event.type, event.bubbles, values.get(this)]);
+  } });
+  assert.equal(fill(doc, addressForm.collect(doc), '0', address, addressForm.setNativeAddressValue).filled, 1);
+  assert.deepEqual(events, [['input', true, address.addressLine1], ['change', true, address.addressLine1]]);
 }
 {
   const { doc, field } = fixture();
@@ -150,7 +233,7 @@ for (const mutate of [node => { node.isConnected = false; },
 {
   const { doc, field } = fixture();
   field('address-line1');
-  const country = field('country', { tagName: 'SELECT', value: 'DE', options: [
+  const country = field('country', { tagName: 'SELECT', options: [
     { value: 'PL', textContent: 'Poland' }, { value: 'DE', textContent: 'Germany' }
   ] });
   const result = fill(doc, addressForm.collect(doc), '0', address, (node, value) => {
@@ -158,12 +241,44 @@ for (const mutate of [node => { node.isConnected = false; },
     country.options = [{ value: 'DE', textContent: 'Germany' }];
   });
   assert.equal(result.filled, 1);
-  assert.equal(country.value, 'DE', 'removed option never clears an existing selection');
+  assert.equal(country.value, '', 'removed option is skipped even when the control is empty');
 }
 {
   const { doc, field } = fixture();
   const street = field('street-address');
   fill(doc, addressForm.collect(doc));
   assert.equal(street.value, '12 Example Street, Unit 4', 'single-line inputs do not glue multiline addresses');
+}
+{
+  const labels = ['Vollständiger Name', 'Firma (optional)', 'Straße und Hausnummer', 'Stadt', 'Bundesland',
+    'Postleitzahl', 'Land / Region', 'Telefonnummer', 'E-Mail-Adresse'];
+  const { doc, field } = fixture();
+  const nodes = labels.map(textContent => field('', { labels: [{ textContent }] }));
+  const groups = addressForm.collect(doc);
+  assert.equal(groups.length, 1);
+  assert.equal(fill(doc, groups).filled, labels.length);
+  assert.deepEqual(nodes.map(node => node.value), [address.fullName, address.organization, address.addressLine1,
+    address.city, address.region, address.postalCode, address.countryName, address.phone, address.email]);
+}
+{
+  const { doc, field } = fixture();
+  field('address-line1');
+  const postal = field('', { name: 'zip', type: 'number' });
+  const card = field('cc-number', { name: 'phone', type: 'number' });
+  assert.equal(fill(doc, addressForm.collect(doc), '0', { ...address, postalCode: '01234' }).filled, 2);
+  assert.equal(postal.value, '01234');
+  assert.equal(card.value, '');
+  postal.value = '';
+  assert.equal(fill(doc, addressForm.collect(doc)).code, 'address_no_values');
+  assert.equal(postal.value, '', 'an alphanumeric postal code is skipped for a number input');
+}
+{
+  const { doc, field } = fixture();
+  field('', { name: 'city' });
+  field('', { type: 'email' });
+  assert.equal(addressForm.collect(doc).length, 0, 'location and contact alone are insufficient');
+  field('', { name: 'address1' });
+  field('', { name: 'street' });
+  assert.equal(addressForm.collect(doc).length, 0, 'ambiguous unscoped inferred street fields fail closed');
 }
 console.log('addressForm.test.js: conservative scope, sparse values, select matching and stale forms OK');

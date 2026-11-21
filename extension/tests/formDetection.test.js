@@ -261,3 +261,15 @@ assert.strictEqual(hostnameMatches('http://example.com/', 'http://example.com/')
 assert.strictEqual(hostnameMatches('https://example.com/', 'http://example.com/'), true);
 assert.strictEqual(hostnameMatches('http://evil.example/', 'http://example.com/'), false);
 console.log('formDetection.test.js: hostnameMatches stays scheme-insensitive OK');
+
+const { addressFieldHint } = require('../shared/form-detection.js');
+const addressTokens = ['name', 'organization', 'address-line1', 'address-level2', 'address-level1',
+  'postal-code', 'country-name', 'tel', 'email'];
+for (const labels of [
+    ['Повне ім’я', 'Компанія', 'Вулиця', 'Місто', 'Область', 'Поштовий індекс', 'Країна', 'Телефон', 'Електронна пошта'],
+    ['Полное имя', 'Компания', 'Улица', 'Город', 'Регион', 'Почтовый индекс', 'Страна', 'Телефон', 'Электронная почта'],
+]) {
+  assert.deepStrictEqual(labels.map(text => addressFieldHint({
+    ...fakeInput({}), labels: [fakeLabel(text)]
+  })?.token), addressTokens);
+}

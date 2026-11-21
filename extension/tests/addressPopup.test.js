@@ -41,6 +41,7 @@ const forms = [
 ];
 let scanResponse = { type: 'addressForms', token: 'target', url: 'https://checkout.example.test/address', forms };
 let fillResponse = { type: 'addressFilled', filled: 4 };
+let tabUrl = 'https://checkout.example.test/address';
 global.document = {
   getElementById: (id) => elements[id] || makeEl(id),
   createElement: () => makeEl('created-' + Object.keys(elements).length)
@@ -60,7 +61,7 @@ global.chrome = {
       else cb({ type: 'ok' });
     }
   },
-  tabs: { query: (_opts, cb) => cb([{ id: 1, url: 'https://checkout.example.test/address' }]), sendMessage() {},
+  tabs: { query: (_opts, cb) => cb([{ id: 1, url: tabUrl }]), sendMessage() {},
     create() { throw Error('Address must never open URL or arm credential fill'); } }
 };
 require('../popup.js');
@@ -118,4 +119,10 @@ assert.equal(sent.length, sentBefore + 1, 'a hidden address suggestion does not 
 assert.equal(sent.at(-1).type, 'listEntries');
 assert.ok(chooser()[0].textContent.includes('Autofill and save'));
 chrome.storage.local.get = originalGet;
+tabUrl = 'http://checkout.example.test/address';
+for (const key of Object.keys(elements)) delete elements[key];
+delete require.cache[require.resolve('../popup.js')];
+require('../popup.js');
+assert.ok(!elements['category-menu'].children.some((item) => item.textContent === 'Addresses'));
+assert.equal(elements.list.children.length, 0, 'HTTP tabs cannot offer an address row');
 console.log('addressPopup.test.js: explicit destination/form confirmation, trusted actions, focus and errors OK');

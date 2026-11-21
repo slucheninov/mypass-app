@@ -3,6 +3,9 @@
 const i18n = typeof require === 'function'
   ? require('./shared/i18n.js')
   : window.mypassI18n;
+const popupUrlMatch = typeof require === 'function'
+  ? require('./shared/url-match.js')
+  : mypassUrlMatch;
 
 const PAIRING_STARTED_AT_KEY = 'pairingStartedAt';
 const PAIRING_CHALLENGE_TTL_MS = 120_000;
@@ -847,11 +850,13 @@ if (typeof document !== 'undefined') {
       address_page_changed: i18n.t('addressPageChanged'),
       address_form_changed: i18n.t('addressFormChanged'),
       address_no_values: i18n.t('addressNoValues'),
+      address_disabled: i18n.t('addressTurnOn'),
     };
     return messages[response && response.code] || i18n.t('addressFillFailed');
   }
 
   function beginAddressFill(credential) {
+    if (!popupUrlMatch.isHttpsAddressPage(currentTabUrl)) return;
     const requestId = ++browseRequestId;
     listEl.innerHTML = '';
     listHeaderEl.textContent = i18n.t('addressChecking');
@@ -1125,24 +1130,27 @@ if (typeof document !== 'undefined') {
       return;
     }
     if (kind === 'credentialList') {
+      const credentials = popupUrlMatch.isHttpsAddressPage(currentTabUrl)
+        ? response.credentials : response.credentials.filter((entry) => entry.entryType !== 'Address');
       const browsing = popupContext.kind !== 'site';
       listHeaderEl.textContent = browsing ? categoryTitle(popupContext.category) : LIST_HEADER_TEXT;
       if (popupContext.kind === 'search') listHeaderEl.textContent = i18n.t('search');
       emptyTitleEl.textContent = emptyTitleForContext();
-      if (response.credentials.length === 0) {
+      if (credentials.length === 0) {
+        listEl.innerHTML = '';
         showPanel('empty');
         hideIdentifierOffer();
         return;
       }
       showPanel('credential-list');
       const passkeyOnly = browsing && popupContext.kind === 'category' && popupContext.category === 'passkeys';
-      const identifierOffer = browsing ? null : pageIdentifier.unsavedPageIdentifier(currentPageIdentifier, response.credentials);
-      renderCredentials(response.credentials, url, browsing ? { openSavedUrl: true, passkeyOnly } : { identifierOffer: identifierOffer });
+      const identifierOffer = browsing ? null : pageIdentifier.unsavedPageIdentifier(currentPageIdentifier, credentials);
+      renderCredentials(credentials, url, browsing ? { openSavedUrl: true, passkeyOnly } : { identifierOffer: identifierOffer });
       if (identifierOffer) paintIdentifierOffer(identifierOffer);
       else hideIdentifierOffer();
       const hint = document.getElementById('site-passkey-hint');
       if (hint) {
-        hint.hidden = !passkeyOnly && (browsing || !response.credentials.some((entry) => entry.hasPasskey));
+        hint.hidden = !passkeyOnly && (browsing || !credentials.some((entry) => entry.hasPasskey));
         hint.textContent = passkeyOnly ? i18n.t('openSiteHint') : '';
         if (!passkeyOnly) hint.hidden = true;
       }
@@ -1242,6 +1250,7 @@ if (typeof document !== 'undefined') {
     categoryMenu.innerHTML = '';
     BROWSER_CATEGORIES.forEach((category) => {
       if (category.id === 'thisSite' && !isSiteUrl(currentTabUrl)) return;
+      if (category.id === 'addresses' && !popupUrlMatch.isHttpsAddressPage(currentTabUrl)) return;
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'category-option';

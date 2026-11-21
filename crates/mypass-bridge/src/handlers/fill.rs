@@ -94,10 +94,10 @@ pub(crate) fn fill_credential(ctx: &Ctx<'_>, id: &str, url: &str) -> Response {
     }
 }
 
-/// `true` for an `http(s)` URL with a host and no userinfo.
-fn is_website_url(url: &str) -> bool {
+/// `true` for an HTTPS URL with a host and no userinfo.
+fn is_https_website_url(url: &str) -> bool {
     url::Url::parse(url.trim()).is_ok_and(|u| {
-        matches!(u.scheme(), "http" | "https")
+        u.scheme() == "https"
             && u.host_str().is_some_and(|h| !h.is_empty())
             && u.username().is_empty()
             && u.password().is_none()
@@ -105,8 +105,8 @@ fn is_website_url(url: &str) -> bool {
 }
 
 pub(crate) fn fill_address(ctx: &Ctx<'_>, id: &str, url: &str) -> Response {
-    if !is_website_url(url) {
-        return error("Address autofill requires a website URL");
+    if !is_https_website_url(url) {
+        return error("Address autofill requires an HTTPS URL");
     }
     let wanted = parse_wire_id(id);
     let found = ctx.deps.session.with_db(|db| {
@@ -400,8 +400,12 @@ mod tests {
     }
 
     #[test]
-    fn fill_address_requires_http_url_without_userinfo() {
+    fn fill_address_requires_https_url_without_userinfo() {
         let (f, ids) = sample_fx();
+        assert!(matches!(
+            send(&f, address_req(ids.c, "http://x.com/form")),
+            Response::Error { .. }
+        ));
         for bad in [
             "ftp://x",
             "https://u:p@x.com",
@@ -411,16 +415,23 @@ mod tests {
             "https://:p@x.com",
         ] {
             let r = send(&f, address_req(ids.c, bad));
-            assert_eq!(msg(&r), "Address autofill requires a website URL", "{bad}");
+            assert_eq!(msg(&r), "Address autofill requires an HTTPS URL", "{bad}");
         }
         assert!(matches!(
             send(&f, address_req(ids.c, "https://x.com")),
             Response::Address { .. }
         ));
-        assert!(matches!(
-            send(&f, address_req(ids.c, "http://x.com/form")),
-            Response::Address { .. }
-        ));
+    }
+
+    #[test]
+    fn fill_address_checks_quit_lock_and_pairing_before_the_url() {
+        let (f, ids) = sample_fx();
+        let unpaired = || address_req(ids.c, "http://x.com")("tok".into(), None);
+        assert_eq!(f.svc.handle(unpaired()), Response::PairingRequired);
+        f.session.lock(mypass_session::session::LockReason::Manual);
+        assert_eq!(f.svc.handle(unpaired()), Response::Locked);
+        f.session.begin_quit();
+        assert_eq!(msg(&f.svc.handle(unpaired())), "MyPass is quitting");
     }
 
     #[test]

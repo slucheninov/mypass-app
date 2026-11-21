@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 if (!global.crypto) global.crypto = require('node:crypto').webcrypto;
 let handler, sent = [], native = [], active, documentId, mutateDuringNative, nativeAddressId, fillAck;
+let showAddresses;
 const extensionId = 'test-extension';
 const popup = { id: extensionId, url: 'chrome-extension://' + extensionId + '/popup.html' };
 const contentSender = () => ({ id: extensionId, tab: { id: 7 }, frameId: 0, documentId, url: 'https://shop.example.test/checkout' });
@@ -14,7 +15,7 @@ global.chrome = {
       callback({ type: 'address', address: { id: nativeAddressId, addressLine1: '12 Example Street' } });
     }
   },
-  storage: { local: { get: (_keys, cb) => cb({ pairingSecret: 'paired' }) } },
+  storage: { local: { get: (_keys, cb) => cb({ pairingSecret: 'paired', mypassAutofillSettings: { showAddresses } }) } },
   tabs: {
     query: (_options, cb) => cb(active ? [active] : []),
     sendMessage(tabId, message, options, callback) {
@@ -33,6 +34,7 @@ require('../background.js');
 function reset() {
   sent = []; native = []; active = { id: 7, url: 'https://shop.example.test/checkout' };
   documentId = 'original-document'; mutateDuringNative = null; nativeAddressId = 'abc';
+  showAddresses = true;
   fillAck = { type: 'addressFilled', filled: 3 };
 }
 function request(message, sender = popup) {
@@ -65,12 +67,32 @@ async function run() {
     assert.equal((await request({ type: 'fillAddress', id: 'abc' }, sender)).code, 'address_unauthorized');
     assert.equal(native.length, 0); assert.equal(sent.length, 0);
   }
+  for (const type of ['listEntries', 'searchEntries', 'getFavorites']) {
+    assert.equal(await request({ type, category: 'addresses', query: 'Home' }, contentSender()), undefined);
+    assert.equal(native.length, 0, 'vault browsing stays in the popup');
+  }
+  reset();
+  showAddresses = false;
+  assert.equal((await request({ type: 'prepareAddressFill' })).code, 'address_disabled');
+  assert.equal(sent.length, 0);
+  reset();
+  let disabledToken = await prepare();
+  showAddresses = false;
+  assert.equal((await request({ type: 'fillAddress', token: disabledToken, id: 'abc', groupId: '0' })).code, 'address_disabled');
+  assert.equal(native.length, 0);
+  reset();
+  disabledToken = await prepare();
+  mutateDuringNative = () => { showAddresses = false; };
+  assert.equal((await request({ type: 'fillAddress', token: disabledToken, id: 'abc', groupId: '0' })).code, 'address_disabled');
+  assert.equal(sent.length, 1, 'turning off suggestions in flight stops delivery');
+
   reset();
   let prepared = await prepare(); active = { id: 8, url: active.url };
   assert.equal((await request({ type: 'fillAddress', token: prepared, id: 'abc', groupId: '0' })).code, 'address_page_changed');
   assert.equal(native.length, 0, 'tab switch before retrieval aborts');
 
   for (const mutate of [() => { active.url = 'https://evil.example.test/'; },
+    () => { active.url = 'http://shop.example.test/checkout'; },
     () => { active.url = 'https://shop.example.test/other'; },
     () => { active.id = 8; }]) {
     reset(); prepared = await prepare(); mutateDuringNative = mutate;
@@ -91,9 +113,12 @@ async function run() {
   reset(); prepared = await prepare();
   assert.equal((await request({ type: 'fillAddress', token: prepared, id: 'abc', groupId: '9' })).code, 'address_page_changed');
   assert.equal(native.length, 0);
-  reset(); active = { id: 7, url: 'chrome://settings' };
-  assert.equal((await request({ type: 'prepareAddressFill' })).code, 'address_no_form');
-  assert.equal(sent.length, 0);
+  for (const url of ['http://shop.example.test/checkout', 'chrome://settings', 'https://a@shop.example.test/checkout']) {
+    reset(); active = { id: 7, url };
+    assert.equal((await request({ type: 'prepareAddressFill' })).code, 'address_no_form');
+    assert.equal(sent.length, 0);
+    assert.equal(native.length, 0);
+  }
   console.log('addressRelay.test.js: authorization, exact document routing, replay and navigation races OK');
 }
 run().catch((error) => { console.error(error); process.exitCode = 1; });
