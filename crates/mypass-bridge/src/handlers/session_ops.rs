@@ -52,16 +52,23 @@ pub(crate) fn unlock_with_device(ctx: &Ctx<'_>) -> Response {
     if ctx.deps.session.is_unlocked() {
         return Response::UnlockNotNeeded;
     }
-    match ctx.deps.unlocker.unlock_with_device() {
-        Ok(()) => {
-            ctx.throttle.reset();
-            Response::Unlocked
-        }
-        Err(UnlockFailure::Cancelled) => Response::UnlockCancelled,
-        Err(UnlockFailure::DeviceUnavailable) => Response::DeviceUnlockUnavailable,
-        Err(UnlockFailure::InApp) => Response::UnlockInApp,
-        Err(UnlockFailure::WrongPassword | UnlockFailure::Failed) => error("unlock_failed"),
-    }
+    ctx.throttle
+        .device_attempt(|| {
+            if ctx.deps.session.is_unlocked() {
+                return Response::UnlockNotNeeded;
+            }
+            match ctx.deps.unlocker.unlock_with_device() {
+                Ok(()) => {
+                    ctx.throttle.reset();
+                    Response::Unlocked
+                }
+                Err(UnlockFailure::Cancelled) => Response::UnlockCancelled,
+                Err(UnlockFailure::DeviceUnavailable) => Response::DeviceUnlockUnavailable,
+                Err(UnlockFailure::InApp) => Response::UnlockInApp,
+                Err(UnlockFailure::WrongPassword | UnlockFailure::Failed) => error("unlock_failed"),
+            }
+        })
+        .unwrap_or(Response::UnlockCancelled)
 }
 
 pub(crate) fn get_unlock_options(ctx: &Ctx<'_>) -> Response {

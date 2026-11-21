@@ -373,13 +373,19 @@ change is done.
   The popup starts pairing automatically and can pair while the vault is locked. A lock transition dismisses
   the code. Paired popups can unlock through the existing app-core password and macOS device-unlock operations.
   From the fifth wrong password the bridge applies an in-memory, monotonic backoff starting at 30 seconds and
-  doubling up to 900 seconds. A successful unlock clears it. The popup clears the password field on submit.
+  doubling up to 900 seconds. A successful unlock clears it. Popup device unlock permits one prompt
+  in flight and ignores requests within two seconds of the last prompt start. macOS enforces its
+  own authentication lockout. The popup clears the password field on submit.
   Rust holds the master password in zeroizing storage, and neither logs nor reply details carry it.
   The host handles `launchApp` locally, before the relay handshake. On macOS it prefers the bundle containing
   the registered host. For an installed host copy, the app writes `app-location.json` in `AppPaths::host_dir`.
   On macOS, the host checks the bundle's Info.plist for the MyPass bundle identifier. A same-user process can
   replace the record with a path to another executable with an accepted MyPass name or a bundle claiming
   that identifier, which the host could then launch.
+  - **Residual risks.** Pairing while locked requires the code shown by the app and can proceed
+    without the master password. Anyone with access to the unlocked OS session can pair another
+    browser profile. That profile can access vault data after the owner unlocks and can try
+    passwords at the bridge's throttled rate.
 - **Passkeys.** `mypass_core::passkey` holds the pure parts: request parsing and origin validation (`https` only,
   the rpId must be a registrable suffix of the origin host through the Public Suffix List, no IP literals, no
   localhost exception, so passkeys never work on `localhost`), the ES256 ceremonies (`perform_create`,

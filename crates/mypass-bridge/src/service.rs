@@ -531,11 +531,40 @@ mod tests {
         ] {
             f.unlocker.script_device(Err(failure));
             assert_eq!(f.svc.handle(request()), response);
+            f.sched.advance(Duration::from_secs(2));
         }
         reach_backoff(&f);
         f.unlocker.script_device(Ok(()));
         assert_eq!(f.svc.handle(request()), Response::Unlocked);
         assert_eq!(wrong_password(&f), Response::WrongPassword);
+    }
+
+    #[test]
+    fn unpaired_unlock_options_are_pairing_required_while_locked() {
+        let f = fx();
+        f.session.lock(LockReason::Manual);
+        assert_eq!(
+            f.svc.handle(named("getUnlockOptions", None)),
+            Response::PairingRequired,
+        );
+    }
+
+    #[test]
+    fn repeated_device_requests_within_two_seconds_do_not_prompt_again() {
+        use crate::unlock::UnlockFailure;
+        let f = fx();
+        f.session.lock(LockReason::Manual);
+        let request = || named("unlockWithDevice", Some(&f.secret));
+        f.unlocker.script_device(Err(UnlockFailure::Cancelled));
+        f.unlocker
+            .script_device(Err(UnlockFailure::DeviceUnavailable));
+        assert_eq!(f.svc.handle(request()), Response::UnlockCancelled);
+        f.sched.advance(Duration::from_millis(1999));
+        assert_eq!(f.svc.handle(request()), Response::UnlockCancelled);
+        assert_eq!(f.unlocker.device_calls(), 1);
+        f.sched.advance(Duration::from_millis(1));
+        assert_eq!(f.svc.handle(request()), Response::DeviceUnlockUnavailable);
+        assert_eq!(f.unlocker.device_calls(), 2);
     }
 
     #[test]

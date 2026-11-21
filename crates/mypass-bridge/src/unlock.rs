@@ -1,6 +1,6 @@
-//! The app-owned vault unlock seam and the bridge-wide password retry budget.
+//! The app-owned vault unlock seam and the bridge-wide retry limits.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, TryLockError};
 use std::time::Duration;
 
 use mypass_session::scheduler::Scheduler;
@@ -9,6 +9,7 @@ use secrecy::SecretString;
 pub const UNLOCK_FREE_ATTEMPTS: u32 = 5;
 pub const UNLOCK_BASE_BACKOFF: Duration = Duration::from_secs(30);
 pub const UNLOCK_MAX_BACKOFF: Duration = Duration::from_secs(900);
+const DEVICE_UNLOCK_DEBOUNCE: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum UnlockFailure {
@@ -71,6 +72,7 @@ pub struct UnlockThrottle {
     // The session observer can synchronously reset the throttle during the unlocker call.
     // Serialize attempts separately so the observer and the options poll can both access state.
     attempts: Mutex<()>,
+    last_device_prompt: Mutex<Option<Duration>>,
     state: Mutex<State>,
     scheduler: Arc<dyn Scheduler>,
 }
@@ -79,6 +81,7 @@ impl UnlockThrottle {
     pub fn new(scheduler: Arc<dyn Scheduler>) -> Self {
         Self {
             attempts: Mutex::new(()),
+            last_device_prompt: Mutex::new(None),
             state: Mutex::new(State::default()),
             scheduler,
         }
@@ -130,6 +133,22 @@ impl UnlockThrottle {
                 UnlockFailure::Cancelled | UnlockFailure::DeviceUnavailable | UnlockFailure::Failed,
             ) => PasswordAttempt::Failed,
         }
+    }
+
+    pub(crate) fn device_attempt<T>(&self, try_unlock: impl FnOnce() -> T) -> Option<T> {
+        // Hold this separate guard through the prompt. Rapid callers are dropped without
+        // queuing another system prompt or blocking password attempts and session observers.
+        let mut last = match self.last_device_prompt.try_lock() {
+            Ok(last) => last,
+            Err(TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(TryLockError::WouldBlock) => return None,
+        };
+        let now = self.scheduler.monotonic_now();
+        if last.is_some_and(|started| now.saturating_sub(started) < DEVICE_UNLOCK_DEBOUNCE) {
+            return None;
+        }
+        *last = Some(now);
+        Some(try_unlock())
     }
 
     pub fn retry_after_secs(&self) -> Option<u64> {
@@ -276,6 +295,33 @@ mod tests {
             PasswordAttempt::Unlocked
         );
         four_wrong(&throttle);
+    }
+
+    #[test]
+    fn device_prompt_drops_concurrent_requests_even_after_the_debounce() {
+        let (clock, throttle) = fixture();
+        let (entered, prompt_started) = std::sync::mpsc::channel();
+        let (release, wait_for_release) = std::sync::mpsc::channel();
+        let (answer, concurrent_result) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let throttle = &throttle;
+            scope.spawn(move || {
+                assert_eq!(
+                    throttle.device_attempt(|| {
+                        entered.send(()).unwrap();
+                        wait_for_release.recv().unwrap();
+                    }),
+                    Some(())
+                );
+            });
+            prompt_started.recv().unwrap();
+            clock.advance(DEVICE_UNLOCK_DEBOUNCE);
+            scope.spawn(move || answer.send(throttle.device_attempt(|| ())).unwrap());
+            let result = concurrent_result.recv_timeout(Duration::from_secs(5));
+            release.send(()).unwrap();
+            assert_eq!(result.unwrap(), None);
+        });
+        assert_eq!(throttle.device_attempt(|| ()), Some(()));
     }
 
     #[test]
