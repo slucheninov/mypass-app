@@ -119,21 +119,26 @@ fn checked_extras(fields: &[ProposalExtraField]) -> Option<Vec<ProposalExtra>> {
     fields
         .iter()
         .map(|field| {
+            // The raw text is checked before it is trimmed, exactly like the extension's background
+            // (prompt-record.js `checkFields`): a control character or an over-long value that
+            // trimming would hide still refuses the proposal.
+            if !is_clean_line(&field.label, MAX_EXTRA_LABEL_CHARS)
+                || !is_clean_line(&field.value, MAX_EXTRA_VALUE_CHARS)
+            {
+                return None;
+            }
             let label = field.label.trim();
             let value = field.value.trim();
             let lowered = label.to_lowercase();
-            let label_ok = is_clean_line(label, MAX_EXTRA_LABEL_CHARS)
-                && (field.kind != ExtraFieldKind::Other || !label.is_empty())
+            let label_ok = (field.kind != ExtraFieldKind::Other || !label.is_empty())
                 && !RESERVED_LABEL_PREFIXES
                     .iter()
                     .any(|p| lowered.starts_with(p));
-            (label_ok && !value.is_empty() && is_clean_line(value, MAX_EXTRA_VALUE_CHARS)).then(
-                || ProposalExtra {
-                    kind: field.kind,
-                    label: label.to_owned(),
-                    value: Zeroizing::new(value.to_owned()),
-                },
-            )
+            (label_ok && !value.is_empty()).then(|| ProposalExtra {
+                kind: field.kind,
+                label: label.to_owned(),
+                value: Zeroizing::new(value.to_owned()),
+            })
         })
         .collect()
 }
@@ -627,6 +632,31 @@ mod tests {
                 extra(ExtraFieldKind::GivenName, "First name", "Ann"),
                 extra(ExtraFieldKind::Phone, "Phone", "1\u{0000}"),
             ],
+        ];
+        for fields in cases {
+            let r = send(&f, propose_with(fields));
+            assert_eq!(error_message(&r), "invalid request");
+        }
+        assert!(f.ui.calls().is_empty(), "nothing was proposed");
+    }
+
+    /// The raw label and value are checked before they are trimmed, like the extension's background
+    /// does: trimming must not turn a refused field into an accepted one.
+    #[test]
+    fn extra_fields_are_checked_before_they_are_trimmed() {
+        let f = fx();
+        let padded_value = format!(" {} ", "v".repeat(MAX_EXTRA_VALUE_CHARS));
+        let padded_label = format!(" {} ", "l".repeat(MAX_EXTRA_LABEL_CHARS));
+        let cases = vec![
+            vec![extra(ExtraFieldKind::GivenName, "First name", "\tAnn")],
+            vec![extra(ExtraFieldKind::GivenName, "First name", "Ann\n")],
+            vec![extra(
+                ExtraFieldKind::GivenName,
+                "First name\u{0085}",
+                "Ann",
+            )],
+            vec![extra(ExtraFieldKind::City, "City", &padded_value)],
+            vec![extra(ExtraFieldKind::City, &padded_label, "Kyiv")],
         ];
         for fields in cases {
             let r = send(&f, propose_with(fields));
