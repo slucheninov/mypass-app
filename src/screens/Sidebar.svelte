@@ -1,5 +1,6 @@
 <script lang="ts">
   import { api } from "../lib/api";
+  import { CATEGORIES, categoryLabel } from "../lib/categories";
   import type { Category, GroupNode_Serialize, Scope } from "../lib/bindings";
   import { dragKind, readDrag, startDrag } from "../lib/dnd";
   import { isSelfOrDescendant, visibleGroups } from "../lib/group-tree";
@@ -10,7 +11,6 @@
   import Button from "../lib/ui/Button.svelte";
   import ContextMenu from "../lib/ui/ContextMenu.svelte";
   import Icon from "../lib/ui/Icon.svelte";
-  import type { IconName } from "../lib/ui/icons";
   import Modal from "../lib/ui/Modal.svelte";
   import { treeNav } from "../lib/ui/tree-nav";
 
@@ -23,45 +23,6 @@
     /** Opens the group editor for an existing group. */
     oneditgroup: (group: { id: string; name: string; emoji: string | null }) => void;
   } = $props();
-
-  // The spec's order; the counts come from the backend by category.
-  const CATEGORIES: { category: Category; icon: IconName }[] = [
-    { category: "all", icon: "all" },
-    { category: "favorites", icon: "star" },
-    { category: "codes", icon: "shield-key" },
-    { category: "passkeys", icon: "passkey" },
-    { category: "addresses", icon: "address" },
-    { category: "cards", icon: "card" },
-    { category: "notes", icon: "note" },
-    { category: "files", icon: "paperclip" },
-    { category: "security", icon: "security" },
-    { category: "deleted", icon: "trash" },
-  ];
-
-  function categoryLabel(category: Category): string {
-    switch (category) {
-      case "all":
-        return t("All");
-      case "favorites":
-        return t("Favorites");
-      case "codes":
-        return t("Codes");
-      case "passkeys":
-        return t("Passkeys");
-      case "addresses":
-        return t("Addresses");
-      case "cards":
-        return t("Cards");
-      case "notes":
-        return t("Notes");
-      case "files":
-        return t("Files");
-      case "security":
-        return t("Security");
-      case "deleted":
-        return t("Deleted");
-    }
-  }
 
   const sidebar = $derived(entries.sidebar);
   let collapsed = $state<Record<string, boolean>>({});
