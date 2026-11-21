@@ -9,6 +9,7 @@ import { FIXTURE_LOGIN_PASSWORD, FIXTURE_MASTER_PASSWORD, makeEntry } from "../t
 import { calls } from "../test/mainApp";
 import { renderTrayPanel } from "../test/trayApp";
 import type { FakeBackend } from "../test/fakeBackend";
+import type { EntrySummary } from "../lib/bindings";
 
 const GITHUB_MODIFIED = 1_700_000_300_000;
 
@@ -472,6 +473,124 @@ describe("tray panel, search", () => {
     fake.handlers.vaultUnlock({ password: FIXTURE_MASTER_PASSWORD });
     expect(await screen.findByRole("list", { name: "Recent items" })).toBeTruthy();
     expect((screen.getByRole("searchbox", { name: "Search" }) as HTMLInputElement).value).toBe("");
+  });
+});
+
+/** Holds every `tray_search` answer until the test releases it, in any order. */
+function holdSearches(fake: FakeBackend) {
+  const real = fake.handlers.traySearch;
+  const held: { query: string; release: (list?: EntrySummary[]) => void }[] = [];
+  fake.handlers.traySearch = (args) =>
+    new Promise<EntrySummary[]>((resolve) => {
+      const query = (args as { query: string }).query;
+      held.push({ query, release: (list) => resolve(list ?? (real(args) as EntrySummary[])) });
+    });
+  return held;
+}
+
+/** The backend switches to another vault without passing through `locked`. */
+async function switchVault(fake: FakeBackend, name = "Other"): Promise<void> {
+  fake.state.session = { ...fake.state.session, vaultPath: `/vaults/${name}.kdbx`, vaultName: name };
+  await fake.emit("sessionChanged", fake.state.session);
+}
+
+const resultNames = (list: HTMLElement) => within(list).getAllByRole("button").map((b) => b.getAttribute("aria-label"));
+
+describe("tray panel, vault switch while unlocked", () => {
+  it("a_switch_closes_the_open_detail_and_drops_the_search", async () => {
+    const { fake, user, detail } = await openGithub();
+    await within(detail).findByText("octo");
+    await switchVault(fake);
+    expect(await screen.findByRole("list", { name: "Recent items" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "GitHub" })).toBeNull();
+    const search = screen.getByRole("searchbox", { name: "Search" }) as HTMLInputElement;
+    await user.type(search, "lab");
+    await screen.findByRole("list", { name: "Search results" });
+    await switchVault(fake, "Third");
+    await waitFor(() => expect(search.value).toBe(""));
+    expect(await screen.findByRole("list", { name: "Recent items" })).toBeTruthy();
+    // The new vault's own recents were loaded.
+    expect(calls(fake, "entryRecent").length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("a_search_answer_of_the_old_vault_is_discarded", async () => {
+    const { fake, user } = await unlockedTray();
+    const held = holdSearches(fake);
+    const search = screen.getByRole("searchbox", { name: "Search" });
+    await user.type(search, "git");
+    await waitFor(() => expect(held).toHaveLength(1));
+    await switchVault(fake);
+    await waitFor(() => expect((search as HTMLInputElement).value).toBe(""));
+    await user.type(search, "git");
+    await waitFor(() => expect(held).toHaveLength(2));
+    // The old vault answers late, with its own items: they never appear in the new vault's panel.
+    held[0]!.release([makeEntry({ id: "old-vault", title: "Old vault item", modified: 1_600_000_000_000 }).summary]);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByRole("button", { name: "Old vault item" })).toBeNull();
+    await user.keyboard("{Enter}");
+    expect(screen.queryByRole("region", { name: "Old vault item" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "GitHub" })).toBeNull();
+    held[1]!.release();
+    const list = await screen.findByRole("list", { name: "Search results" });
+    expect(resultNames(list)).toEqual(["GitHub", "GitLab"]);
+  });
+});
+
+describe("tray panel, results belong to the current text", () => {
+  it("enter_during_the_pause_opens_nothing_from_the_previous_text", async () => {
+    const { fake, user } = await unlockedTray();
+    const search = screen.getByRole("searchbox", { name: "Search" });
+    await user.type(search, "git");
+    await waitFor(async () => expect(resultNames(await screen.findByRole("list", { name: "Search results" }))).toEqual(["GitHub", "GitLab"]));
+    const held = holdSearches(fake);
+    await user.clear(search);
+    await user.type(search, "lab");
+    // The earlier results are gone at once, and Enter does not open GitHub (the old first match).
+    expect(screen.queryByRole("list", { name: "Search results" })).toBeNull();
+    await user.keyboard("{Enter}");
+    expect(screen.queryByRole("region", { name: "GitHub" })).toBeNull();
+    expect(calls(fake, "entryTouch")).toHaveLength(0);
+    await waitFor(() => expect(held.length).toBeGreaterThan(0));
+    for (const h of held) h.release();
+    const list = await screen.findByRole("list", { name: "Search results" });
+    expect(resultNames(list)).toEqual(["GitLab"]);
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("region", { name: "GitLab" })).toBeTruthy();
+  });
+
+  it("an_earlier_search_answering_last_does_not_replace_the_current_results", async () => {
+    const { fake, user } = await unlockedTray();
+    const held = holdSearches(fake);
+    const search = screen.getByRole("searchbox", { name: "Search" });
+    await user.type(search, "gi");
+    await waitFor(() => expect(held).toHaveLength(1));
+    await user.type(search, "tl");
+    await waitFor(() => expect(held).toHaveLength(2));
+    expect(held.map((h) => h.query)).toEqual(["gi", "gitl"]);
+    held[1]!.release();
+    const list = await screen.findByRole("list", { name: "Search results" });
+    expect(resultNames(list)).toEqual(["GitLab"]);
+    held[0]!.release();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(resultNames(screen.getByRole("list", { name: "Search results" }))).toEqual(["GitLab"]);
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("region", { name: "GitLab" })).toBeTruthy();
+  });
+
+  it("a_held_answer_for_an_older_text_is_dropped_even_before_a_newer_search_starts", async () => {
+    const { fake, user } = await unlockedTray();
+    const held = holdSearches(fake);
+    const search = screen.getByRole("searchbox", { name: "Search" });
+    await user.type(search, "git");
+    await waitFor(() => expect(held).toHaveLength(1));
+    // Typing again invalidates; the old answer arrives inside the pause, before the next search.
+    await user.type(search, "l");
+    held[0]!.release();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByRole("list", { name: "Search results" })).toBeNull();
+    await user.keyboard("{Enter}");
+    expect(screen.queryByRole("region", { name: "GitHub" })).toBeNull();
+    expect(calls(fake, "entryTouch")).toHaveLength(0);
   });
 });
 

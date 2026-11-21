@@ -31,6 +31,9 @@
 
   let recents = $state<EntrySummary[]>([]);
   let results = $state<EntrySummary[]>([]);
+  /** The (trimmed) text `results` answer; `null` while none does. Any other text, typed but not yet
+   *  searched or still in flight, shows no result and Enter opens nothing. */
+  let resultsFor = $state<string | null>(null);
   let query = $state("");
   let selectedId = $state<string | null>(null);
   let card: UnlockCard | undefined = $state();
@@ -43,8 +46,11 @@
   const noVault = $derived(session.status.state === "noVault");
   // One key per unlocked stretch and vault: a save-state change replaces `status` but not this.
   const vaultKey = $derived(unlocked ? (session.status.vaultPath ?? "") : null);
-  const searching = $derived(query.trim() !== "");
-  const shown = $derived(searching ? results : recents);
+  const searched = $derived(query.trim());
+  const searching = $derived(searched !== "");
+  /** The results are those of the current text, not of an earlier one. */
+  const answered = $derived(resultsFor === searched);
+  const shown = $derived(searching ? (answered ? results : []) : recents);
   const lockShortcut = $derived(formatShortcut(settings.value?.shortcutLock ?? "", platform.os));
   const showShortcut = $derived(formatShortcut(settings.value?.shortcutShow ?? "", platform.os));
 
@@ -73,18 +79,27 @@
     const mine = ++searches;
     if (text === "" || !unlocked) {
       results = [];
+      resultsFor = null;
       return;
     }
     const unchanged = lockGuard();
     try {
       const list = await api.traySearch(text);
-      if (mine === searches && unchanged()) results = list;
+      // A response is used only for the text it answers, while nothing newer was asked and the
+      // vault is the same one (`lockGuard` also catches a switch to another vault).
+      if (mine === searches && unchanged() && text === query.trim()) {
+        results = list;
+        resultsFor = text;
+      }
     } catch (e) {
       if (mine === searches && unchanged()) toasts.reportError(e);
     }
   }
 
-  function scheduleSearch(): void {
+  /** A change of the text invalidates the results at once; the search for it runs after a pause. */
+  function onSearchInput(): void {
+    results = [];
+    resultsFor = null;
     stopSearchTimer();
     searchTimer = setTimeout(() => void runSearch(), SEARCH_DELAY_MS);
   }
@@ -94,18 +109,20 @@
     searches++;
     query = "";
     results = [];
+    resultsFor = null;
   }
 
-  // Everything of one unlocked stretch is dropped on a lock; the next unlock starts at the list.
+  // Everything of one unlocked stretch, of one vault, is dropped whenever that changes: on a lock,
+  // and on a switch to another vault while unlocked (`unlocked -> unlocked` with another path,
+  // which never passes through `locked`). Bumping `requests` and `searches` discards the answers
+  // still in flight for the old vault. The next stretch starts at the list of its own recents.
   $effect(() => {
-    if (vaultKey !== null) {
-      void loadRecents();
-    } else {
-      requests++;
-      recents = [];
-      selectedId = null;
-      resetSearch();
-    }
+    const key = vaultKey;
+    requests++;
+    recents = [];
+    selectedId = null;
+    resetSearch();
+    if (key !== null) void loadRecents();
   });
 
   onMount(() => {
@@ -165,6 +182,9 @@
       resetSearch();
     } else if (event.key === "Enter") {
       event.preventDefault();
+      // Only results of the text as it is now: never those of an earlier text still on screen
+      // while the next search waits or runs.
+      if (searching && !answered) return;
       const first = shown[0];
       if (first) open(first.id);
     }
@@ -208,12 +228,14 @@
         aria-label={t("Search")}
         autocomplete="off"
         spellcheck="false"
-        oninput={scheduleSearch}
+        oninput={onSearchInput}
         onkeydown={onSearchKey}
       />
     </label>
     <div class="content">
-      {#if shown.length === 0}
+      {#if searching && !answered}
+        <!-- The search for this text has not answered yet: nothing to show, nothing to open. -->
+      {:else if shown.length === 0}
         <p class="empty">{searching ? t("No results") : t("Nothing here yet")}</p>
       {:else}
         <ul class="entries" aria-label={searching ? t("Search results") : t("Recent items")}>
