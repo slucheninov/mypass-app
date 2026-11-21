@@ -7,7 +7,7 @@
 //! Secrets never reach `Debug` output: `Debug` for the requests and responses prints the message tag
 //! only, and the address and history item types hide their values.
 
-use std::fmt;
+use std::{borrow::Cow, fmt};
 
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
@@ -48,6 +48,19 @@ pub const REQUEST_TYPES: [&str; 32] = [
     "getUnlockOptions",
 ];
 
+/// Inspect the tag without deserialising the other fields into serde's enum buffer.
+pub(crate) fn message_type(frame: &[u8]) -> Option<Cow<'_, str>> {
+    #[derive(Deserialize)]
+    struct MessageType<'a> {
+        #[serde(borrow, rename = "type")]
+        kind: Cow<'a, str>,
+    }
+
+    serde_json::from_slice::<MessageType<'_>>(frame)
+        .ok()
+        .map(|tag| tag.kind)
+}
+
 /// Master password received from the extension. Its backing string is wiped on drop.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct WirePassword(Zeroizing<String>);
@@ -62,8 +75,9 @@ impl WirePassword {
     }
 
     #[cfg(feature = "server")]
-    pub fn into_secret(mut self) -> secrecy::SecretString {
-        secrecy::SecretString::from(std::mem::take(&mut *self.0))
+    pub fn into_secret(self) -> secrecy::SecretString {
+        // Copy into the final secret and let the Zeroizing string erase its allocation.
+        secrecy::SecretString::from(self.0.as_str())
     }
 }
 

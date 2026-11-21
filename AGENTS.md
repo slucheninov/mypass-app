@@ -376,7 +376,11 @@ change is done.
   doubling up to 900 seconds. A successful unlock clears it. Popup device unlock permits one prompt
   in flight and ignores requests within two seconds of the last prompt start. macOS enforces its
   own authentication lockout. The popup clears the password field on submit.
-  Rust holds the master password in zeroizing storage, and neither logs nor reply details carry it.
+  The native host relays raw JSON values through zeroizing buffers, inserting its token without
+  decoding the password. The app decodes popup passwords directly into a zeroizing string and
+  passes them to the session in a `SecretString`. Serde can retain temporary scratch copies of
+  escaped passwords, and browser, OS and standard I/O buffers can retain copies. Logs and reply
+  details carry no master password.
   The host handles `launchApp` locally, before the relay handshake. On macOS it prefers the bundle containing
   the registered host. For an installed host copy, the app writes `app-location.json` in `AppPaths::host_dir`.
   On macOS, the host checks the bundle's Info.plist for the MyPass bundle identifier. A same-user process can

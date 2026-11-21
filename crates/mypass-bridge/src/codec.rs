@@ -7,6 +7,8 @@
 
 use std::io::{self, Read};
 
+use zeroize::{Zeroize, Zeroizing};
+
 /// The largest frame accepted by default. Chromium itself caps a message from the extension at
 /// 4 GiB and a message to it at 1 MiB; no legitimate bridge message comes near 10 MiB.
 pub const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
@@ -49,9 +51,8 @@ pub enum FrameError {
 }
 
 /// Incremental frame decoder for a byte stream that arrives in arbitrary pieces.
-#[derive(Debug)]
 pub struct FrameReader {
-    buf: Vec<u8>,
+    buf: Zeroizing<Vec<u8>>,
     max: usize,
     failed: Option<FrameError>,
 }
@@ -59,7 +60,7 @@ pub struct FrameReader {
 impl FrameReader {
     pub fn new(max: usize) -> Self {
         Self {
-            buf: Vec::new(),
+            buf: Zeroizing::new(Vec::new()),
             max,
             failed: None,
         }
@@ -79,8 +80,28 @@ impl FrameReader {
     /// the reader is poisoned: every later `feed` returns the same error and buffers nothing, and
     /// the caller MUST drop the connection.
     pub fn feed(&mut self, data: &[u8]) -> Result<Vec<Vec<u8>>, FrameError> {
+        self.feed_zeroizing(data).map(|frames| {
+            frames
+                .into_iter()
+                .map(|mut frame| std::mem::take(&mut *frame))
+                .collect()
+        })
+    }
+
+    pub(crate) fn feed_zeroizing(
+        &mut self,
+        data: &[u8],
+    ) -> Result<Vec<Zeroizing<Vec<u8>>>, FrameError> {
         if let Some(err) = &self.failed {
             return Err(err.clone());
+        }
+        let needed = self.buf.len().saturating_add(data.len());
+        if needed > self.buf.capacity() {
+            // Keep the old allocation wipeable when growing the buffer.
+            let capacity = needed.max(self.buf.capacity().saturating_mul(2));
+            let mut next = Zeroizing::new(Vec::with_capacity(capacity));
+            next.extend_from_slice(&self.buf);
+            self.buf = next;
         }
         self.buf.extend_from_slice(data);
         let mut frames = Vec::new();
@@ -89,7 +110,7 @@ impl FrameReader {
             let rest = self.buf.get(pos..).unwrap_or_default();
             let Some(claimed) = peek_len(rest) else { break };
             if claimed > self.max {
-                self.buf.clear();
+                self.buf.zeroize();
                 let err = FrameError::TooLarge {
                     claimed,
                     max: self.max,
@@ -103,10 +124,15 @@ impl FrameReader {
             let Some(payload) = rest.get(HEADER_LEN..end) else {
                 break;
             };
-            frames.push(payload.to_vec());
+            frames.push(Zeroizing::new(payload.to_vec()));
             pos = pos.saturating_add(end);
         }
-        self.buf.drain(..pos);
+        let remaining = self.buf.len() - pos;
+        self.buf.copy_within(pos.., 0);
+        if let Some(consumed) = self.buf.get_mut(remaining..) {
+            consumed.zeroize();
+        }
+        self.buf.truncate(remaining);
         Ok(frames)
     }
 }
@@ -121,6 +147,37 @@ fn peek_len(bytes: &[u8]) -> Option<usize> {
 /// an oversize claim is `InvalidData` (checked before any payload is read or allocated) and an
 /// end of stream inside a frame is `UnexpectedEof`.
 pub fn read_frame(r: &mut impl Read, max: usize) -> io::Result<Option<Vec<u8>>> {
+    let Some(claimed) = read_frame_len(r, max)? else {
+        return Ok(None);
+    };
+    // `take` + `read_to_end` grows the buffer with the bytes that actually arrive, so a lying
+    // header on a short stream never allocates the claimed length.
+    let mut payload = Vec::new();
+    let want = u64::try_from(claimed).unwrap_or(u64::MAX);
+    r.take(want).read_to_end(&mut payload)?;
+    if payload.len() != claimed {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "stream ended inside a frame payload",
+        ));
+    }
+    Ok(Some(payload))
+}
+
+/// Read a capped frame straight into its final allocation and wipe partial reads on failure.
+pub(crate) fn read_zeroizing_frame(
+    r: &mut impl Read,
+    max: usize,
+) -> io::Result<Option<Zeroizing<Vec<u8>>>> {
+    let Some(claimed) = read_frame_len(r, max)? else {
+        return Ok(None);
+    };
+    let mut payload = Zeroizing::new(vec![0; claimed]);
+    r.read_exact(&mut payload)?;
+    Ok(Some(payload))
+}
+
+fn read_frame_len(r: &mut impl Read, max: usize) -> io::Result<Option<usize>> {
     let mut header = [0u8; HEADER_LEN];
     let mut got = 0usize;
     while got < HEADER_LEN {
@@ -152,18 +209,7 @@ pub fn read_frame(r: &mut impl Read, max: usize) -> io::Result<Option<Vec<u8>>> 
             FrameError::TooLarge { claimed, max },
         ));
     }
-    // `take` + `read_to_end` grows the buffer with the bytes that actually arrive, so a lying
-    // header on a short stream never allocates the claimed length.
-    let mut payload = Vec::new();
-    let want = u64::try_from(claimed).unwrap_or(u64::MAX);
-    r.take(want).read_to_end(&mut payload)?;
-    if payload.len() != claimed {
-        return Err(io::Error::new(
-            io::ErrorKind::UnexpectedEof,
-            "stream ended inside a frame payload",
-        ));
-    }
-    Ok(Some(payload))
+    Ok(Some(claimed))
 }
 
 #[cfg(test)]

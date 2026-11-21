@@ -119,6 +119,35 @@ fn wait_until(mut f: impl FnMut() -> bool) {
 }
 
 #[test]
+fn password_request_decodes_escapes_when_fields_precede_the_tag() {
+    use secrecy::ExposeSecret;
+
+    let store = Arc::new(EndpointStore::new(InMemorySecretStore::new()));
+    let handler: Handler = Arc::new(|request| {
+        let Request::UnlockWithPassword {
+            password, pairing, ..
+        } = request
+        else {
+            panic!("expected a password unlock request");
+        };
+        assert_eq!(password.into_secret().expose_secret(), "test\u{1f510}\"\n");
+        assert_eq!(pairing.as_deref(), Some("proof"));
+        Response::Unlocked
+    });
+    let s = LoopbackServer::start(ServerConfig::default(), store, handler).unwrap();
+    let mut c = connect(&s);
+    hello(&mut c);
+    let token = &s.endpoint().token;
+    send(
+        &mut c,
+        &format!(
+            r#"{{"password":"test\ud83d\udd10\"\n","pairing":"proof","token":"{token}","type":"unlockWithPasswor\u0064"}}"#
+        ),
+    );
+    assert_eq!(recv(&mut c).as_deref(), Some(r#"{"type":"unlocked"}"#));
+}
+
+#[test]
 fn start_binds_loopback_and_publishes_endpoint() {
     let (s, store, _) = start();
     let e = store.load().unwrap().unwrap();

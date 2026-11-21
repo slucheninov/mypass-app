@@ -1,13 +1,10 @@
 //! Handles the one native message that needs no connection to the app.
 
-use std::borrow::Cow;
 use std::io::{Read, Write};
 
-use serde::Deserialize;
-use zeroize::Zeroizing;
-
-use crate::codec::read_frame;
+use crate::codec::read_zeroizing_frame;
 use crate::endpoint::Endpoint;
+use crate::protocol::message_type;
 use crate::relay::{
     connect_verified, error_frame, run_relay_with_first_frame, RelayOptions, RelayOutcome,
 };
@@ -23,12 +20,6 @@ pub enum LaunchResult {
     Failed,
 }
 
-#[derive(Deserialize)]
-struct MessageType<'a> {
-    #[serde(borrow, rename = "type")]
-    kind: Cow<'a, str>,
-}
-
 pub fn run_host<R: Read, W: Write + Send + 'static>(
     mut stdin: R,
     mut stdout: W,
@@ -37,16 +28,12 @@ pub fn run_host<R: Read, W: Write + Send + 'static>(
     verify_peer: &dyn Fn(u16) -> bool,
     launch: &dyn Fn() -> LaunchResult,
 ) -> RelayOutcome {
-    let first = read_frame(&mut stdin, opts.max_frame).map(|frame| frame.map(Zeroizing::new));
+    let first = read_zeroizing_frame(&mut stdin, opts.max_frame);
     let is_launch = first
         .as_ref()
         .ok()
         .and_then(Option::as_ref)
-        .is_some_and(|frame| {
-            // Read the type alone so an ordinary request does not make another copy of its fields.
-            serde_json::from_slice::<MessageType<'_>>(frame)
-                .is_ok_and(|message| message.kind == LAUNCH_APP)
-        });
+        .is_some_and(|frame| message_type(frame).as_deref() == Some(LAUNCH_APP));
     if !is_launch {
         return run_relay_with_first_frame(stdin, stdout, endpoint, opts, verify_peer, Some(first));
     }
@@ -75,6 +62,7 @@ fn launch_reply(body: &[u8]) -> Vec<u8> {
 #[allow(clippy::unwrap_used)] // test-only
 mod tests {
     use super::*;
+    use crate::codec::read_frame;
     use crate::codec::{encode_frame, MAX_FRAME_BYTES};
     use crate::endpoint::{generate_token, hello_proof, Handshake};
     use crate::relay::{inject_token, run_relay};
@@ -228,8 +216,8 @@ mod tests {
         assert_eq!(outcome, RelayOutcome::StdinClosed);
         assert_eq!(answer(&out), json!({"type":"locked"}));
         assert_eq!(
-            peer.join().unwrap(),
-            Some(inject_token(body.as_bytes(), &token).unwrap())
+            peer.join().unwrap().as_deref(),
+            Some(inject_token(body.as_bytes(), &token).unwrap().as_slice())
         );
     }
 
