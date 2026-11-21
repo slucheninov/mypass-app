@@ -80,7 +80,6 @@ fn create_tray(app: &AppHandle, model: &TrayMenuModel) -> tauri::Result<()> {
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .icon_as_template(cfg!(target_os = "macos"))
         .on_menu_event(|app, event| {
             if let Some(action) = action_for_id(event.id().as_ref()) {
                 run_tray_action(app, action);
@@ -99,8 +98,15 @@ fn create_tray(app: &AppHandle, model: &TrayMenuModel) -> tauri::Result<()> {
                 toggle_panel(tray.app_handle(), rect, position);
             }
         });
-    if let Some(icon) = app.default_window_icon() {
-        builder = builder.icon(icon.clone());
+    #[cfg(target_os = "macos")]
+    let template =
+        tauri::image::Image::from_bytes(include_bytes!("../icons/tray-template.png")).ok();
+    #[cfg(not(target_os = "macos"))]
+    let template = None;
+
+    builder = builder.icon_as_template(template.is_some());
+    if let Some(icon) = template.or_else(|| app.default_window_icon().cloned()) {
+        builder = builder.icon(icon);
     }
     builder.build(app)?;
     Ok(())
