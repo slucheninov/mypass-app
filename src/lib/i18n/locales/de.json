@@ -563,5 +563,9 @@
   "Open main window": "Hauptfenster öffnen",
   "Search results": "Suchergebnisse",
   "Last modified: %@": "Zuletzt geändert: {0}",
-  "Created %@": "Erstellt am {0}"
+  "Created %@": "Erstellt am {0}",
+  "Birthday": "Geburtsdatum",
+  "Review form fields": "Formularfelder prüfen",
+  "Choose the form fields to keep with the new login.": "Wähle die Formularfelder, die mit der neuen Anmeldung gespeichert werden.",
+  "Also create an Address entry": "Auch einen Adresseintrag anlegen"
 }

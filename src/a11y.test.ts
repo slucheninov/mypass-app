@@ -340,6 +340,16 @@ const SCENARIOS: Record<string, Scenario> = {
     await fake.emit("pairingChallengeEvent", challenge);
     return { dialog: "Pairing code", opener };
   },
+  // The review of a registration form proposal, raised by the backend like the pairing code.
+  "src/screens/ProposalReview.svelte#Review form fields": async () => {
+    const { fake } = await unlocked();
+    const opener = screen.getByRole("listbox");
+    opener.focus();
+    const model = { ...(await fake.handlers.entryNewModel({ entryType: "login", groupId: null })), title: "shop.example" };
+    fake.state.proposals.r1 = { model, extraFields: [{ kind: "givenName", label: "First name", value: "Ann" }], address: null };
+    await fake.emit("proposalEvent", { id: "r1", kind: "login", url: "https://shop.example", username: "ann", entryId: null });
+    return { dialog: "Review form fields", opener };
+  },
   "src/windows/settings/BrowserHelpSheet.svelte#Connect a browser": async (user) => {
     await renderSettingsApp({}, { pane: "Browser" });
     const opener = await screen.findByRole("button", { name: "Connect a browser" });

@@ -563,5 +563,9 @@
   "Open main window": "Open main window",
   "Search results": "Search results",
   "Last modified: %@": "Last modified: {0}",
-  "Created %@": "Created {0}"
+  "Created %@": "Created {0}",
+  "Birthday": "Birthday",
+  "Review form fields": "Review form fields",
+  "Choose the form fields to keep with the new login.": "Choose the form fields to keep with the new login.",
+  "Also create an Address entry": "Also create an Address entry"
 }

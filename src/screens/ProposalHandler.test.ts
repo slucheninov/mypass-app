@@ -2,7 +2,7 @@ import { fireEvent, screen, waitFor } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../lib/api";
-import type { EntryEditModel_Serialize } from "../lib/bindings";
+import type { BrowserProposal_Serialize, EntryEditModel_Serialize, ProposalField } from "../lib/bindings";
 import { navigation } from "../lib/stores/navigation.svelte";
 import { toasts } from "../lib/stores/toasts.svelte";
 import { calls, renderMainApp } from "../test/mainApp";
@@ -21,8 +21,44 @@ async function openApp() {
 /** Stores a proposal on the fake and returns the event the backend would send. */
 async function propose(fake: FakeBackend, id: string, title: string) {
   const model: EntryEditModel_Serialize = { ...(await api.entryNewModel("login", null)), title, password: `pw-${id}` };
-  fake.state.proposals[id] = model;
+  fake.state.proposals[id] = { model, extraFields: [], address: null };
   return { id, kind: "login" as const, url: "https://example.test", username: "me", entryId: null };
+}
+
+const FORM_FIELDS: ProposalField[] = [
+  { kind: "givenName", label: "First name", value: "Ann" },
+  { kind: "phone", label: "Mobile", value: "+380501234567" },
+  { kind: "other", label: "Nickname", value: "annie" },
+  { kind: "city", label: "Town", value: "Lviv" },
+];
+
+/** A registration form proposal: extra form values and, with `withAddress`, an Address entry to offer. */
+async function proposeRegistration(fake: FakeBackend, id: string, withAddress: boolean) {
+  const event = await propose(fake, id, "shop.example");
+  const proposal = fake.state.proposals[id];
+  if (!proposal) throw new Error("no proposal stored");
+  proposal.extraFields = structuredClone(FORM_FIELDS);
+  if (withAddress) {
+    const address = await api.entryNewModel("address", null);
+    address.title = "Ann";
+    if (address.address) {
+      address.address.givenName = "Ann";
+      address.address.city = "Lviv";
+    }
+    proposal.address = address;
+  }
+  return event;
+}
+
+/** Wraps the take so the test sees the very object the webview received. */
+function captureTake(fake: FakeBackend) {
+  const seen: { taken?: BrowserProposal_Serialize } = {};
+  const take = fake.handlers.browserProposalTake;
+  fake.handlers.browserProposalTake = async (args) => {
+    seen.taken = (await take(args)) as BrowserProposal_Serialize;
+    return seen.taken;
+  };
+  return seen;
 }
 
 const waiting = () => toasts.items.filter((t) => t.text === WAITING);
@@ -171,11 +207,11 @@ describe("ProposalHandler", () => {
     await screen.findByRole("textbox", { name: "Title" });
     let release: () => void = () => {};
     const gate = new Promise<void>((resolve) => (release = resolve));
-    let taken: EntryEditModel_Serialize | undefined;
+    let taken: BrowserProposal_Serialize | undefined;
     const take = fake.handlers.browserProposalTake;
     fake.handlers.browserProposalTake = async (args) => {
       await gate;
-      taken = (await take(args)) as EntryEditModel_Serialize;
+      taken = (await take(args)) as BrowserProposal_Serialize;
       return taken;
     };
     await fake.emit("proposalEvent", await propose(fake, "p1", "From the browser"));
@@ -183,10 +219,10 @@ describe("ProposalHandler", () => {
     await typeTitle("typed meanwhile");
     release();
     await waitFor(() => expect(waiting()).toHaveLength(1));
-    expect(taken?.password).toBe("pw-p1");
+    expect(taken?.model.password).toBe("pw-p1");
     await api.vaultLock();
     await waitFor(() => expect(waiting()).toHaveLength(0));
-    expect(taken?.password).toBe("");
+    expect(taken?.model.password).toBe("");
     expect(navigation.editModel).toBeNull();
   });
 
@@ -197,5 +233,102 @@ describe("ProposalHandler", () => {
     expect(navigation.editorDirty?.()).toBe(true);
     await userEvent.setup().click(screen.getByRole("button", { name: "Cancel" }));
     expect(await screen.findByRole("dialog", { name: "Discard changes?" })).toBeTruthy();
+  });
+
+  describe("registration form review", () => {
+    const review = () => screen.findByRole("dialog", { name: "Review form fields" });
+    const box = (name: RegExp) => screen.getByRole("checkbox", { name }) as HTMLInputElement;
+
+    it("lists every form value ticked and opens the editor with the kept ones as custom fields", async () => {
+      const { fake } = await openApp();
+      await fake.emit("proposalEvent", await proposeRegistration(fake, "r1", false));
+      await review();
+      // No editor yet: the review comes first.
+      expect(navigation.editModel).toBeNull();
+      expect(screen.getAllByRole("checkbox").map((c) => (c as HTMLInputElement).checked)).toEqual([true, true, true, true]);
+      expect(screen.queryByRole("checkbox", { name: /Also create an Address entry/ })).toBeNull();
+      const user = userEvent.setup();
+      await user.click(box(/Phone/));
+      await user.click(screen.getByRole("button", { name: "Continue" }));
+      await screen.findByTestId("proposal-banner");
+      expect(navigation.editorSource).toBe("browser");
+      expect(navigation.editModel?.password).toBe("pw-r1");
+      expect(navigation.editModel?.customFields).toEqual([
+        { key: "Given Name", value: "Ann", protected: false },
+        { key: "Nickname", value: "annie", protected: false },
+        { key: "City", value: "Lviv", protected: false },
+      ]);
+      expect(calls(fake, "entrySave")).toHaveLength(0);
+    });
+
+    it("offers the Address entry unticked and saves it only when ticked", async () => {
+      const { fake } = await openApp();
+      // A copy at the time of the call, like IPC: the webview wipes its own copy after the save.
+      const saved: EntryEditModel_Serialize[] = [];
+      const save = fake.handlers.entrySave;
+      fake.handlers.entrySave = async (args) => {
+        saved.push(structuredClone((args as { model: EntryEditModel_Serialize }).model));
+        return save(args);
+      };
+      await fake.emit("proposalEvent", await proposeRegistration(fake, "r1", true));
+      await review();
+      const address = box(/Also create an Address entry/);
+      expect(address.checked).toBe(false);
+      const user = userEvent.setup();
+      await user.click(address);
+      await user.click(screen.getByRole("button", { name: "Continue" }));
+      await screen.findByTestId("proposal-banner");
+      expect(saved).toHaveLength(1);
+      expect(saved[0]?.entryType).toBe("address");
+      expect(saved[0]?.address?.city).toBe("Lviv");
+      // The login itself is not saved: the editor's Save does that.
+      expect(navigation.editModel?.entryType).toBe("login");
+    });
+
+    it("an unticked Address entry is never saved", async () => {
+      const { fake } = await openApp();
+      await fake.emit("proposalEvent", await proposeRegistration(fake, "r1", true));
+      await review();
+      await userEvent.setup().click(screen.getByRole("button", { name: "Continue" }));
+      await screen.findByTestId("proposal-banner");
+      expect(calls(fake, "entrySave")).toHaveLength(0);
+    });
+
+    it("cancel overwrites every taken value and opens nothing", async () => {
+      const { fake } = await openApp();
+      const seen = captureTake(fake);
+      await fake.emit("proposalEvent", await proposeRegistration(fake, "r1", true));
+      await review();
+      await userEvent.setup().click(screen.getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(navigation.editModel).toBeNull();
+      expect(seen.taken?.model.password).toBe("");
+      expect(seen.taken?.extraFields.map((f) => f.value)).toEqual(["", "", "", ""]);
+      expect(calls(fake, "entrySave")).toHaveLength(0);
+    });
+
+    it("an open review makes a newer proposal wait", async () => {
+      const { fake } = await openApp();
+      await fake.emit("proposalEvent", await proposeRegistration(fake, "r1", false));
+      await review();
+      await fake.emit("proposalEvent", await propose(fake, "p2", "Second"));
+      await waitFor(() => expect(waiting()).toHaveLength(1));
+      expect(calls(fake, "browserProposalTake").map((c) => c.args.id)).toEqual(["r1"]);
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(calls(fake, "browserProposalTake").map((c) => c.args.id)).toEqual(["r1", "p2"]));
+      await waitFor(() => expect((screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toBe("Second"));
+    });
+
+    it("lock overwrites a proposal under review", async () => {
+      const { fake } = await openApp();
+      const seen = captureTake(fake);
+      await fake.emit("proposalEvent", await proposeRegistration(fake, "r1", true));
+      await review();
+      await api.vaultLock();
+      await waitFor(() => expect(seen.taken?.model.password).toBe(""));
+      expect(seen.taken?.extraFields.every((f) => f.value === "")).toBe(true);
+      expect(seen.taken?.address?.address?.city).toBe("");
+    });
   });
 });

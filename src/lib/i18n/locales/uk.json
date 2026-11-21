@@ -563,5 +563,9 @@
   "Open main window": "Відкрити головне вікно",
   "Search results": "Результати пошуку",
   "Last modified: %@": "Остання зміна: {0}",
-  "Created %@": "Створено {0}"
+  "Created %@": "Створено {0}",
+  "Birthday": "Дата народження",
+  "Review form fields": "Перегляд полів форми",
+  "Choose the form fields to keep with the new login.": "Виберіть поля форми, які зберегти з новим логіном.",
+  "Also create an Address entry": "Також створити запис «Адреса»"
 }

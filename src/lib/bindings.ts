@@ -35,7 +35,7 @@ export const commands = {
 	backupList: () => typedError<BackupStatus_Serialize, ApiError>(__TAURI_INVOKE("backup_list")),
 	backupRestore: (id: string) => typedError<null, ApiError>(__TAURI_INVOKE("backup_restore", { id })),
 	browserPairingCancel: () => typedError<null, ApiError>(__TAURI_INVOKE("browser_pairing_cancel")),
-	browserProposalTake: (id: string) => typedError<EntryEditModel_Serialize, ApiError>(__TAURI_INVOKE("browser_proposal_take", { id })),
+	browserProposalTake: (id: string) => typedError<BrowserProposal_Serialize, ApiError>(__TAURI_INVOKE("browser_proposal_take", { id })),
 	browserReinstallHost: () => typedError<BrowserRegistrationDto_Serialize[], ApiError>(__TAURI_INVOKE("browser_reinstall_host")),
 	browserResetPairings: () => typedError<null, ApiError>(__TAURI_INVOKE("browser_reset_pairings")),
 	browserRevoke: (id: string) => typedError<null, ApiError>(__TAURI_INVOKE("browser_revoke", { id })),
@@ -285,6 +285,38 @@ export type BrowserDiagnosticsDto_Serialize = {
 	extensionScanState: string,
 	enabledManagers: string[],
 	receivedAt: number | null,
+};
+
+/**
+ *  A taken save proposal: the editor model, the extra values of a registration form the user may
+ *  keep or drop (each becomes a custom field of the model), and a prefilled Address entry when the
+ *  form had an address no Address entry of the vault holds yet (created only when the user ticks
+ *  it). Empty extras and no address for a plain login or a one-time-password proposal.
+ */
+export type BrowserProposal = BrowserProposal_Serialize | BrowserProposal_Deserialize;
+
+/**
+ *  A taken save proposal: the editor model, the extra values of a registration form the user may
+ *  keep or drop (each becomes a custom field of the model), and a prefilled Address entry when the
+ *  form had an address no Address entry of the vault holds yet (created only when the user ticks
+ *  it). Empty extras and no address for a plain login or a one-time-password proposal.
+ */
+export type BrowserProposal_Deserialize = {
+	model: EntryEditModel_Deserialize,
+	extraFields: ProposalField[],
+	address?: EntryEditModel_Deserialize | null,
+};
+
+/**
+ *  A taken save proposal: the editor model, the extra values of a registration form the user may
+ *  keep or drop (each becomes a custom field of the model), and a prefilled Address entry when the
+ *  form had an address no Address entry of the vault holds yet (created only when the user ticks
+ *  it). Empty extras and no address for a plain login or a one-time-password proposal.
+ */
+export type BrowserProposal_Serialize = {
+	model: EntryEditModel_Serialize,
+	extraFields: ProposalField[],
+	address: EntryEditModel_Serialize | null,
 };
 
 /**  One browser's native messaging registration (`state`: `ok`, `missing`, `stale` or `error`). */
@@ -1118,6 +1150,22 @@ export type ProposalEvent_Serialize = {
 	username: string | null,
 	entryId: string | null,
 };
+
+/**
+ *  One extra value of a registration form, offered as a custom field of the new login. The value
+ *  is wiped on drop; `Debug` hides it.
+ */
+export type ProposalField = {
+	kind: ProposalFieldKind,
+	label: string,
+	value: string,
+};
+
+/**
+ *  What a value captured from a registration form is; the review names it in the UI language
+ *  (only `Other` keeps the page's label). Mirrors `mypass_bridge::protocol::ExtraFieldKind`.
+ */
+export type ProposalFieldKind = "name" | "givenName" | "familyName" | "email" | "phone" | "birthday" | "username" | "organization" | "addressLine1" | "addressLine2" | "city" | "region" | "postalCode" | "country" | "other";
 
 /**  What a save proposal is about. */
 export type ProposalKind = "login" | "totp";

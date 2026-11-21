@@ -19,6 +19,7 @@ import type {
   BackupItem,
   BrowserRegistrationDto_Serialize,
   BrowserStatus_Serialize,
+  BrowserProposal_Serialize,
   EntryEditModel_Serialize,
   CsvPreview,
   commands,
@@ -126,7 +127,7 @@ export interface FakeState {
   /** What `browser_reinstall_host` answers. */
   browserReinstall: BrowserRegistrationDto_Serialize[];
   /** Save proposals by id: `browser_proposal_take` hands one out once, like the Rust store. */
-  proposals: Record<string, EntryEditModel_Serialize>;
+  proposals: Record<string, BrowserProposal_Serialize>;
   session: SessionStatus_Serialize;
   settings: Settings_Serialize;
   entries: FixtureEntry[];
