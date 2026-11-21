@@ -140,6 +140,23 @@ impl UnlockThrottle {
     }
 }
 
+/// A bridge without an app-core-backed unlocker.
+pub struct NoUnlocker;
+
+impl VaultUnlocker for NoUnlocker {
+    fn unlock_with_password(&self, _password: SecretString) -> Result<(), UnlockFailure> {
+        Err(UnlockFailure::Failed)
+    }
+
+    fn unlock_with_device(&self) -> Result<(), UnlockFailure> {
+        Err(UnlockFailure::DeviceUnavailable)
+    }
+
+    fn device_offer(&self) -> DeviceOffer {
+        DeviceOffer::default()
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)] // test-only
 mod tests {

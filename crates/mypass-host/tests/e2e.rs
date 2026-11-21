@@ -189,6 +189,7 @@ impl App {
             proposals: Arc::new(ProposalStore::new(sched.clone())),
             ui: ui.clone(),
             passkeys,
+            unlocker: Arc::new(mypass_bridge::unlock::NoUnlocker),
         });
 
         let mut db = fast_database("E2E");

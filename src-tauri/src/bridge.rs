@@ -414,6 +414,7 @@ fn start_bridge_with_kind(
         diagnostics: Arc::clone(&diagnostics),
         proposals: Arc::clone(&proposals),
         ui: Arc::clone(&ui),
+        unlocker: Arc::new(mypass_bridge::unlock::NoUnlocker),
         // The pending table is dropped on lock and on a vault switch by the observer that
         // `register_observer` adds below, once the server is up.
         passkeys: PasskeyService::with_presence(Arc::clone(&scheduler), ui, {
@@ -953,13 +954,19 @@ mod tests {
     }
 
     #[test]
-    fn bridge_starts_while_locked_and_answers_locked() {
+    fn bridge_starts_while_locked_and_requires_pairing_before_locked_reply() {
         let f = unstarted(true, None);
         f.w.core.vault_lock().unwrap();
         f.state.start().unwrap();
         let reply = ask(
             &f.handle(),
             &serde_json::json!({"type": "getCredentials", "url": "https://a.example"}),
+        );
+        assert_eq!(reply["type"], "pairingRequired");
+        let secret = pair(&f);
+        let reply = ask(
+            &f.handle(),
+            &serde_json::json!({"type": "getCredentials", "url": "https://a.example", "pairing": secret}),
         );
         assert_eq!(reply["type"], "locked");
     }
@@ -982,7 +989,7 @@ mod tests {
             .all(|r| r.state == mypass_platform::RegistrationState::Error));
         f.w.core.vault_lock().unwrap();
         let reply = ask(&handle, &serde_json::json!({"type": "getFavorites"}));
-        assert_eq!(reply["type"], "locked");
+        assert_eq!(reply["type"], "pairingRequired");
     }
 
     #[test]
@@ -1311,8 +1318,14 @@ mod tests {
     fn bridge_keeps_serving_after_cancel_quit_and_stops_after_final_quit() {
         let f = fixture(true);
         f.w.core.vault_lock().unwrap();
+        let secret = pair(&f);
         let handle = f.handle();
-        let locked = || ask(&handle, &serde_json::json!({"type": "getFavorites"}));
+        let locked = || {
+            ask(
+                &handle,
+                &serde_json::json!({"type": "getFavorites", "pairing": secret}),
+            )
+        };
         // A quit that is cancelled: the bridge answers again once the session re-opens.
         f.w.core.begin_quit();
         on_quit_outcome(&f.state, ExitOutcome::Stay);

@@ -42,7 +42,10 @@ impl Request {
             | Self::GeneratePassword { token, .. }
             | Self::RecordGeneratedPassword { token, .. }
             | Self::GetGeneratedPasswordHistory { token, .. }
-            | Self::DeleteGeneratedPassword { token, .. } => token,
+            | Self::DeleteGeneratedPassword { token, .. }
+            | Self::UnlockWithPassword { token, .. }
+            | Self::UnlockWithDevice { token, .. }
+            | Self::GetUnlockOptions { token, .. } => token,
         }
     }
 
@@ -76,7 +79,10 @@ impl Request {
             | Self::GeneratePassword { pairing, .. }
             | Self::RecordGeneratedPassword { pairing, .. }
             | Self::GetGeneratedPasswordHistory { pairing, .. }
-            | Self::DeleteGeneratedPassword { pairing, .. } => pairing.as_deref(),
+            | Self::DeleteGeneratedPassword { pairing, .. }
+            | Self::UnlockWithPassword { pairing, .. }
+            | Self::UnlockWithDevice { pairing, .. }
+            | Self::GetUnlockOptions { pairing, .. } => pairing.as_deref(),
         }
     }
 
@@ -112,18 +118,24 @@ impl Request {
             Self::RecordGeneratedPassword { .. } => "recordGeneratedPassword",
             Self::GetGeneratedPasswordHistory { .. } => "getGeneratedPasswordHistory",
             Self::DeleteGeneratedPassword { .. } => "deleteGeneratedPassword",
+            Self::UnlockWithPassword { .. } => "unlockWithPassword",
+            Self::UnlockWithDevice { .. } => "unlockWithDevice",
+            Self::GetUnlockOptions { .. } => "getUnlockOptions",
         }
     }
 
-    /// Only these requests may be answered while the vault is locked: asking for an unlock, the
-    /// passkey proxy status poll (the extension must learn the vault is locked), and the
-    /// app-level actions that touch no vault data.
+    /// Allows pairing, unlock, proxy status and app-level actions while the vault is locked.
     pub fn is_answerable_while_locked(&self) -> bool {
         match self {
             Self::RequestUnlock { .. }
             | Self::GetPasskeyProxyStatus { .. }
             | Self::OpenBrowserSettings { .. }
             | Self::ReportBrowserDiagnostics { .. }
+            | Self::StartPairing { .. }
+            | Self::CompletePairing { .. }
+            | Self::UnlockWithPassword { .. }
+            | Self::UnlockWithDevice { .. }
+            | Self::GetUnlockOptions { .. }
             | Self::OpenApp { .. } => true,
             Self::GetCredentials { .. }
             | Self::GetFavorites { .. }
@@ -136,8 +148,6 @@ impl Request {
             | Self::ProposeSaveLogin { .. }
             | Self::AddEntryIdentifier { .. }
             | Self::ProposeSaveTotp { .. }
-            | Self::StartPairing { .. }
-            | Self::CompletePairing { .. }
             | Self::LockVault { .. }
             | Self::SetPasskeyProxyEnabled { .. }
             | Self::PasskeyCreate { .. }
@@ -182,6 +192,8 @@ impl Request {
             | Self::PasskeyCreateConfirm { .. }
             | Self::PasskeyGetApprove { .. }
             | Self::RequestUnlock { .. }
+            | Self::UnlockWithPassword { .. }
+            | Self::UnlockWithDevice { .. }
             | Self::GeneratePassword { .. }
             | Self::GetFavorites { .. }
             | Self::ListEntries { .. }
@@ -209,7 +221,8 @@ impl Request {
             | Self::OpenBrowserSettings { .. }
             | Self::ReportBrowserDiagnostics { .. }
             | Self::LockVault { .. }
-            | Self::OpenApp { .. } => false,
+            | Self::OpenApp { .. }
+            | Self::GetUnlockOptions { .. } => false,
         }
     }
 
@@ -243,6 +256,9 @@ impl Request {
             | Self::GeneratePassword { .. }
             | Self::RecordGeneratedPassword { .. }
             | Self::GetGeneratedPasswordHistory { .. }
+            | Self::UnlockWithPassword { .. }
+            | Self::UnlockWithDevice { .. }
+            | Self::GetUnlockOptions { .. }
             | Self::DeleteGeneratedPassword { .. } => true,
         }
     }
@@ -278,6 +294,9 @@ impl Request {
             | Self::GeneratePassword { .. }
             | Self::RecordGeneratedPassword { .. }
             | Self::GetGeneratedPasswordHistory { .. }
+            | Self::UnlockWithPassword { .. }
+            | Self::UnlockWithDevice { .. }
+            | Self::GetUnlockOptions { .. }
             | Self::DeleteGeneratedPassword { .. } => false,
         }
     }
@@ -288,7 +307,14 @@ impl Response {
     /// `PairingRequired`, `Error`) and for a passkey completion that carries an error.
     pub fn was_served(&self) -> bool {
         match self {
-            Self::Locked | Self::PairingRequired | Self::Error { .. } => false,
+            Self::Locked
+            | Self::PairingRequired
+            | Self::WrongPassword
+            | Self::UnlockThrottled { .. }
+            | Self::DeviceUnlockUnavailable
+            | Self::UnlockCancelled
+            | Self::UnlockInApp
+            | Self::Error { .. } => false,
             Self::PasskeyCreateComplete { error, .. } | Self::PasskeyGetComplete { error, .. } => {
                 error.is_none()
             }
@@ -300,6 +326,8 @@ impl Response {
             | Self::Totp { .. }
             | Self::SaveProposalAccepted
             | Self::UnlockPresented
+            | Self::Unlocked
+            | Self::UnlockOptions { .. }
             | Self::UnlockNotNeeded
             | Self::PasskeyProxyStatus { .. }
             | Self::PasskeyProxyEnabled { .. }
@@ -384,16 +412,21 @@ mod tests {
     }
 
     #[test]
-    fn answerable_while_locked_is_exactly_five() {
+    fn answerable_while_locked_is_exactly_ten() {
         let expected = sorted(&[
             "requestUnlock",
             "getPasskeyProxyStatus",
             "openBrowserSettings",
             "reportBrowserDiagnostics",
             "openApp",
+            "startPairing",
+            "completePairing",
+            "unlockWithPassword",
+            "unlockWithDevice",
+            "getUnlockOptions",
         ]);
         assert_eq!(names_where(Request::is_answerable_while_locked), expected);
-        assert_eq!(expected.len(), 5);
+        assert_eq!(expected.len(), 10);
     }
 
     #[test]
@@ -407,6 +440,8 @@ mod tests {
             "passkeyCreateConfirm",
             "passkeyGetApprove",
             "requestUnlock",
+            "unlockWithPassword",
+            "unlockWithDevice",
             "generatePassword",
             "getFavorites",
             "listEntries",
@@ -430,8 +465,9 @@ mod tests {
             "reportBrowserDiagnostics",
             "lockVault",
             "openApp",
+            "getUnlockOptions",
         ];
-        assert_eq!(yes.len() + no.len(), 29);
+        assert_eq!(yes.len() + no.len(), 32);
         assert_eq!(names_where(Request::resets_auto_lock_timer), sorted(&yes));
         let others = names_where(|r| !r.resets_auto_lock_timer());
         assert_eq!(others, sorted(&no));
@@ -441,7 +477,7 @@ mod tests {
     fn pairing_required_for_all_but_the_two_handshake_requests() {
         let no = names_where(|r| !r.requires_pairing());
         assert_eq!(no, vec!["completePairing", "startPairing"]);
-        assert_eq!(names_where(Request::requires_pairing).len(), 27);
+        assert_eq!(names_where(Request::requires_pairing).len(), 30);
     }
 
     #[test]
@@ -473,9 +509,9 @@ mod tests {
     }
 
     #[test]
-    fn name_matches_serde_tag_for_all_29() {
+    fn name_matches_serde_tag_for_all_32() {
         let all = all_requests(None);
-        assert_eq!(all.len(), 29);
+        assert_eq!(all.len(), 32);
         for (r, expected) in all.iter().zip(REQUEST_TYPES) {
             assert_eq!(r.name(), expected);
             let v = serde_json::to_value(r).unwrap();

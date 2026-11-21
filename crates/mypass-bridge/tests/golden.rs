@@ -297,6 +297,28 @@ fn request_cases() -> Vec<(Request, &'static str)> {
             },
             r#"{"type":"deleteGeneratedPassword","token":"tok-1","id":"h1"}"#,
         ),
+        (
+            Request::UnlockWithPassword {
+                token: t(),
+                password: WirePassword::new(s("pw")),
+                pairing: None,
+            },
+            r#"{"type":"unlockWithPassword","token":"tok-1","password":"pw"}"#,
+        ),
+        (
+            Request::UnlockWithDevice {
+                token: t(),
+                pairing: None,
+            },
+            r#"{"type":"unlockWithDevice","token":"tok-1"}"#,
+        ),
+        (
+            Request::GetUnlockOptions {
+                token: t(),
+                pairing: None,
+            },
+            r#"{"type":"getUnlockOptions","token":"tok-1"}"#,
+        ),
     ]
 }
 
@@ -323,7 +345,7 @@ fn every_request_case_has_golden_json() {
 #[test]
 fn request_types_are_distinct_and_match_the_tags() {
     let set: BTreeSet<&str> = REQUEST_TYPES.iter().copied().collect();
-    assert_eq!(set.len(), 29);
+    assert_eq!(set.len(), 32);
     assert_eq!(set.len(), variant_count("Request"));
     let tags: BTreeSet<String> = request_cases()
         .iter()
@@ -725,6 +747,28 @@ fn response_cases() -> Vec<(Response, Value)> {
                 message: s("invalid_code"),
             },
             json!({"type":"error","message":"invalid_code"}),
+        ),
+        (Response::Unlocked, json!({"type":"unlocked"})),
+        (Response::WrongPassword, json!({"type":"wrongPassword"})),
+        (
+            Response::UnlockThrottled {
+                retry_after_secs: 30,
+            },
+            json!({"type":"unlockThrottled","retryAfterSecs":30}),
+        ),
+        (
+            Response::DeviceUnlockUnavailable,
+            json!({"type":"deviceUnlockUnavailable"}),
+        ),
+        (Response::UnlockCancelled, json!({"type":"unlockCancelled"})),
+        (Response::UnlockInApp, json!({"type":"unlockInApp"})),
+        (
+            Response::UnlockOptions {
+                device_unlock: true,
+                touch_id: true,
+                retry_after_secs: None,
+            },
+            json!({"type":"unlockOptions","deviceUnlock":true,"touchId":true}),
         ),
     ]
 }
