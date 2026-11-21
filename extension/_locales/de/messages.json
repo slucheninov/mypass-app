@@ -397,6 +397,12 @@
   "newNote": {
     "message": "Neue Notiz"
   },
+  "newAddress": {
+    "message": "Neue Adresse"
+  },
+  "newFile": {
+    "message": "Neue Datei"
+  },
   "totpInvalid": {
     "message": "Gib eine gültige Authenticator-URL oder einen geheimen Schlüssel ein"
   },

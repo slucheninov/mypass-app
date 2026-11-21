@@ -16,6 +16,8 @@ function openPopup({ reply, startedAt, now = 200_000 } = {}) {
   const sent = [];
   let timerId = 0;
   let focused = null;
+  let closed = 0;
+  const windowsCreated = [];
 
   function element(id) {
     return {
@@ -58,6 +60,7 @@ function openPopup({ reply, startedAt, now = 200_000 } = {}) {
   const chrome = chromeI18n.install({
     storage: { local, session },
     runtime: {
+      getURL: (relative) => 'chrome-extension://extension-id/' + relative,
       sendMessage(message, cb) {
         sent.push({ ...message });
         const result = reply?.(message, cb);
@@ -65,6 +68,7 @@ function openPopup({ reply, startedAt, now = 200_000 } = {}) {
       },
     },
     tabs: { query: (_, cb) => cb([{ url: 'https://example.com/' }]) },
+    windows: { create: (options, cb) => { windowsCreated.push(options.url); cb?.(); } },
   });
   function schedule(fn, delay, repeat) {
     const id = ++timerId;
@@ -72,13 +76,14 @@ function openPopup({ reply, startedAt, now = 200_000 } = {}) {
     return id;
   }
   const context = vm.createContext({
-    document, chrome, console, URL, TextEncoder,
+    document, chrome, console, URL, URLSearchParams, TextEncoder,
     Date: class extends Date { static now() { return now; } },
     setTimeout: (fn, delay) => schedule(fn, delay, false),
     setInterval: (fn, delay) => schedule(fn, delay, true),
     clearTimeout: (id) => timers.delete(id),
     clearInterval: (id) => timers.delete(id),
     addEventListener: (name, cb) => { listeners[name] = cb; },
+    close: () => { closed += 1; },
   });
   context.window = context;
 
@@ -110,7 +115,10 @@ function openPopup({ reply, startedAt, now = 200_000 } = {}) {
     node[`on${name}`]?.(event);
     for (const fn of node.events[name] || []) fn(event);
   }
-  return { el, fire, advance, sent, storage, listeners, timers, focused: () => focused, api: context.module.exports };
+  return {
+    el, fire, advance, sent, storage, listeners, timers,
+    focused: () => focused, closed: () => closed, windowsCreated, api: context.module.exports,
+  };
 }
 
 module.exports = { openPopup, html, flush };

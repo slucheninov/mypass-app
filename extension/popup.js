@@ -1487,12 +1487,18 @@ if (typeof document !== 'undefined') {
     const icons = {
       Login: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M14.2 3.2a6.3 6.3 0 0 0-5.9 8.3L3.2 16.6V21h4.2l1.3-1.3v-2.2h2.2l1.2-1.2a6.3 6.3 0 1 0 2.1-13.1zm1.5 5.1a1.35 1.35 0 1 1 0 2.7 1.35 1.35 0 0 1 0-2.7z"/></svg>',
       Card: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="2.2" y="5" width="19.6" height="14" rx="2.4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M2.2 9.6h19.6" stroke="currentColor" stroke-width="1.8"/></svg>',
-      Notes: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><path d="M6.4 3.2h7.6l4.8 4.8v12.2a.6.6 0 0 1-.6.6H6.4a.6.6 0 0 1-.6-.6V3.8a.6.6 0 0 1 .6-.6z"/><path d="M13.6 3.6v4.8h4.8M8.8 13h6.4M8.8 16.4h4.2"/></svg>'
+      Notes: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><path d="M6.4 3.2h7.6l4.8 4.8v12.2a.6.6 0 0 1-.6.6H6.4a.6.6 0 0 1-.6-.6V3.8a.6.6 0 0 1 .6-.6z"/><path d="M13.6 3.6v4.8h4.8M8.8 13h6.4M8.8 16.4h4.2"/></svg>',
+      Address: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><path d="M12 21s6.75-6 6.75-11.25a6.75 6.75 0 0 0-13.5 0C5.25 15 12 21 12 21z"/><circle cx="12" cy="9.75" r="2.25"/></svg>',
+      Files: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><path d="M18.75 11.25l-7.5 7.5a4.5 4.5 0 0 1-6.36-6.36l8.25-8.25a3 3 0 0 1 4.24 4.24L9 16.8a1.5 1.5 0 0 1-2.12-2.12l7.05-7.05"/></svg>'
     };
+    // Login, card and note open the extension's own create window; an address and a files item
+    // (which needs the app's file dialog) open in MyPass, straight into its editor.
     [
       { type: 'Login', title: i18n.t('newLogin'), iconClass: 'add-entry-icon-login' },
       { type: 'Card', title: i18n.t('newCard'), iconClass: 'add-entry-icon-card' },
-      { type: 'Notes', title: i18n.t('newNote'), iconClass: 'add-entry-icon-note' }
+      { type: 'Notes', title: i18n.t('newNote'), iconClass: 'add-entry-icon-note' },
+      { type: 'Address', title: i18n.t('newAddress'), iconClass: 'add-entry-icon-address', inApp: true },
+      { type: 'Files', title: i18n.t('newFile'), iconClass: 'add-entry-icon-files', inApp: true }
     ].forEach((choice) => {
       const button = document.createElement('button');
       button.type = 'button';
@@ -1508,7 +1514,7 @@ if (typeof document !== 'undefined') {
       label.textContent = choice.title;
       button.appendChild(icon);
       button.appendChild(label);
-      button.addEventListener('click', () => openAddEntry(choice.type));
+      button.addEventListener('click', () => (choice.inApp ? openNewEntryInApp(choice.type) : openAddEntry(choice.type)));
       addEntryMenu.appendChild(button);
       addEntryItems.push(button);
     });
@@ -1520,6 +1526,30 @@ if (typeof document !== 'undefined') {
     if (entryType === 'Login' && isSiteUrl(currentTabUrl)) params.set('url', currentTabUrl);
     const height = entryType === 'Notes' ? 640 : entryType === 'Card' ? 680 : 760;
     openCenteredExtensionWindow('create.html?' + params.toString(), 520, height);
+  }
+
+  // Asks MyPass to come forward with a new entry of `entryType` in its editor. A locked app shows
+  // its unlock screen and opens the editor after the unlock. The popup closes once the app took
+  // the request; otherwise the failure is shown under the header, and an app that is not running
+  // gets the locked panel with its Launch button.
+  function openNewEntryInApp(entryType) {
+    closeHeaderMenus();
+    lockErrorEl.hidden = true;
+    void sendPopupMessage({ type: 'openApp', newEntry: entryType }).then((response) => {
+      if (response?.type === 'ok') {
+        window.close?.();
+        return;
+      }
+      if (isHostMissing(response)) {
+        presentLockedPanel('hostMissing');
+        return;
+      }
+      if (isAppConnectionError(response)) {
+        presentLockedPanel('notRunning');
+        return;
+      }
+      showMenuError(response?.type === 'pairingRequired' ? i18n.t('connectBrowserFirst') : i18n.t('openAppFailed'));
+    });
   }
 
   function openGenerator() {

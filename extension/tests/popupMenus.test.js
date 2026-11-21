@@ -6,6 +6,16 @@ const { test } = require('node:test');
 const { openPopup, html } = require('./popupHarness.js');
 
 function menuPopup({ lock = { type: 'ok' }, openApp = { type: 'ok' } } = {}) {
+  // `openApp` may be a function of the message (to answer a newEntry request differently).
+  if (typeof openApp === 'function') {
+    const answer = openApp;
+    return openPopup({ reply(message) {
+      if (message.type === 'getCredentials') return { type: 'credentialList', credentials: [] };
+      if (message.type === 'lockVault') return lock;
+      if (message.type === 'openApp') return answer(message);
+      return {};
+    } });
+  }
   return openPopup({ reply(message) {
     if (message.type === 'getCredentials') return { type: 'credentialList', credentials: [] };
     if (message.type === 'lockVault') return lock;
@@ -48,11 +58,22 @@ test('both header buttons are menu buttons wired to role=menu dropdowns', () => 
   assert.match(html, /<button id="more-menu-btn"[^>]*data-i18n-aria-label="moreActions"/);
 });
 
-test('the + menu holds only creation items: New login, New card, New note', () => {
+test('the + menu holds only creation items: New login, card, note, address and file', () => {
   const h = menuPopup();
   h.fire('add-entry-btn', 'click');
   const rows = h.el('add-entry-menu').children;
-  assert.deepStrictEqual(rows.map((row) => row.children[1].textContent), ['New login', 'New card', 'New note']);
+  assert.deepStrictEqual(rows.map((row) => row.children[1].textContent), ['New login', 'New card', 'New note', 'New address', 'New file']);
+  assert.deepStrictEqual(rows.map((row) => row.children[0].className), [
+    'add-entry-icon add-entry-icon-login', 'add-entry-icon add-entry-icon-card', 'add-entry-icon add-entry-icon-note',
+    'add-entry-icon add-entry-icon-address', 'add-entry-icon add-entry-icon-files',
+  ]);
+  for (const row of rows) {
+    assert.match(row.children[0].innerHTML, /^<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"/);
+    assert.match(row.children[0].innerHTML, /currentColor/);
+  }
+  for (const cls of ['add-entry-icon-address', 'add-entry-icon-files']) {
+    assert.match(html, new RegExp(`\\.${cls} \\{ color: #[0-9a-f]{6}; \\}`));
+  }
   for (const row of rows) {
     assert.equal(row.role, 'menuitem');
     assert.equal(row.tabindex, '-1');
@@ -153,6 +174,55 @@ test('Open MyPass failures are shown under the header', async () => {
     assert.equal(h.el('lock-vault-error').hidden, false);
     assert.match(h.el('lock-vault-error').textContent, pattern);
   }
+});
+
+function clickRow(h, label) {
+  h.fire('add-entry-btn', 'click');
+  const row = h.el('add-entry-menu').children.find((r) => r.children[1].textContent === label);
+  assert.ok(row, label);
+  for (const fn of row.events.click || []) fn({ preventDefault() {}, target: row });
+}
+
+test('New address and New file ask MyPass to open its editor and close the popup', async () => {
+  for (const [label, newEntry] of [['New address', 'Address'], ['New file', 'Files']]) {
+    const h = menuPopup();
+    clickRow(h, label);
+    assert.equal(h.el('add-entry-menu').hidden, true);
+    assert.deepStrictEqual(h.sent.at(-1), { type: 'openApp', newEntry });
+    await h.advance(0);
+    assert.equal(h.closed(), 1);
+    assert.equal(h.el('lock-vault-error').hidden, true);
+  }
+});
+
+test('New login, card and note still use the extension create window, never openApp', () => {
+  for (const [label, type] of [['New login', 'Login'], ['New card', 'Card'], ['New note', 'Notes']]) {
+    const h = menuPopup();
+    clickRow(h, label);
+    assert.ok(!h.sent.some((m) => m.type === 'openApp'), label);
+    assert.equal(h.windowsCreated.length, 1);
+    assert.match(h.windowsCreated[0], new RegExp(`create\\.html\\?type=${type}`));
+  }
+});
+
+test('New address and New file failures stay in the popup and are shown under the header', async () => {
+  for (const [reply, pattern] of [[{ type: 'pairingRequired' }, /Connect this browser/], [{ type: 'error' }, /Could not open MyPass/], [{}, /Could not open MyPass/]]) {
+    const h = menuPopup({ openApp: () => reply });
+    clickRow(h, 'New file');
+    await h.advance(0);
+    assert.equal(h.closed(), 0);
+    assert.equal(h.el('lock-vault-error').hidden, false);
+    assert.match(h.el('lock-vault-error').textContent, pattern);
+  }
+});
+
+test('New address when MyPass is not running shows the locked panel with its Launch button', async () => {
+  const h = menuPopup({ openApp: () => ({ type: 'error', message: 'app_not_running' }) });
+  clickRow(h, 'New address');
+  await h.advance(0);
+  assert.equal(h.closed(), 0);
+  assert.equal(h.el('locked-panel').hidden, false);
+  assert.equal(h.el('launch-app-btn').hidden, false);
 });
 
 test('Help opens the help card; Back and Escape return focus to the more button', () => {

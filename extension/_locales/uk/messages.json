@@ -397,6 +397,12 @@
   "newNote": {
     "message": "Нова нотатка"
   },
+  "newAddress": {
+    "message": "Нова адреса"
+  },
+  "newFile": {
+    "message": "Новий файл"
+  },
   "totpInvalid": {
     "message": "Введіть дійсну URL-адресу автентифікатора або секретний ключ"
   },
