@@ -36,7 +36,8 @@ uuid.workspace = true
 sys-locale.workspace = true
 thiserror.workspace = true
 
-[target.'cfg(target_os = "macos")'.dependencies]
+# PNG decoding for the macOS tray template and the theme-following window icons on Windows.
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
 tauri = { workspace = true, features = ["image-png"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]

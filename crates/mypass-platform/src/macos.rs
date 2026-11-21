@@ -26,17 +26,20 @@ use crate::macos_device_unlock::mac_device_unlock;
 use crate::macos_keychain::MacKeychainSecretStore;
 use crate::macos_login_item::MacLaunchAtLogin;
 use crate::{
-    AppPaths, ClipboardStamp, KeyboardLayout, Platform, PlatformError, PlatformResult,
+    AppIcon, AppPaths, ClipboardStamp, KeyboardLayout, Platform, PlatformError, PlatformResult,
     SecureClipboard, Subscription, SystemEvent, SystemEvents,
 };
 use block2::RcBlock;
 use objc2::rc::{autoreleasepool, Retained};
 use objc2::runtime::{AnyObject, NSObjectProtocol, ProtocolObject};
-use objc2::MainThreadMarker;
-use objc2_app_kit::{NSPasteboard, NSPasteboardContentsOptions, NSRunningApplication, NSWorkspace};
+use objc2::{AllocAnyThread, MainThreadMarker};
+use objc2_app_kit::{
+    NSApplication, NSImage, NSPasteboard, NSPasteboardContentsOptions, NSRunningApplication,
+    NSWorkspace,
+};
 use objc2_foundation::{
     NSArray, NSData, NSDistributedNotificationCenter, NSNotification, NSNotificationCenter,
-    NSOperationQueue, NSString,
+    NSOperationQueue, NSString, NSUserDefaults,
 };
 use std::ffi::c_void;
 use std::path::PathBuf;
@@ -86,7 +89,43 @@ pub(crate) fn platform(paths: &AppPaths) -> Platform {
         host_registrar: Arc::new(registrar),
         launch_at_login: Arc::new(MacLaunchAtLogin),
         keyboard_layout: Arc::new(MacKeyboardLayout),
+        app_icon: Arc::new(MacAppIcon),
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// App icon
+// ---------------------------------------------------------------------------------------------
+
+/// [`AppIcon`] over `NSApplication.applicationIconImage` (the Dock tile of the running app) and
+/// the global `AppleInterfaceStyle` default (the OS appearance, which the app's own forced
+/// `NSApp.appearance` never changes).
+#[derive(Debug, Default)]
+pub(crate) struct MacAppIcon;
+
+impl AppIcon for MacAppIcon {
+    fn system_dark(&self) -> PlatformResult<bool> {
+        let style = NSUserDefaults::standardUserDefaults()
+            .stringForKey(&NSString::from_str("AppleInterfaceStyle"));
+        Ok(style.is_some_and(|s| s.to_string().eq_ignore_ascii_case("dark")))
+    }
+
+    fn set_png(&self, png: &[u8]) -> PlatformResult<()> {
+        let mtm = MainThreadMarker::new()
+            .ok_or_else(|| PlatformError::Failed("app icon: not on the main thread".into()))?;
+        let data = NSData::with_bytes(png);
+        let image = NSImage::initWithData(NSImage::alloc(), &data)
+            .ok_or_else(|| PlatformError::Failed("app icon: not an image".into()))?;
+        set_application_icon(&NSApplication::sharedApplication(mtm), &image);
+        Ok(())
+    }
+}
+
+fn set_application_icon(app: &NSApplication, image: &NSImage) {
+    // SAFETY: the binding is `unsafe` only because the property "might not allow `None`"; a live,
+    // decoded `NSImage` is always passed, and `app` comes from `sharedApplication` on the main
+    // thread (the `MainThreadMarker` of the caller).
+    unsafe { app.setApplicationIconImage(Some(image)) };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -423,6 +462,17 @@ mod tests {
     use objc2_app_kit::NSPasteboard;
     use objc2_foundation::{NSDate, NSDistributedNotificationCenter, NSRunLoop, NSString};
     use std::sync::Mutex;
+
+    #[test]
+    fn app_icon_reads_the_appearance_and_refuses_off_the_main_thread() {
+        // Either appearance is fine; the default only has to be readable.
+        assert!(MacAppIcon.system_dark().is_ok());
+        // Test threads are never the main thread: nothing touches the test runner's Dock tile.
+        assert!(matches!(
+            MacAppIcon.set_png(b"not a png"),
+            Err(PlatformError::Failed(_))
+        ));
+    }
 
     /// A private, uniquely named pasteboard released (`releaseGlobally`) on drop, so the tests never
     /// touch the developer's real clipboard.

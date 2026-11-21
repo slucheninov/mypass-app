@@ -101,6 +101,8 @@ pub(crate) fn platform(paths: &AppPaths) -> crate::Platform {
             ),
         ),
         keyboard_layout: std::sync::Arc::new(WinKeyboardLayout::capture()),
+        // The window icons follow the theme through the app shell (Tauri); no Dock to set.
+        app_icon: std::sync::Arc::new(crate::fallback::UnsupportedAppIcon),
     }
 }
 

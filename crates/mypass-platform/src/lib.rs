@@ -1,9 +1,10 @@
 //! OS glue behind traits: system events, the secure clipboard, secret storage, device unlock, the
-//! native host registrar, launch at login, the keyboard layout and every on-disk path.
+//! native host registrar, launch at login, the keyboard layout, the app icon and every on-disk path.
 //!
 //! [`current`] wires the real implementations of the running OS; [`testing`] (behind the
 //! `test-util` feature) holds the fakes every other crate's tests build on.
 
+mod app_icon;
 pub mod app_launch;
 pub mod dev_overrides;
 mod file_identity;
@@ -56,6 +57,7 @@ mod secrets;
 #[doc(hidden)]
 pub mod testing;
 
+pub use app_icon::AppIcon;
 pub use clipboard::{ClipboardStamp, SecureClipboard};
 pub use coordinated::{
     coordinated_files, map_download_status, Accessor, ChangeCallback, ConflictVersion,
@@ -84,8 +86,8 @@ pub use secrets::SecretStore;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Every platform service, as trait objects. This is the final shape: later stages fill bodies and
-/// never add or rename a field.
+/// Every platform service, as trait objects. Stages fill bodies; a field is added only for a new OS
+/// service (`app_icon` came with the theme-following app icon).
 #[derive(Clone)]
 pub struct Platform {
     pub events: Arc<dyn SystemEvents>,
@@ -96,6 +98,7 @@ pub struct Platform {
     pub host_registrar: Arc<dyn NativeHostRegistrar>,
     pub launch_at_login: Arc<dyn LaunchAtLogin>,
     pub keyboard_layout: Arc<dyn KeyboardLayout>,
+    pub app_icon: Arc<dyn AppIcon>,
 }
 
 impl std::fmt::Debug for Platform {

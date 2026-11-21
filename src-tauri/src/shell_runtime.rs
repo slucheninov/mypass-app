@@ -8,6 +8,7 @@
 //! menu is built on the calling thread first. The quit flow runs on a worker thread because it
 //! flushes to disk and shows a blocking dialog.
 
+use crate::app_icon::{self, AppIconState};
 use crate::commands::app::{app_open_settings, open_entry, MAIN_WINDOW};
 use crate::events::ShortcutConflictEvent;
 use crate::hotkeys::{self, ConflictGate};
@@ -394,6 +395,8 @@ impl ShellTarget for TauriTarget {
 
     fn apply_theme(&self, theme: Theme) {
         self.on_main(move |app| app.set_theme(native_theme(theme)));
+        // Windows reports the new window themes later (`ThemeChanged`), which refreshes again.
+        refresh_app_icon(&self.app, false);
     }
 }
 
@@ -402,6 +405,42 @@ fn native_theme(theme: Theme) -> Option<tauri::Theme> {
         Theme::System => None,
         Theme::Light => Some(tauri::Theme::Light),
         Theme::Dark => Some(tauri::Theme::Dark),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// App icon
+
+/// Shows the app icon of the effective theme (`app_icon.rs`) on the main thread; `force` applies
+/// it even when unchanged (a new window, or the framework's own dev-mode Dock icon at `Ready`).
+/// Posted, never awaited.
+pub fn refresh_app_icon<R: Runtime>(app: &tauri::AppHandle<R>, force: bool) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || apply_app_icon(&handle, force));
+}
+
+fn apply_app_icon<R: Runtime>(app: &tauri::AppHandle<R>, force: bool) {
+    let (Some(core), Some(shown)) = (app.try_state::<AppState>(), app.try_state::<AppIconState>())
+    else {
+        return;
+    };
+    let platform = core.0.platform();
+    let window_dark = app
+        .get_webview_window(MAIN_WINDOW)
+        .and_then(|window| window.theme().ok())
+        .map(|theme| theme == tauri::Theme::Dark);
+    let dark = app_icon::system_dark(platform.app_icon.system_dark().ok(), window_dark);
+    let variant = app_icon::app_icon_variant(core.0.settings.get().theme, dark);
+    if !shown.should_apply(variant, force) {
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    let _ = platform.app_icon.set_png(variant.png());
+    #[cfg(windows)]
+    if let Ok(image) = tauri::image::Image::from_bytes(variant.png()) {
+        for window in app.webview_windows().into_values() {
+            let _ = window.set_icon(image.clone());
+        }
     }
 }
 
@@ -462,6 +501,8 @@ pub fn start(app: &tauri::App) {
     app.manage(watcher);
 
     app.set_theme(native_theme(settings.theme));
+    // The icon itself is applied at `RunEvent::Ready`, after the framework's own dev-mode icon.
+    app.manage(AppIconState::default());
     apply_startup_ui(&handle, &core, &settings);
 }
 
@@ -509,6 +550,8 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
                 tauri::async_runtime::spawn_blocking(move || watcher.check());
             }
         }
+        // The OS appearance (or the forced app theme) changed: the icon may follow.
+        (_, WindowEvent::ThemeChanged(_)) => refresh_app_icon(app, false),
         (PANEL_WINDOW, WindowEvent::CloseRequested { api, .. }) => {
             api.prevent_close();
             let _ = window.hide();
@@ -529,7 +572,8 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
     }
 }
 
-/// `RunEvent` handler: the quit flow (`ExitRequested`) and the Dock reopen. Generic over the
+/// `RunEvent` handler: the first app icon (`Ready`), the quit flow (`ExitRequested`) and the Dock
+/// reopen. Generic over the
 /// runtime so the tests drive it with the mock runtime.
 pub fn on_run_event<R: Runtime>(app: &tauri::AppHandle<R>, event: &RunEvent) {
     match event {
@@ -546,6 +590,7 @@ pub fn on_run_event<R: Runtime>(app: &tauri::AppHandle<R>, event: &RunEvent) {
                 }
             }
         }
+        RunEvent::Ready => refresh_app_icon(app, true),
         // Safety net for any exit that did not go through the quit flow; `shutdown` is idempotent.
         RunEvent::Exit => {
             if let Some(core) = app.try_state::<AppState>() {

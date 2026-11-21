@@ -165,12 +165,15 @@ pub fn open_settings(app: &AppHandle, pane: Option<&str>) -> Result<(), ApiError
                     .data_dir
                     .join("webview2"),
             );
-            builder
+            let window = builder
                 .title("MyPass")
                 .inner_size(640.0, 520.0)
                 .visible(false)
                 .build()
-                .map_err(|e| super::internal(e.to_string()))?
+                .map_err(|e| super::internal(e.to_string()))?;
+            // A new window starts with the bundle icon; Windows shows the theme's one.
+            crate::shell_runtime::refresh_app_icon(app, true);
+            window
         }
     };
     window.show().map_err(|e| super::internal(e.to_string()))?;

@@ -23,7 +23,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `mypass-kdbx` | implemented | KDBX4 engine: format pipeline, model, database API, vault file, `FileIo` seam |
 | `mypass-core` | implemented | Everything that consumes the model: TOTP, generator and password rules, Public Suffix List, entry matcher, merge engine, WebAuthn passkey ceremonies and the KeePassXC passkey record (`passkey`) |
 | `repo-guards` | implemented | Test-only (`publish = false`, never shipped): guard tests for the workspace, CI, docs and scripts |
-| `mypass-platform` | macOS and Windows implemented; device unlock and coordinated iCloud access are macOS-only | OS glue behind traits (system events, secure clipboard, secret stores, device unlock, native host registrar, launch at login, keyboard layout) and `AppPaths`; fakes behind the `test-util` feature, `Unsupported` fallbacks where a platform body has not landed |
+| `mypass-platform` | macOS and Windows implemented; device unlock and coordinated iCloud access are macOS-only | OS glue behind traits (system events, secure clipboard, secret stores, device unlock, native host registrar, launch at login, keyboard layout, app icon) and `AppPaths`; fakes behind the `test-util` feature, `Unsupported` fallbacks where a platform body has not landed |
 | `mypass-sync` | implemented | Secondary-folder sync, hash checkpoints, watcher and coordinated iCloud storage with offline cache and conflict merging |
 | `mypass-update` | implemented | GitHub release checks behind the `github` feature; banner-only updates, no automatic installation |
 | `mypass-session` | implemented | Vault session, settings, scheduling and the `AppCore` command facade; no Tauri dependency |
@@ -40,7 +40,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `Cargo.toml` | Workspace manifest. `members = ["crates/*", "src-tauri"]`; the single `[workspace.dependencies]` version table; `[workspace.lints]` |
 | `rust-toolchain.toml` | Pinned toolchain `1.99.1` (components `rustfmt`, `clippy`) |
 | `crates/` | The Rust crates listed above |
-| `src-tauri/` | The Tauri app shell (`mypass-app`): `tauri.conf.json`, capabilities, owner artwork in `icons/source.png` and generated app icons |
+| `src-tauri/` | The Tauri app shell (`mypass-app`): `tauri.conf.json`, capabilities, the generated app icon sources `icons/source.png` (light, the bundle icon) and `icons/source-dark.png`, the runtime `icons/app-{light,dark}.png` and the bundle icons made from `source.png` |
 | `src/lib/bindings.ts` | Generated TypeScript bindings of the Tauri commands; never edited by hand |
 | `pnpm-workspace.yaml` | pnpm settings: `allowBuilds: esbuild: false` (esbuild's postinstall is not needed, the platform binary comes as an optional dependency) |
 | `package.json`, `pnpm-lock.yaml`, `.nvmrc` | Node and pnpm pins, the exact-pinned npm dependencies and the scripts `dev`, `build`, `check`, `test`, `tauri`; the lockfile is committed |
@@ -54,6 +54,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `scripts/build-windows.sh`, `scripts/package-windows.sh` | Production x64 MSVC app/sidecar build, deterministic unsigned ZIP and sibling checksum |
 | `scripts/test-extension.sh` | Runs every `extension/tests/*.test.js` suite in its own node process (`--list` prints them); part of the `js` part |
 | `scripts/make-locked-icons.mjs` | Generates the four locked toolbar PNGs from the shipped key icons. A Node test compares the committed pixels with the generator |
+| `scripts/make-app-icons.mjs` | Draws the light and dark app icon (the key only) into `src-tauri/icons/`; `pnpm tauri icon src-tauri/icons/source.png` then makes the bundle icons. A Node test compares the committed pixels with the generator |
 | `scripts/convert-xcstrings.mjs` | One-time converter of the old app's String Catalogs; its output (`src/lib/i18n/locales/{en,uk,ru}.json`, `src-tauri/resources/macos/{en,uk,ru}.lproj/InfoPlist.strings`) is then the hand-edited source of truth; `de.json` and `de.lproj` were written by hand and never went through it |
 | `.github/` | Workflows (`ci.yml`, `codeql.yml`), Dependabot config, issue forms, pull request template |
 | `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts), the Stage 2b UI walk-through and the Stage 3 browser bridge checklist (M1 to M14) and the Stage 4 passkey checklist (P1 to P13), Stage 5 checks (S1 to S21), cutover (C1 to C10) Stage 6 Windows checks (W1 to W17) and the extension popup checks (E1 to E10) |
@@ -319,7 +320,7 @@ change is done.
   and quit rules, login-item reconcile, `WindowOps`), `tray.rs` (menu model and ids), `hotkeys.rs`
   (plan, `HotkeyRegistry` seam), `lifecycle.rs` (platform events into auto-lock, the quit flow,
   the external-change watcher, `ShellEffects`, tray refresh) and `bridge.rs` (the browser bridge: pairing window and unlock-focus rules, start and quit, over the `BridgeEvents` seam; `commands/browser.rs` holds the `browser_*` commands) and `i18n.rs` (the shared catalogs, `{0}`
-  substitution, English fallback) and `navigation.rs` (a webview may navigate only to the app's own origin); only `shell_runtime.rs` touches the runtime. Webviews hold
+  substitution, English fallback) and `navigation.rs` (a webview may navigate only to the app's own origin) and `app_icon.rs` (the light or dark app icon for the theme setting and the OS appearance: the Dock tile through `Platform::app_icon` on macOS, the window icons on Windows; Finder, Explorer and pinned shortcuts keep the light bundle icon); only `shell_runtime.rs` touches the runtime. Webviews hold
   `core:event:default`, so no Rust listener acts on a webview-emittable event: every trigger is
   a Rust call (session observer, platform sink, menu, tray, window or run-event callback). Tray
   icon and menus are built in Rust only (no `core:tray`/`core:menu` permission). Work for the main
