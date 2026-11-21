@@ -191,14 +191,14 @@ pub fn launch_hidden(target: &AppTarget) -> PlatformResult<()> {
         const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
         let detached = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
         command.creation_flags(detached | CREATE_BREAKAWAY_FROM_JOB);
-        return match command.spawn() {
+        match command.spawn() {
             Err(error) if error.kind() == ErrorKind::PermissionDenied => command
                 .creation_flags(detached)
                 .spawn()
                 .map(drop)
                 .map_err(failed),
             result => result.map(drop).map_err(failed),
-        };
+        }
     }
     #[cfg(not(windows))]
     {
