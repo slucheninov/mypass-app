@@ -483,6 +483,9 @@
   "addItem": {
     "message": "Add item"
   },
+  "moreActions": {
+    "message": "More"
+  },
   "sendCode": {
     "message": "Send"
   },

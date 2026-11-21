@@ -479,6 +479,9 @@
   "addItem": {
     "message": "Додати запис"
   },
+  "moreActions": {
+    "message": "Більше"
+  },
   "sendCode": {
     "message": "Надіслати"
   },

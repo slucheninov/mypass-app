@@ -479,6 +479,9 @@
   "addItem": {
     "message": "Eintrag hinzufügen"
   },
+  "moreActions": {
+    "message": "Mehr"
+  },
   "sendCode": {
     "message": "Senden"
   },
