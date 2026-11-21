@@ -2,14 +2,15 @@
 
 use std::borrow::Cow;
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 
 use serde::Deserialize;
 use zeroize::Zeroizing;
 
 use crate::codec::read_frame;
 use crate::endpoint::Endpoint;
-use crate::relay::{error_frame, run_relay_with_first_frame, RelayOptions, RelayOutcome};
+use crate::relay::{
+    connect_verified, error_frame, run_relay_with_first_frame, RelayOptions, RelayOutcome,
+};
 
 pub const LAUNCH_APP: &str = "launchApp";
 pub const LAUNCH_UNAVAILABLE: &str = "launch_unavailable";
@@ -51,8 +52,7 @@ pub fn run_host<R: Read, W: Write + Send + 'static>(
     }
 
     let running = endpoint.is_some_and(|record| {
-        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, record.port));
-        TcpStream::connect_timeout(&addr, opts.connect_timeout).is_ok() && verify_peer(record.port)
+        connect_verified(record.port, opts.connect_timeout, verify_peer).is_some()
     });
     let response = if running {
         launch_reply(br#"{"type":"launchNotNeeded"}"#)
@@ -79,7 +79,7 @@ mod tests {
     use crate::endpoint::{generate_token, hello_proof, Handshake};
     use crate::relay::{inject_token, run_relay};
     use serde_json::{json, Value};
-    use std::net::TcpListener;
+    use std::net::{Ipv4Addr, TcpListener};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 

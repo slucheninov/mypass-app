@@ -312,6 +312,17 @@ pub fn run_relay_verified<R: Read, W: Write + Send + 'static>(
     run_relay_with_first_frame(stdin, stdout, endpoint, opts, verify_peer, None)
 }
 
+/// Open the endpoint socket and apply the host's listener identity policy.
+pub(crate) fn connect_verified(
+    port: u16,
+    timeout: Duration,
+    verify_peer: &dyn Fn(u16) -> bool,
+) -> Option<TcpStream> {
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let stream = TcpStream::connect_timeout(&addr, timeout).ok()?;
+    verify_peer(port).then_some(stream)
+}
+
 type InputFrame = io::Result<Option<Zeroizing<Vec<u8>>>>;
 
 /// Continue a normal relay after host-local dispatch has inspected the first frame.
@@ -331,13 +342,10 @@ pub(crate) fn run_relay_with_first_frame<R: Read, W: Write + Send + 'static>(
     let Some(endpoint) = endpoint else {
         return not_running(&out);
     };
-    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, endpoint.port));
-    let Ok(mut stream) = TcpStream::connect_timeout(&addr, opts.connect_timeout) else {
+    let Some(mut stream) = connect_verified(endpoint.port, opts.connect_timeout, verify_peer)
+    else {
         return not_running(&out);
     };
-    if !verify_peer(endpoint.port) {
-        return not_running(&out);
-    }
     let _ = stream.set_nodelay(true);
     if !handshake(&mut stream, &endpoint.token, opts.connect_timeout) {
         let _ = stream.shutdown(Shutdown::Both);
