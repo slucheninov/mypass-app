@@ -46,6 +46,7 @@ idna = "1.1.0"
 url = "2.5.8"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+plist = "1.10.3"
 # Password shuffling relies on unbiased range sampling in rand's SliceRandom.
 rand = { version = "=0.10.3", default-features = false, features = ["std", "std_rng", "sys_rng", "unbiased"] }
 getrandom = "0.4.3"

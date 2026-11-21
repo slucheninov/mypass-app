@@ -14,6 +14,10 @@ pub const APP_LOCATION_MAX_BYTES: u64 = 4096;
 #[cfg(windows)]
 use crate::paths::APP_LOCATION_FILE;
 const AUTOSTARTED: &str = "--autostarted";
+#[cfg(target_os = "macos")]
+const MAC_BUNDLE_IDENTIFIER: &str = "com.mypass.app";
+#[cfg(target_os = "macos")]
+const INFO_PLIST_MAX_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppTarget {
@@ -69,6 +73,33 @@ fn plain_metadata(path: &Path) -> Option<Metadata> {
     Some(metadata)
 }
 
+#[cfg(target_os = "macos")]
+fn mac_bundle_identifier(bundle: &Path) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Info {
+        #[serde(rename = "CFBundleIdentifier")]
+        identifier: String,
+    }
+
+    let path = bundle.join("Contents/Info.plist");
+    let metadata = plain_metadata(&path)?;
+    if !metadata.is_file() || metadata.len() > INFO_PLIST_MAX_BYTES {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    File::open(path)
+        .ok()?
+        .take(INFO_PLIST_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > INFO_PLIST_MAX_BYTES {
+        return None;
+    }
+    plist::from_bytes::<Info>(&bytes)
+        .ok()
+        .map(|info| info.identifier)
+}
+
 fn validate_target(path: PathBuf) -> Option<AppTarget> {
     if !path.is_absolute() {
         return None;
@@ -77,7 +108,7 @@ fn validate_target(path: PathBuf) -> Option<AppTarget> {
     #[cfg(target_os = "macos")]
     if path.extension().is_some_and(|ext| ext == "app")
         && metadata.is_dir()
-        && path.join("Contents/Info.plist").is_file()
+        && mac_bundle_identifier(&path).as_deref() == Some(MAC_BUNDLE_IDENTIFIER)
     {
         return Some(AppTarget::MacBundle(path));
     }
@@ -357,8 +388,23 @@ mod tests {
     }
 
     #[cfg(target_os = "macos")]
+    fn bundle_plist(identifier: &str) -> String {
+        format!(
+            "<plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>{identifier}</string></dict></plist>"
+        )
+    }
+
+    #[cfg(target_os = "macos")]
+    fn app_identifier() -> &'static str {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../../../src-tauri/tauri.conf.json")).unwrap();
+        assert_eq!(config["identifier"].as_str(), Some(MAC_BUNDLE_IDENTIFIER));
+        MAC_BUNDLE_IDENTIFIER
+    }
+
+    #[cfg(target_os = "macos")]
     #[test]
-    fn read_app_location_accepts_a_bundle_with_info_plist_only() {
+    fn read_app_location_requires_the_mypass_bundle_identifier() {
         let dir = tempfile::tempdir().unwrap();
         let paths = paths(&dir);
         let bundle = dir.path().join("MyPass.app");
@@ -368,11 +414,21 @@ mod tests {
             &serde_json::to_vec(&serde_json::json!({"version": 1, "path": &bundle})).unwrap(),
         );
         assert_eq!(read_app_location(&paths), None);
-        std::fs::write(bundle.join("Contents/Info.plist"), []).unwrap();
-        assert_eq!(
-            read_app_location(&paths),
-            Some(AppTarget::MacBundle(bundle))
-        );
+        let info = bundle.join("Contents/Info.plist");
+        std::fs::write(&info, []).unwrap();
+        assert_eq!(read_app_location(&paths), None);
+        std::fs::write(&info, bundle_plist("com.example.other")).unwrap();
+        assert_eq!(read_app_location(&paths), None);
+        std::fs::write(&info, bundle_plist(app_identifier())).unwrap();
+        let expected = Some(AppTarget::MacBundle(bundle));
+        assert_eq!(read_app_location(&paths), expected);
+
+        let metadata = plist::Dictionary::from_iter([(
+            "CFBundleIdentifier".to_owned(),
+            plist::Value::String(app_identifier().to_owned()),
+        )]);
+        plist::to_file_binary(&info, &metadata).unwrap();
+        assert_eq!(read_app_location(&paths), expected);
     }
 
     #[cfg(windows)]
@@ -398,7 +454,11 @@ mod tests {
         let bundle = dir.path().join("MyPass.app");
         let host = bundle.join("Contents/MacOS/mypass-native-host");
         std::fs::create_dir_all(host.parent().unwrap()).unwrap();
-        std::fs::write(bundle.join("Contents/Info.plist"), []).unwrap();
+        std::fs::write(
+            bundle.join("Contents/Info.plist"),
+            bundle_plist(app_identifier()),
+        )
+        .unwrap();
         assert_eq!(
             resolve_app(&host, &paths),
             Some(AppTarget::MacBundle(bundle))

@@ -377,8 +377,9 @@ change is done.
   Rust holds the master password in zeroizing storage, and neither logs nor reply details carry it.
   The host handles `launchApp` locally, before the relay handshake. On macOS it prefers the bundle containing
   the registered host. For an installed host copy, the app writes `app-location.json` in `AppPaths::host_dir`.
-  A same-user process can replace that record with a path to another executable named MyPass or another app
-  bundle, which the host could then launch.
+  On macOS, the host checks the bundle's Info.plist for the MyPass bundle identifier. A same-user process can
+  replace the record with a path to another executable with an accepted MyPass name or a bundle claiming
+  that identifier, which the host could then launch.
 - **Passkeys.** `mypass_core::passkey` holds the pure parts: request parsing and origin validation (`https` only,
   the rpId must be a registrable suffix of the origin host through the Public Suffix List, no IP literals, no
   localhost exception, so passkeys never work on `localhost`), the ES256 ceremonies (`perform_create`,
