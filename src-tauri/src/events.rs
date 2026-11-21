@@ -91,15 +91,13 @@ pub struct ProposalEvent {
     pub entry_id: Option<String>,
 }
 
-/// The main window should start a new entry of `entry_type`: a login from the tray panel's "+", or
-/// a kind the bridge cannot create itself (an address or a files item) from the browser extension.
-/// The main window runs its own "+" menu action, right away when unlocked, otherwise after the next
-/// unlock (if that comes soon). Sent to the main window only; it carries no secret.
+/// A new-entry request is waiting (`AppCore::new_entry_requests`): a login from the tray panel's
+/// "+", or a kind the bridge cannot create itself (an address or a files item) from the browser
+/// extension. Payload-free, only a nudge: the main window takes the request with
+/// `app_take_new_entry` (main window only) and runs its own "+" menu action. Any webview may emit
+/// this event, so it must never carry the request itself; a forged one finds nothing to take.
 #[derive(Serialize, Deserialize, specta::Type, tauri_specta::Event, Clone, PartialEq, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct NewEntryEvent {
-    pub entry_type: mypass_session::EntryTypeDto,
-}
+pub struct NewEntryEvent;
 
 /// A browser asked for an unlock. Payload-free; the unlock screen (stage 5) listens to it.
 #[derive(Serialize, Deserialize, specta::Type, tauri_specta::Event, Clone, Debug)]

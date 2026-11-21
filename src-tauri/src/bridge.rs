@@ -82,8 +82,9 @@ pub trait BridgeEvents: Send + Sync {
     fn proposal(&self, event: ProposalEvent);
     /// A browser asked for an unlock.
     fn unlock_requested(&self);
-    /// A browser asked the main window to start a new entry of `entry_type`. Main window only.
-    fn new_entry(&self, entry_type: EntryTypeDto);
+    /// A new-entry request is waiting in `AppCore::new_entry_requests`: the payload-free nudge
+    /// for the main window, which takes the request itself. Main window only.
+    fn new_entry(&self);
     /// Opens the settings window, at `pane` when given.
     fn open_settings(&self, pane: Option<&str>);
     /// The settings changed outside the settings commands (the extension's passkey toggle).
@@ -108,8 +109,8 @@ impl BridgeEvents for TauriBridgeEvents {
     fn unlock_requested(&self) {
         let _ = UnlockRequestedEvent.emit(&self.0);
     }
-    fn new_entry(&self, entry_type: EntryTypeDto) {
-        let _ = NewEntryEvent { entry_type }.emit_to(&self.0, MAIN);
+    fn new_entry(&self) {
+        let _ = NewEntryEvent.emit_to(&self.0, MAIN);
     }
     fn open_settings(&self, pane: Option<&str>) {
         let _ = crate::commands::app::open_settings(&self.0, pane);
@@ -250,11 +251,13 @@ impl BridgeUi for TauriBridgeUi {
     }
 
     fn new_entry_requested(&self, kind: NewEntryKind) {
-        // The main window stays alive while hidden (closing it only hides it), so its listener
-        // hears the event whether or not the window was visible. Locked, it keeps the request
-        // until the next unlock; the window itself decides, the backend keeps no pending state.
+        // The request waits in the backend (newest wins, `NewEntryRequestState::TTL`) and the
+        // main window takes it with `app_take_new_entry`: right away on the nudge when unlocked,
+        // after the unlock when locked, or once its listener is registered when the webview was
+        // not listening yet (startup, reload). The nudge carries nothing a forger could use.
+        self.core.new_entry_requests.request(new_entry_type(kind));
         self.show_main();
-        self.events.new_entry(new_entry_type(kind));
+        self.events.new_entry();
     }
 
     fn open_browser_settings_requested(&self) {
@@ -792,7 +795,8 @@ pub(crate) mod test_support {
         pub proposals: Mutex<Vec<ProposalEvent>>,
         pub panes: Mutex<Vec<Option<String>>>,
         pub settings: Mutex<Vec<Settings>>,
-        pub new_entries: Mutex<Vec<EntryTypeDto>>,
+        /// How many new-entry nudges were sent.
+        pub new_entries: Mutex<usize>,
     }
 
     impl RecordingEvents {
@@ -816,9 +820,9 @@ pub(crate) mod test_support {
         fn unlock_requested(&self) {
             lock(&self.log).push("unlock_requested".into());
         }
-        fn new_entry(&self, entry_type: EntryTypeDto) {
+        fn new_entry(&self) {
             lock(&self.log).push("new_entry".into());
-            lock(&self.new_entries).push(entry_type);
+            *lock(&self.new_entries) += 1;
         }
         fn open_settings(&self, pane: Option<&str>) {
             lock(&self.log).push("open_settings".into());
@@ -1302,7 +1306,7 @@ mod tests {
     }
 
     #[test]
-    fn open_app_with_new_entry_shows_main_window_and_emits_the_entry_type() {
+    fn open_app_with_new_entry_records_the_request_shows_main_window_and_nudges() {
         for locked in [false, true] {
             let f = fixture(true);
             let secret = pair(&f);
@@ -1321,11 +1325,14 @@ mod tests {
             let calls: Vec<_> = f.windows.calls().into_iter().skip(before).collect();
             let ops: Vec<_> = calls.iter().map(|(op, _, _)| op.as_str()).collect();
             assert_eq!(ops, ["show", "focus", "show", "focus"], "locked: {locked}");
+            assert_eq!(*lock(&f.events.new_entries), 2, "locked: {locked}");
+            // The newest request waits in the backend, taken once.
             assert_eq!(
-                *lock(&f.events.new_entries),
-                [EntryTypeDto::Address, EntryTypeDto::Files],
+                f.w.core.new_entry_requests.take(),
+                Some(EntryTypeDto::Files),
                 "locked: {locked}"
             );
+            assert_eq!(f.w.core.new_entry_requests.take(), None);
         }
         // A plain open shows the window and starts nothing.
         let f = fixture(true);
@@ -1335,7 +1342,8 @@ mod tests {
             new_entry: None,
             pairing: Some(secret),
         });
-        assert!(lock(&f.events.new_entries).is_empty());
+        assert_eq!(*lock(&f.events.new_entries), 0);
+        assert!(!f.w.core.new_entry_requests.is_pending());
     }
 
     #[test]

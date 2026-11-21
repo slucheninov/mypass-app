@@ -9,6 +9,7 @@ const MAIN: &[&str] = &[
     "app_open_settings",
     "app_record_activity",
     "app_set_editor_dirty",
+    "app_take_new_entry",
     "attachment_export",
     "attachment_pick",
     "browser_pairing_cancel",

@@ -16,6 +16,7 @@ pub mod editing;
 pub mod fields;
 pub mod generator_service;
 pub mod migration;
+pub mod new_entry_request;
 pub mod queries;
 pub mod saving;
 pub mod scheduler;

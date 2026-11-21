@@ -25,6 +25,11 @@ export const commands = {
 	 */
 	appSetEditorDirty: (dirty: boolean) => typedError<null, ApiError>(__TAURI_INVOKE("app_set_editor_dirty", { dirty })),
 	appShowMain: () => typedError<null, ApiError>(__TAURI_INVOKE("app_show_main")),
+	/**
+	 *  The main window takes the pending new-entry request: after its listener is registered, on
+	 *  each `NewEntryEvent` and after an unlock. Main window only (capability and label).
+	 */
+	appTakeNewEntry: () => typedError<EntryTypeDto | null, ApiError>(__TAURI_INVOKE("app_take_new_entry")),
 	attachmentExport: (entryId: string, name: string) => typedError<boolean, ApiError>(__TAURI_INVOKE("attachment_export", { entryId, name })),
 	attachmentPick: () => typedError<PickedFile[], ApiError>(__TAURI_INVOKE("attachment_pick")),
 	backupList: () => typedError<BackupStatus_Serialize, ApiError>(__TAURI_INVOKE("backup_list")),
@@ -927,14 +932,13 @@ export type LoginItemStatus = "enabled" | "disabled" | "requiresApproval" | "not
 export type MigrationStrategy = "seedRemote" | "merge" | "adoptRemote" | "overwriteRemote";
 
 /**
- *  The main window should start a new entry of `entry_type`: a login from the tray panel's "+", or
- *  a kind the bridge cannot create itself (an address or a files item) from the browser extension.
- *  The main window runs its own "+" menu action, right away when unlocked, otherwise after the next
- *  unlock (if that comes soon). Sent to the main window only; it carries no secret.
+ *  A new-entry request is waiting (`AppCore::new_entry_requests`): a login from the tray panel's
+ *  "+", or a kind the bridge cannot create itself (an address or a files item) from the browser
+ *  extension. Payload-free, only a nudge: the main window takes the request with
+ *  `app_take_new_entry` (main window only) and runs its own "+" menu action. Any webview may emit
+ *  this event, so it must never carry the request itself; a forged one finds nothing to take.
  */
-export type NewEntryEvent = {
-	entryType: EntryTypeDto,
-};
+export type NewEntryEvent = null;
 
 /**  Why device unlock cannot be offered right now. */
 export type OfferBlock = 

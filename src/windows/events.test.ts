@@ -1,10 +1,10 @@
 import { screen, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PENDING_NEW_ENTRY_MS } from "../lib/stores/events";
 import { navigation } from "../lib/stores/navigation.svelte";
 import { toasts } from "../lib/stores/toasts.svelte";
-import { createFakeBackend, apiError } from "../test/fakeBackend";
+import type { EntryTypeDto } from "../lib/bindings";
+import { createFakeBackend, apiError, type FakeBackend } from "../test/fakeBackend";
 import { FIXTURE_MASTER_PASSWORD } from "../test/fixtures";
 import { calls, renderMainApp } from "../test/mainApp";
 
@@ -19,8 +19,15 @@ async function unlock(user: ReturnType<typeof userEvent.setup>) {
   await screen.findByRole("listbox");
 }
 
-async function mainApp(session: "unlocked" | "locked" = "unlocked") {
+/** What Rust does for the tray's "+" or the extension's request: records it, then nudges. */
+async function requestNewEntry(fake: FakeBackend, entryType: EntryTypeDto): Promise<void> {
+  fake.state.newEntryRequest = entryType;
+  await fake.emit("newEntryEvent", null);
+}
+
+async function mainApp(session: "unlocked" | "locked" = "unlocked", prepare?: (fake: FakeBackend) => void) {
   const fake = createFakeBackend({ session });
+  prepare?.(fake);
   const app = await renderMainApp(fake);
   if (session === "unlocked") await screen.findByRole("listbox");
   return { ...app, fake };
@@ -77,7 +84,7 @@ describe("main window event bridge", () => {
 
   it("new_entry_event_opens_the_editor_for_a_new_login", async () => {
     const { fake } = await mainApp();
-    await fake.emit("newEntryEvent", { entryType: "login" });
+    await requestNewEntry(fake, "login");
     await waitFor(() => expect(navigation.presentation).toBe("create"));
     expect(navigation.editModel?.id ?? null).toBeNull();
     expect(navigation.editModel?.entryType).toBe("login");
@@ -86,7 +93,7 @@ describe("main window event bridge", () => {
 
   it("new_entry_event_while_locked_opens_nothing", async () => {
     const { fake } = await mainApp("locked");
-    await fake.emit("newEntryEvent", { entryType: "login" });
+    await requestNewEntry(fake, "login");
     await new Promise((r) => setTimeout(r, 50));
     expect(navigation.presentation).toBe("browse");
     expect(calls(fake, "entryNewModel")).toHaveLength(0);
@@ -132,7 +139,7 @@ describe("main window event bridge", () => {
 
   it.each(["address", "files"] as const)("new_entry_event_opens_a_new_%s_editor_like_the_toolbar", async (entryType) => {
     const { fake } = await mainApp();
-    await fake.emit("newEntryEvent", { entryType });
+    await requestNewEntry(fake, entryType);
     await waitFor(() => expect(navigation.presentation).not.toBe("browse"));
     expect(navigation.editModel?.entryType).toBe(entryType);
     expect(navigation.editModel?.id).toBeNull();
@@ -142,7 +149,7 @@ describe("main window event bridge", () => {
   it("new_entry_event_lands_in_the_selected_group_like_the_toolbar", async () => {
     const { fake } = await mainApp();
     navigation.setScope({ kind: "group", groupId: "group-work" });
-    await fake.emit("newEntryEvent", { entryType: "files" });
+    await requestNewEntry(fake, "files");
     await waitFor(() => expect(navigation.editModel?.entryType).toBe("files"));
     expect(calls(fake, "entryNewModel")[0]?.args).toEqual({ entryType: "files", groupId: "group-work" });
   });
@@ -153,14 +160,14 @@ describe("main window event bridge", () => {
     await fake.emit("openEntryEvent", { id: "e-github", edit: true });
     await waitFor(() => expect(navigation.editModel?.id).toBe("e-github"));
     await user.type(await screen.findByRole("textbox", { name: "Title" }), " changed");
-    await fake.emit("newEntryEvent", { entryType: "address" });
+    await requestNewEntry(fake, "address");
     const dialog = await screen.findByRole("dialog", { name: "Discard changes?" });
     expect(navigation.editModel?.id).toBe("e-github");
     await user.click(within(dialog).getByRole("button", { name: "Keep editing" }));
     expect(navigation.editModel?.id).toBe("e-github");
     expect((screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toContain("changed");
     // Asked again, Discard opens the new address.
-    await fake.emit("newEntryEvent", { entryType: "address" });
+    await requestNewEntry(fake, "address");
     await user.click(within(await screen.findByRole("dialog", { name: "Discard changes?" })).getByRole("button", { name: "Discard" }));
     await waitFor(() => expect(navigation.editModel?.entryType).toBe("address"));
     expect(navigation.editModel?.id).toBeNull();
@@ -169,9 +176,9 @@ describe("main window event bridge", () => {
   it("new_entry_event_while_locked_opens_the_editor_after_the_unlock", async () => {
     const user = userEvent.setup();
     const { fake } = await mainApp("locked");
-    await fake.emit("newEntryEvent", { entryType: "address" });
+    await requestNewEntry(fake, "address");
     // The newest request wins.
-    await fake.emit("newEntryEvent", { entryType: "files" });
+    await requestNewEntry(fake, "files");
     await new Promise((r) => setTimeout(r, 50));
     expect(calls(fake, "entryNewModel")).toHaveLength(0);
     expect(screen.getByTestId("unlock-screen")).toBeTruthy();
@@ -180,23 +187,50 @@ describe("main window event bridge", () => {
     expect(calls(fake, "entryNewModel")).toHaveLength(1);
   });
 
-  it("new_entry_event_while_locked_is_dropped_after_its_wait_runs_out", async () => {
+  it("a_request_made_before_the_window_listened_is_taken_at_startup", async () => {
+    const { fake } = await mainApp("unlocked", (f) => {
+      f.state.newEntryRequest = "files";
+    });
+    await waitFor(() => expect(navigation.editModel?.entryType).toBe("files"));
+    expect(calls(fake, "appTakeNewEntry").length).toBeGreaterThanOrEqual(1);
+    expect(calls(fake, "entryNewModel")).toHaveLength(1);
+    expect(fake.state.newEntryRequest).toBeNull();
+  });
+
+  it("a_request_made_before_a_locked_window_listened_waits_for_the_unlock", async () => {
     const user = userEvent.setup();
-    const { fake } = await mainApp("locked");
-    const start = Date.now();
-    const now = vi.spyOn(Date, "now").mockReturnValue(start);
-    await fake.emit("newEntryEvent", { entryType: "files" });
-    now.mockReturnValue(start + PENDING_NEW_ENTRY_MS + 1);
+    const { fake } = await mainApp("locked", (f) => {
+      f.state.newEntryRequest = "address";
+    });
+    await waitFor(() => expect(calls(fake, "appTakeNewEntry").length).toBeGreaterThanOrEqual(1));
+    expect(calls(fake, "entryNewModel")).toHaveLength(0);
+    expect(fake.state.newEntryRequest).toBe("address");
     await unlock(user);
+    await waitFor(() => expect(navigation.editModel?.entryType).toBe("address"));
+  });
+
+  it("a_new_entry_event_without_a_pending_request_does_nothing", async () => {
+    const { fake } = await mainApp();
+    // Forged by another webview: a bare nudge, or one carrying a payload the window never reads.
+    await fake.emit("newEntryEvent", null);
+    await fake.emit("newEntryEvent", { entryType: "login" });
     await new Promise((r) => setTimeout(r, 50));
+    expect(calls(fake, "appTakeNewEntry").length).toBeGreaterThanOrEqual(2);
     expect(calls(fake, "entryNewModel")).toHaveLength(0);
     expect(navigation.presentation).toBe("browse");
+  });
+
+  it("the_tray_plus_records_a_login_request_that_the_main_window_takes", async () => {
+    const { fake } = await mainApp();
+    await fake.handlers.appNewEntry({});
+    await waitFor(() => expect(navigation.editModel?.entryType).toBe("login"));
+    expect(fake.state.newEntryRequest).toBeNull();
   });
 
   it("a_pending_new_entry_runs_once_and_not_again_on_a_later_unlock", async () => {
     const user = userEvent.setup();
     const { fake } = await mainApp("locked");
-    await fake.emit("newEntryEvent", { entryType: "address" });
+    await requestNewEntry(fake, "address");
     await unlock(user);
     await waitFor(() => expect(navigation.editModel?.entryType).toBe("address"));
     await fake.handlers.vaultLock({});

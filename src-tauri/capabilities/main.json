@@ -23,6 +23,7 @@
     "allow-app-open-settings",
     "allow-app-record-activity",
     "allow-app-set-editor-dirty",
+    "allow-app-take-new-entry",
     "allow-attachment-export",
     "allow-attachment-pick",
     "allow-browser-pairing-cancel",

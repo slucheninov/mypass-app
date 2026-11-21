@@ -49,6 +49,7 @@ pub fn commands() -> Commands<tauri::Wry> {
         app::app_reveal_backups,
         app::app_set_editor_dirty,
         app::app_show_main,
+        app::app_take_new_entry,
         attachment::attachment_export,
         attachment::attachment_pick,
         backup::backup_list,

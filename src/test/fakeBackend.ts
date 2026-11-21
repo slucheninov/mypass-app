@@ -9,6 +9,7 @@ import { emit } from "@tauri-apps/api/event";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type {
   AddressDto,
+  EntryTypeDto,
   ApiError,
   HistoryReveal,
   DeviceUnlockStatus_Serialize,
@@ -182,6 +183,9 @@ export interface FakeState {
   csvFailure: ApiError | null;
   /** What the next `shortcut_conflicts_take` returns (and empties). */
   shortcutConflicts: ShortcutConflictEvent[];
+  /** Like `AppCore::new_entry_requests` (without its TTL, which Rust tests pin): the one pending
+   *  new-entry request, taken by `appTakeNewEntry`. */
+  newEntryRequest: EntryTypeDto | null;
   /** Ids `entry_touch` was called with, in order. */
   touched: string[];
   /** What `sync_status` answers; `sync_now` and `sync_disconnect_secondary` edit it. */
@@ -254,6 +258,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     csvFailure: null,
     touched: [],
     shortcutConflicts: [],
+    newEntryRequest: null,
     sync: { state: "off" },
     displaced: { count: 0, copies: [], unavailable: [] },
   };
@@ -438,10 +443,21 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       publish("openEntryEvent", { id, edit });
       return null;
     },
-    // Like Rust: only an unlocked session asks the main window for a new login.
+    // Like Rust: only an unlocked session records a request for a new login, then nudges the main
+    // window (a payload-free event) to take it.
     appNewEntry: () => {
-      if (state.session.state === "unlocked") publish("newEntryEvent", { entryType: "login" });
+      if (state.session.state === "unlocked") {
+        state.newEntryRequest = "login";
+        publish("newEntryEvent", null);
+      }
       return null;
+    },
+    // Like Rust: taken at most once, and only while unlocked (locked, the request keeps waiting).
+    appTakeNewEntry: () => {
+      if (state.session.state !== "unlocked") return null;
+      const taken = state.newEntryRequest;
+      state.newEntryRequest = null;
+      return taken;
     },
     appOpenSettings: () => null,
     // Only the call log matters: the window and the quit flow live in Rust.

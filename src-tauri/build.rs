@@ -49,6 +49,7 @@ fn main() {
         "app_reveal_backups",
         "app_set_editor_dirty",
         "app_show_main",
+        "app_take_new_entry",
         "attachment_export",
         "attachment_pick",
         "backup_list",
