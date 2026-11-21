@@ -13,6 +13,7 @@
     tooltip,
     disabled = false,
     tone = "accent",
+    iconSize = 16,
   }: {
     icon: IconName;
     /** Accessible name and tooltip, already translated. */
@@ -29,6 +30,8 @@
     disabled?: boolean;
     /** How a pressed button shows: `accent` tints it, `favorite` draws a filled amber icon. */
     tone?: "accent" | "favorite";
+    /** Glyph size; a light glyph (the sidebar outline) takes a larger one to match its neighbours. */
+    iconSize?: number;
   } = $props();
 </script>
 
@@ -45,7 +48,7 @@
   {disabled}
   {onclick}
 >
-  <Icon name={icon} filled={tone === "favorite" && pressed === true} />
+  <Icon name={icon} size={iconSize} filled={tone === "favorite" && pressed === true} />
 </button>
 
 <style>

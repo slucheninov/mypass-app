@@ -1,9 +1,10 @@
 import { screen, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { setLanguage } from "../lib/i18n/index.svelte";
 import { navigation } from "../lib/stores/navigation.svelte";
 import { expectNoAxeViolations } from "../test/axe";
-import { PERSONAL_GROUP_ID, WORK_GROUP_ID, fixtureSidebar } from "../test/fixtures";
+import { PERSONAL_GROUP_ID, WORK_GROUP_ID, fixtureSidebar, sessionStatus } from "../test/fixtures";
 import { renderMainApp } from "../test/mainApp";
 
 async function openVault() {
@@ -17,6 +18,8 @@ const pane = () => screen.getByTestId("detail-empty");
 const part = (name: string) => pane().querySelector(`[data-part="${name}"]`)?.textContent?.trim() ?? null;
 const countOf = (sidebar: ReturnType<typeof fixtureSidebar>, category: string) =>
   sidebar.categories.find((c) => c.category === category)?.count ?? null;
+
+afterEach(() => setLanguage("en"));
 
 describe("empty detail pane", () => {
   it("detail_empty_shows_the_vault_and_its_item_count_for_all", async () => {
@@ -32,6 +35,44 @@ describe("empty detail pane", () => {
     expect(art?.querySelector("svg")).not.toBeNull();
   });
 
+  it("detail_empty_shows_the_vault_file_size_next_to_the_count", async () => {
+    const { sidebar } = await openVault();
+    // The fixture vault file is 4096 bytes on disk.
+    expect(part("size")).toBe("4 KB");
+    const all = countOf(sidebar, "all") ?? 0;
+    const line = pane().querySelector(".count");
+    expect(line?.textContent?.replace(/\s+/g, " ").trim()).toBe(`${all} items · 4 KB`);
+    // The dot is decoration only.
+    expect(line?.querySelector(".sep")?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("detail_empty_formats_the_size_in_the_ui_language", async () => {
+    const { fake } = await openVault();
+    await setLanguage("de");
+    await fake.emit("sessionChanged", {
+      ...sessionStatus("unlocked"),
+      fileStatus: { kind: "connected", size: 35_942, modified: 1_700_000_000_000 },
+    });
+    await waitFor(() => expect(part("size")).toBe("35,1 KB"));
+  });
+
+  it("detail_empty_has_no_size_without_a_connected_file", async () => {
+    const { fake } = await openVault();
+    await fake.emit("sessionChanged", { ...sessionStatus("unlocked"), fileStatus: { kind: "missing" } });
+    await waitFor(() => expect(part("size")).toBeNull());
+    expect(part("count")).not.toBeNull();
+    expect(pane().querySelector(".sep")).toBeNull();
+  });
+
+  it("detail_empty_draws_the_app_key_as_an_outline", async () => {
+    await openVault();
+    const key = pane().querySelector(".art svg.key");
+    expect(key?.getAttribute("fill")).toBe("none");
+    // Bow, shaft, teeth and tip in one path, and the eye.
+    expect(key?.querySelectorAll("path")).toHaveLength(1);
+    expect(key?.querySelector("circle")).not.toBeNull();
+  });
+
   it("detail_empty_shows_the_category_icon_label_and_count", async () => {
     const user = userEvent.setup();
     const { sidebar } = await openVault();
@@ -40,6 +81,8 @@ describe("empty detail pane", () => {
     expect(part("title")).toBe("Cards");
     const cards = countOf(sidebar, "cards") ?? 0;
     expect(part("count")).toBe(`${cards} ${cards === 1 ? "item" : "items"}`);
+    // The file size belongs to the whole vault only.
+    expect(part("size")).toBeNull();
   });
 
   it("detail_empty_security_has_no_count", async () => {
