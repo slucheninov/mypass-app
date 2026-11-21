@@ -5,9 +5,10 @@ const addressForm = require('../shared/address-form.js');
 function fixture() {
   const doc = { activeElement: null, nodes: [], defaultView: { getComputedStyle: () => ({ visibility: 'visible', display: 'block', opacity: '1' }) },
     querySelectorAll() { return this.nodes; } };
+  const container = { tagName: 'DIV' };
   function field(autocomplete, options = {}) {
     const node = { autocomplete, tagName: 'INPUT', type: 'text', name: '', id: '', value: '', size: 0,
-      isConnected: true, disabled: false, readOnly: false, ownerDocument: doc, form: null,
+      isConnected: true, disabled: false, readOnly: false, ownerDocument: doc, form: null, parentElement: container,
       getAttribute(name) { return this[name] || null; }, closest() { return null; }, matches() { return false; },
       getBoundingClientRect() { return { width: 100, height: 30 }; }, ...options };
     doc.nodes.push(node);
@@ -75,6 +76,40 @@ test('fills a selected disabled placeholder with a nonempty value', () => {
   assert.equal(country.value, 'PL');
 });
 
+test('excludes a guessed newsletter email outside the address section', () => {
+  const { doc, field } = fixture();
+  const page = { tagName: 'DIV' };
+  const checkout = { tagName: 'SECTION', parentElement: page };
+  const newsletter = { tagName: 'SECTION', parentElement: page };
+  field('address-line1', { parentElement: checkout });
+  const email = field('', { name: 'email', type: 'email', parentElement: newsletter });
+  assert.equal(fill(doc, addressForm.collect(doc)).filled, 1);
+  assert.equal(email.value, '');
+});
+
+test('keeps the closest of two guessed fields with the same token', () => {
+  const { doc, field } = fixture();
+  const checkout = { tagName: 'SECTION' };
+  const contact = { tagName: 'DIV', parentElement: checkout };
+  const farther = field('', { name: 'phone', parentElement: contact });
+  field('address-line1', { parentElement: checkout });
+  const closer = field('', { name: 'phone', parentElement: checkout });
+  assert.equal(fill(doc, addressForm.collect(doc)).filled, 2);
+  assert.equal(closer.value, address.phone);
+  assert.equal(farther.value, '');
+});
+
+test('a distant guessed city cannot pull a newsletter field into the address', () => {
+  const { doc, field } = fixture();
+  const checkout = { tagName: 'SECTION' };
+  const newsletter = { tagName: 'SECTION' };
+  field('address-line1', { parentElement: checkout });
+  const city = field('', { name: 'city', parentElement: newsletter });
+  const email = field('', { name: 'email', type: 'email', parentElement: newsletter });
+  assert.equal(fill(doc, addressForm.collect(doc)).filled, 1);
+  assert.equal(city.value, '');
+  assert.equal(email.value, '');
+});
 {
   const { doc, field } = fixture();
   field('email'); field('username'); field('one-time-code');
@@ -329,10 +364,12 @@ for (const mutate of [node => { node.isConnected = false; },
 {
   const { doc, field } = fixture();
   field('', { name: 'city' });
-  field('', { type: 'email' });
+  field('', { name: 'email', type: 'email' });
   assert.equal(addressForm.collect(doc).length, 0, 'location and contact alone are insufficient');
-  field('', { name: 'address1' });
-  field('', { name: 'street' });
-  assert.equal(addressForm.collect(doc).length, 0, 'ambiguous unscoped inferred street fields fail closed');
+  const first = field('', { name: 'address1' });
+  const second = field('', { name: 'street' });
+  assert.equal(fill(doc, addressForm.collect(doc)).filled, 3);
+  assert.equal(first.value, address.addressLine1, 'equally close guessed fields keep the first in DOM order');
+  assert.equal(second.value, '');
 }
 console.log('addressForm.test.js: conservative scope, sparse values, select matching and stale forms OK');

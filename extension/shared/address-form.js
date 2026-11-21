@@ -13,6 +13,8 @@ var mypassAddressForm = (() => {
   const streetTokens = new Set(['street-address', 'address-line1', 'address-line2']);
   const placeTokens = new Set(['address-level2', 'address-level1', 'postal-code']);
   const countryTokens = new Set(['country', 'country-name']);
+  const addressBoundaries = new Set(['SECTION', 'FIELDSET', 'MAIN', 'ASIDE', 'HEADER', 'FOOTER', 'NAV']);
+  const isAnchor = ({ token }) => streetTokens.has(token) || placeTokens.has(token);
 
   function parse(autocomplete, control) {
     if (['', 'on', 'off'].includes(autocomplete)) {
@@ -59,6 +61,51 @@ var mypassAddressForm = (() => {
     return Array.from(owners).flatMap(([owner, controls]) => addressGroups(owner, controls));
   }
 
+  function ancestors(node) {
+    const path = [];
+    for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+      if (parent.tagName === 'BODY' || parent.tagName === 'HTML') break;
+      path.push(parent);
+      // Outside forms, a shared page wrapper is weak evidence. Stay within
+      // the local section, allowing up to three levels for field wrappers.
+      if (!node.form && (path.length === 3 || addressBoundaries.has(parent.tagName))) break;
+    }
+    return path;
+  }
+
+  function closestHints(controls, anchors) {
+    const anchorPaths = anchors.map((item) => ({ token: item.token, path: ancestors(item.node) }));
+    const closest = new Map();
+    for (const item of controls) {
+      if (item.explicit) continue;
+      const path = ancestors(item.node);
+      let distance = Infinity;
+      let hasOtherAnchor = false;
+      for (const anchor of anchorPaths) {
+        if (anchor.token === item.token) continue;
+        hasOtherAnchor = true;
+        const shared = path.findIndex((parent) => anchor.path.includes(parent));
+        if (shared !== -1) {
+          distance = Math.min(distance, shared + anchor.path.indexOf(path[shared]) + 2);
+        }
+      }
+      // A lone inferred anchor can still establish proximity for nearby hints.
+      if (!hasOtherAnchor && isAnchor(item)) distance = 0;
+      if (!item.node.form && distance === Infinity) continue;
+      const previous = closest.get(item.token);
+      if (!previous || distance < previous.distance) closest.set(item.token, { item, distance });
+    }
+    return controls.filter((item) => item.explicit || closest.get(item.token)?.item === item);
+  }
+
+  function nearbyHints(controls) {
+    const anchors = controls.filter(isAnchor);
+    const keptAnchors = closestHints(anchors, anchors);
+    const keptOthers = closestHints(controls.filter((item) => !isAnchor(item)), keptAnchors);
+    const kept = new Set([...keptAnchors, ...keptOthers]);
+    return controls.filter((item) => kept.has(item));
+  }
+
   function addressGroups(owner, controls) {
     const scopes = new Map();
     const explicitScopes = controls.filter((item) => item.explicit);
@@ -80,14 +127,13 @@ var mypassAddressForm = (() => {
       const explicitTokens = new Set(group.controls.filter((item) => item.explicit).map((item) => item.token));
       const explicitStreet = explicitTokens.has('street-address');
       const explicitLines = explicitTokens.has('address-line1') || explicitTokens.has('address-line2');
-      group.controls = group.controls.filter(({ explicit, token }) => explicit || !(explicitTokens.has(token)
-        || (explicitStreet && streetTokens.has(token)) || (explicitLines && token === 'street-address')));
+      group.controls = nearbyHints(group.controls.filter(({ explicit, token }) => explicit || !(explicitTokens.has(token)
+        || (explicitStreet && streetTokens.has(token)) || (explicitLines && token === 'street-address'))));
       const tokens = group.controls.map((item) => item.token);
       const hasStreet = tokens.some((token) => streetTokens.has(token));
       const places = tokens.filter((token) => placeTokens.has(token)).length;
-      const explicitAnchor = group.controls.some(({ explicit, token }) =>
-        explicit && (streetTokens.has(token) || placeTokens.has(token)));
-      // Repeated fields can be two unnamed sections. Ambiguous layouts stay
+      const explicitAnchor = group.controls.some((item) => item.explicit && isAnchor(item));
+      // Repeated explicit fields can be two unnamed sections. Ambiguous layouts stay
       // unavailable. Inferred fields need more evidence than a lone city or ZIP.
       return (explicitAnchor || (hasStreet && tokens.length > 1) || places >= 2)
         && new Set(tokens).size === tokens.length
