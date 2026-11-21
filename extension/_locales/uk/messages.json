@@ -26,9 +26,6 @@
   "add": {
     "message": "Додати"
   },
-  "retry": {
-    "message": "Повторити"
-  },
   "copy": {
     "message": "Скопіювати"
   },
@@ -80,6 +77,56 @@
   "myPassLocked": {
     "message": "MyPass заблоковано"
   },
+  "masterPassword": {
+    "message": "Майстер-пароль"
+  },
+  "showPassword": {
+    "message": "Показати пароль"
+  },
+  "hidePassword": {
+    "message": "Приховати пароль"
+  },
+  "unlockSubmit": {
+    "message": "Розблокувати"
+  },
+  "unlockWithTouchId": {
+    "message": "Розблокувати через Touch ID"
+  },
+  "unlockWithSystemPassword": {
+    "message": "Розблокувати системним паролем"
+  },
+  "unlockWrongPassword": {
+    "message": "Неправильний пароль."
+  },
+  "unlockThrottled": {
+    "message": "Забагато спроб. Спробуйте ще раз через $SECONDS$ с.",
+    "placeholders": {
+      "seconds": {
+        "content": "$1"
+      }
+    }
+  },
+  "unlockFailed": {
+    "message": "Не вдалося розблокувати MyPass. Спробуйте ще раз у застосунку."
+  },
+  "unlockInApp": {
+    "message": "Відкрийте MyPass, щоб розблокувати це сховище."
+  },
+  "deviceUnlockUnavailable": {
+    "message": "Touch ID недоступний. Скористайтеся майстер-паролем."
+  },
+  "startingMyPass": {
+    "message": "Запускаємо MyPass…"
+  },
+  "appNotRunningTitle": {
+    "message": "MyPass не запущено"
+  },
+  "launchFailed": {
+    "message": "Не вдалося запустити MyPass."
+  },
+  "hostMissingTitle": {
+    "message": "MyPass не налаштовано для цього браузера"
+  },
   "myPassLockedSentence": {
     "message": "MyPass заблоковано."
   },
@@ -104,20 +151,8 @@
   "connectBrowserFirst": {
     "message": "Спершу підключіть цей браузер до MyPass."
   },
-  "appUnavailableStatus": {
-    "message": "Не вдається підключитися до MyPass. Переконайтеся, що програму відкрито, і натисніть «Повторити»."
-  },
   "hostUnavailableStatus": {
-    "message": "Конектор браузера MyPass не знайдено. Завершіть налаштування браузера й натисніть «Повторити»."
-  },
-  "appUnavailableOpenHelper": {
-    "message": "Відкрийте MyPass із теки «Програми» або з Dock. За потреби розблокуйте сховище й натисніть «Повторити»."
-  },
-  "lockedHelper": {
-    "message": "Відкрийте MyPass і розблокуйте сховище"
-  },
-  "unlockUnreachable": {
-    "message": "Не вдалося зв’язатися з MyPass. Відкрийте програму й спробуйте ще раз."
+    "message": "Не знайдено з’єднувач MyPass для браузера. Завершіть налаштування браузера в MyPass і знову відкрийте це вікно."
   },
   "emptyListTitle": {
     "message": "Немає збережених логінів для цього сайту"
@@ -180,9 +215,6 @@
   },
   "pairingPanelTitle": {
     "message": "Підключити розширення браузера"
-  },
-  "waitingForUnlock": {
-    "message": "Очікуємо, поки ви розблокуєте MyPass…"
   },
   "passkeyBadge": {
     "message": "Ключ доступу"
@@ -754,12 +786,6 @@
   },
   "removeFromFavorites": {
     "message": "Вилучити з вибраного"
-  },
-  "showPassword": {
-    "message": "Показати пароль"
-  },
-  "hidePassword": {
-    "message": "Приховати пароль"
   },
   "showCardNumber": {
     "message": "Показати номер картки"

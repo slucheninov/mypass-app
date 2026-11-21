@@ -30,9 +30,6 @@
   "add": {
     "message": "Add"
   },
-  "retry": {
-    "message": "Retry"
-  },
   "copy": {
     "message": "Copy"
   },
@@ -84,6 +81,56 @@
   "myPassLocked": {
     "message": "MyPass is locked"
   },
+  "masterPassword": {
+    "message": "Master password"
+  },
+  "showPassword": {
+    "message": "Show password"
+  },
+  "hidePassword": {
+    "message": "Hide password"
+  },
+  "unlockSubmit": {
+    "message": "Unlock"
+  },
+  "unlockWithTouchId": {
+    "message": "Unlock with Touch ID"
+  },
+  "unlockWithSystemPassword": {
+    "message": "Unlock with system password"
+  },
+  "unlockWrongPassword": {
+    "message": "Incorrect password."
+  },
+  "unlockThrottled": {
+    "message": "Too many attempts. Try again in $SECONDS$ s.",
+    "placeholders": {
+      "seconds": {
+        "content": "$1"
+      }
+    }
+  },
+  "unlockFailed": {
+    "message": "MyPass couldn't unlock. Try again in the app."
+  },
+  "unlockInApp": {
+    "message": "Open MyPass to unlock this vault."
+  },
+  "deviceUnlockUnavailable": {
+    "message": "Touch ID isn't available. Use your master password."
+  },
+  "startingMyPass": {
+    "message": "Starting MyPass…"
+  },
+  "appNotRunningTitle": {
+    "message": "MyPass isn't running"
+  },
+  "launchFailed": {
+    "message": "MyPass couldn't be started."
+  },
+  "hostMissingTitle": {
+    "message": "MyPass isn't set up for this browser"
+  },
   "myPassLockedSentence": {
     "message": "MyPass is locked."
   },
@@ -108,20 +155,8 @@
   "connectBrowserFirst": {
     "message": "Connect this browser to MyPass first."
   },
-  "appUnavailableStatus": {
-    "message": "Cannot connect to MyPass. Make sure the app is open, then click Retry."
-  },
   "hostUnavailableStatus": {
-    "message": "The MyPass browser connector was not found. Complete browser setup, then click Retry."
-  },
-  "appUnavailableOpenHelper": {
-    "message": "Open MyPass from Applications or the Dock. Unlock your vault if needed, then tap Retry."
-  },
-  "lockedHelper": {
-    "message": "Open MyPass and unlock the vault"
-  },
-  "unlockUnreachable": {
-    "message": "Could not reach MyPass. Open the app and try again."
+    "message": "The MyPass browser connector was not found. Complete browser setup in MyPass, then reopen this popup."
   },
   "emptyListTitle": {
     "message": "No saved logins for this site"
@@ -184,9 +219,6 @@
   },
   "pairingPanelTitle": {
     "message": "Connect browser extension"
-  },
-  "waitingForUnlock": {
-    "message": "Waiting for you to unlock MyPass…"
   },
   "passkeyBadge": {
     "message": "Passkey"
@@ -758,12 +790,6 @@
   },
   "removeFromFavorites": {
     "message": "Remove from Favorites"
-  },
-  "showPassword": {
-    "message": "Show password"
-  },
-  "hidePassword": {
-    "message": "Hide password"
   },
   "showCardNumber": {
     "message": "Show card number"

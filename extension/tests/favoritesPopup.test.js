@@ -154,7 +154,7 @@ assert.ok(!sentMessages.some((message) => message.type === 'getCredentials'), 'a
 assert.strictEqual(elements['category-btn'].textContent, 'Favorites ▾');
 assert.strictEqual(elements['list-panel'].hidden, false);
 assert.strictEqual(elements['browser-chrome'].hidden, false);
-assert.strictEqual(elements['app-unavailable-panel'].hidden, true);
+assert.strictEqual(elements['locked-panel'].hidden, true);
 assert.strictEqual(elements['settings-panel'], undefined, 'settings are hosted by the native app');
 assert.strictEqual(elements['popup-menu'].hidden, true, 'the menu stays closed on the credential list');
 assert.strictEqual(elements['browser-chrome'].hidden, false, 'the gear stays with the search field');

@@ -26,9 +26,6 @@
   "add": {
     "message": "Добавить"
   },
-  "retry": {
-    "message": "Повторить"
-  },
   "copy": {
     "message": "Скопировать"
   },
@@ -80,6 +77,56 @@
   "myPassLocked": {
     "message": "MyPass заблокирован"
   },
+  "masterPassword": {
+    "message": "Мастер-пароль"
+  },
+  "showPassword": {
+    "message": "Показать пароль"
+  },
+  "hidePassword": {
+    "message": "Скрыть пароль"
+  },
+  "unlockSubmit": {
+    "message": "Разблокировать"
+  },
+  "unlockWithTouchId": {
+    "message": "Разблокировать через Touch ID"
+  },
+  "unlockWithSystemPassword": {
+    "message": "Разблокировать системным паролем"
+  },
+  "unlockWrongPassword": {
+    "message": "Неверный пароль."
+  },
+  "unlockThrottled": {
+    "message": "Слишком много попыток. Повторите через $SECONDS$ с.",
+    "placeholders": {
+      "seconds": {
+        "content": "$1"
+      }
+    }
+  },
+  "unlockFailed": {
+    "message": "Не удалось разблокировать MyPass. Повторите попытку в приложении."
+  },
+  "unlockInApp": {
+    "message": "Откройте MyPass, чтобы разблокировать это хранилище."
+  },
+  "deviceUnlockUnavailable": {
+    "message": "Touch ID недоступен. Введите мастер-пароль."
+  },
+  "startingMyPass": {
+    "message": "Запуск MyPass…"
+  },
+  "appNotRunningTitle": {
+    "message": "MyPass не запущен"
+  },
+  "launchFailed": {
+    "message": "Не удалось запустить MyPass."
+  },
+  "hostMissingTitle": {
+    "message": "MyPass не настроен для этого браузера"
+  },
   "myPassLockedSentence": {
     "message": "MyPass заблокирован."
   },
@@ -104,20 +151,8 @@
   "connectBrowserFirst": {
     "message": "Сначала подключите этот браузер к MyPass."
   },
-  "appUnavailableStatus": {
-    "message": "Не удаётся подключиться к MyPass. Убедитесь, что приложение открыто, и нажмите «Повторить»."
-  },
   "hostUnavailableStatus": {
-    "message": "Коннектор браузера MyPass не найден. Завершите настройку браузера и нажмите «Повторить»."
-  },
-  "appUnavailableOpenHelper": {
-    "message": "Откройте MyPass из папки «Программы» или из Dock. При необходимости разблокируйте хранилище и нажмите «Повторить»."
-  },
-  "lockedHelper": {
-    "message": "Откройте MyPass и разблокируйте хранилище"
-  },
-  "unlockUnreachable": {
-    "message": "Не удалось связаться с MyPass. Откройте приложение и повторите попытку."
+    "message": "Не найден коннектор MyPass для браузера. Завершите настройку браузера в MyPass и снова откройте это окно."
   },
   "emptyListTitle": {
     "message": "Нет сохранённых логинов для этого сайта"
@@ -180,9 +215,6 @@
   },
   "pairingPanelTitle": {
     "message": "Подключить расширение браузера"
-  },
-  "waitingForUnlock": {
-    "message": "Ждём, пока вы разблокируете MyPass…"
   },
   "passkeyBadge": {
     "message": "Ключ доступа"
@@ -754,12 +786,6 @@
   },
   "removeFromFavorites": {
     "message": "Удалить из избранного"
-  },
-  "showPassword": {
-    "message": "Показать пароль"
-  },
-  "hidePassword": {
-    "message": "Скрыть пароль"
   },
   "showCardNumber": {
     "message": "Показать номер карты"

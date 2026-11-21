@@ -26,9 +26,6 @@
   "add": {
     "message": "Hinzufügen"
   },
-  "retry": {
-    "message": "Erneut versuchen"
-  },
   "copy": {
     "message": "Kopieren"
   },
@@ -80,6 +77,56 @@
   "myPassLocked": {
     "message": "MyPass ist gesperrt"
   },
+  "masterPassword": {
+    "message": "Master-Passwort"
+  },
+  "showPassword": {
+    "message": "Passwort anzeigen"
+  },
+  "hidePassword": {
+    "message": "Passwort ausblenden"
+  },
+  "unlockSubmit": {
+    "message": "Entsperren"
+  },
+  "unlockWithTouchId": {
+    "message": "Mit Touch ID entsperren"
+  },
+  "unlockWithSystemPassword": {
+    "message": "Mit Systempasswort entsperren"
+  },
+  "unlockWrongPassword": {
+    "message": "Falsches Passwort."
+  },
+  "unlockThrottled": {
+    "message": "Zu viele Versuche. Versuche es in $SECONDS$ Sek. erneut.",
+    "placeholders": {
+      "seconds": {
+        "content": "$1"
+      }
+    }
+  },
+  "unlockFailed": {
+    "message": "MyPass konnte nicht entsperrt werden. Versuche es erneut in der App."
+  },
+  "unlockInApp": {
+    "message": "Öffne MyPass, um diesen Tresor zu entsperren."
+  },
+  "deviceUnlockUnavailable": {
+    "message": "Touch ID ist nicht verfügbar. Verwende dein Master-Passwort."
+  },
+  "startingMyPass": {
+    "message": "MyPass wird gestartet…"
+  },
+  "appNotRunningTitle": {
+    "message": "MyPass läuft nicht"
+  },
+  "launchFailed": {
+    "message": "MyPass konnte nicht gestartet werden."
+  },
+  "hostMissingTitle": {
+    "message": "MyPass ist für diesen Browser nicht eingerichtet"
+  },
   "myPassLockedSentence": {
     "message": "MyPass ist gesperrt."
   },
@@ -104,20 +151,8 @@
   "connectBrowserFirst": {
     "message": "Verbinde diesen Browser zuerst mit MyPass."
   },
-  "appUnavailableStatus": {
-    "message": "Verbindung zu MyPass nicht möglich. Stelle sicher, dass die App geöffnet ist, und klicke auf „Erneut versuchen“."
-  },
   "hostUnavailableStatus": {
-    "message": "Der MyPass-Browser-Connector wurde nicht gefunden. Schließe die Browser-Einrichtung ab und klicke auf „Erneut versuchen“."
-  },
-  "appUnavailableOpenHelper": {
-    "message": "Öffne MyPass über „Programme“ oder das Dock. Entsperre bei Bedarf deinen Tresor und tippe auf „Erneut versuchen“."
-  },
-  "lockedHelper": {
-    "message": "Öffne MyPass und entsperre den Tresor"
-  },
-  "unlockUnreachable": {
-    "message": "MyPass ist nicht erreichbar. Öffne die App und versuche es erneut."
+    "message": "Der MyPass-Browser-Connector wurde nicht gefunden. Schließe die Browser-Einrichtung in MyPass ab und öffne dieses Fenster erneut."
   },
   "emptyListTitle": {
     "message": "Keine gespeicherten Zugangsdaten für diese Website"
@@ -180,9 +215,6 @@
   },
   "pairingPanelTitle": {
     "message": "Browser-Erweiterung verbinden"
-  },
-  "waitingForUnlock": {
-    "message": "Warte darauf, dass du MyPass entsperrst …"
   },
   "passkeyBadge": {
     "message": "Passkey"
@@ -754,12 +786,6 @@
   },
   "removeFromFavorites": {
     "message": "Aus Favoriten entfernen"
-  },
-  "showPassword": {
-    "message": "Passwort anzeigen"
-  },
-  "hidePassword": {
-    "message": "Passwort ausblenden"
   },
   "showCardNumber": {
     "message": "Kartennummer anzeigen"

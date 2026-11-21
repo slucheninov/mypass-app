@@ -7,17 +7,58 @@ const i18n = typeof require === 'function'
 const PAIRING_STARTED_AT_KEY = 'pairingStartedAt';
 const PAIRING_CHALLENGE_TTL_MS = 120_000;
 
-const APP_UNAVAILABLE_STATUS_TEXT = i18n.t('appUnavailableStatus');
-const HOST_UNAVAILABLE_STATUS_TEXT = i18n.t('hostUnavailableStatus');
-const APP_UNAVAILABLE_OPEN_HELPER_TEXT = i18n.t('appUnavailableOpenHelper');
+const LOCKED_TITLE_TEXT = i18n.t('myPassLocked');
+const LAUNCH_POLL_INTERVAL_MS = 500;
+const LAUNCH_POLL_MAX_ATTEMPTS = 30;
 
-function shouldShowAppUnavailableActions(kind) {
-  return kind === 'error';
+function lockedPanelModel(mode, options = {}) {
+  const showForm = mode === 'locked';
+  const showDevice = showForm && options.deviceUnlock === true;
+  const model = {
+    title: LOCKED_TITLE_TEXT, showForm, showDevice,
+    deviceLabelKey: showDevice ? (options.touchId ? 'unlockWithTouchId' : 'unlockWithSystemPassword') : null,
+    helperKey: null, launchAction: null,
+  };
+  switch (mode) {
+    case 'starting':
+      return { ...model, title: i18n.t('startingMyPass') };
+    case 'notRunning':
+      return {
+        ...model, title: i18n.t('appNotRunningTitle'), launchAction: 'launch',
+        helperKey: options.launchFailed ? 'launchFailed' : null,
+      };
+    case 'hostMissing':
+      return { ...model, title: i18n.t('hostMissingTitle'), helperKey: 'hostUnavailableStatus' };
+    case 'inApp':
+      return { ...model, helperKey: 'unlockInApp', launchAction: 'openApp' };
+    default:
+      return model;
+  }
 }
 
-const LOCKED_TITLE_TEXT = i18n.t('myPassLocked');
-const LOCKED_HELPER_TEXT = i18n.t('lockedHelper');
-const UNLOCK_UNREACHABLE_TEXT = i18n.t('unlockUnreachable');
+function classifyLaunchResponse(response) {
+  if (response?.type === 'launchStarted' || response?.type === 'launchNotNeeded') return 'started';
+  return response?.message === 'launch_unavailable' ? 'unavailable' : 'failed';
+}
+
+function isHostMissing(response) {
+  return response?.type === 'error' && response.code === 'native_host_not_found';
+}
+
+function isAppConnectionError(response) {
+  return !response || (response.type === 'error'
+    && (response.message === 'app_not_running' || response.code === 'connection_unavailable'));
+}
+
+function sendPopupMessage(message) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(message, (response) => {
+      void chrome.runtime.lastError;
+      resolve(response);
+    });
+  }).catch(() => null);
+}
+
 const EMPTY_LIST_TITLE_TEXT = i18n.t('emptyListTitle');
 const LIST_HEADER_TEXT = i18n.t('listHeader');
 const FAVORITES_HEADER_TEXT = i18n.t('categoryFavorites');
@@ -75,14 +116,6 @@ function isSiteUrl(url) {
   }
 }
 const PAIRING_PANEL_TITLE_TEXT = i18n.t('pairingPanelTitle');
-const UNLOCK_BUTTON_LABEL = i18n.t('unlockMyPass');
-// Must match PAIRING_STORAGE_KEY in background.js — asserted by unlockButton.test.js.
-const POPUP_PAIRING_STORAGE_KEY = 'pairingSecret';
-// The popup was expected to close when MyPass takes focus, so no waiting state was
-// planned. It does not reliably close, so it polls the vault instead of stranding the
-// user on a stale locked panel.
-const UNLOCK_POLL_INTERVAL_MS = 800;
-
 // Locked-panel auto refresh. One module-level handle so repeated showPanel('locked')
 // calls cannot stack intervals and leaving the locked state always clears it.
 const LOCKED_POLL_INTERVAL_MS = 2000;
@@ -96,27 +129,6 @@ function stopLockedPolling() {
   clearInterval(lockedPollHandle);
   lockedPollHandle = null;
 }
-const UNLOCK_POLL_MAX_ATTEMPTS = 75; // 800 ms x 75 = 60 s of real unlocking time
-const WAITING_FOR_UNLOCK_TEXT = i18n.t('waitingForUnlock');
-
-function shouldShowUnlockButton(pairingSecret) {
-  return typeof pairingSecret === 'string' && pairingSecret.length > 0;
-}
-
-function classifyRequestUnlockResponse(response) {
-  if (!response) return 'unavailable';
-  if (response.type === 'unlockPresented') return 'presented';
-  if (response.type === 'unlockNotNeeded') return 'notNeeded';
-  return 'unavailable';
-}
-
-function shouldContinueUnlockPolling(kind, attempt) {
-  // Any non-locked outcome is terminal: unlocked means we are done, and an error or a
-  // pairing prompt means polling cannot help.
-  if (kind !== 'locked') return false;
-  return attempt < UNLOCK_POLL_MAX_ATTEMPTS;
-}
-
 function isPairingChallengeFresh(startedAt, now) {
   if (startedAt == null || typeof startedAt !== 'number') return false;
   return now - startedAt < PAIRING_CHALLENGE_TTL_MS;
@@ -488,6 +500,10 @@ let sendPasskeyCancel = null;
 let initPasskeySettingsToggle = null;
 let refreshPasskeyProxy = null;
 let initPasskeyPopupUI = null;
+let presentLockedPanel = null;
+let submitUnlockPassword = null;
+let unlockWithDevice = null;
+let startLaunchFlow = null;
 
 const PENDING_PASSKEY_KEY = 'pendingPasskeyCeremony';
 const LAST_PASSKEY_FAILURE_KEY = 'lastPasskeyFailure';
@@ -556,15 +572,20 @@ if (typeof document !== 'undefined') {
   const lockedPanel = document.getElementById('locked-panel');
   const lockedTitleEl = document.getElementById('locked-title');
   const lockedHelperEl = document.getElementById('locked-helper');
-  const lockedUnlockBtn = document.getElementById('locked-unlock-btn');
-
-  const appUnavailablePanel = document.getElementById('app-unavailable-panel');
-  const appUnavailableStatusEl = document.getElementById('app-unavailable-status');
-  const appUnavailableActions = document.getElementById('app-unavailable-actions');
-  const retryBtn = document.getElementById('retry-btn');
-  const openMypassBtn = document.getElementById('open-mypass-btn');
-  const openMypassHelper = document.getElementById('open-mypass-helper');
-  openMypassHelper.textContent = APP_UNAVAILABLE_OPEN_HELPER_TEXT;
+  const unlockForm = document.getElementById('unlock-form');
+  const unlockPassword = document.getElementById('unlock-password');
+  const unlockRevealBtn = document.getElementById('unlock-reveal-btn');
+  const unlockSubmitBtn = document.getElementById('unlock-submit-btn');
+  const unlockDeviceBtn = document.getElementById('unlock-device-btn');
+  const unlockErrorEl = document.getElementById('unlock-error');
+  const launchAppBtn = document.getElementById('launch-app-btn');
+  let lockedMode = null;
+  let unlockPanelRevision = 0;
+  let unlockBusy = false;
+  let throttleTimer = null;
+  let retryDeadline = 0;
+  let launchTried = false;
+  let launchPollTimer = null;
 
   const emptyPanel = document.getElementById('empty-panel');
   const emptyTitleEl = document.getElementById('empty-title');
@@ -650,8 +671,6 @@ if (typeof document !== 'undefined') {
   let listOwnedByTotpPicker = false;
   let selectedCategory = 'favorites';
   let browseRequestId = 0;
-  lockedTitleEl.textContent = LOCKED_TITLE_TEXT;
-  lockedHelperEl.textContent = LOCKED_HELPER_TEXT;
 
   // Status and site lookup arrive independently. Recompute from current context
   // at either callback, including when switching into search or global browsing.
@@ -663,7 +682,6 @@ if (typeof document !== 'undefined') {
 
   const PANEL_SECTIONS = [
     lockedPanel,
-    appUnavailablePanel,
     emptyPanel,
     listPanel,
     pairingPanel,
@@ -693,24 +711,15 @@ if (typeof document !== 'undefined') {
   }
 
   function showPanel(name) {
-    if (pendingPasskeyOwnsPopup && !PASSKEY_PANELS.includes(name)) return;
-    if (promptOwnsPopup && name !== 'prompt' && !PASSKEY_PANELS.includes(name)) return;
+    if (pendingPasskeyOwnsPopup && !PASSKEY_PANELS.includes(name)) return false;
+    if (promptOwnsPopup && name !== 'prompt' && !PASSKEY_PANELS.includes(name)) return false;
+    if (name !== 'locked' && lockedMode !== null) clearUnlockPanel();
     for (const section of PANEL_SECTIONS) {
       section.hidden = true;
     }
-    openMypassHelper.hidden = true;
-    // The locked view is only the key, the title, the subtitle and Unlock. With no
-    // Retry button the popup has to notice an unlock by itself, so the locked panel
-    // polls; every other panel stops that single timer.
     if (name === 'locked') {
       addTotpSection.hidden = true;
-      // A tick must not run while the Unlock wait is polling: sendBrowse() cancels that
-      // wait and would leave the button disabled with the waiting text.
-      startLockedPolling(() => { if (unlockPollTimer === null) reloadCurrentContext(); });
-    } else {
-      stopLockedPolling();
-      // Leaving the locked panel drops any error text, so the next present starts from the default.
-      lockedHelperEl.textContent = LOCKED_HELPER_TEXT;
+      generatePasswordSection.hidden = true;
     }
     // Approval owns the popup; unrelated actions must not interrupt a ceremony.
     if (PASSKEY_PANELS.includes(name) || name === 'prompt') {
@@ -719,13 +728,8 @@ if (typeof document !== 'undefined') {
     }
     document.getElementById('passkey-diagnostics').hidden = PASSKEY_PANELS.includes(name) || name === 'prompt';
     document.getElementById('site-passkey-hint').hidden = true;
-    // Search, categories, and new-item stay on the browse panels. The "More" menu (Help)
-    // also stays on pairing and "app not found". The locked panel shows no menu button at
-    // all: it is only the key, title, subtitle and Unlock, and the 2 s poll would close an
-    // open menu anyway.
     const browse = name === 'credential-list' || name === 'empty';
-    const menuOnly = name === 'app-unavailable' || name === 'pairing';
-    browserChrome.hidden = !browse && !menuOnly;
+    browserChrome.hidden = !browse && name !== 'pairing';
     vaultSearch.hidden = !browse;
     openGeneratorBtn.hidden = !browse;
     addEntryBtn.hidden = !browse;
@@ -760,9 +764,6 @@ if (typeof document !== 'undefined') {
       case 'locked':
         lockedPanel.hidden = false;
         break;
-      case 'app-unavailable':
-        appUnavailablePanel.hidden = false;
-        break;
       case 'empty':
         emptyPanel.hidden = false;
         break;
@@ -775,6 +776,7 @@ if (typeof document !== 'undefined') {
       default:
         break;
     }
+    return true;
   }
 
   function setPairingError(text) {
@@ -1040,10 +1042,6 @@ if (typeof document !== 'undefined') {
     });
   }
 
-  function hideAppUnavailableActions() {
-    openMypassHelper.hidden = true;
-  }
-
   function loadForActiveTab(tab) {
     currentTabUrl = tab && isSiteUrl(tab.url) ? tab.url : null;
     buildCategoryMenu();
@@ -1057,11 +1055,86 @@ if (typeof document !== 'undefined') {
     selectCategory('favorites');
   }
 
-  function presentLockedPanel() {
-    showPanel('locked');
-    lockedUnlockBtn.textContent = UNLOCK_BUTTON_LABEL;
-    lockedUnlockBtn.onclick = () => requestUnlock();
+  function setReveal(revealed) {
+    unlockPassword.type = revealed ? 'text' : 'password';
+    unlockRevealBtn.setAttribute('aria-pressed', String(revealed));
+    unlockRevealBtn.setAttribute('aria-label', revealed ? i18n.t('hidePassword') : i18n.t('showPassword'));
   }
+
+  function setUnlockError(text) {
+    unlockErrorEl.textContent = text;
+    unlockErrorEl.hidden = !text;
+  }
+
+  function updateUnlockButtons() {
+    unlockSubmitBtn.disabled = unlockBusy || retryDeadline !== 0;
+    unlockDeviceBtn.disabled = unlockBusy;
+  }
+
+  function clearUnlockPanel() {
+    unlockPanelRevision++;
+    lockedMode = null;
+    stopLockedPolling();
+    clearTimeout(throttleTimer);
+    clearTimeout(launchPollTimer);
+    throttleTimer = null;
+    launchPollTimer = null;
+    retryDeadline = 0;
+    unlockBusy = false;
+    unlockPassword.value = '';
+    setReveal(false);
+    setUnlockError('');
+    updateUnlockButtons();
+  }
+
+  function showUnlockBackoff(seconds) {
+    if (!Number.isFinite(seconds) || seconds <= 0) return;
+    clearTimeout(throttleTimer);
+    retryDeadline = Date.now() + Math.min(seconds, 900) * 1000;
+    function tick() {
+      const remaining = Math.ceil((retryDeadline - Date.now()) / 1000);
+      if (remaining <= 0) {
+        retryDeadline = 0;
+        throttleTimer = null;
+        setUnlockError('');
+        updateUnlockButtons();
+        return;
+      }
+      setUnlockError(i18n.t('unlockThrottled', String(remaining)));
+      throttleTimer = setTimeout(tick, 1000);
+    }
+    tick();
+    updateUnlockButtons();
+  }
+
+  presentLockedPanel = function (mode = 'locked', options = {}) {
+    if (mode === lockedMode || !showPanel('locked')) return;
+    clearUnlockPanel();
+    lockedMode = mode;
+    const revision = unlockPanelRevision;
+    const model = lockedPanelModel(mode, options);
+    lockedTitleEl.textContent = model.title;
+    unlockForm.hidden = !model.showForm;
+    unlockDeviceBtn.hidden = !model.showDevice;
+    lockedHelperEl.textContent = model.helperKey ? i18n.t(model.helperKey) : '';
+    lockedHelperEl.hidden = !model.helperKey;
+    launchAppBtn.hidden = !model.launchAction;
+    if (mode === 'locked' || mode === 'inApp') startLockedPolling(reloadCurrentContext);
+    if (!model.showForm) return;
+    unlockPassword.focus?.();
+    sendPopupMessage({ type: 'getUnlockOptions' }).then((response) => {
+      if (revision !== unlockPanelRevision) return;
+      if (response?.type === 'pairingRequired') {
+        handleCredentialsResponse(response, currentTabUrl);
+        return;
+      }
+      if (response?.type !== 'unlockOptions') return;
+      const offer = lockedPanelModel(mode, response);
+      unlockDeviceBtn.hidden = !offer.showDevice;
+      unlockDeviceBtn.textContent = offer.deviceLabelKey ? i18n.t(offer.deviceLabelKey) : '';
+      if (retryDeadline === 0) showUnlockBackoff(response.retryAfterSecs);
+    });
+  };
 
   function reloadCurrentContext() {
     if (popupContext.kind === 'search') querySearch(popupContext.query);
@@ -1069,32 +1142,105 @@ if (typeof document !== 'undefined') {
     else queryCategory(popupContext.category || 'favorites');
   }
 
-  function retryCredentialsForActiveTab() {
-    listEl.innerHTML = '';
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      loadForActiveTab(tabs[0]);
-    });
+  function handleUnlockResponse(response) {
+    switch (response?.type) {
+      case 'unlocked':
+      case 'unlockNotNeeded':
+        reloadCurrentContext();
+        break;
+      case 'wrongPassword':
+        setUnlockError(i18n.t('unlockWrongPassword'));
+        unlockPassword.focus?.();
+        break;
+      case 'unlockThrottled':
+        showUnlockBackoff(response.retryAfterSecs);
+        break;
+      case 'unlockInApp':
+        presentLockedPanel('inApp');
+        break;
+      case 'pairingRequired':
+        handleCredentialsResponse(response, currentTabUrl);
+        break;
+      case 'unlockCancelled':
+        break;
+      case 'deviceUnlockUnavailable':
+        unlockDeviceBtn.hidden = true;
+        setUnlockError(i18n.t('deviceUnlockUnavailable'));
+        break;
+      default:
+        setUnlockError(i18n.t('unlockFailed'));
+    }
   }
 
-  function showAppUnavailableActions(url, response) {
-    hidePairingPanel();
-    listEl.innerHTML = '';
-    appUnavailableStatusEl.textContent = bridgeStatus.classifyBridgeConnectionError(response) === 'native_host_not_found'
-      ? HOST_UNAVAILABLE_STATUS_TEXT : APP_UNAVAILABLE_STATUS_TEXT;
-    showPanel('app-unavailable');
-    openMypassHelper.hidden = true;
-    retryBtn.onclick = () => {
-      if (url) {
-        listEl.innerHTML = '';
-        queryCredentials(url);
-      } else {
-        retryCredentialsForActiveTab();
-      }
-    };
-    openMypassBtn.onclick = () => {
-      openMypassHelper.hidden = false;
-    };
+  async function runUnlock(message) {
+    const revision = unlockPanelRevision;
+    unlockBusy = true;
+    updateUnlockButtons();
+    const response = await sendPopupMessage(message);
+    if (revision !== unlockPanelRevision) return;
+    unlockBusy = false;
+    updateUnlockButtons();
+    handleUnlockResponse(response);
   }
+
+  submitUnlockPassword = function () {
+    if (lockedMode !== 'locked' || unlockSubmitBtn.disabled) return;
+    const password = unlockPassword.value;
+    unlockPassword.value = '';
+    setReveal(false);
+    setUnlockError('');
+    return runUnlock({ type: 'unlockWithPassword', password });
+  };
+
+  unlockWithDevice = function () {
+    if (lockedMode !== 'locked' || unlockDeviceBtn.hidden || unlockDeviceBtn.disabled) return;
+    return runUnlock({ type: 'unlockWithDevice' });
+  };
+
+  unlockForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    void submitUnlockPassword();
+  });
+  unlockRevealBtn.addEventListener('click', () => setReveal(unlockPassword.type === 'password'));
+  unlockDeviceBtn.addEventListener('click', () => { void unlockWithDevice(); });
+  launchAppBtn.addEventListener('click', () => {
+    if (lockedMode === 'inApp') void sendPopupMessage({ type: 'openApp' });
+    else if (lockedMode === 'notRunning') void startLaunchFlow();
+  });
+
+  startLaunchFlow = async function () {
+    if (lockedMode === 'starting') return;
+    presentLockedPanel('starting');
+    if (lockedMode !== 'starting') return;
+    launchTried = true;
+    const revision = unlockPanelRevision;
+    const response = await sendPopupMessage({ type: 'launchApp' });
+    if (revision !== unlockPanelRevision) return;
+    if (isHostMissing(response)) {
+      presentLockedPanel('hostMissing');
+      return;
+    }
+    if (classifyLaunchResponse(response) !== 'started') {
+      presentLockedPanel('notRunning', { launchFailed: true });
+      return;
+    }
+
+    function poll(attempt) {
+      launchPollTimer = setTimeout(async () => {
+        const result = await sendPopupMessage(browseMessage());
+        if (revision !== unlockPanelRevision) return;
+        if (!isAppConnectionError(result)) {
+          handleCredentialsResponse(result, popupContext.kind === 'site' ? popupContext.url : null);
+          if (lockedMode === 'starting') presentLockedPanel('notRunning', { launchFailed: true });
+        } else if (attempt < LAUNCH_POLL_MAX_ATTEMPTS) {
+          poll(attempt + 1);
+        } else {
+          presentLockedPanel('notRunning', { launchFailed: true });
+        }
+      }, LAUNCH_POLL_INTERVAL_MS);
+    }
+    poll(1);
+  };
 
   function handleCredentialsResponse(response, url) {
     if (pendingPasskeyOwnsPopup || promptOwnsPopup) return;
@@ -1103,14 +1249,14 @@ if (typeof document !== 'undefined') {
       ? response.credentials : [];
     renderPasskeyProxyStatus();
     if (kind === 'error') {
-      if (shouldShowAppUnavailableActions(kind)) {
-        showAppUnavailableActions(url, response);
-      }
+      hidePairingPanel();
+      if (isHostMissing(response)) presentLockedPanel('hostMissing');
+      else if (!launchTried && isAppConnectionError(response)) void startLaunchFlow();
+      else if (lockedMode !== 'starting') presentLockedPanel('notRunning', { launchFailed: launchTried });
       return;
     }
-    hideAppUnavailableActions();
     if (kind === 'locked') {
-      presentLockedPanel();
+      if (lockedMode !== 'inApp') presentLockedPanel();
       return;
     }
     if (kind === 'pairingRequired') {
@@ -1149,54 +1295,6 @@ if (typeof document !== 'undefined') {
     }
   }
 
-  let unlockPollTimer = null;
-
-  function stopUnlockPolling() {
-    if (unlockPollTimer !== null) {
-      clearTimeout(unlockPollTimer);
-      unlockPollTimer = null;
-    }
-  }
-
-  function endUnlockWait(response, url) {
-    stopUnlockPolling();
-    lockedHelperEl.textContent = LOCKED_HELPER_TEXT;
-    lockedUnlockBtn.disabled = false;
-    handleCredentialsResponse(response, url);
-  }
-
-  function pollForUnlock(attempt) {
-    const message = browseMessage();
-    chrome.runtime.sendMessage(message, (response) => {
-      if (!shouldContinueUnlockPolling(bridgeStatus.classifyGetCredentialsResponse(response), attempt)) {
-        endUnlockWait(response, popupContext.kind === 'site' ? popupContext.url : null);
-        return;
-      }
-      unlockPollTimer = setTimeout(() => pollForUnlock(attempt + 1), UNLOCK_POLL_INTERVAL_MS);
-    });
-  }
-
-  function requestUnlock() {
-    chrome.runtime.sendMessage({ type: 'requestUnlock' }, (response) => {
-      const kind = classifyRequestUnlockResponse(response);
-      if (kind === 'notNeeded') {
-        reloadCurrentContext();
-        return;
-      }
-      if (kind !== 'presented') {
-        // Unreachable app or a failed request: say so instead of leaving the click silent.
-        // The next present of the locked panel restores LOCKED_HELPER_TEXT.
-        lockedHelperEl.textContent = UNLOCK_UNREACHABLE_TEXT;
-        return;
-      }
-      // MyPass is now showing its unlock screen. Wait for it rather than leaving the
-      // user on a stale panel whose only action is Retry.
-      lockedHelperEl.textContent = WAITING_FOR_UNLOCK_TEXT;
-      lockedUnlockBtn.disabled = true;
-      pollForUnlock(0);
-    });
-  }
-
   function emptyTitleForContext() {
     if (popupContext.kind === 'search') return NO_SEARCH_RESULTS_TEXT;
     if (popupContext.kind === 'site') return EMPTY_LIST_TITLE_TEXT;
@@ -1213,10 +1311,10 @@ if (typeof document !== 'undefined') {
 
   function sendBrowse(message, url) {
     const requestId = ++browseRequestId;
-    stopUnlockPolling();
     matchedSiteCredentials = [];
     renderPasskeyProxyStatus();
     chrome.runtime.sendMessage(message, (response) => {
+      void chrome.runtime.lastError;
       if (requestId !== browseRequestId) return;
       handleCredentialsResponse(response, url);
     });
@@ -1726,7 +1824,7 @@ if (typeof document !== 'undefined') {
       // runtime.lastError" warning when the tab has no content script listening
       // (chrome:// pages, the Web Store, etc.).
       const lastError = chrome.runtime.lastError;
-      if (lastError || !resp || !resp.candidate) return;
+      if (lastError || !resp || !resp.candidate || lockedMode !== null) return;
       totpPasteInput.value = resp.candidate;
       addTotpSection.hidden = false;
     });
@@ -1743,7 +1841,7 @@ if (typeof document !== 'undefined') {
     if (typeof tabId !== 'number' || typeof chrome.tabs.sendMessage !== 'function') return;
     chrome.tabs.sendMessage(tabId, { type: 'queryNewPasswordField' }, (resp) => {
       const lastError = chrome.runtime.lastError;
-      if (lastError || !resp || !resp.hasNewPasswordField) return;
+      if (lastError || !resp || !resp.hasNewPasswordField || lockedMode !== null) return;
       generatePasswordSection.hidden = false;
     });
   };
@@ -1975,7 +2073,10 @@ if (typeof document !== 'undefined') {
   };
   initPasskeyPopupUI();
   // Test harnesses run this block without a window.
-  if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('pagehide', stopLockedPolling);
+  if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('pagehide', () => {
+    browseRequestId++;
+    if (lockedMode !== null) clearUnlockPanel();
+  });
 }
 
 if (typeof module !== 'undefined') {
@@ -1984,29 +2085,24 @@ if (typeof module !== 'undefined') {
     isPairingChallengeFresh,
     normalizePairingCode,
     PAIRING_CHALLENGE_TTL_MS,
-    APP_UNAVAILABLE_STATUS_TEXT,
-    HOST_UNAVAILABLE_STATUS_TEXT,
-    APP_UNAVAILABLE_OPEN_HELPER_TEXT,
-    shouldShowAppUnavailableActions,
     LOCKED_TITLE_TEXT,
-    LOCKED_HELPER_TEXT,
+    LAUNCH_POLL_INTERVAL_MS,
+    LAUNCH_POLL_MAX_ATTEMPTS,
+    lockedPanelModel,
+    classifyLaunchResponse,
+    presentLockedPanel,
+    submitUnlockPassword,
+    unlockWithDevice,
+    startLaunchFlow,
     EMPTY_LIST_TITLE_TEXT,
     LIST_HEADER_TEXT,
     FAVORITES_HEADER_TEXT,
     NO_FAVORITES_TEXT,
     isSiteUrl,
     PAIRING_PANEL_TITLE_TEXT,
-    shouldShowUnlockButton,
     LOCKED_POLL_INTERVAL_MS,
     startLockedPolling,
     stopLockedPolling,
-    classifyRequestUnlockResponse,
-    UNLOCK_BUTTON_LABEL,
-    POPUP_PAIRING_STORAGE_KEY,
-    shouldContinueUnlockPolling,
-    UNLOCK_POLL_INTERVAL_MS,
-    UNLOCK_POLL_MAX_ATTEMPTS,
-    WAITING_FOR_UNLOCK_TEXT,
     shouldShowTotpCircle,
     createTotpCircleController,
     buildTotpCircleElement,
