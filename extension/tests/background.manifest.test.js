@@ -92,6 +92,7 @@ for (const size of expectedSizes) {
   const relPath = `icons/icon${size}.png`;
   assert.strictEqual(manifest.icons[size], relPath, `manifest.icons["${size}"] must be ${relPath}`);
   assert.strictEqual(manifest.action.default_icon[size], relPath, `action.default_icon["${size}"] must be ${relPath}`);
+  assert.ok(fs.statSync(path.join(iconsDir, `icon-locked${size}.png`)).size > 0);
   const absPath = path.join(__dirname, '..', relPath);
   assert.ok(fs.existsSync(absPath), `${relPath} must exist on disk`);
   const stat = fs.statSync(absPath);

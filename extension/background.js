@@ -5,8 +5,53 @@ const knownTypes = [
   "fillCredential", "getTotp", "proposeSaveLogin", "proposeSaveTotp",
   "startPairing", "completePairing", "requestUnlock",
   "getPasskeyProxyStatus", "setPasskeyProxyEnabled", "passkeyCreateConfirm", "passkeyGetApprove",
-  "generatePassword"
+  "generatePassword", "unlockWithPassword", "unlockWithDevice", "getUnlockOptions"
 ];
+
+const ACTION_ICON_PATHS = Object.fromEntries(
+  ["unlocked", "locked"].map((state) => [
+    state,
+    Object.fromEntries([16, 32, 48, 128].map((size) => [
+      size, `icons/icon${state === "locked" ? "-locked" : ""}${size}.png`,
+    ])),
+  ]),
+);
+const UNREACHABLE_ICON_ERRORS = ["app_not_running", "connection_unavailable", "native_host_not_found"];
+const POPUP_UNLOCK_TYPES = ["unlockWithPassword", "unlockWithDevice", "getUnlockOptions"];
+let lastActionIcon = null;
+
+function iconStateForResponse(response) {
+  switch (response?.type) {
+    case "locked":
+    case "pairingRequired":
+      return "locked";
+    case "unlocked":
+    case "unlockNotNeeded":
+    case "credentialList":
+      return "unlocked";
+    case "passkeyProxyStatus":
+      return response.unlocked && response.paired ? "unlocked" : "locked";
+    case "error":
+      if (UNREACHABLE_ICON_ERRORS.includes(response.code) || UNREACHABLE_ICON_ERRORS.includes(response.message)) {
+        return "locked";
+      }
+  }
+  return null;
+}
+
+async function applyActionIcon(state) {
+  if (state === null || state === lastActionIcon || !chrome.action?.setIcon) return;
+  lastActionIcon = state;
+  try {
+    await chrome.action.setIcon({ path: ACTION_ICON_PATHS[state] });
+  } catch (_) {
+    if (lastActionIcon === state) lastActionIcon = null;
+  }
+}
+
+function resetActionIconStateForTests() {
+  lastActionIcon = null;
+}
 
 const PASSKEY_WATCHDOG_MS = 120000;
 // A 60 s OS presence prompt plus relay/cleanup budget must fit before Chrome's 180 s
@@ -95,9 +140,11 @@ function sendNativeMessage(message) {
         // Keep raw runtime errors out of replies; they can contain local paths.
         const code = runtimeError && /^Specified native messaging host not found\.?$/i.test(runtimeError.message || "")
           ? "native_host_not_found" : "connection_unavailable";
-        resolve({ type: "error", code, message: code });
-        return;
+        response = { type: "error", code, message: code };
       }
+      const state = message.type === "lockVault" && response.type === "ok"
+        ? "locked" : iconStateForResponse(response);
+      void applyActionIcon(state);
       resolve(response);
     });
   });
@@ -623,6 +670,7 @@ async function attachPasskeyProxyIfEligible() {
         type: "passkeyProxyStatus", unlocked: false, paired: false,
         proxyState: status && status.type === "pairingRequired" ? "unpaired" : "unavailable"
       };
+    if (status?.type !== "passkeyProxyStatus") void applyActionIcon(iconStateForResponse(result));
     await reportBrowserDiagnostics(result);
     return result;
   });
@@ -1578,6 +1626,12 @@ function handleRuntimeMessage(message, sender, sendResponse) {
     sendNativeMessageWithPairing({ type: "openApp" }).then(sendResponse);
     return true;
   }
+  if (message?.type === "launchApp") {
+    if (sender?.tab || !isAddressPopup(sender)) return false;
+    sendNativeMessage({ type: "launchApp" }).then(sendResponse);
+    return true;
+  }
+  if (POPUP_UNLOCK_TYPES.includes(message?.type) && (sender?.tab || !isAddressPopup(sender))) return false;
   // The pasted or copied text stays inside the extension. The reply is only
   // whether to warn. sender.url is the page, so the message cannot name a
   // different host. Not added to knownTypes: the native app must not receive it.
@@ -1964,6 +2018,10 @@ if (typeof chrome !== "undefined" && chrome.commands && chrome.commands.onComman
 
 if (typeof module !== "undefined") {
   module.exports = {
+    ACTION_ICON_PATHS,
+    iconStateForResponse,
+    applyActionIcon,
+    resetActionIconStateForTests,
     passkeyPresenceDeadlineFits,
     PAIRING_STORAGE_KEY,
     PASSKEY_WATCHDOG_ALARM,
