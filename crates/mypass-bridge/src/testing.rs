@@ -352,6 +352,7 @@ pub(crate) fn all_requests(pairing: Option<&str>) -> Vec<Request> {
             url: s(),
             username: s(),
             password: s(),
+            extra_fields: Vec::new(),
             pairing: p(),
         },
         Request::AddEntryIdentifier {

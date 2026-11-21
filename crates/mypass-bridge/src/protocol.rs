@@ -187,6 +187,12 @@ pub enum Request {
         url: String,
         username: String,
         password: String,
+        /// The other values of a submitted registration form (names, email, phone, birthday,
+        /// address parts, other labelled text fields), never a password, a card value or a hidden
+        /// field. Absent for a plain login save. Bounded and checked by the handler, which refuses
+        /// the whole proposal when a limit is exceeded.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        extra_fields: Vec<ProposalExtraField>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pairing: Option<String>,
     },
@@ -586,6 +592,56 @@ pub enum NewEntryKind {
     Files,
 }
 
+/// What a value captured from a registration form is. The app names the custom field after the
+/// kind (in the UI language); only `Other` uses the label the page gave the field. An unknown kind
+/// fails to decode, so the proposal is refused as malformed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExtraFieldKind {
+    Name,
+    GivenName,
+    FamilyName,
+    Email,
+    Phone,
+    Birthday,
+    Username,
+    Organization,
+    AddressLine1,
+    AddressLine2,
+    City,
+    Region,
+    PostalCode,
+    Country,
+    Other,
+}
+
+impl ExtraFieldKind {
+    /// A part of a postal address (what makes a form an address form), not a name or contact value.
+    #[must_use]
+    pub fn is_address_part(self) -> bool {
+        matches!(
+            self,
+            Self::AddressLine1
+                | Self::AddressLine2
+                | Self::City
+                | Self::Region
+                | Self::PostalCode
+                | Self::Country
+        )
+    }
+}
+
+/// One extra value of a registration form, next to a proposal's username and password. `Debug`
+/// hides the label and the value; the value is wiped on drop.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposalExtraField {
+    pub kind: ExtraFieldKind,
+    /// The field's readable label on the page (for `Other`, the name it gets in the entry).
+    pub label: String,
+    pub value: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ExtensionScanState {
@@ -640,6 +696,20 @@ impl fmt::Debug for Request {
 impl fmt::Debug for Response {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Response::{} {{ .. }}", message_tag(self))
+    }
+}
+
+impl fmt::Debug for ProposalExtraField {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProposalExtraField")
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for ProposalExtraField {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.value);
     }
 }
 

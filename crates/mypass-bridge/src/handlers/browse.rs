@@ -26,7 +26,7 @@ fn rows(
 
 /// Every entry outside the recycle bin and the generator history group, with its group name, in
 /// document order. Files entries are left out: the browser never lists, searches or fills them.
-fn live_entries(db: &Database) -> Vec<(&Entry, &str)> {
+pub(crate) fn live_entries(db: &Database) -> Vec<(&Entry, &str)> {
     let bin = bin_id(db);
     let mut out = Vec::new();
     let mut stack = vec![&db.root];

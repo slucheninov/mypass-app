@@ -8,7 +8,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::pairing::PairingChallenge;
-use crate::protocol::NewEntryKind;
+use crate::protocol::{ExtraFieldKind, NewEntryKind};
 
 /// The complete UI surface of the bridge. Passkey ceremonies need no UI call of their own (the
 /// consent is a click in the extension popup); only the toggle reaches the app's windows.
@@ -36,12 +36,32 @@ pub enum Proposal {
         url: String,
         username: String,
         password: Zeroizing<String>,
+        /// The other values of a registration form, already checked against the limits.
+        extras: Vec<ProposalExtra>,
+        /// The form had address parts and no Address entry of the vault holds them, so the user
+        /// may also create one (an unchecked option in the review).
+        offer_address: bool,
     },
     Totp {
         url: String,
         otp: Zeroizing<String>,
         entry_id: Option<Uuid>,
     },
+}
+
+/// One checked extra value of a login proposal. The value is wiped on drop.
+pub struct ProposalExtra {
+    pub kind: ExtraFieldKind,
+    pub label: String,
+    pub value: Zeroizing<String>,
+}
+
+impl std::fmt::Debug for ProposalExtra {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProposalExtra")
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
 }
 
 impl std::fmt::Debug for Proposal {
@@ -157,6 +177,8 @@ mod tests {
             url: format!("https://e{n}.example"),
             username: "u".into(),
             password: Zeroizing::new("pw".into()),
+            extras: Vec::new(),
+            offer_address: false,
         }
     }
 

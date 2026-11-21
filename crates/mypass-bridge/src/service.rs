@@ -224,8 +224,9 @@ impl BridgeService {
                 url,
                 username,
                 password,
+                extra_fields,
                 ..
-            } => session_ops::propose_save_login(ctx, url, username, password),
+            } => session_ops::propose_save_login(ctx, url, username, password, extra_fields),
             Request::AddEntryIdentifier {
                 id,
                 url,
@@ -812,6 +813,8 @@ mod tests {
             url: "https://a.example".into(),
             username: "u".into(),
             password: Zeroizing::new("pw".into()),
+            extras: Vec::new(),
+            offer_address: false,
         });
         f.svc
             .handle(named("getPasskeyProxyStatus", Some(&f.secret)));

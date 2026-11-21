@@ -1482,6 +1482,7 @@ mod tests {
             url: "https://a.example/login".into(),
             username: "me".into(),
             password: "hunter2-secret".into(),
+            extra_fields: Vec::new(),
             pairing: Some(secret),
         });
         assert_eq!(
