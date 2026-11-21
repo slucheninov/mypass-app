@@ -546,5 +546,16 @@
   "Delete retained copy?": "Aufbewahrte Kopie löschen?",
   "Delete %@? MyPass checks that the file is unchanged before deleting it. This cannot be undone.": "{0} löschen? MyPass prüft vor dem Löschen, dass die Datei unverändert ist. Das kann nicht rückgängig gemacht werden.",
   "The copy changed or could not be verified, so it was not deleted. The list was refreshed.": "Die Kopie wurde geändert oder konnte nicht geprüft werden und wurde daher nicht gelöscht. Die Liste wurde aktualisiert.",
-  "Could not delete this copy. Try again.": "Diese Kopie konnte nicht gelöscht werden. Versuche es noch einmal."
+  "Could not delete this copy. Try again.": "Diese Kopie konnte nicht gelöscht werden. Versuche es noch einmal.",
+  "%lld items sorted by": "{count, plural, one {# Eintrag sortiert nach} other {# Einträge sortiert nach}}",
+  "Date Created": "Erstellungsdatum",
+  "Date Modified": "Änderungsdatum",
+  "Frequently Used": "Häufig verwendet",
+  "Recently Used": "Zuletzt verwendet",
+  "Newest First": "Neueste zuerst",
+  "Oldest First": "Älteste zuerst",
+  "Most Used First": "Häufigste zuerst",
+  "Least Used First": "Seltenste zuerst",
+  "A to Z": "A → Z",
+  "Z to A": "Z → A"
 }

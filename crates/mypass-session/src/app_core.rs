@@ -1568,6 +1568,7 @@ mod tests {
             scope: crate::dto::Scope::Category { category: crate::dto::Category::All },
             search: String::new(),
             sort: crate::dto::SortKey::Title,
+            order: crate::dto::SortOrder::Ascending,
         }));
         call!("entry_recent", c, a => c.entry_recent(5));
         call!("entry_get", c, a => c.entry_get(&a.entry));

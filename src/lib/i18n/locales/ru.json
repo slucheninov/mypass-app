@@ -546,5 +546,16 @@
   "Delete retained copy?": "Удалить сохранённую копию?",
   "Delete %@? MyPass checks that the file is unchanged before deleting it. This cannot be undone.": "Удалить {0}? MyPass проверит, что файл не изменился, прежде чем удалить его. Это действие нельзя отменить.",
   "The copy changed or could not be verified, so it was not deleted. The list was refreshed.": "Копия изменилась или её не удалось проверить, поэтому она не удалена. Список обновлён.",
-  "Could not delete this copy. Try again.": "Не удалось удалить эту копию. Повторите попытку."
+  "Could not delete this copy. Try again.": "Не удалось удалить эту копию. Повторите попытку.",
+  "%lld items sorted by": "{count, plural, one {# запись, сортировка по} few {# записи, сортировка по} many {# записей, сортировка по} other {# записи, сортировка по}}",
+  "Date Created": "Дата создания",
+  "Date Modified": "Дата изменения",
+  "Frequently Used": "Часто используемые",
+  "Recently Used": "Недавно использованные",
+  "Newest First": "Сначала новые",
+  "Oldest First": "Сначала старые",
+  "Most Used First": "Сначала частые",
+  "Least Used First": "Сначала редкие",
+  "A to Z": "А → Я",
+  "Z to A": "Я → А"
 }

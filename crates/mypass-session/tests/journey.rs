@@ -89,6 +89,7 @@ fn all(core: &AppCore, search: &str) -> Vec<String> {
         },
         search: search.into(),
         sort: SortKey::Title,
+        order: mypass_session::dto::SortOrder::Ascending,
     };
     core.entry_list(q)
         .unwrap()
@@ -287,6 +288,7 @@ fn journey_csv_import_with_quoted_fields_then_search() {
             },
             search: "acme".into(),
             sort: SortKey::Title,
+            order: mypass_session::dto::SortOrder::Ascending,
         })
         .unwrap()[0]
         .id

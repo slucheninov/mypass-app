@@ -1,11 +1,16 @@
 import { ApiFailure, api } from "../api";
-import { events, type EntryQuery, type EntrySummary, type SortKey, type Sidebar_Serialize } from "../bindings";
+import { events, type EntryQuery, type EntrySummary, type SortKey, type SortOrder, type Sidebar_Serialize } from "../bindings";
 import { navigation } from "./navigation.svelte";
 import { session } from "./session.svelte";
 import { toasts } from "./toasts.svelte";
 
 /** Quiet time after the last keystroke before the list is asked again. */
 export const SEARCH_DEBOUNCE_MS = 150;
+
+/** The direction a sort key starts in: titles A to Z, dates newest first, usage most used first. */
+export function defaultOrder(sort: SortKey): SortOrder {
+  return sort === "title" ? "ascending" : "descending";
+}
 
 class EntriesStore {
   items = $state<EntrySummary[]>([]);
@@ -17,6 +22,7 @@ class EntriesStore {
   searchText = $state("");
   #search = $state("");
   #sort = $state<SortKey>("title");
+  #order = $state<SortOrder>("ascending");
 
   #generation = 0;
   #sidebarGeneration = 0;
@@ -24,9 +30,9 @@ class EntriesStore {
   #unlisten: (() => void)[] = [];
   #offHooks: (() => void)[] = [];
 
-  /** The query in force: the navigation scope plus the committed search and sort. */
+  /** The query in force: the navigation scope plus the committed search, sort and order. */
   get query(): EntryQuery {
-    return { scope: $state.snapshot(navigation.scope), search: this.#search, sort: this.#sort };
+    return { scope: $state.snapshot(navigation.scope), search: this.#search, sort: this.#sort, order: this.#order };
   }
 
   /** Wires the store to the session and to `VaultChanged`. Call once per window, before `session.start`. */
@@ -51,6 +57,7 @@ class EntriesStore {
     for (const off of this.#offHooks.splice(0)) off();
     this.clear();
     this.#sort = "title";
+    this.#order = "ascending";
   }
 
   /** Debounced: the list is fetched once, 150 ms after the last call. */
@@ -64,8 +71,15 @@ class EntriesStore {
     }, SEARCH_DEBOUNCE_MS);
   }
 
-  setSort(sort: SortKey): Promise<void> {
+  /** A new key starts in its own default direction unless `order` is given. */
+  setSort(sort: SortKey, order: SortOrder = defaultOrder(sort)): Promise<void> {
     this.#sort = sort;
+    this.#order = order;
+    return this.refreshList();
+  }
+
+  setOrder(order: SortOrder): Promise<void> {
+    this.#order = order;
     return this.refreshList();
   }
 

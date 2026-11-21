@@ -25,6 +25,9 @@ export const ICON_PATHS = {
   import: "M8 2v8 M4.8 7.2L8 10.4l3.2-3.2 M2.5 13.5h11",
   // An eight-tooth cog (the old rays-around-a-circle drawing read as a sun, a theme toggle).
   gear: "M6.4 3.37L6.85 1.5L9.15 1.5L9.6 3.37L10.15 3.6L11.79 2.59L13.41 4.21L12.4 5.85L12.63 6.4L14.5 6.85L14.5 9.15L12.63 9.6L12.4 10.15L13.41 11.79L11.79 13.41L10.15 12.4L9.6 12.63L9.15 14.5L6.85 14.5L6.4 12.63L5.85 12.4L4.21 13.41L2.59 11.79L3.6 10.15L3.37 9.6L1.5 9.15L1.5 6.85L3.37 6.4L3.6 5.85L2.59 4.21L4.21 2.59L5.85 3.6z M8 5.8a2.2 2.2 0 100 4.4 2.2 2.2 0 000-4.4z",
+  // A down arrow beside three shortening lines: "sorted by".
+  sort: "M4.5 2.5v11 M2 11l2.5 2.5L7 11 M9 4h5 M9 8h3.8 M9 12h2.6",
+  check: "M3 8.5l3 3 7-7",
   expand: "M9.5 2.5h4v4 M13.5 2.5L9 7 M6.5 13.5h-4v-4 M2.5 13.5L7 9",
   keyboard: "M1.5 4.5h13v7h-13z M4 7h.01 M6.5 7h.01 M9 7h.01 M11.5 7h.01 M5 9.5h6",
   undo: "M5 3L2.5 5.5 5 8 M2.5 5.5h6a4 4 0 010 8H6",

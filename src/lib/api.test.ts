@@ -40,7 +40,7 @@ describe("call", () => {
   it("api_functions_forward_arguments_and_unwrap", async () => {
     const fake = createFakeBackend({ session: "unlocked" });
     fake.install();
-    const rows = await api.entryList({ scope: { kind: "category", category: "all" }, search: "git", sort: "title" });
+    const rows = await api.entryList({ scope: { kind: "category", category: "all" }, search: "git", sort: "title", order: "ascending" });
     expect(rows.map((r) => r.title)).toEqual(["GitHub", "GitLab"]);
     await expect(api.entryGet("missing")).rejects.toMatchObject({ code: "notFound" });
   });

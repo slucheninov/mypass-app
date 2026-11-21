@@ -734,6 +734,7 @@ mod tests {
                         scope: Scope::Category { category },
                         search: String::new(),
                         sort: SortKey::Title,
+                        order: crate::dto::SortOrder::Ascending,
                     };
                     assert!(list_entries(db, &q, SearchScope::App).is_empty());
                 }
@@ -743,6 +744,7 @@ mod tests {
                     },
                     search: "example".into(),
                     sort: SortKey::Title,
+                    order: crate::dto::SortOrder::Ascending,
                 };
                 assert!(list_entries(db, &q, SearchScope::App).is_empty());
                 assert!(credential_candidates(db, "https://example.com").is_empty());

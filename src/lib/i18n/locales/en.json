@@ -546,5 +546,16 @@
   "Delete retained copy?": "Delete retained copy?",
   "Delete %@? MyPass checks that the file is unchanged before deleting it. This cannot be undone.": "Delete {0}? MyPass checks that the file is unchanged before deleting it. This cannot be undone.",
   "The copy changed or could not be verified, so it was not deleted. The list was refreshed.": "The copy changed or could not be verified, so it was not deleted. The list was refreshed.",
-  "Could not delete this copy. Try again.": "Could not delete this copy. Try again."
+  "Could not delete this copy. Try again.": "Could not delete this copy. Try again.",
+  "%lld items sorted by": "{count, plural, one {# item sorted by} other {# items sorted by}}",
+  "Date Created": "Date Created",
+  "Date Modified": "Date Modified",
+  "Frequently Used": "Frequently Used",
+  "Recently Used": "Recently Used",
+  "Newest First": "Newest First",
+  "Oldest First": "Oldest First",
+  "Most Used First": "Most Used First",
+  "Least Used First": "Least Used First",
+  "A to Z": "A → Z",
+  "Z to A": "Z → A"
 }

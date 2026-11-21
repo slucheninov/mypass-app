@@ -198,6 +198,7 @@ mod tests {
                 },
                 search: String::new(),
                 sort: SortKey::Title,
+                order: mypass_session::dto::SortOrder::Ascending,
             };
             let mut listed: Vec<String> = queries::list_entries(&db, &query, SearchScope::App)
                 .into_iter()

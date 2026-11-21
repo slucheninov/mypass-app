@@ -690,6 +690,7 @@ export type EntryQuery = {
 	scope: Scope,
 	search: string,
 	sort: SortKey,
+	order: SortOrder,
 };
 
 export type EntrySummary = {
@@ -1522,7 +1523,25 @@ export type SkippedRow = {
 	reason: SkipReason,
 };
 
-export type SortKey = "title" | "modified";
+export type SortKey = "title" | 
+/**  KDBX `CreationTime`. */
+"created" | 
+/**  KDBX `LastModificationTime`. */
+"modified" | 
+/**  "Recently used": KDBX `LastAccessTime`, set when a field is copied or the bridge fills. */
+"accessed" | 
+/**  "Frequently used": KDBX `UsageCount`, bumped together with `Accessed`. */
+"usageCount";
+
+/**
+ *  The direction of an [`EntryQuery`] sort. Ties always fall back to the title (A to Z, case
+ *  insensitive) and then the entry id, whatever the direction, so the order is stable.
+ */
+export type SortOrder = 
+/**  A to Z, oldest first, least used first. */
+"ascending" | 
+/**  Z to A, newest first, most used first. */
+"descending";
 
 /**
  *  Where the open vault is stored and how that storage is doing (the `StorageStatusChanged`

@@ -344,6 +344,7 @@ mod tests {
             scope: mypass_session::dto::Scope::Group { group_id: w.root() },
             search: String::new(),
             sort: mypass_session::dto::SortKey::Title,
+            order: mypass_session::dto::SortOrder::Ascending,
         }
     }
 }
