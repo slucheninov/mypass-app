@@ -12,6 +12,10 @@
   // - The backend keeps a proposal for 120 s from when it asked for it. A waiting proposal (and a
   //   held model) is dropped at the same age: the toast goes, the held password is overwritten and
   //   no take is attempted. A take that still answers not-found says so in one specific message.
+  //   Each proposal has its own expiry, and it only ever drops that proposal: never an earlier
+  //   one already taken and open in the review or the editor.
+  // - A proposal that arrives while a take or the review's Address save is running waits too, and
+  //   is picked up when that work is done (shown, or parked behind the editor it opened).
   // - Proposals are not throttled by the backend, so only the LATEST one is kept: a burst leaves
   //   one waiting proposal, one toast and at most one editor. A replaced proposal is never taken
   //   (taking it only to drop it would pull its password into the webview); the backend expires it
@@ -41,7 +45,8 @@
   const PROPOSAL_TTL_MS = 120_000;
 
   // Ids and URLs only, no secret.
-  let pending = $state<ProposalEvent_Deserialize | null>(null);
+  // Raw: compared by identity with the event the timer and the take hold.
+  let pending = $state.raw<ProposalEvent_Deserialize | null>(null);
   // True once the proposal had to wait behind an editor; it then opens when the editor is gone.
   let deferred = $state(false);
   // The taken model of `pending`, when the editor turned dirty during the take. A secret.
@@ -93,6 +98,7 @@
     toastId = toasts.push("info", t("Saving from your browser is waiting"), { sticky: true });
   }
 
+  /** Lets go of everything: the waiting proposal, its held model and the one under review. */
   function forget() {
     if (expiry !== null) clearTimeout(expiry);
     expiry = null;
@@ -105,19 +111,35 @@
     dismissToast();
   }
 
+  /** The backend dropped `event`: so does the queue, if it still waits. The review is not its. */
+  function expire(event: ProposalEvent_Deserialize) {
+    if (pending !== event) return;
+    expiry = null;
+    scrub(held);
+    held = null;
+    pending = null;
+    deferred = false;
+    dismissToast();
+  }
+
   function incoming(event: ProposalEvent_Deserialize) {
     // Latest only: what waited before is replaced (its held model, if any, is overwritten).
     scrub(held);
     held = null;
     pending = event;
     if (expiry !== null) clearTimeout(expiry);
-    expiry = setTimeout(forget, PROPOSAL_TTL_MS);
+    expiry = setTimeout(() => expire(event), PROPOSAL_TTL_MS);
     arrive();
   }
 
   /** Shows `pending` now, or parks it behind the editor. */
   function arrive() {
-    if (busy || !pending) return;
+    if (!pending) return;
+    if (busy) {
+      // A take or the review's save is running: the proposal is picked up when it is done.
+      deferred = true;
+      return;
+    }
     if (blocked()) {
       deferred = true;
       showWaiting();
@@ -186,8 +208,8 @@
     if (!proposal || busy) return;
     review = null;
     busy = true;
+    const unchanged = lockGuard();
     try {
-      const unchanged = lockGuard();
       const kept = proposal.extraFields.filter((_, i) => keep[i] === true);
       const model = proposal.model;
       model.customFields = [...model.customFields, ...proposalCustomFields(kept, model.customFields)];
@@ -209,6 +231,8 @@
     } finally {
       busy = false;
     }
+    // A proposal that arrived during the save: shown now, or parked behind the editor just opened.
+    if (unchanged() && pending) arrive();
   }
 
   function cancelReview() {

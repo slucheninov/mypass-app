@@ -272,6 +272,83 @@ describe("ProposalHandler", () => {
       expect(navigation.editModel?.customFields.map((f) => f.key)).toEqual(["Given Name", "Phone", "Nickname", "City"]);
     });
 
+    /** Holds every `entrySave` until the returned release is called. */
+    function holdEntrySave(fake: FakeBackend) {
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      const save = fake.handlers.entrySave;
+      fake.handlers.entrySave = async (args) => {
+        await gate;
+        return save(args);
+      };
+      return () => release();
+    }
+
+    it("a proposal that arrives while the Address entry is being saved waits and opens after the editor", async () => {
+      const { fake } = await openApp();
+      const release = holdEntrySave(fake);
+      await fake.emit("proposalEvent", await proposeRegistration(fake, "r1", true));
+      await review();
+      const user = userEvent.setup();
+      await user.click(box(/Also create an Address entry/));
+      await user.click(screen.getByRole("button", { name: "Continue" }));
+      await waitFor(() => expect(calls(fake, "entrySave")).toHaveLength(1));
+      await fake.emit("proposalEvent", await propose(fake, "p2", "Second"));
+      release();
+      await screen.findByTestId("proposal-banner");
+      expect(navigation.editModel?.password).toBe("pw-r1");
+      // The newer proposal is not lost: it waits behind the editor with its toast.
+      await waitFor(() => expect(waiting()).toHaveLength(1));
+      expect(calls(fake, "browserProposalTake").map((c) => c.args.id)).toEqual(["r1"]);
+      await user.click(screen.getByRole("button", { name: "Dismiss" }));
+      await waitFor(() => expect((screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toBe("Second"));
+      expect(calls(fake, "browserProposalTake").map((c) => c.args.id)).toEqual(["r1", "p2"]);
+      expect(waiting()).toHaveLength(0);
+    });
+
+    it("a lock while the Address entry is being saved opens nothing and wipes what was taken", async () => {
+      const { fake } = await openApp();
+      const seen = captureTake(fake);
+      const release = holdEntrySave(fake);
+      await fake.emit("proposalEvent", await proposeRegistration(fake, "r1", true));
+      await review();
+      const user = userEvent.setup();
+      await user.click(box(/Also create an Address entry/));
+      await user.click(screen.getByRole("button", { name: "Continue" }));
+      await waitFor(() => expect(calls(fake, "entrySave")).toHaveLength(1));
+      await fake.emit("proposalEvent", await propose(fake, "p2", "Second"));
+      await api.vaultLock();
+      release();
+      await waitFor(() => expect(seen.taken?.model.password).toBe(""));
+      expect(seen.taken?.extraFields.every((f) => f.value === "")).toBe(true);
+      expect(seen.taken?.address?.address?.city).toBe("");
+      expect(navigation.editModel).toBeNull();
+      expect(waiting()).toHaveLength(0);
+      expect(calls(fake, "browserProposalTake").map((c) => c.args.id)).toEqual(["r1"]);
+    });
+
+    it("a newer proposal's expiry leaves the open review alone", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const { fake } = await openApp();
+      const seen = captureTake(fake);
+      await fake.emit("proposalEvent", await proposeRegistration(fake, "r1", false));
+      await review();
+      await fake.emit("proposalEvent", await propose(fake, "p2", "Second"));
+      await waitFor(() => expect(waiting()).toHaveLength(1));
+      await vi.advanceTimersByTimeAsync(121_000);
+      // Only the expired proposal goes: its toast, never the review the user is reading.
+      expect(waiting()).toHaveLength(0);
+      expect(screen.getByRole("dialog", { name: "Review form fields" })).toBeTruthy();
+      expect(seen.taken?.model.password).toBe("pw-r1");
+      expect(seen.taken?.extraFields.map((f) => f.value)).toEqual(["Ann", "+380501234567", "annie", "Lviv"]);
+      await userEvent.setup({ advanceTimers: vi.advanceTimersByTime }).click(screen.getByRole("button", { name: "Continue" }));
+      await screen.findByTestId("proposal-banner");
+      expect(navigation.editModel?.password).toBe("pw-r1");
+      // The expired proposal is never taken.
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(calls(fake, "browserProposalTake").map((c) => c.args.id)).toEqual(["r1"]);
+    });
+
     it("offers the Address entry unticked and saves it only when ticked", async () => {
       const { fake } = await openApp();
       // A copy at the time of the call, like IPC: the webview wipes its own copy after the save.
