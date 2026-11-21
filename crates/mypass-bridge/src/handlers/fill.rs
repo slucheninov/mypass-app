@@ -424,12 +424,13 @@ mod tests {
     }
 
     #[test]
-    fn fill_address_checks_quit_lock_and_pairing_before_the_url() {
+    fn fill_address_checks_session_and_pairing_before_the_url() {
         let (f, ids) = sample_fx();
-        let unpaired = || address_req(ids.c, "http://x.com")("tok".into(), None);
+        let url = "http://x.com";
+        let unpaired = || address_req(ids.c, url)("tok".into(), None);
         assert_eq!(f.svc.handle(unpaired()), Response::PairingRequired);
         f.session.lock(mypass_session::session::LockReason::Manual);
-        assert_eq!(f.svc.handle(unpaired()), Response::Locked);
+        assert_eq!(send(&f, address_req(ids.c, url)), Response::Locked);
         f.session.begin_quit();
         assert_eq!(msg(&f.svc.handle(unpaired())), "MyPass is quitting");
     }
