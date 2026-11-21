@@ -443,10 +443,35 @@ fn apply_app_icon<R: Runtime>(app: &tauri::AppHandle<R>, force: bool) {
     let _ = platform.app_icon.set_png(variant.png());
     #[cfg(windows)]
     if let Ok(image) = tauri::image::Image::from_bytes(variant.png()) {
+        let big = taskbar_icon(variant, &image);
         for window in app.webview_windows().into_values() {
+            // tao's `set_icon` sets only ICON_SMALL (the title bar); the taskbar button and
+            // Alt+Tab show ICON_BIG, set through the platform crate.
             let _ = window.set_icon(image.clone());
+            if let (Some(big), Ok(hwnd)) = (big, window.hwnd()) {
+                big.set_for_window(hwnd.0 as usize);
+            }
         }
     }
+}
+
+/// The big (taskbar) icon of `variant`, built once and kept for the process lifetime: a window
+/// keeps showing the handle it was given, so it is never destroyed while the app runs.
+#[cfg(windows)]
+fn taskbar_icon(
+    variant: app_icon::AppIconVariant,
+    image: &tauri::image::Image<'_>,
+) -> Option<&'static mypass_platform::windows::TaskbarIcon> {
+    use mypass_platform::windows::TaskbarIcon;
+    use std::sync::OnceLock;
+    static LIGHT: OnceLock<Option<TaskbarIcon>> = OnceLock::new();
+    static DARK: OnceLock<Option<TaskbarIcon>> = OnceLock::new();
+    let cell = match variant {
+        app_icon::AppIconVariant::Light => &LIGHT,
+        app_icon::AppIconVariant::Dark => &DARK,
+    };
+    cell.get_or_init(|| TaskbarIcon::from_rgba(image.rgba(), image.width(), image.height()).ok())
+        .as_ref()
 }
 
 fn emit_conflicts(app: &AppHandle, conflicts: Vec<ShortcutConflictEvent>) {

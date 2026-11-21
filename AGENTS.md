@@ -321,7 +321,7 @@ change is done.
   and quit rules, login-item reconcile, `WindowOps`), `tray.rs` (menu model and ids), `hotkeys.rs`
   (plan, `HotkeyRegistry` seam), `lifecycle.rs` (platform events into auto-lock, the quit flow,
   the external-change watcher, `ShellEffects`, tray refresh) and `bridge.rs` (the browser bridge: pairing window and unlock-focus rules, start and quit, over the `BridgeEvents` seam; `commands/browser.rs` holds the `browser_*` commands) and `i18n.rs` (the shared catalogs, `{0}`
-  substitution, English fallback) and `navigation.rs` (a webview may navigate only to the app's own origin) and `app_icon.rs` (the light or dark app icon for the theme setting and the OS appearance: the Dock tile through `Platform::app_icon` on macOS, the window icons on Windows; Finder, Explorer and pinned shortcuts keep the light bundle icon); only `shell_runtime.rs` touches the runtime. Webviews hold
+  substitution, English fallback) and `navigation.rs` (a webview may navigate only to the app's own origin) and `app_icon.rs` (the light or dark app icon for the theme setting and the OS appearance: the Dock tile through `Platform::app_icon` on macOS, the window icons on Windows (the small one through Tauri, the big taskbar and Alt+Tab one through `mypass_platform::windows::TaskbarIcon`); Finder, Explorer and pinned shortcuts keep the light bundle icon); only `shell_runtime.rs` touches the runtime. Webviews hold
   `core:event:default`, so no Rust listener acts on a webview-emittable event: every trigger is
   a Rust call (session observer, platform sink, menu, tray, window or run-event callback). Tray
   icon and menus are built in Rust only (no `core:tray`/`core:menu` permission). Work for the main

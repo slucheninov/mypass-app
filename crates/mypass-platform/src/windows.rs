@@ -2279,3 +2279,86 @@ pub fn show_startup_error(title: &str, message: &str) {
         );
     }
 }
+
+/// A window's big icon (`ICON_BIG`: the taskbar button and Alt+Tab) made from straight RGBA
+/// pixels. Tauri's `set_icon` sets only `ICON_SMALL` (the title bar), so the theme switch sets
+/// this one too. The handle is owned and destroyed on drop: keep the value alive for as long as
+/// any window may show it (the app caches one per icon variant for the process lifetime).
+pub struct TaskbarIcon(isize);
+
+impl TaskbarIcon {
+    /// Builds the icon from `width` x `height` RGBA pixels, rows top to bottom.
+    pub fn from_rgba(rgba: &[u8], width: u32, height: u32) -> PlatformResult<Self> {
+        use windows::Win32::UI::WindowsAndMessaging::CreateIcon;
+        let bad = || PlatformError::Failed("icon pixels do not match the icon size".into());
+        let (Ok(w), Ok(h)) = (i32::try_from(width), i32::try_from(height)) else {
+            return Err(bad());
+        };
+        let pixels = usize::try_from(width)
+            .ok()
+            .zip(usize::try_from(height).ok())
+            .and_then(|(w, h)| w.checked_mul(h))
+            .filter(|&n| n > 0 && n.checked_mul(4) == Some(rgba.len()))
+            .ok_or_else(bad)?;
+        // Win32 icons take BGRA; with an alpha channel the AND mask is ignored, so it stays all
+        // zero (opaque), one bit per pixel, each row padded to a 16-bit boundary.
+        let mut bgra = Vec::with_capacity(pixels.saturating_mul(4));
+        let (pixel_rows, _) = rgba.as_chunks::<4>();
+        for &[r, g, b, a] in pixel_rows {
+            bgra.extend_from_slice(&[b, g, r, a]);
+        }
+        let stride = usize::try_from(width.div_ceil(16).saturating_mul(2)).map_err(|_| bad())?;
+        let mask = vec![0u8; stride.saturating_mul(usize::try_from(height).map_err(|_| bad())?)];
+        // SAFETY: `mask` holds `height` rows of `stride` bytes (a 1-bpp bitmap with WORD-aligned
+        // rows) and `bgra` holds `width * height` 32-bit pixels, both checked above; CreateIcon
+        // only reads them during the call and copies them into the new icon it returns.
+        let icon = unsafe { CreateIcon(None, w, h, 1, 32, mask.as_ptr(), bgra.as_ptr()) }
+            .map_err(win_error)?;
+        Ok(Self(icon.0 as isize))
+    }
+
+    /// Makes this the big (taskbar and Alt+Tab) icon of the window `hwnd` (`HWND` as an integer).
+    /// A window that is gone ignores the message.
+    pub fn set_for_window(&self, hwnd: usize) {
+        use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{SendMessageW, ICON_BIG, WM_SETICON};
+        // SAFETY: WM_SETICON takes an icon handle by value and does not take ownership; `self`
+        // owns a live icon and the caller keeps it alive while the window may show it. A stale
+        // or invalid HWND makes SendMessageW fail without touching memory.
+        unsafe {
+            SendMessageW(
+                HWND(hwnd as *mut _),
+                WM_SETICON,
+                Some(WPARAM(ICON_BIG as usize)),
+                Some(LPARAM(self.0)),
+            );
+        }
+    }
+}
+
+impl Drop for TaskbarIcon {
+    fn drop(&mut self) {
+        use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, HICON};
+        // SAFETY: CreateIcon returned this handle and this owner is unique, so it is destroyed
+        // exactly once.
+        let _ = unsafe { DestroyIcon(HICON(self.0 as *mut _)) };
+    }
+}
+
+#[cfg(test)]
+mod taskbar_icon_tests {
+    use super::TaskbarIcon;
+
+    #[test]
+    fn pixels_must_match_the_size() {
+        assert!(TaskbarIcon::from_rgba(&[0; 15], 2, 2).is_err());
+        assert!(TaskbarIcon::from_rgba(&[], 0, 0).is_err());
+        assert!(TaskbarIcon::from_rgba(&[0; 16], 2, 2).is_ok());
+    }
+
+    #[test]
+    fn a_window_that_is_gone_ignores_the_icon() {
+        let icon = TaskbarIcon::from_rgba(&[255; 4 * 32 * 32], 32, 32).unwrap();
+        icon.set_for_window(0);
+    }
+}
