@@ -203,3 +203,15 @@ test('the locked panel has neither a Retry nor a more button', () => {
   assert.doesNotMatch(panel, /id="(?:retry-btn|popup-menu-btn)"/);
   assert.match(panel, /<form id="unlock-form"/);
 });
+
+test('a stalled readiness reply cannot keep the popup starting past the launch budget', async () => {
+  let initial = true;
+  const h = stoppedPopup(() => {
+    if (!initial) return undefined;
+    initial = false;
+    return { type: 'error', message: 'app_not_running' };
+  });
+  await h.advance(15_000);
+  assert.equal(h.el('locked-title').textContent, "MyPass isn't running");
+  assert.equal(h.el('launch-app-btn').hidden, false);
+});

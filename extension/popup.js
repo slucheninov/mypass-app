@@ -588,6 +588,7 @@ if (typeof document !== 'undefined') {
   let retryDeadline = 0;
   let launchTried = false;
   let launchPollTimer = null;
+  let launchDeadlineTimer = null;
 
   const emptyPanel = document.getElementById('empty-panel');
   const emptyTitleEl = document.getElementById('empty-title');
@@ -1080,8 +1081,10 @@ if (typeof document !== 'undefined') {
     stopLockedPolling();
     clearTimeout(throttleTimer);
     clearTimeout(launchPollTimer);
+    clearTimeout(launchDeadlineTimer);
     throttleTimer = null;
     launchPollTimer = null;
+    launchDeadlineTimer = null;
     retryDeadline = 0;
     unlockBusy = false;
     unlockPassword.value = '';
@@ -1228,21 +1231,21 @@ if (typeof document !== 'undefined') {
       return;
     }
 
-    function poll(attempt) {
-      launchPollTimer = setTimeout(async () => {
-        const result = await sendPopupMessage(browseMessage());
-        if (revision !== unlockPanelRevision) return;
-        if (!isAppConnectionError(result)) {
-          handleCredentialsResponse(result, popupContext.kind === 'site' ? popupContext.url : null);
-          if (lockedMode === 'starting') presentLockedPanel('notRunning', { launchFailed: true });
-        } else if (attempt < LAUNCH_POLL_MAX_ATTEMPTS) {
-          poll(attempt + 1);
-        } else {
-          presentLockedPanel('notRunning', { launchFailed: true });
-        }
-      }, LAUNCH_POLL_INTERVAL_MS);
+    const launchFailed = () => presentLockedPanel('notRunning', { launchFailed: true });
+    launchDeadlineTimer = setTimeout(launchFailed, LAUNCH_POLL_INTERVAL_MS * LAUNCH_POLL_MAX_ATTEMPTS);
+    async function poll(attempt) {
+      const result = await sendPopupMessage(browseMessage());
+      if (revision !== unlockPanelRevision) return;
+      if (!isAppConnectionError(result)) {
+        handleCredentialsResponse(result, popupContext.kind === 'site' ? popupContext.url : null);
+        if (lockedMode === 'starting') launchFailed();
+      } else if (attempt < LAUNCH_POLL_MAX_ATTEMPTS) {
+        launchPollTimer = setTimeout(() => { void poll(attempt + 1); }, LAUNCH_POLL_INTERVAL_MS);
+      } else {
+        launchFailed();
+      }
     }
-    poll(1);
+    void poll(1);
   };
 
   function handleCredentialsResponse(response, url) {
