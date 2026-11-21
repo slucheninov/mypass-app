@@ -109,7 +109,7 @@
     {#if valueWithActions}
       {@render valueWithActions()}
     {:else if copyable}
-      <CopyFieldValue onclick={copy}>{@render value()}</CopyFieldValue>
+      <CopyFieldValue onclick={copy} tabindex={-1}>{@render value()}</CopyFieldValue>
     {:else}
       {@render value()}
     {/if}

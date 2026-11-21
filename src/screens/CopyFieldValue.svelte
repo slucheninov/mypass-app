@@ -2,10 +2,10 @@
   import type { Snippet } from "svelte";
   import { t } from "../lib/i18n/index.svelte";
 
-  let { onclick, children }: { onclick: () => void; children: Snippet } = $props();
+  let { onclick, children, tabindex }: { onclick: () => void; children: Snippet; tabindex?: number } = $props();
 </script>
 
-<button type="button" class="value" title={t("Click to copy")} {onclick}>
+<button type="button" class="value" title={t("Click to copy")} {tabindex} {onclick}>
   {@render children()}
 </button>
 

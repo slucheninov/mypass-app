@@ -376,10 +376,10 @@ describe("SplitPane", () => {
       await fireEvent.pointerMove(window, { clientX: -500, pointerId: 1 });
       expect(onresize).toHaveBeenLastCalledWith([160, 300]);
       await fireEvent.pointerUp(window, { pointerId: 1 });
-      // Drag far right: the detail pane keeps its 320 px minimum (1000 - 300 - 320 = 380).
+      // Drag far right: leave 320 px for detail and 2 px for the handles.
       await fireEvent.pointerDown(h1, { clientX: 200, pointerId: 1 });
       await fireEvent.pointerMove(window, { clientX: 5000, pointerId: 1 });
-      expect(onresize).toHaveBeenLastCalledWith([380, 300]);
+      expect(onresize).toHaveBeenLastCalledWith([378, 300]);
       await fireEvent.pointerUp(window, { pointerId: 1 });
       // Second handle: list width clamps to min[1] and to the room left.
       await fireEvent.pointerDown(h2, { clientX: 500, pointerId: 1 });
@@ -417,12 +417,12 @@ describe("SplitPane collapse", () => {
       const first = screen.getByTestId("split-first");
       expect(first.inert).toBe(true);
       expect(first.style.width).toBe("0px");
-      // The list may now grow into the sidebar's room: 1000 - 0 - 320 = 680.
+      // The list may now grow into the sidebar's room, leaving 1 px for the list handle.
       const list = handles[0];
       if (!list) throw new Error("separator missing");
       await fireEvent.pointerDown(list, { clientX: 500, pointerId: 1 });
       await fireEvent.pointerMove(window, { clientX: 5000, pointerId: 1 });
-      expect(onresize).toHaveBeenLastCalledWith([200, 680]);
+      expect(onresize).toHaveBeenLastCalledWith([200, 679]);
       await fireEvent.pointerUp(window, { pointerId: 1 });
       expect(oncollapse).not.toHaveBeenCalled();
     } finally {

@@ -66,7 +66,7 @@
   });
 </script>
 
-<DetailField label={t("One-time code")} {entryId} field={{ kind: "totp" }} {onlargetype}>
+<DetailField label={t("One-time code")} {entryId} field={{ kind: "totp" }} copyable={code !== null} {onlargetype}>
   {#if code !== null}
     <span class="totp">
       <TotpRing {remaining} {period} />

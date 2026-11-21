@@ -448,6 +448,25 @@ describe("focus return", () => {
 });
 
 describe("keyboard", () => {
+  it("tab_order_reaches_the_copy_action_once_per_field", async () => {
+    const { user } = await unlocked();
+    await user.click(screen.getByRole("option", { name: /GitHub/ }));
+    await screen.findByRole("heading", { name: "GitHub" });
+    const username = within(pane()).getByRole("group", { name: "Username" });
+    const password = within(within(pane()).getByRole("group", { name: "Password" }));
+    const usernameCopy = within(username).getByRole("button", { name: "Copy" });
+
+    usernameCopy.focus();
+    await user.tab({ shift: true });
+    expect(username.contains(document.activeElement)).toBe(false);
+    await user.tab();
+    expect(document.activeElement).toBe(usernameCopy);
+    await user.tab();
+    expect(document.activeElement).toBe(password.getByRole("button", { name: "Reveal" }));
+    await user.tab();
+    expect(document.activeElement).toBe(password.getByRole("button", { name: "Copy" }));
+  });
+
   it("tab_order_reaches_toolbar_sidebar_list_detail_in_order", async () => {
     const { user } = await unlocked();
     await user.click(screen.getByRole("option", { name: /GitHub/ }));

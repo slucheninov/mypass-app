@@ -74,9 +74,12 @@
 
   function setSidebarCollapsed(next: boolean) {
     if (next === sidebarCollapsed) return;
-    // Focus inside the sidebar would vanish with it: it moves to the list, else to the toggle.
+    // Move focus to the list (or the toggle) before hiding the sidebar and its separator.
     const active = document.activeElement;
-    const focusInside = next && active instanceof Node && document.getElementById(sidebarId)?.contains(active);
+    const focusInside = next && active !== null && (
+      document.getElementById(sidebarId)?.contains(active) ||
+      (active.matches('[role="separator"]') && active.getAttribute("aria-controls") === sidebarId)
+    );
     sidebarCollapsed = next;
     writePref(COLLAPSED_KEY, String(next));
     if (focusInside) {
@@ -88,6 +91,13 @@
 
   function onkeydown(e: KeyboardEvent) {
     if (e.defaultPrevented || e.repeat || !isToggleShortcut(e)) return;
+    if (document.querySelector('[aria-modal="true"]')) return;
+    const target = e.target;
+    if (
+      target instanceof HTMLElement &&
+      (target.matches("input, textarea") || target.isContentEditable) &&
+      document.getElementById(sidebarId)?.contains(target)
+    ) return;
     e.preventDefault();
     setSidebarCollapsed(!sidebarCollapsed);
   }

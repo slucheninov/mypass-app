@@ -9,7 +9,7 @@ import { startStores } from "../lib/stores";
 import { navigation } from "../lib/stores/navigation.svelte";
 import { toasts } from "../lib/stores/toasts.svelte";
 import { expectNoAxeViolations } from "../test/axe";
-import { createFakeBackend, type FakeBackend } from "../test/fakeBackend";
+import { apiError, createFakeBackend, type FakeBackend } from "../test/fakeBackend";
 import {
   FIXTURE_CARD_CVV,
   FIXTURE_CARD_NUMBER,
@@ -157,7 +157,7 @@ describe("login detail", () => {
     const fake = backend();
     const { container } = await open(fake, github);
     const user = userEvent.setup();
-    within(row(t("Password"))).getByRole("button", { name: "••••••••" }).focus();
+    within(row(t("Password"))).getByRole("button", { name: "Copy" }).focus();
     await user.keyboard("{Enter}");
     await waitFor(() => expect(calls(fake, "entryCopy")).toHaveLength(1));
     expect(calls(fake, "entryCopy")[0]?.args).toEqual({ id: github, field: { kind: "password" } });
@@ -245,6 +245,20 @@ describe("login detail", () => {
 });
 
 describe("totp", () => {
+  it("totp_has_no_copy_button_while_loading_or_after_a_failed_load", async () => {
+    const fake = backend();
+    let rejectCode!: (reason: unknown) => void;
+    const pending = new Promise<typeof fake.state.totp>((_, reject) => { rejectCode = reject; });
+    fake.handlers.entryTotp = () => pending;
+    await open(fake, github);
+    const codeRow = within(row(t("One-time code")));
+    expect.soft(codeRow.queryAllByRole("button")).toHaveLength(0);
+
+    rejectCode(apiError("invalidInput"));
+    await waitFor(() => expect(toasts.items.some((item) => item.kind === "error")).toBe(true));
+    expect(codeRow.queryAllByRole("button")).toHaveLength(0);
+  });
+
   it("totp_code_grouping_six_and_eight_digits", async () => {
     const fake = backend();
     await open(fake, github);

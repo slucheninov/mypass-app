@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import type { Snippet } from "svelte";
   import { t } from "../i18n/index.svelte";
 
@@ -35,18 +36,35 @@
   // Reactive twin of `drag`, so a drag turns the width animation off.
   let dragging = $state(false);
   const KEY_STEP = 16;
+  const HANDLE_WIDTH = 1;
+  let wasCollapsed = false;
+
+  function roomForSidebarAndList(): number {
+    const total = container?.clientWidth ?? 0;
+    return total > 0 ? total - (collapsed ? 1 : 2) * HANDLE_WIDTH - min[2] : Infinity;
+  }
+
+  $effect.pre(() => {
+    const expanded = wasCollapsed && !collapsed;
+    wasCollapsed = collapsed;
+    if (!expanded) return;
+    untrack(() => {
+      // Give up the extra list width from the collapsed layout before shrinking the sidebar.
+      const room = roomForSidebarAndList();
+      const [sidebar, list] = widths;
+      const nextList = Math.max(min[1], Math.min(list, room - sidebar));
+      const nextSidebar = Math.max(min[0], Math.min(sidebar, room - nextList));
+      if (nextSidebar !== sidebar || nextList !== list) onresize([nextSidebar, nextList]);
+    });
+  });
 
   /** The widths after moving handle `index` by `delta`, clamped so every pane keeps its minimum. */
   function clamp(index: 0 | 1, base: [number, number], delta: number): [number, number] {
-    const total = container?.clientWidth ?? 0;
+    const room = roomForSidebarAndList();
     const [a, b] = base;
-    if (index === 0) {
-      const room = total > 0 ? total - b - min[2] : Infinity;
-      return [Math.max(min[0], Math.min(a + delta, Math.max(min[0], room))), b];
-    }
+    if (index === 0) return [Math.max(min[0], Math.min(a + delta, room - b)), b];
     // A collapsed first pane takes no room.
-    const room = total > 0 ? total - (collapsed ? 0 : a) - min[2] : Infinity;
-    return [a, Math.max(min[1], Math.min(b + delta, Math.max(min[1], room)))];
+    return [a, Math.max(min[1], Math.min(b + delta, room - (collapsed ? 0 : a)))];
   }
 
   function down(index: 0 | 1, event: PointerEvent) {
@@ -88,7 +106,7 @@
 
 <svelte:window onpointermove={move} onpointerup={up} onpointercancel={up} />
 
-<div class="split" class:dragging bind:this={container}>
+<div class="split" class:dragging bind:this={container} style:--handle-width="{HANDLE_WIDTH}px">
   <!-- Collapsed: kept mounted (its tree state survives) but inert and hidden; `visibility` is
        inline so it applies before any stylesheet, and its transition is delayed in CSS so the
        width can animate first. -->
@@ -110,6 +128,7 @@
       role="separator"
       aria-orientation="vertical"
       aria-label={t("Resize sidebar")}
+      aria-controls={firstId}
       aria-valuenow={widths[0]}
       aria-valuemin={min[0]}
       tabindex="0"
@@ -166,7 +185,7 @@
   }
   .handle {
     flex: none;
-    width: 1px;
+    width: var(--handle-width);
     position: relative;
     background: var(--separator);
     cursor: col-resize;
