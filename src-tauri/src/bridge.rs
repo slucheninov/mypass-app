@@ -414,7 +414,7 @@ fn start_bridge_with_kind(
         diagnostics: Arc::clone(&diagnostics),
         proposals: Arc::clone(&proposals),
         ui: Arc::clone(&ui),
-        unlocker: Arc::new(mypass_bridge::unlock::NoUnlocker),
+        unlocker: Arc::new(crate::bridge_unlock::AppUnlocker::new(Arc::clone(core))),
         // The pending table is dropped on lock and on a vault switch by the observer that
         // `register_observer` adds below, once the server is up.
         passkeys: PasskeyService::with_presence(Arc::clone(&scheduler), ui, {
