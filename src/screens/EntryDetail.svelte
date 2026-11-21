@@ -268,13 +268,13 @@
 
 <style>
   .detail {
-    padding: 20px 24px;
+    padding: var(--space-8) 28px;
   }
   header {
     display: flex;
     align-items: center;
-    gap: 12px;
-    margin-bottom: 12px;
+    gap: var(--space-6);
+    margin-bottom: var(--space-6);
   }
   .titles {
     flex: 1;

@@ -22,9 +22,9 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
-    min-height: 26px;
-    padding: 3px 12px;
+    gap: var(--space-3);
+    min-height: 28px;
+    padding: var(--space-2) var(--space-6);
     border: 1px solid var(--control-border);
     border-radius: var(--radius);
     background: var(--control-bg);

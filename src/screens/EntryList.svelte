@@ -460,14 +460,14 @@
     display: flex;
     flex: none;
     align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
+    gap: var(--space-4);
+    padding: var(--space-5) var(--space-6);
     border-bottom: var(--sep);
   }
   .count {
     flex: 1;
     color: var(--text-2);
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
   .listbox {
     flex: 1;
@@ -477,8 +477,8 @@
   .row {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
+    gap: var(--space-6);
+    padding: var(--space-6);
     border-bottom: 1px solid var(--separator);
     cursor: default;
   }
@@ -493,7 +493,7 @@
     flex: 1;
     flex-direction: column;
     min-width: 0;
-    gap: 1px;
+    gap: 3px;
   }
   .title {
     overflow: hidden;
@@ -504,15 +504,15 @@
   .subtitle {
     overflow: hidden;
     color: var(--text-2);
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .flags {
     display: flex;
     flex-wrap: wrap;
-    gap: 4px;
-    margin-top: 2px;
+    gap: var(--space-2);
+    margin-top: var(--space-1);
   }
   .chip {
     padding: 0 6px;
@@ -525,9 +525,9 @@
     display: flex;
     flex: none;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-3);
     color: var(--text-2);
-    font-size: 11px;
+    font-size: var(--font-size-xs);
   }
   .badges > span {
     display: inline-flex;
@@ -540,7 +540,7 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 24px;
+    padding: var(--space-8);
     color: var(--text-2);
     text-align: center;
   }

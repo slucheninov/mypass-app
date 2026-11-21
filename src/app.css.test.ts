@@ -99,3 +99,18 @@ describe("contrast", () => {
     expect(norm(media)).toEqual(norm(dark));
   });
 });
+
+describe("spacing tokens", () => {
+  it("spacing_and_type_tokens_are_declared_once_on_the_root", () => {
+    const root = block(":root {");
+    for (const name of ["--space-1", "--space-6", "--font-size-sm", "--font-size-md", "--row-height", "--field-height"]) {
+      expect(root).toContain(`${name}:`);
+    }
+    expect(root).toContain("--row-height: 32px");
+    expect(css).toMatch(/\nbody \{[^}]*font-size: var\(--font-size-md\)/);
+  });
+
+  it("windows_gets_its_own_body_size_through_the_root_os_attribute", () => {
+    expect(block(':root[data-os="windows"]')).toContain("--font-size-md: 14px");
+  });
+});

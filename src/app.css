@@ -22,6 +22,34 @@
   --overlay: rgba(0, 0, 0, 0.32);
   --shadow: 0 8px 28px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.06);
   color-scheme: light;
+
+  /* Spacing and type scale: one airy rhythm shared by both systems. */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 10px;
+  --space-6: 14px;
+  --space-7: 20px;
+  --space-8: 24px;
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-md: 13px;
+  --font-size-lg: 15px;
+  --line-height: 1.45;
+  /* A sidebar row; list rows are taller (avatar plus two lines). */
+  --row-height: 32px;
+  /* Text inputs and the password field in forms and sheets. */
+  --field-height: 32px;
+  /* The search field and other controls inside the title bar. */
+  --toolbar-control-height: 30px;
+}
+
+/* Windows body text is 14 px (Segoe UI Variable); macOS keeps its 13 px system size. The 32 px
+   Windows caption leaves less room for controls in the title bar. `data-os` is set from app_info. */
+:root[data-os="windows"] {
+  --font-size-md: 14px;
+  --toolbar-control-height: 28px;
 }
 
 /* Dark follows the system only while no theme is forced. */
@@ -81,8 +109,8 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
-  font-size: 13px;
-  line-height: 1.4;
+  font-size: var(--font-size-md);
+  line-height: var(--line-height);
   -webkit-font-smoothing: antialiased;
   user-select: none;
   -webkit-user-select: none;

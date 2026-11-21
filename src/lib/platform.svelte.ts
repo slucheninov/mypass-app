@@ -20,6 +20,9 @@ export async function loadPlatform(): Promise<void> {
     platform.os = narrowOs(info.os);
     platform.version = info.version;
     platform.deviceUnlockAvailable = info.deviceUnlockAvailable;
+    // A presentation hook for CSS (`:root[data-os]`), so spacing differences never need an OS
+    // comparison in a component.
+    if (platform.os) document.documentElement.dataset.os = platform.os;
   } catch {
     // Keep the defaults.
   }

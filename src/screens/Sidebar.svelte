@@ -268,7 +268,7 @@
           aria-expanded={expandable ? expanded : undefined}
           data-key={key}
           data-id={node.id}
-          style="padding-left: {8 + (level - 1) * 14}px"
+          style="padding-left: {10 + (level - 1) * 16}px"
           tabindex={tabKey === key ? 0 : -1}
           draggable="true"
           onclick={() => choose({ kind: "group", groupId: node.id })}
@@ -351,20 +351,26 @@
   .sidebar {
     height: 100%;
     overflow-y: auto;
-    padding: 8px 6px;
+    padding: var(--space-5) var(--space-4);
     background: var(--sidebar-bg);
   }
   .tree {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: var(--space-6);
     outline: none;
+  }
+  .tree > [role="group"] {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
   }
   .row {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 4px 8px;
+    gap: var(--space-5);
+    min-height: var(--row-height);
+    padding: var(--space-3) var(--space-5);
     border-radius: var(--radius);
     cursor: default;
     user-select: none;
@@ -395,16 +401,17 @@
   }
   .count {
     color: var(--text-2);
-    font-size: 11px;
+    font-size: var(--font-size-xs);
     font-variant-numeric: tabular-nums;
   }
   .selected .count {
     color: inherit;
   }
   .heading {
-    padding: 6px 8px 2px;
+    padding: var(--space-2) var(--space-5) var(--space-3);
     color: var(--text-2);
-    font-size: 11px;
+    font-size: var(--font-size-xs);
+    letter-spacing: 0.02em;
     font-weight: 600;
     text-transform: uppercase;
   }
