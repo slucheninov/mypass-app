@@ -71,7 +71,7 @@ fn build_menu(app: &AppHandle, model: &TrayMenuModel) -> tauri::Result<Menu<Wry>
     Ok(menu)
 }
 
-/// Creates the tray icon (a template image on macOS) with `model`'s menu. Main thread only.
+/// Creates the tray icon (a template image on macOS, a green key on Windows) with `model`'s menu. Main thread only.
 fn create_tray(app: &AppHandle, model: &TrayMenuModel) -> tauri::Result<()> {
     if app.tray_by_id(TRAY_ID).is_some() {
         return apply_menu(app, model);
@@ -98,14 +98,19 @@ fn create_tray(app: &AppHandle, model: &TrayMenuModel) -> tauri::Result<()> {
                 toggle_panel(tray.app_handle(), rect, position);
             }
         });
-    #[cfg(target_os = "macos")]
-    let template =
-        tauri::image::Image::from_bytes(include_bytes!("../icons/tray-template.png")).ok();
-    #[cfg(not(target_os = "macos"))]
-    let template = None;
-
-    builder = builder.icon_as_template(template.is_some());
-    if let Some(icon) = template.or_else(|| app.default_window_icon().cloned()) {
+    // One upright key: a template on macOS (the menu bar tints it), a green key on Windows.
+    let custom =
+        crate::tray::tray_icon_png(crate::tray::TrayOs::current()).and_then(|(png, template)| {
+            tauri::image::Image::from_bytes(png)
+                .ok()
+                .map(|icon| (icon, template))
+        });
+    let (icon, template) = match custom {
+        Some((icon, template)) => (Some(icon), template),
+        None => (app.default_window_icon().cloned(), false),
+    };
+    builder = builder.icon_as_template(template);
+    if let Some(icon) = icon {
         builder = builder.icon(icon);
     }
     builder.build(app)?;
