@@ -1962,12 +1962,32 @@ if (typeof chrome !== "undefined" && chrome.webAuthenticationProxy) {
     sendNativeMessageWithPairing({ type: "passkeyCancel", requestId }).catch(() => {});
   });
 
+  if (chrome.notifications && chrome.notifications.onClicked) {
+    chrome.notifications.onClicked.addListener((id) => {
+      if (id === "mypass-passkey") openPasskeyPopup();
+      // Opening the popup is enough. A failed open must not post the notification again,
+      // and this click must not ask the app to come forward.
+      else if (id === "mypass-unlocked" && chrome.action && typeof chrome.action.openPopup === "function") {
+        chrome.action.openPopup().catch(() => {});
+      }
+    });
+  }
+}
+
+if (chrome.alarms?.get || chrome.webAuthenticationProxy) {
+  const refreshVaultStatus = () => {
+    const refresh = chrome.webAuthenticationProxy
+      ? attachPasskeyProxyIfEligible()
+      : sendNativeMessageWithPairing({ type: "getPasskeyProxyStatus" });
+    return refresh.catch(() => {});
+  };
+
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === PASSKEY_REFRESH_ALARM) {
-      attachPasskeyProxyIfEligible();
+      refreshVaultStatus();
       return;
     }
-    if (alarm.name !== PASSKEY_WATCHDOG_ALARM) return;
+    if (alarm.name !== PASSKEY_WATCHDOG_ALARM || !chrome.webAuthenticationProxy) return;
     readPending().then((pending) => {
       if (!pending) return;
       sendNativeMessageWithPairing({ type: "passkeyCancel", requestId: pending.requestId });
@@ -1983,18 +2003,10 @@ if (typeof chrome !== "undefined" && chrome.webAuthenticationProxy) {
   if (chrome.alarms.get) chrome.alarms.get(PASSKEY_REFRESH_ALARM).then((alarm) => {
     if (!alarm) chrome.alarms.create(PASSKEY_REFRESH_ALARM, { periodInMinutes: 0.5 });
   });
-  if (chrome.runtime.onStartup) chrome.runtime.onStartup.addListener(attachPasskeyProxyIfEligible);
-  if (chrome.notifications && chrome.notifications.onClicked) {
-    chrome.notifications.onClicked.addListener((id) => {
-      if (id === "mypass-passkey") openPasskeyPopup();
-      // Opening the popup is enough. A failed open must not post the notification again,
-      // and this click must not ask the app to come forward.
-      else if (id === "mypass-unlocked" && chrome.action && typeof chrome.action.openPopup === "function") {
-        chrome.action.openPopup().catch(() => {});
-      }
-    });
-  }
-  attachPasskeyProxyIfEligible();
+  chrome.runtime.onStartup?.addListener(refreshVaultStatus);
+  chrome.runtime.onInstalled?.addListener(refreshVaultStatus);
+  void applyActionIcon("locked");
+  refreshVaultStatus();
 }
 
 if (typeof chrome !== "undefined" && chrome.runtime) {

@@ -10,7 +10,7 @@ global.chrome = { runtime: { id: "test", getURL: extensionUrl, onMessage: { addL
 const background = require("../background.js");
 const {
   ACTION_ICON_PATHS, iconStateForResponse, applyActionIcon, resetActionIconStateForTests,
-  handleRuntimeMessage, attachPasskeyProxyIfEligible,
+  handleRuntimeMessage, attachPasskeyProxyIfEligible, PASSKEY_REFRESH_ALARM,
 } = background;
 
 beforeEach(() => {
@@ -101,4 +101,57 @@ test("unlockWithPassword is sent with pairing without writing the password to st
   assert.deepEqual(nativeCalls, [{ type: "unlockWithPassword", password, pairing: "proof" }]);
   assert.ok(!JSON.stringify(storageWrites).includes(password));
   assert.deepEqual(icons, [ACTION_ICON_PATHS.unlocked]);
+});
+
+test("worker startup, install and the status alarm update the icon without a popup or passkey proxy", async () => {
+  const startup = [], installed = [], alarms = [], created = [];
+  const callbacks = [];
+  chrome.runtime.onStartup = { addListener: (listener) => startup.push(listener) };
+  chrome.runtime.onInstalled = { addListener: (listener) => installed.push(listener) };
+  chrome.alarms = {
+    onAlarm: { addListener: (listener) => alarms.push(listener) },
+    get: async () => undefined,
+    create: (name, options) => created.push([name, options]),
+  };
+  chrome.runtime.sendNativeMessage = (_, message, callback) => {
+    nativeCalls.push(message);
+    callbacks.push(callback);
+  };
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  const worker = require.resolve("../background.js");
+  delete require.cache[worker];
+  try {
+    require(worker);
+    await settle();
+    assert.deepEqual(icons, [ACTION_ICON_PATHS.locked]);
+    assert.deepEqual(nativeCalls, [{ type: "getPasskeyProxyStatus", pairing: "proof" }]);
+    assert.deepEqual(created, [[PASSKEY_REFRESH_ALARM, { periodInMinutes: 0.5 }]]);
+
+    callbacks.shift()({ type: "passkeyProxyStatus", unlocked: true, paired: true });
+    await settle();
+    for (const listener of alarms) listener({ name: PASSKEY_REFRESH_ALARM });
+    await settle();
+    callbacks.shift()({ type: "passkeyProxyStatus", unlocked: false, paired: true });
+    await settle();
+
+    assert.equal(startup.length, 1);
+    startup[0]();
+    await settle();
+    callbacks.shift()({ type: "passkeyProxyStatus", unlocked: true, paired: true });
+    await settle();
+    assert.equal(installed.length, 1);
+    installed[0]();
+    await settle();
+    callbacks.shift()({ type: "error", message: "app_not_running" });
+    await settle();
+
+    assert.deepEqual(icons, [
+      ACTION_ICON_PATHS.locked, ACTION_ICON_PATHS.unlocked, ACTION_ICON_PATHS.locked,
+      ACTION_ICON_PATHS.unlocked, ACTION_ICON_PATHS.locked,
+    ]);
+  } finally {
+    delete chrome.runtime.onStartup;
+    delete chrome.runtime.onInstalled;
+    delete chrome.alarms;
+  }
 });
