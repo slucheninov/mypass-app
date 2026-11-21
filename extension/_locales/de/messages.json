@@ -370,13 +370,16 @@
     "message": "Aktiviere „Adressen anzeigen“ unter „Automatisch ausfüllen und sichern“ und wähle die Adresse dann erneut aus."
   },
   "pairingStartFailed": {
-    "message": "Die Kopplung konnte nicht gestartet werden. Läuft MyPass und ist es entsperrt?"
+    "message": "Die Verbindung konnte nicht gestartet werden. Läuft MyPass?"
+  },
+  "pairingThrottled": {
+    "message": "Zu viele Verbindungsversuche. Warte eine Minute und öffne dieses Fenster erneut."
   },
   "pairingInvalidCode": {
-    "message": "Ungültiger Code. Tippe auf „Verbinden“, um es erneut zu versuchen."
+    "message": "Der Code ist ungültig oder abgelaufen. Prüfe ihn in MyPass oder öffne dieses Fenster erneut."
   },
   "pairingCompleteFailed": {
-    "message": "Die Kopplung konnte nicht abgeschlossen werden. Läuft MyPass und ist es entsperrt?"
+    "message": "Die Verbindung konnte nicht abgeschlossen werden. Läuft MyPass?"
   },
   "openSiteHint": {
     "message": "Wähle einen Eintrag, um seine Website zu öffnen."
@@ -478,11 +481,8 @@
   "addItem": {
     "message": "Eintrag hinzufügen"
   },
-  "connect": {
-    "message": "Verbinden"
-  },
-  "submit": {
-    "message": "Absenden"
+  "sendCode": {
+    "message": "Senden"
   },
   "pairingCodeHint": {
     "message": "Gib den in MyPass angezeigten Code ein"

@@ -130,8 +130,14 @@ function stopLockedPolling() {
   lockedPollHandle = null;
 }
 function isPairingChallengeFresh(startedAt, now) {
-  if (startedAt == null || typeof startedAt !== 'number') return false;
-  return now - startedAt < PAIRING_CHALLENGE_TTL_MS;
+  if (!Number.isFinite(startedAt)) return false;
+  const age = now - startedAt;
+  return age >= 0 && age < PAIRING_CHALLENGE_TTL_MS;
+}
+
+function pairingStartErrorKey(response) {
+  return response?.type === 'error' && response.message === 'pairing_throttled'
+    ? 'pairingThrottled' : 'pairingStartFailed';
 }
 
 function normalizePairingCode(raw) {
@@ -197,10 +203,6 @@ function readPairingStartedAt(cb) {
   getPairingStorageArea().get(PAIRING_STARTED_AT_KEY, (result) => {
     cb(result[PAIRING_STARTED_AT_KEY]);
   });
-}
-
-function writePairingStartedAt(cb) {
-  getPairingStorageArea().set({ [PAIRING_STARTED_AT_KEY]: Date.now() }, cb);
 }
 
 function clearPairingStartedAt(cb) {
@@ -603,11 +605,11 @@ if (typeof document !== 'undefined') {
   const pairingPanel = document.getElementById('pairing-panel');
   const pairingTitleEl = document.getElementById('pairing-title');
   pairingTitleEl.textContent = PAIRING_PANEL_TITLE_TEXT;
-  const connectBtn = document.getElementById('connect-btn');
   const codeEntry = document.getElementById('code-entry');
   const codeInput = document.getElementById('code-input');
   const submitCodeBtn = document.getElementById('submit-code-btn');
   const pairingErrorEl = document.getElementById('pairing-error');
+  let pairingChecked = false;
 
   const passkeyCheckingPanel = document.getElementById('passkey-checking-panel');
   // A save-login / save-2FA / settings prompt raised by the page for this tab. Like a passkey
@@ -729,7 +731,7 @@ if (typeof document !== 'undefined') {
     document.getElementById('passkey-diagnostics').hidden = PASSKEY_PANELS.includes(name) || name === 'prompt';
     document.getElementById('site-passkey-hint').hidden = true;
     const browse = name === 'credential-list' || name === 'empty';
-    browserChrome.hidden = !browse && name !== 'pairing';
+    browserChrome.hidden = !browse;
     vaultSearch.hidden = !browse;
     openGeneratorBtn.hidden = !browse;
     addEntryBtn.hidden = !browse;
@@ -790,7 +792,12 @@ if (typeof document !== 'undefined') {
   }
 
   function showPairingPanel() {
-    showPanel('pairing');
+    if (!showPanel('pairing') || pairingChecked) return;
+    pairingChecked = true;
+    readPairingStartedAt((startedAt) => {
+      if (isPairingChallengeFresh(startedAt, Date.now())) revealCodeEntry();
+      else startPairingFlow();
+    });
   }
 
   function hidePairingPanel() {
@@ -799,14 +806,9 @@ if (typeof document !== 'undefined') {
     setPairingError('');
   }
 
-  function resetPairingFlow() {
-    codeEntry.hidden = true;
-    codeInput.value = '';
-    setPairingError('');
-  }
-
   function revealCodeEntry() {
     codeEntry.hidden = false;
+    codeInput.focus?.();
   }
 
   function buildLetterAvatarElement(title) {
@@ -1005,19 +1007,11 @@ if (typeof document !== 'undefined') {
   };
 
   function startPairingFlow() {
-    resetPairingFlow();
-    chrome.runtime.sendMessage({ type: 'startPairing' }, (startResp) => {
-      if (startResp && startResp.type === 'pairingStarted') {
-        writePairingStartedAt(() => {
-          revealCodeEntry();
-        });
-        return;
-      }
-      if (startResp && startResp.type === 'locked') {
-        setPairingError(i18n.t('myPassLockedSentence'));
-        return;
-      }
-      setPairingError(i18n.t('pairingStartFailed'));
+    hidePairingPanel();
+    chrome.runtime.sendMessage({ type: 'startPairing' }, (response) => {
+      void chrome.runtime.lastError;
+      if (response?.type === 'pairingStarted') revealCodeEntry();
+      else setPairingError(i18n.t(pairingStartErrorKey(response)));
     });
   }
 
@@ -1041,6 +1035,11 @@ if (typeof document !== 'undefined') {
       setPairingError(i18n.t('pairingCompleteFailed'));
     });
   }
+
+  submitCodeBtn.addEventListener('click', submitPairingCode);
+  codeInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !codeEntry.hidden) submitPairingCode();
+  });
 
   function loadForActiveTab(tab) {
     currentTabUrl = tab && isSiteUrl(tab.url) ? tab.url : null;
@@ -1261,13 +1260,6 @@ if (typeof document !== 'undefined') {
     }
     if (kind === 'pairingRequired') {
       showPairingPanel();
-      connectBtn.onclick = startPairingFlow;
-      submitCodeBtn.onclick = () => submitPairingCode();
-      readPairingStartedAt((startedAt) => {
-        if (isPairingChallengeFresh(startedAt, Date.now())) {
-          revealCodeEntry();
-        }
-      });
       return;
     }
     if (kind === 'credentialList') {
@@ -2084,6 +2076,7 @@ if (typeof module !== 'undefined') {
     classifyGetCredentialsResponse: bridgeStatus.classifyGetCredentialsResponse,
     isPairingChallengeFresh,
     normalizePairingCode,
+    pairingStartErrorKey,
     PAIRING_CHALLENGE_TTL_MS,
     LOCKED_TITLE_TEXT,
     LAUNCH_POLL_INTERVAL_MS,

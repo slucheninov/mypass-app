@@ -374,13 +374,16 @@
     "message": "Turn on Show addresses in Autofill and save, then select the address again."
   },
   "pairingStartFailed": {
-    "message": "Could not start pairing. Is MyPass running and unlocked?"
+    "message": "Could not start pairing. Is MyPass running?"
+  },
+  "pairingThrottled": {
+    "message": "Too many pairing attempts. Wait a minute, then reopen this popup."
   },
   "pairingInvalidCode": {
-    "message": "Invalid code. Tap Connect to try again."
+    "message": "Invalid or expired code. Check the code in MyPass or reopen this popup."
   },
   "pairingCompleteFailed": {
-    "message": "Could not complete pairing. Is MyPass running and unlocked?"
+    "message": "Could not complete pairing. Is MyPass running?"
   },
   "openSiteHint": {
     "message": "Select an entry to open its website."
@@ -482,11 +485,8 @@
   "addItem": {
     "message": "Add item"
   },
-  "connect": {
-    "message": "Connect"
-  },
-  "submit": {
-    "message": "Submit"
+  "sendCode": {
+    "message": "Send"
   },
   "pairingCodeHint": {
     "message": "Enter the code shown in MyPass"

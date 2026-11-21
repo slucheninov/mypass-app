@@ -1,5 +1,7 @@
 const NATIVE_HOST_NAME = "com.mypass.chromehost";
 const PAIRING_STORAGE_KEY = "pairingSecret";
+const PAIRING_STARTED_AT_KEY = "pairingStartedAt";
+let pendingPairingStart = null;
 const knownTypes = [
   "getCredentials", "getFavorites", "listEntries", "searchEntries", "createEntry", "addEntryIdentifier",
   "fillCredential", "getTotp", "proposeSaveLogin", "proposeSaveTotp",
@@ -157,6 +159,19 @@ async function sendNativeMessageWithPairing(message) {
   await clearStaleSecretOnPairingRequired(response, pairingSecret);
   await persistPairingResponse(response);
   return response;
+}
+
+function startBrowserPairing() {
+  if (pendingPairingStart) return pendingPairingStart;
+  const startedAt = Date.now();
+  pendingPairingStart = sendNativeMessage({ type: "startPairing", browser: detectBrowserName() })
+    .then(async (response) => {
+      // The MyPass window can take focus before the popup receives this response.
+      if (response?.type === "pairingStarted") await sessionSetValue(PAIRING_STARTED_AT_KEY, startedAt);
+      return response;
+    })
+    .finally(() => { pendingPairingStart = null; });
+  return pendingPairingStart;
 }
 
 async function sendPairingCompletion(message) {
@@ -1877,9 +1892,7 @@ function handleRuntimeMessage(message, sender, sendResponse) {
   }
 
   if (message.type === "startPairing") {
-    sendNativeMessage({ type: "startPairing", browser: detectBrowserName() }).then((response) => {
-      sendResponse(response);
-    });
+    startBrowserPairing().then(sendResponse, () => sendResponse({ type: "error" }));
     return true;
   }
 

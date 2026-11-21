@@ -615,13 +615,12 @@
 
     <section id="pairing-panel" hidden>
       <h1 class="panel-title" id="pairing-title"></h1>
-      <button id="connect-btn" type="button" class="btn-primary" data-i18n="connect"></button>
       <div id="code-entry" hidden>
         <p id="code-hint" data-i18n="pairingCodeHint"></p>
-        <input id="code-input" type="text" inputmode="numeric" maxlength="7" pattern="[0-9]{6}" />
-        <button id="submit-code-btn" type="button" class="btn-primary" data-i18n="submit"></button>
+        <input id="code-input" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="7" aria-labelledby="code-hint" />
+        <button id="submit-code-btn" type="button" class="btn-primary" data-i18n="sendCode"></button>
       </div>
-      <p id="pairing-error" hidden></p>
+      <p id="pairing-error" role="alert" hidden></p>
     </section>
 
     <!-- Every passkey confirm panel shows the relying-party ID and the origin the
