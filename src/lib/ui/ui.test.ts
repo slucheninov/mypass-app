@@ -375,6 +375,41 @@ describe("SplitPane", () => {
   });
 });
 
+describe("SplitPane collapse", () => {
+  it("split_pane_collapsed_hides_the_first_pane_and_gives_its_room_to_the_list", async () => {
+    const proto = HTMLElement.prototype;
+    const desc = Object.getOwnPropertyDescriptor(proto, "clientWidth");
+    Object.defineProperty(proto, "clientWidth", { configurable: true, get: () => 1000 });
+    try {
+      const onresize = vi.fn();
+      const oncollapse = vi.fn();
+      render(SplitPane, {
+        props: {
+          widths: [200, 300], min: [160, 240, 320], onresize, collapsed: true, oncollapse,
+          first: textSnippet("one"), second: textSnippet("two"), third: textSnippet("three"),
+        },
+      });
+      // Only the list separator is left, and the hidden pane is out of reach.
+      const handles = screen.getAllByRole("separator");
+      expect(handles).toHaveLength(1);
+      const first = screen.getByTestId("split-first");
+      expect(first.inert).toBe(true);
+      expect(first.style.width).toBe("0px");
+      // The list may now grow into the sidebar's room: 1000 - 0 - 320 = 680.
+      const list = handles[0];
+      if (!list) throw new Error("separator missing");
+      await fireEvent.pointerDown(list, { clientX: 500, pointerId: 1 });
+      await fireEvent.pointerMove(window, { clientX: 5000, pointerId: 1 });
+      expect(onresize).toHaveBeenLastCalledWith([200, 680]);
+      await fireEvent.pointerUp(window, { pointerId: 1 });
+      expect(oncollapse).not.toHaveBeenCalled();
+    } finally {
+      if (desc) Object.defineProperty(proto, "clientWidth", desc);
+      else delete (proto as unknown as Record<string, unknown>).clientWidth;
+    }
+  });
+});
+
 describe("Icon", () => {
   it("icon_names_all_render_svg", () => {
     expect(ICON_NAMES.length).toBe(Object.keys(ICON_PATHS).length);

@@ -6,6 +6,10 @@
     widths,
     min,
     onresize,
+    collapsed = false,
+    oncollapse,
+    snap = 120,
+    firstId,
     first,
     second,
     third,
@@ -13,6 +17,14 @@
     widths: [number, number];
     min: [number, number, number];
     onresize: (widths: [number, number]) => void;
+    /** The first pane is hidden (width 0, out of the tab order and the accessibility tree). */
+    collapsed?: boolean;
+    /** Asked to collapse when the first handle is dragged below `snap`, and to expand when dragged back. */
+    oncollapse?: (collapsed: boolean) => void;
+    /** Width in px under which a drag of the first handle collapses the first pane. */
+    snap?: number;
+    /** The id of the first pane, for an `aria-controls` elsewhere. */
+    firstId?: string;
     first: Snippet;
     second: Snippet;
     third: Snippet;
@@ -20,6 +32,8 @@
 
   let container: HTMLElement | undefined = $state();
   let drag: { index: 0 | 1; startX: number; startWidths: [number, number] } | null = null;
+  // Reactive twin of `drag`, so a drag turns the width animation off.
+  let dragging = $state(false);
   const KEY_STEP = 16;
 
   /** The widths after moving handle `index` by `delta`, clamped so every pane keeps its minimum. */
@@ -30,22 +44,38 @@
       const room = total > 0 ? total - b - min[2] : Infinity;
       return [Math.max(min[0], Math.min(a + delta, Math.max(min[0], room))), b];
     }
-    const room = total > 0 ? total - a - min[2] : Infinity;
+    // A collapsed first pane takes no room.
+    const room = total > 0 ? total - (collapsed ? 0 : a) - min[2] : Infinity;
     return [a, Math.max(min[1], Math.min(b + delta, Math.max(min[1], room)))];
   }
 
   function down(index: 0 | 1, event: PointerEvent) {
     drag = { index, startX: event.clientX, startWidths: [widths[0], widths[1]] };
+    dragging = true;
     event.preventDefault();
   }
 
   function move(event: PointerEvent) {
     if (!drag) return;
-    onresize(clamp(drag.index, drag.startWidths, event.clientX - drag.startX));
+    const delta = event.clientX - drag.startX;
+    if (drag.index === 0 && oncollapse) {
+      // Below the snap width the pane collapses and keeps the width it had before the drag, so
+      // showing it again brings that width back; dragging out again expands it.
+      if (drag.startWidths[0] + delta < snap) {
+        if (!collapsed) {
+          onresize([drag.startWidths[0], widths[1]]);
+          oncollapse(true);
+        }
+        return;
+      }
+      if (collapsed) oncollapse(false);
+    }
+    onresize(clamp(drag.index, drag.startWidths, delta));
   }
 
   function up() {
     drag = null;
+    dragging = false;
   }
 
   function key(index: 0 | 1, event: KeyboardEvent) {
@@ -58,20 +88,35 @@
 
 <svelte:window onpointermove={move} onpointerup={up} onpointercancel={up} />
 
-<div class="split" bind:this={container}>
-  <div class="pane" style="width: {widths[0]}px">{@render first()}</div>
-  <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+<div class="split" class:dragging bind:this={container}>
+  <!-- Collapsed: kept mounted (its tree state survives) but inert and hidden; `visibility` is
+       inline so it applies before any stylesheet, and its transition is delayed in CSS so the
+       width can animate first. -->
   <div
-    class="handle"
-    role="separator"
-    aria-orientation="vertical"
-    aria-label={t("Resize sidebar")}
-    aria-valuenow={widths[0]}
-    aria-valuemin={min[0]}
-    tabindex="0"
-    onpointerdown={(e) => down(0, e)}
-    onkeydown={(e) => key(0, e)}
-  ></div>
+    class="pane first"
+    class:collapsed
+    id={firstId}
+    style="width: {collapsed ? 0 : widths[0]}px{collapsed ? '; visibility: hidden' : ''}"
+    inert={collapsed}
+    data-testid="split-first"
+  >
+    <!-- Keeps its full width while the pane animates, so the content is clipped, not squeezed. -->
+    <div class="inner" style="width: {widths[0]}px">{@render first()}</div>
+  </div>
+  {#if !collapsed}
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+    <div
+      class="handle"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={t("Resize sidebar")}
+      aria-valuenow={widths[0]}
+      aria-valuemin={min[0]}
+      tabindex="0"
+      onpointerdown={(e) => down(0, e)}
+      onkeydown={(e) => key(0, e)}
+    ></div>
+  {/if}
   <div class="pane" style="width: {widths[1]}px">{@render second()}</div>
   <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
   <div
@@ -101,6 +146,23 @@
   }
   .rest {
     flex: 1;
+  }
+  /* Collapse and expand animate briefly; reduced motion turns transitions off globally (app.css). */
+  .first {
+    transition:
+      width 150ms ease,
+      visibility 0s linear 0s;
+  }
+  .first.collapsed {
+    transition:
+      width 150ms ease,
+      visibility 0s linear 150ms;
+  }
+  .dragging .first {
+    transition: none;
+  }
+  .inner {
+    height: 100%;
   }
   .handle {
     flex: none;

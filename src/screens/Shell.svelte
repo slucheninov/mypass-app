@@ -3,6 +3,7 @@
   import { t } from "../lib/i18n/index.svelte";
   import { platform } from "../lib/platform.svelte";
   import { readPref, writePref } from "../lib/prefs";
+  import IconButton from "../lib/ui/IconButton.svelte";
   import SplitPane from "../lib/ui/SplitPane.svelte";
   import WindowControls from "../lib/ui/WindowControls.svelte";
   import GroupEditor, { type GroupEditorTarget } from "./GroupEditor.svelte";
@@ -50,16 +51,77 @@
     widths = next;
     writePref(KEY, JSON.stringify(next));
   }
+
+  // ---- hiding the sidebar ---------------------------------------------------------------------
+
+  const COLLAPSED_KEY = "layout.sidebarCollapsed";
+  const uid = $props.id();
+  const sidebarId = `sidebar-${uid}`;
+  let sidebarCollapsed = $state(readPref(COLLAPSED_KEY) === "true");
+  let toggleBox: HTMLElement | undefined = $state();
+
+  // One shortcut per system, both free in the app and among the defaults of the global hotkeys:
+  // Control-Command-S is the macOS convention (Mail, Notes), Ctrl+Shift+S elsewhere.
+  const mac = $derived(platform.os === "macos");
+  const shortcutLabel = $derived(mac ? "\u2303\u2318S" : "Ctrl+Shift+S");
+  const shortcutAria = $derived(mac ? "Control+Meta+S" : "Control+Shift+S");
+
+  function isToggleShortcut(e: KeyboardEvent): boolean {
+    // `code` is the physical key, so a Cyrillic layout works the same.
+    if (e.code !== "KeyS" || e.altKey) return false;
+    return mac ? e.metaKey && e.ctrlKey && !e.shiftKey : e.ctrlKey && e.shiftKey && !e.metaKey;
+  }
+
+  function setSidebarCollapsed(next: boolean) {
+    if (next === sidebarCollapsed) return;
+    // Focus inside the sidebar would vanish with it: it moves to the list, else to the toggle.
+    const active = document.activeElement;
+    const focusInside = next && active instanceof Node && document.getElementById(sidebarId)?.contains(active);
+    sidebarCollapsed = next;
+    writePref(COLLAPSED_KEY, String(next));
+    if (focusInside) {
+      const target =
+        document.querySelector<HTMLElement>('[data-pane="list"] [role="listbox"]') ?? toggleBox?.querySelector("button");
+      target?.focus();
+    }
+  }
+
+  function onkeydown(e: KeyboardEvent) {
+    if (e.defaultPrevented || e.repeat || !isToggleShortcut(e)) return;
+    e.preventDefault();
+    setSidebarCollapsed(!sidebarCollapsed);
+  }
 </script>
+
+<svelte:window {onkeydown} />
 
 <div class="shell" data-testid="vault-shell">
   <header class="titlebar" class:windows={platform.os === "windows"} data-tauri-drag-region>
+    <!-- Right after the macOS traffic lights (the inset is ordered first), at the left on Windows. -->
+    <div class="sidebar-toggle" bind:this={toggleBox} data-tauri-drag-region>
+      <IconButton
+        icon="sidebar"
+        label={sidebarCollapsed ? t("Show sidebar") : t("Hide sidebar")}
+        tooltip={`${sidebarCollapsed ? t("Show sidebar") : t("Hide sidebar")} (${shortcutLabel})`}
+        expanded={!sidebarCollapsed}
+        controls={sidebarId}
+        keyshortcuts={shortcutAria}
+        onclick={() => setSidebarCollapsed(!sidebarCollapsed)}
+      />
+    </div>
     <Toolbar onnewgroup={(parentId) => (editor = { mode: "create", parentId })} {onimportcsv} />
     <!-- Last in the DOM so the Windows buttons sit at the right edge; the macOS inset is ordered first. -->
     {#if platform.os}<WindowControls os={platform.os} />{/if}
   </header>
   <div class="body">
-    <SplitPane {widths} min={MIN} onresize={resize}>
+    <SplitPane
+      {widths}
+      min={MIN}
+      onresize={resize}
+      collapsed={sidebarCollapsed}
+      oncollapse={setSidebarCollapsed}
+      firstId={sidebarId}
+    >
       {#snippet first()}
         <Sidebar
           onnewgroup={(parentId) => (editor = { mode: "create", parentId })}
@@ -67,7 +129,7 @@
         />
       {/snippet}
       {#snippet second()}
-        <div class="list">{@render list?.()}</div>
+        <div class="list" data-pane="list">{@render list?.()}</div>
       {/snippet}
       {#snippet third()}
         <!-- Programmatic focus target for the entry list's Enter key (`[data-pane="detail"]`). -->
@@ -103,6 +165,12 @@
     height: 44px;
     border-bottom: var(--sep);
     background: var(--bg);
+  }
+  .sidebar-toggle {
+    display: flex;
+    flex: none;
+    align-items: center;
+    padding-left: var(--space-4);
   }
   .body {
     flex: 1;

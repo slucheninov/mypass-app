@@ -2,7 +2,7 @@
 // return after every modal, and the tab order across the main window's panes.
 import { fireEvent, screen, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { expectNoAxeViolations } from "./test/axe";
 import { createFakeBackend, type FakeBackend } from "./test/fakeBackend";
 import { dragAndDrop } from "./test/dnd";
@@ -470,5 +470,32 @@ describe("keyboard", () => {
       if (seen.includes("detail")) break;
     }
     expect(seen).toEqual(["toolbar", "sidebar", "list", "detail"]);
+  });
+
+  it("tab_order_skips_the_hidden_sidebar", async () => {
+    // The collapsed state is persisted; later tests start with the sidebar shown.
+    onTestFinished(() => localStorage.removeItem("layout.sidebarCollapsed"));
+    const { user } = await unlocked();
+    await user.click(screen.getByRole("button", { name: "Hide sidebar" }));
+    await user.click(screen.getByRole("option", { name: /GitHub/ }));
+    await screen.findByRole("heading", { name: "GitHub" });
+    (document.activeElement as HTMLElement | null)?.blur();
+    const toolbar = screen.getByRole("searchbox").closest("header");
+    const zoneOf = (el: Element | null): string | null => {
+      if (!el) return null;
+      if (toolbar?.contains(el)) return "toolbar";
+      if (el.closest("[role=tree]")) return "sidebar";
+      if (el.closest("[role=listbox]")) return "list";
+      if (el.closest("[role=region]")) return "detail";
+      return null;
+    };
+    const seen: string[] = [];
+    for (let i = 0; i < 80; i += 1) {
+      await user.tab();
+      const zone = zoneOf(document.activeElement);
+      if (zone && seen[seen.length - 1] !== zone) seen.push(zone);
+      if (seen.includes("detail")) break;
+    }
+    expect(seen).toEqual(["toolbar", "list", "detail"]);
   });
 });

@@ -28,6 +28,7 @@ export const ICON_PATHS = {
   keyboard: "M1.5 4.5h13v7h-13z M4 7h.01 M6.5 7h.01 M9 7h.01 M11.5 7h.01 M5 9.5h6",
   undo: "M5 3L2.5 5.5 5 8 M2.5 5.5h6a4 4 0 010 8H6",
   redo: "M11 3l2.5 2.5L11 8 M13.5 5.5h-6a4 4 0 000 8H10",
+  sidebar: "M2 3h12a.5.5 0 01.5.5v9a.5.5 0 01-.5.5H2a.5.5 0 01-.5-.5v-9A.5.5 0 012 3z M6 3v10 M3.3 5.5h1 M3.3 7.5h1",
 } as const;
 
 export type IconName = keyof typeof ICON_PATHS;

@@ -1,4 +1,5 @@
 import { fireEvent, screen, waitFor } from "@testing-library/svelte";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadPlatform, platform } from "../lib/platform.svelte";
 import { expectNoAxeViolations } from "../test/axe";
@@ -63,6 +64,90 @@ describe("layout", () => {
     await shell();
     expect(now(sidebarHandle())).toBe("220");
     expect(now(listHandle())).toBe("300");
+  });
+});
+
+describe("sidebar collapse", () => {
+  const sidebarPane = () => screen.getByTestId("split-first");
+  // jsdom keeps `inert` as a property only (browsers reflect it as an attribute).
+  const isHidden = () => sidebarPane().inert && sidebarPane().style.visibility === "hidden";
+
+  it("toolbar_toggle_hides_and_shows_the_sidebar_and_persists", async () => {
+    const user = userEvent.setup();
+    await shell();
+    const hide = screen.getByRole("button", { name: "Hide sidebar" });
+    expect(hide.getAttribute("aria-expanded")).toBe("true");
+    expect(hide.getAttribute("aria-controls")).toBe(sidebarPane().id);
+    expect(isHidden()).toBe(false);
+    await user.click(hide);
+    const show = screen.getByRole("button", { name: "Show sidebar" });
+    expect(show.getAttribute("aria-expanded")).toBe("false");
+    expect(isHidden()).toBe(true);
+    expect(sidebarPane().style.width).toBe("0px");
+    // The sidebar separator goes with it; the list one stays.
+    expect(screen.queryByRole("separator", { name: "Resize sidebar" })).toBeNull();
+    expect(listHandle()).toBeTruthy();
+    expect(localStorage.getItem("layout.sidebarCollapsed")).toBe("true");
+    await user.click(show);
+    expect(isHidden()).toBe(false);
+    expect(now(sidebarHandle())).toBe("220");
+    expect(localStorage.getItem("layout.sidebarCollapsed")).toBe("false");
+  });
+
+  it("stored_collapsed_state_is_restored", async () => {
+    localStorage.setItem("layout.sidebarCollapsed", "true");
+    await shell();
+    expect(isHidden()).toBe(true);
+    expect(screen.getByRole("button", { name: "Show sidebar" })).toBeTruthy();
+  });
+
+  it("control_command_s_toggles_the_sidebar_on_macos", async () => {
+    await shell({ session: "unlocked", os: "macos" });
+    expect(screen.getByRole("button", { name: "Hide sidebar" }).getAttribute("aria-keyshortcuts")).toBe("Control+Meta+S");
+    // The Windows chord does nothing on macOS.
+    await fireEvent.keyDown(window, { code: "KeyS", key: "S", ctrlKey: true, shiftKey: true });
+    expect(isHidden()).toBe(false);
+    await fireEvent.keyDown(window, { code: "KeyS", key: "s", ctrlKey: true, metaKey: true });
+    expect(isHidden()).toBe(true);
+    await fireEvent.keyDown(window, { code: "KeyS", key: "s", ctrlKey: true, metaKey: true });
+    expect(isHidden()).toBe(false);
+  });
+
+  it("ctrl_shift_s_toggles_the_sidebar_on_windows", async () => {
+    await shell({ session: "unlocked", os: "windows" });
+    expect(screen.getByRole("button", { name: "Hide sidebar" }).getAttribute("aria-keyshortcuts")).toBe("Control+Shift+S");
+    // A Cyrillic layout sends another `key` for the same physical key.
+    await fireEvent.keyDown(window, { code: "KeyS", key: "\u042B", ctrlKey: true, shiftKey: true });
+    expect(isHidden()).toBe(true);
+    await fireEvent.keyDown(window, { code: "KeyS", key: "s", ctrlKey: true });
+    expect(isHidden()).toBe(true);
+  });
+
+  it("collapsing_from_inside_the_sidebar_moves_focus_to_the_list", async () => {
+    await shell();
+    const all = await screen.findByRole("treeitem", { name: /^All/ });
+    all.focus();
+    await fireEvent.keyDown(all, { code: "KeyS", key: "s", ctrlKey: true, metaKey: true });
+    expect(isHidden()).toBe(true);
+    expect(document.activeElement).toBe(screen.getByRole("listbox"));
+  });
+
+  it("dragging_the_sidebar_separator_below_the_snap_width_collapses_it", async () => {
+    await shell();
+    await fireEvent.pointerDown(sidebarHandle(), { clientX: 220, pointerId: 1 });
+    // Exactly the 120 px snap width is still a resize (clamped to the 180 px minimum)...
+    await fireEvent.pointerMove(window, { clientX: 120, pointerId: 1 });
+    expect(isHidden()).toBe(false);
+    expect(now(sidebarHandle())).toBe("180");
+    // ...below it the pane collapses, keeping the width it had before the drag.
+    await fireEvent.pointerMove(window, { clientX: 110, pointerId: 1 });
+    expect(isHidden()).toBe(true);
+    expect(localStorage.getItem("layout.sidebarCollapsed")).toBe("true");
+    // Dragging back out expands it again during the same drag.
+    await fireEvent.pointerMove(window, { clientX: 230, pointerId: 1 });
+    expect(isHidden()).toBe(false);
+    await fireEvent.pointerUp(window, { pointerId: 1 });
+    expect(now(sidebarHandle())).toBe("230");
   });
 });
 
