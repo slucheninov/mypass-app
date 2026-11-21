@@ -15,7 +15,7 @@ workspace = true
 default = ["server"]
 # The app-side server. The native messaging host builds with `default-features = false`, so it never
 # links the vault code (guard `host_links_no_vault_code`).
-server = ["dep:mypass-session", "dep:mypass-core", "dep:mypass-kdbx", "dep:url"]
+server = ["dep:mypass-session", "dep:mypass-core", "dep:mypass-kdbx", "dep:url", "dep:secrecy"]
 
 [dependencies]
 # Not gated: the endpoint store and the relay need `SecretStore` and `AppPaths`.
@@ -26,6 +26,7 @@ mypass-kdbx = { path = "../mypass-kdbx", optional = true }
 base64.workspace = true
 hmac.workspace = true
 rand.workspace = true
+secrecy = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -36,7 +37,6 @@ uuid = { workspace = true, features = ["serde"] }
 zeroize.workspace = true
 
 [dev-dependencies]
-secrecy.workspace = true
 tempfile.workspace = true
 mypass-platform = { path = "../mypass-platform", features = ["test-util"] }
 # The shared passkey fixtures (`mypass_session::testing::passkey_category_database`).

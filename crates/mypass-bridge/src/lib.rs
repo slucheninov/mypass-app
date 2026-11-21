@@ -24,6 +24,8 @@ mod testing;
 #[cfg(feature = "server")]
 pub mod ui;
 #[cfg(feature = "server")]
+pub mod unlock;
+#[cfg(feature = "server")]
 pub mod views;
 
 /// The native messaging host name and the one extension id allowed to talk to the host: one copy,

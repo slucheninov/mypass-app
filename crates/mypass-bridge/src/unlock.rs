@@ -1,0 +1,291 @@
+//! The app-owned vault unlock seam and the bridge-wide password retry budget.
+
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
+
+use mypass_session::scheduler::Scheduler;
+use secrecy::SecretString;
+
+pub const UNLOCK_FREE_ATTEMPTS: u32 = 5;
+pub const UNLOCK_BASE_BACKOFF: Duration = Duration::from_secs(30);
+pub const UNLOCK_MAX_BACKOFF: Duration = Duration::from_secs(900);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum UnlockFailure {
+    #[error("wrong password")]
+    WrongPassword,
+    #[error("unlock cancelled")]
+    Cancelled,
+    #[error("device unlock unavailable")]
+    DeviceUnavailable,
+    #[error("unlock in MyPass")]
+    InApp,
+    #[error("unlock failed")]
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DeviceOffer {
+    pub offered: bool,
+    pub touch_id: bool,
+}
+
+pub trait VaultUnlocker: Send + Sync {
+    fn unlock_with_password(&self, password: SecretString) -> Result<(), UnlockFailure>;
+    fn unlock_with_device(&self) -> Result<(), UnlockFailure>;
+    fn device_offer(&self) -> DeviceOffer;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasswordAttempt {
+    Unlocked,
+    WrongPassword,
+    Throttled { retry_after_secs: u64 },
+    InApp,
+    Failed,
+}
+
+#[derive(Default)]
+struct State {
+    consecutive_wrong: u32,
+    blocked_until: Option<Duration>,
+    generation: u64,
+}
+
+impl State {
+    fn retry_after_secs(&self, now: Duration) -> Option<u64> {
+        let remaining = self.blocked_until?.checked_sub(now)?;
+        if remaining.is_zero() {
+            return None;
+        }
+        Some(
+            remaining
+                .as_secs()
+                .saturating_add(u64::from(remaining.subsec_nanos() > 0)),
+        )
+    }
+}
+
+pub struct UnlockThrottle {
+    // The session observer can synchronously reset the throttle during the unlocker call.
+    // Serialize attempts separately so the observer and the options poll can both access state.
+    attempts: Mutex<()>,
+    state: Mutex<State>,
+    scheduler: Arc<dyn Scheduler>,
+}
+
+impl UnlockThrottle {
+    pub fn new(scheduler: Arc<dyn Scheduler>) -> Self {
+        Self {
+            attempts: Mutex::new(()),
+            state: Mutex::new(State::default()),
+            scheduler,
+        }
+    }
+
+    pub fn attempt(
+        &self,
+        try_unlock: impl FnOnce() -> Result<(), UnlockFailure>,
+    ) -> PasswordAttempt {
+        let _attempt = self.attempts.lock().unwrap_or_else(PoisonError::into_inner);
+        let generation = {
+            let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(retry_after_secs) = state.retry_after_secs(self.scheduler.monotonic_now()) {
+                return PasswordAttempt::Throttled { retry_after_secs };
+            }
+            state.generation
+        };
+        match try_unlock() {
+            Ok(()) => {
+                self.reset();
+                PasswordAttempt::Unlocked
+            }
+            Err(UnlockFailure::WrongPassword) => {
+                let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+                // An independent successful unlock supersedes an in-flight failure.
+                if state.generation != generation {
+                    return PasswordAttempt::WrongPassword;
+                }
+                state.consecutive_wrong = state.consecutive_wrong.saturating_add(1);
+                if state.consecutive_wrong < UNLOCK_FREE_ATTEMPTS {
+                    return PasswordAttempt::WrongPassword;
+                }
+                let exponent = state.consecutive_wrong - UNLOCK_FREE_ATTEMPTS;
+                let backoff = UNLOCK_BASE_BACKOFF
+                    .saturating_mul(2_u32.saturating_pow(exponent))
+                    .min(UNLOCK_MAX_BACKOFF);
+                state.blocked_until = Some(self.scheduler.monotonic_now().saturating_add(backoff));
+                PasswordAttempt::Throttled {
+                    retry_after_secs: backoff.as_secs(),
+                }
+            }
+            Err(UnlockFailure::InApp) => PasswordAttempt::InApp,
+            Err(
+                UnlockFailure::Cancelled | UnlockFailure::DeviceUnavailable | UnlockFailure::Failed,
+            ) => PasswordAttempt::Failed,
+        }
+    }
+
+    pub fn retry_after_secs(&self) -> Option<u64> {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.retry_after_secs(self.scheduler.monotonic_now())
+    }
+
+    pub fn reset(&self) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        *state = State {
+            generation: state.generation.wrapping_add(1),
+            ..State::default()
+        };
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)] // test-only
+mod tests {
+    use super::*;
+    use mypass_session::scheduler::ManualScheduler;
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+    use std::sync::Barrier;
+    use std::time::SystemTime;
+
+    fn fixture() -> (Arc<ManualScheduler>, UnlockThrottle) {
+        let clock = ManualScheduler::new(SystemTime::UNIX_EPOCH);
+        let throttle = UnlockThrottle::new(clock.clone());
+        (clock, throttle)
+    }
+
+    fn wrong(throttle: &UnlockThrottle) -> PasswordAttempt {
+        throttle.attempt(|| Err(UnlockFailure::WrongPassword))
+    }
+
+    fn four_wrong(throttle: &UnlockThrottle) {
+        for _ in 0..4 {
+            assert_eq!(wrong(throttle), PasswordAttempt::WrongPassword);
+        }
+    }
+
+    fn throttled(seconds: u64) -> PasswordAttempt {
+        PasswordAttempt::Throttled {
+            retry_after_secs: seconds,
+        }
+    }
+
+    #[test]
+    fn four_wrong_passwords_answer_wrong_password() {
+        four_wrong(&fixture().1);
+    }
+
+    #[test]
+    fn fifth_wrong_password_is_throttled_for_30_seconds() {
+        let (_, throttle) = fixture();
+        four_wrong(&throttle);
+        assert_eq!(wrong(&throttle), throttled(30));
+    }
+
+    #[test]
+    fn backoff_doubles_to_the_cap() {
+        let (clock, throttle) = fixture();
+        four_wrong(&throttle);
+        for seconds in [30, 60, 120, 240, 480, 900, 900] {
+            assert_eq!(wrong(&throttle), throttled(seconds));
+            clock.advance(Duration::from_secs(seconds));
+        }
+    }
+
+    #[test]
+    fn throttled_attempt_never_reaches_the_unlocker() {
+        let (clock, throttle) = fixture();
+        four_wrong(&throttle);
+        assert_eq!(wrong(&throttle), throttled(30));
+        clock.advance(Duration::from_secs(10));
+        assert_eq!(
+            throttle.attempt(|| panic!("attempt must not run")),
+            throttled(20)
+        );
+        clock.advance(Duration::from_secs(20));
+        assert_eq!(wrong(&throttle), throttled(60));
+    }
+
+    #[test]
+    fn retry_after_rounds_up_and_is_at_least_one() {
+        let (clock, throttle) = fixture();
+        four_wrong(&throttle);
+        assert_eq!(wrong(&throttle), throttled(30));
+        clock.advance(Duration::from_millis(29_400));
+        assert_eq!(throttle.retry_after_secs(), Some(1));
+        assert_eq!(wrong(&throttle), throttled(1));
+    }
+
+    #[test]
+    fn success_resets_the_count() {
+        let (_, throttle) = fixture();
+        four_wrong(&throttle);
+        assert_eq!(throttle.attempt(|| Ok(())), PasswordAttempt::Unlocked);
+        four_wrong(&throttle);
+    }
+
+    #[test]
+    fn reset_clears_a_running_backoff() {
+        let (_, throttle) = fixture();
+        four_wrong(&throttle);
+        assert_eq!(wrong(&throttle), throttled(30));
+        throttle.reset();
+        assert_eq!(throttle.retry_after_secs(), None);
+        four_wrong(&throttle);
+    }
+
+    #[test]
+    fn successful_unlock_can_reset_from_a_synchronous_observer() {
+        let (_, throttle) = fixture();
+        four_wrong(&throttle);
+        assert_eq!(
+            throttle.attempt(|| {
+                throttle.reset();
+                Ok(())
+            }),
+            PasswordAttempt::Unlocked
+        );
+        four_wrong(&throttle);
+    }
+
+    #[test]
+    fn concurrent_wrong_passwords_are_serialised_and_counted() {
+        let (_, throttle) = fixture();
+        let start = Barrier::new(8);
+        let calls = AtomicUsize::new(0);
+        let active = AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            let threads: Vec<_> = (0..8)
+                .map(|_| {
+                    scope.spawn(|| {
+                        start.wait();
+                        throttle.attempt(|| {
+                            assert_eq!(active.fetch_add(1, SeqCst), 0);
+                            calls.fetch_add(1, SeqCst);
+                            std::thread::yield_now();
+                            active.fetch_sub(1, SeqCst);
+                            Err(UnlockFailure::WrongPassword)
+                        })
+                    })
+                })
+                .collect();
+            assert_eq!(
+                threads
+                    .into_iter()
+                    .map(|t| t.join().unwrap())
+                    .filter(|answer| *answer == throttled(30))
+                    .count(),
+                4
+            );
+        });
+        assert_eq!(calls.load(SeqCst), 5);
+    }
+
+    #[test]
+    fn throttle_constants_are_pinned() {
+        assert_eq!(UNLOCK_FREE_ATTEMPTS, 5);
+        assert_eq!(UNLOCK_BASE_BACKOFF, Duration::from_secs(30));
+        assert_eq!(UNLOCK_MAX_BACKOFF, Duration::from_secs(900));
+    }
+}
