@@ -352,6 +352,113 @@ function addressFieldHint(control) {
   return null;
 }
 
+// Registration (sign-up) forms. The identity kinds below are the `kind` values of the bridge's
+// `extraFields` (protocol.rs `ExtraFieldKind`); address parts come from addressFieldHint above.
+// Hints are normalized like addressFieldHint (NFKC, camelCase split, lowercase, punctuation to
+// spaces), so "firstName", "first_name" and "First name:" are all "first name", and an apostrophe
+// ("ім'я") becomes a space ("ім я"). Patterns match whole words of that text, in order: the
+// first kind that matches wins, so "user name" is a username before it is a name.
+function normalizedHint(value) {
+  return String(value || '').normalize('NFKC')
+    .replace(/([\p{Ll}\d])(\p{Lu})/gu, '$1 $2').toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+const WORD = (alternatives) => new RegExp('(?:^| )(?:' + alternatives + ')(?: |$)');
+
+// A field that holds a payment card, a one-time or verification code, a security answer, a
+// national id or a search query is never captured or filled, whatever else its hints say.
+const SENSITIVE_FIELD_HINT = WORD([
+  'card(?: number| holder| name)?', 'credit ?card', 'cc(?: number| num| name| exp\\w*)?', 'cvv2?', 'cvc2?', 'csc', 'cid',
+  'exp(?:iry|iration)?(?: date| month| year)?', 'security code', 'verification code', 'one time(?: code| password)?',
+  'otp', 'captcha', 'pin', 'token', 'secret', 'security answer', 'answer', 'security question', 'iban', 'bic', 'swift',
+  'ssn', 'social security(?: number)?', 'tax id', 'passport(?: number)?', 'search', 'query', 'coupon', 'promo(?: code)?',
+  'gift card', 'voucher',
+  'karte', 'kartennummer', 'kreditkarte', 'karteninhaber', 'prüfnummer', 'sicherheitscode', 'gültig bis', 'suche',
+  'gutschein(?:code)?', 'steuer ?id', 'steuernummer', 'reisepass',
+  'картка', 'картки', 'номер картки', 'кредитна картка', 'код безпеки', 'код підтвердження', 'пошук', 'промокод',
+  'паспорт', 'іпн',
+  'карта', 'карты', 'номер карты', 'кредитная карта', 'код безопасности', 'код подтверждения', 'поиск', 'инн',
+].join('|'));
+
+const IDENTITY_FIELD_HINTS = [
+  ['username', WORD([
+    'user ?name', 'user id', 'userid', 'login(?: name| id)?', 'nick ?name', 'screen name', 'account name', 'display name',
+    'benutzer(?: ?name)?', 'anmeldename', 'spitzname',
+    'логін', 'ім я користувача', 'нікнейм', 'псевдонім',
+    'логин', 'имя пользователя', 'никнейм', 'псевдоним',
+  ].join('|'))],
+  ['email', WORD([
+    'e ?mail(?: address| adresse)?', 'mail(?: address| adresse)', 'e ?mail ?adresse',
+    'електронна пошта', 'ел пошта', 'е пошта', 'пошта',
+    'электронная почта', 'эл почта', 'почта',
+  ].join('|'))],
+  ['phone', WORD([
+    'phone(?: number)?', 'telephone(?: number)?', 'tel', 'mobile(?: phone| number)?', 'cell(?: phone)?',
+    'telefon(?:nummer)?', 'handy(?:nummer)?', 'mobil(?:nummer|telefon)?', 'rufnummer',
+    'телефон', 'номер телефону', 'мобільний(?: телефон)?',
+    'номер телефона', 'мобильный(?: телефон)?',
+  ].join('|'))],
+  ['birthday', WORD([
+    'birthday', 'birth ?date', 'date of birth', 'dob', 'bday',
+    'geburtsdatum', 'geburtstag',
+    'дата народження', 'день народження',
+    'дата рождения', 'день рождения',
+  ].join('|'))],
+  ['familyName', WORD([
+    'last ?name', 'family ?name', 'surname', 'lname',
+    'nachname', 'familienname',
+    'прізвище', 'фамилия',
+  ].join('|'))],
+  ['givenName', WORD([
+    'first ?name', 'given ?name', 'forename', 'fname',
+    'vorname',
+    'ім я', 'имя',
+  ].join('|'))],
+  ['name', /^(?:name|your name|full ?name|vollständiger name|ihr name|vor und nachname|ваше ім я|повне ім я|піб|ваше имя|полное имя|фио)$/],
+  ['organization', WORD([
+    'company(?: name)?', 'organi[sz]ation', 'business name',
+    'firma', 'firmenname', 'unternehmen',
+    'компанія', 'організація', 'компания', 'организация',
+  ].join('|'))],
+];
+
+// The words of a button (or input value) that creates an account: a registration form's submit.
+const REGISTRATION_ACTION_TEXT = WORD([
+  'sign ?up', 'register', 'registration', 'create(?: an| your| my)? account', 'join(?: now| free)?', 'get started',
+  'open(?: an)? account',
+  'registrieren', 'registrierung', 'jetzt registrieren', 'konto (?:erstellen|anlegen|eröffnen)', 'kostenlos registrieren',
+  'зареєструватися', 'зареєструватись', 'реєстрація', 'створити (?:акаунт|обліковий запис)',
+  'зарегистрироваться', 'регистрация', 'создать (?:аккаунт|учетную запись|учётную запись)',
+].join('|'));
+
+// The texts that describe a control: name, id, aria-label, placeholder, associated labels.
+function controlHints(control) {
+  const labels = Array.from(control.labels || [], (label) => addressLabelText(label, control));
+  return [
+    control.getAttribute('name'), control.getAttribute('id'), control.getAttribute('aria-label'),
+    control.getAttribute('placeholder'), ...labels,
+  ].map(normalizedHint).filter(Boolean);
+}
+
+function isSensitiveFieldHint(control) {
+  return controlHints(control).some((hint) => SENSITIVE_FIELD_HINT.test(hint));
+}
+
+// The identity kind of a control from its texts, or null. Sensitive fields are never classified.
+function identityFieldHint(control) {
+  const hints = controlHints(control);
+  if (hints.some((hint) => SENSITIVE_FIELD_HINT.test(hint))) return null;
+  for (const [kind, pattern] of IDENTITY_FIELD_HINTS) {
+    if (hints.some((hint) => pattern.test(hint))) return kind;
+  }
+  return null;
+}
+
+function isRegistrationActionText(text) {
+  return REGISTRATION_ACTION_TEXT.test(normalizedHint(text));
+}
+
 // Bare name for content.js. globalThis in a content script is the page, so
 // globalThis.findLoginForm is not this function (LinkedIn throws
 // "findLoginForm is not a function").
@@ -365,6 +472,9 @@ var mypassFormDetection = {
   findFillableFields,
   findLoginForm,
   addressFieldHint,
+  identityFieldHint,
+  isSensitiveFieldHint,
+  isRegistrationActionText,
 };
 
 if (typeof module !== 'undefined') {

@@ -31,6 +31,7 @@
         base32: require('./shared/base32.js'),
         formDetection: require('./shared/form-detection.js'),
         addressForm: require('./shared/address-form.js'),
+        registrationForm: require('./shared/registration-form.js'),
         totpDetection: require('./shared/totp-detection.js'),
         pageIdentifier: require('./shared/page-identifier.js'),
         securityWatch: require('./shared/security-watch.js'),
@@ -44,6 +45,7 @@
         base32: mypassBase32,
         formDetection: mypassFormDetection,
         addressForm: mypassAddressForm,
+        registrationForm: mypassRegistrationForm,
         totpDetection: mypassTotpDetection,
         pageIdentifier: mypassPageIdentifier,
         securityWatch: mypassSecurityWatch,
@@ -92,6 +94,9 @@
     newPasswordFieldQuery: 'topOnly',
     pageIdentifierQuery: 'topOnly',
     pendingOpenFill: 'topOnly',
+    // The registration form identity icon and its fill: page data from the vault (Address
+    // entries), like the address autofill, which also runs in the top frame only.
+    identityIcon: 'topOnly',
   };
 
   function isFeatureEnabledInFrame(feature, isTopFrame) {
@@ -183,6 +188,26 @@
     const matched = fieldKind === 'otp' ? all.filter((entry) => entry.hasTotp) : all;
     const entries = shared.autofillSettings.filterSuggestionEntries(matched, settings);
     return entries.length === 0 ? { panel: 'empty', entries: [] } : { panel: 'entries', entries };
+  }
+
+  // The identity panel of a registration form field lists the vault's Address entries (the
+  // background answers `identityList` with id, title and the person's name only). Same panel
+  // states as chooseInlinePanel; an empty vault says there is no address rather than no login.
+  function chooseIdentityPanel(response) {
+    if (response && response.type === 'locked') return { panel: 'locked', entries: [] };
+    if (response && response.type === 'pairingRequired') return { panel: 'pairingRequired', entries: [] };
+    if (!response || response.type !== 'identityList' || !Array.isArray(response.entries)) {
+      return { panel: 'unavailable', entries: [] };
+    }
+    const entries = response.entries
+      .filter((entry) => entry && typeof entry.id === 'string' && entry.id && typeof entry.title === 'string')
+      .map((entry) => ({
+        id: entry.id,
+        title: entry.title,
+        username: typeof entry.username === 'string' ? entry.username : '',
+        hasTotp: false,
+      }));
+    return entries.length === 0 ? { panel: 'identityEmpty', entries: [] } : { panel: 'entries', entries };
   }
 
   // The inline icon is a control the PAGE can see and dispatch events at, unlike the popup.
@@ -283,7 +308,9 @@
     return (h1 >>> 0).toString(16) + '.' + (h2 >>> 0).toString(16) + '.' + password.length;
   }
 
-  function requestSavePrompt(url, username, password, state, sendMessage, now) {
+  // `fields` are the extra values of a registration form (registration-form.js `capture`); they
+  // ride along with the login and become the proposal's extraFields once the user saves.
+  function requestSavePrompt(url, username, password, state, sendMessage, now, fields) {
     const at = typeof now === 'number' ? now : Date.now();
     const key = url + '\u0000' + username + '\u0000' + passwordFingerprint(state, password);
     const last = state.lastLoginPrompt;
@@ -296,7 +323,9 @@
       if (state.lastLoginPrompt === entry) state.lastLoginPrompt = null;
     }, PROMPT_DEDUPE_MS);
     if (timer && typeof timer.unref === 'function') timer.unref();
-    sendMessage({ type: 'requestPrompt', kind: 'saveLogin', url, username, password }, (response) => {
+    const message = { type: 'requestPrompt', kind: 'saveLogin', url, username, password };
+    if (Array.isArray(fields) && fields.length > 0) message.fields = fields;
+    sendMessage(message, (response) => {
       // A reply that never came (the service worker restarted, the extension reloaded) sets
       // runtime.lastError; reading it is what stops Chrome logging "Unchecked runtime.lastError".
       // The missing response itself is handled below exactly as before: the entry is dropped so
@@ -829,6 +858,7 @@
     get locked() { return i18n.t('myPassLocked'); },
     get pairingRequired() { return i18n.t('panelPairingRequired'); },
     get unavailable() { return i18n.t('panelUnavailable'); },
+    get identityEmpty() { return i18n.t('panelNoAddresses'); },
   };
 
   // Countdown ring geometry for the row's TOTP indicator. Deliberately smaller than the
@@ -1215,10 +1245,29 @@
         });
         return;
       }
+      // Registration forms first: their identity and address fields get the identity icon, which
+      // takes the place of the login icon on the same field (an email there is a person's email,
+      // not the login of a saved account). Password fields keep their own icon and generator.
+      const identityInputs = new Set();
+      if (identityFeatureOn()) {
+        for (const form of shared.registrationForm.find(document)) {
+          for (const field of shared.registrationForm.fillableFields(form)) {
+            identityInputs.add(field.node);
+            attachIconTo(field.node, 'identity', false);
+          }
+        }
+      }
       for (const field of findFillableFields(document)) {
+        if (field.kind === 'username' && identityInputs.has(field.input)) continue;
         attachIconTo(field.input, field.kind, field.isNewPassword);
       }
       scheduleSync();
+    }
+
+    // Identity icons and fills need the address switch, an https page and the top frame.
+    function identityFeatureOn() {
+      return runsHere('identityIcon') && pageAutofillSettings.showAddresses === true
+        && shared.urlMatch.isHttpsAddressPage(location.href);
     }
 
     // The single ticker driving every ring in the currently-open panel. Kept outside
@@ -1327,10 +1376,87 @@
     }
     handleExtensionContextLost = teardownExtensionContext;
 
+    // Adds the settings row, mounts the panel under the field and starts its ring ticker. Shared
+    // by the credential panel and the registration identity panel.
+    function mountPanel(input, host, shadow, content) {
+      // Last row in every state, so settings stay reachable from the page even in a window
+      // with no toolbar button to click.
+      content.root.appendChild(buildSettingsRow(document, (event) => {
+        if (!isTrustedActivation(event)) return;
+        sendRuntimeMessage({ type: 'openMyPassSettings' });
+        closePanel();
+      }));
+      shadow.appendChild(content.root);
+      // Mounted invisibly first so it can be measured before the flip/clamp decision.
+      host.style.setProperty('visibility', 'hidden', 'important');
+      host.style.setProperty('top', '0px', 'important');
+      host.style.setProperty('left', '0px', 'important');
+      mountParentFor(input).appendChild(host);
+      openPanel = { host, input, dx: 0, dy: 0, verified: false };
+      setIconExpanded(input, true);
+      positionOpenPanel();
+      if (openPanel && openPanel.host === host) host.style.setProperty('visibility', 'visible', 'important');
+
+      // Animate the countdown ring(s) on a single shared 1Hz ticker while the panel stays
+      // open — purely cosmetic, driven by the wall clock (panelRingFraction), never by the
+      // entry's secret. No-op when this panel has no TOTP entries.
+      if (content.ringCircles.length > 0) {
+        panelRingTimer = setInterval(() => {
+          const offset = PANEL_RING_CIRCUMFERENCE * (1 - panelRingFraction(Date.now()));
+          for (const circle of content.ringCircles) {
+            circle.style.strokeDashoffset = String(offset);
+          }
+        }, 1000);
+      }
+    }
+
+    // The identity panel of a registration form field: the vault's Address entries. Choosing one
+    // fills every fillable field of that form at once (registration-form.js `fill`).
+    function openIdentityPanel(input) {
+      panelRequestId += 1;
+      const requestId = panelRequestId;
+      sendRuntimeMessage({ type: 'getIdentitySuggestions', url: location.href }, (response) => {
+        if (requestId !== panelRequestId) return;
+        const routed = chooseIdentityPanel(response);
+        const { host, shadow } = buildPanelHost(document);
+        const content = buildPanelContent(document, routed, {
+          onSelect: (event, entryId) => {
+            if (!isTrustedActivation(event)) return;
+            closePanel();
+            requestIdentityFill(input, entryId);
+          },
+          onUnlock: (event) => {
+            if (isTrustedActivation(event)) {
+              sendRuntimeMessage({ type: 'requestUnlock' });
+              closePanel();
+            }
+          },
+        });
+        mountPanel(input, host, shadow, content);
+      });
+    }
+
+    // The background reads the chosen Address entry for this exact document and answers with its
+    // values; they go only into the form the clicked field still belongs to, never elsewhere.
+    function requestIdentityFill(input, entryId) {
+      const pageUrl = location.href;
+      sendRuntimeMessage({ type: 'fillIdentity', id: entryId, url: pageUrl }, (response) => {
+        if (typeof chrome !== 'undefined' && chrome && chrome.runtime) void chrome.runtime.lastError;
+        if (!response || response.type !== 'identity' || !response.address || location.href !== pageUrl) return;
+        if (!identityFeatureOn() || !input.isConnected) return;
+        const form = shared.registrationForm.formFor(document, input);
+        if (form) shared.registrationForm.fill(form, response.address, shared.addressForm.setNativeAddressValue);
+      });
+    }
+
     function togglePanel(input, kind, isNewPassword) {
       const wasOpenForThisInput = !!(openPanel && openPanel.input === input);
       closePanel();
       if (wasOpenForThisInput) return;
+      if (kind === 'identity') {
+        openIdentityPanel(input);
+        return;
+      }
 
       panelRequestId += 1;
       const requestId = panelRequestId;
@@ -1381,35 +1507,7 @@
           }));
           content.root.appendChild(generateRow);
         }
-        // Last row in every state, so settings stay reachable from the page even in a window
-        // with no toolbar button to click.
-        content.root.appendChild(buildSettingsRow(document, (event) => {
-          if (!isTrustedActivation(event)) return;
-          sendRuntimeMessage({ type: 'openMyPassSettings' });
-          closePanel();
-        }));
-        shadow.appendChild(content.root);
-        // Mounted invisibly first so it can be measured before the flip/clamp decision.
-        host.style.setProperty('visibility', 'hidden', 'important');
-        host.style.setProperty('top', '0px', 'important');
-        host.style.setProperty('left', '0px', 'important');
-        mountParentFor(input).appendChild(host);
-        openPanel = { host, input, dx: 0, dy: 0, verified: false };
-        setIconExpanded(input, true);
-        positionOpenPanel();
-        if (openPanel && openPanel.host === host) host.style.setProperty('visibility', 'visible', 'important');
-
-        // Animate the countdown ring(s) on a single shared 1Hz ticker while the panel stays
-        // open — purely cosmetic, driven by the wall clock (panelRingFraction), never by the
-        // entry's secret. No-op when this panel has no TOTP entries.
-        if (content.ringCircles.length > 0) {
-          panelRingTimer = setInterval(() => {
-            const offset = PANEL_RING_CIRCUMFERENCE * (1 - panelRingFraction(Date.now()));
-            for (const circle of content.ringCircles) {
-              circle.style.strokeDashoffset = String(offset);
-            }
-          }, 1000);
-        }
+        mountPanel(input, host, shadow, content);
       });
     }
 
@@ -1421,6 +1519,8 @@
         // form.requestSubmit() is "trusted" too, so a live user activation is required as well
         // (see isUserSubmit); the background additionally throttles opening per tab.
         if (!isUserSubmit(event)) return;
+        // A registration form raises its own prompt, with its extra fields (see below).
+        if (registrationSaveTarget(loginForm.form)) return;
         if (
           runsHere('saveBanner') &&
           pageAutofillSettings.offerSaveLogin &&
@@ -1434,6 +1534,35 @@
         }
       });
     }
+
+    // The registration form whose submit may raise a save prompt, or null: https top frame,
+    // save offers on, and a form that has a new-password field.
+    function registrationSaveTarget(node) {
+      if (!runsHere('saveBanner') || !pageAutofillSettings.offerSaveLogin
+        || !shared.urlMatch.isHttpsAddressPage(location.href)) return null;
+      const form = shared.registrationForm.formFor(document, node);
+      return form && form.newPassword ? form : null;
+    }
+
+    // A user's submit of a registration form (the submit event, or a click on its submit or
+    // "Sign up" button, whichever comes first; requestSavePrompt drops the repeat) asks to save
+    // the new login with the form's other values. Capture phase, so a page that stops the event
+    // or swaps the form on submit is still seen. A locked vault is not a reason to stay quiet:
+    // the prompt itself asks to unlock before it saves.
+    function onRegistrationSubmit(event, node) {
+      if (!isUserSubmit(event)) return;
+      const form = registrationSaveTarget(node);
+      const captured = form && shared.registrationForm.capture(form);
+      if (!captured) return;
+      requestSavePrompt(location.href, captured.username, captured.password, state, sendRuntimeMessage,
+        undefined, captured.fields);
+    }
+    document.addEventListener('submit', (event) => onRegistrationSubmit(event, event.target), true);
+    document.addEventListener('click', (event) => {
+      const target = event.target && typeof event.target.closest === 'function'
+        ? event.target.closest('button, input[type="submit"], input[type="button"], [role="button"]') : null;
+      if (target && shared.registrationForm.isSubmitControl(target)) onRegistrationSubmit(event, target);
+    }, true);
 
     let addressSnapshot = null;
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -1704,7 +1833,7 @@
       detectOtpauthLink, detectOtpauthText, isBase32Secret, detectManualSetupKey,
       decodeQrFromImage, detectQrCandidate,
       detectTotpCandidateWithPriority, shouldShowTotpBanner,
-      classifyGetCredentialsResponse, chooseInlinePanel, requestSavePrompt, requestTotpPrompt,
+      classifyGetCredentialsResponse, chooseInlinePanel, chooseIdentityPanel, requestSavePrompt, requestTotpPrompt,
       isTrustedActivation, hasLiveUserActivation, isUserSubmit, handleIconActivate, handleEntrySelect, trustedClickHandler,
       buildTotpCandidateQueryResponse, buildNewPasswordFieldQueryResponse, buildGeneratePasswordRow,
       classifyGeneratePasswordResponse, showGeneratePasswordMessage,

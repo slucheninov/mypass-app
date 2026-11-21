@@ -375,7 +375,9 @@
   "pairingThrottled": {
     "message": "Забагато спроб підключення. Зачекайте хвилину й знову відкрийте це вікно."
   },
-  "pairingNewCodeRequested": { "message": "Запитано новий код. Перевірте MyPass." },
+  "pairingNewCodeRequested": {
+    "message": "Запитано новий код. Перевірте MyPass."
+  },
   "pairingInvalidCode": {
     "message": "Код неправильний або прострочений. Перевірте код у MyPass або знову відкрийте це вікно."
   },
@@ -1088,5 +1090,19 @@
   },
   "cvv": {
     "message": "CVV"
+  },
+  "panelNoAddresses": {
+    "message": "У MyPass немає адрес"
+  },
+  "promptFormFields": {
+    "message": "Поля форми"
+  },
+  "promptFormFieldsCount": {
+    "message": "$P1$, які з них зберегти, ви оберете в MyPass",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
   }
 }

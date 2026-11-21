@@ -70,6 +70,7 @@ assert.deepStrictEqual(
     'shared/security-watch.js',
     'shared/autofill-settings.js',
     'shared/address-form.js',
+    'shared/registration-form.js',
     'shared/totp-detection.js',
     'shared/placement.js',
     'content.js',

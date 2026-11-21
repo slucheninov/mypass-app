@@ -379,7 +379,9 @@
   "pairingThrottled": {
     "message": "Too many pairing attempts. Wait a minute, then reopen this popup."
   },
-  "pairingNewCodeRequested": { "message": "A new code was requested. Check MyPass." },
+  "pairingNewCodeRequested": {
+    "message": "A new code was requested. Check MyPass."
+  },
   "pairingInvalidCode": {
     "message": "Invalid or expired code. Check the code in MyPass or reopen this popup."
   },
@@ -1093,5 +1095,19 @@
   "cvv": {
     "message": "CVV",
     "description": "Card security code field placeholder; the abbreviation is used as is."
+  },
+  "panelNoAddresses": {
+    "message": "No addresses in MyPass"
+  },
+  "promptFormFields": {
+    "message": "Form fields"
+  },
+  "promptFormFieldsCount": {
+    "message": "$P1$, you choose which to keep in MyPass",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
   }
 }
