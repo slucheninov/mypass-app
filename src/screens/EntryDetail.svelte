@@ -197,9 +197,13 @@
           <Button onclick={() => (restoringTo = true)}>{t("Restore to…")}</Button>
           <Button variant="danger" onclick={requestDelete}>{t("Delete permanently")}</Button>
         {:else}
+          <!-- A toggle keeps one name; the tooltip says what a click does. -->
           <IconButton
             icon="star"
-            label={detail.favorite ? t("Remove from Favorites") : t("Add to Favorites")}
+            tone="favorite"
+            label={t("Favorite")}
+            pressed={detail.favorite}
+            tooltip={detail.favorite ? t("Remove from Favorites") : t("Add to Favorites")}
             onclick={toggleFavorite}
           />
           <Button onclick={edit}>{t("Edit")}</Button>

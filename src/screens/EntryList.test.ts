@@ -97,13 +97,16 @@ describe("rows", () => {
       ]),
     );
     const github = optionNamed(/GitHub/);
-    expect(within(github).getByRole("img", { name: t("Favorites") })).toBeTruthy();
+    const star = within(github).getByRole("img", { name: t("Favorite") });
+    // A filled star next to the title, not an outline among the badges.
+    expect(star.closest(".title-line")).not.toBeNull();
+    expect(star.querySelector("svg")?.getAttribute("fill")).toBe("currentColor");
     expect(within(github).getByRole("img", { name: t("Verification Code") })).toBeTruthy();
     expect(within(github).queryByRole("img", { name: t("Passkey") })).toBeNull();
     const zed = optionNamed(/Zed/);
     expect(within(zed).getByRole("img", { name: t("Passkey") })).toBeTruthy();
     expect(within(zed).getByRole("img", { name: t("%lld files", 2) })).toBeTruthy();
-    expect(within(zed).queryByRole("img", { name: t("Favorites") })).toBeNull();
+    expect(within(zed).queryByRole("img", { name: t("Favorite") })).toBeNull();
   });
 
   it("security_flags_rendered_as_localised_chips", async () => {

@@ -88,6 +88,15 @@ describe("contrast", () => {
     }
   });
 
+  it("favorite_star_reaches_non_text_contrast_in_light_and_both_dark_blocks", () => {
+    for (const body of [light, dark, media]) {
+      for (const pane of ["--bg", "--list-bg"]) {
+        expect(contrast(token(body, "--favorite"), token(body, pane))).toBeGreaterThanOrEqual(3);
+      }
+    }
+    expect(token(dark, "--favorite")).toBe(token(media, "--favorite"));
+  });
+
   it("danger_text_and_close_hover_reach_aa", () => {
     expect(contrast(token(light, "--danger"), token(light, "--bg"))).toBeGreaterThanOrEqual(4.5);
     expect(contrast(token(dark, "--danger"), token(dark, "--bg"))).toBeGreaterThanOrEqual(4.5);

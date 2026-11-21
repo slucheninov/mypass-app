@@ -385,10 +385,19 @@ describe("header actions", () => {
   it("the_favorite_star_toggles_through_entry_set_favorite", async () => {
     const fake = backend();
     await open(fake, "e-gitlab");
-    await userEvent.setup().click(within(pane()).getByRole("button", { name: "Add to Favorites" }));
+    const star = within(pane()).getByRole("button", { name: "Favorite" });
+    expect(star.getAttribute("aria-pressed")).toBe("false");
+    expect(star.getAttribute("title")).toBe("Add to Favorites");
+    expect(star.querySelector("svg")?.getAttribute("fill")).toBe("none");
+    await userEvent.setup().click(star);
     await waitFor(() => expect(calls(fake, "entrySetFavorite")[0]!.args).toEqual({ id: "e-gitlab", favorite: true }));
-    // The detail refetches on VaultChanged and the star flips.
-    expect(await within(pane()).findByRole("button", { name: "Remove from Favorites" })).toBeTruthy();
+    // The detail refetches on VaultChanged and the star fills.
+    await waitFor(() =>
+      expect(within(pane()).getByRole("button", { name: "Favorite" }).getAttribute("aria-pressed")).toBe("true"),
+    );
+    const on = within(pane()).getByRole("button", { name: "Favorite" });
+    expect(on.getAttribute("title")).toBe("Remove from Favorites");
+    expect(on.querySelector("svg")?.getAttribute("fill")).toBe("currentColor");
   });
 
   it("the_group_link_selects_the_group_scope", async () => {

@@ -388,7 +388,14 @@
         >
           <Avatar text={entry.title} size={32} />
           <span class="text">
-            <span class="title" data-part="title">{entry.title}</span>
+            <span class="title-line">
+              <span class="title" data-part="title">{entry.title}</span>
+              {#if entry.favorite}
+                <span class="favorite" role="img" aria-label={t("Favorite")} data-testid="favorite-star"
+                  ><Icon name="star" size={12} filled /></span
+                >
+              {/if}
+            </span>
             {#if entry.subtitle}<span class="subtitle">{entry.subtitle}</span>{/if}
             {#if entry.flags.length > 0}
               <span class="flags">
@@ -397,7 +404,6 @@
             {/if}
           </span>
           <span class="badges">
-            {#if entry.favorite}<span role="img" aria-label={t("Favorites")}><Icon name="star" size={13} /></span>{/if}
             {#if entry.hasTotp}<span role="img" aria-label={t("Verification Code")}><Icon name="shield-key" size={13} /></span>{/if}
             {#if entry.hasPasskey}<span role="img" aria-label={t("Passkey")}><Icon name="passkey" size={13} /></span>{/if}
             {#if entry.attachmentCount > 0}
@@ -494,6 +500,17 @@
     flex-direction: column;
     min-width: 0;
     gap: 3px;
+  }
+  .title-line {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+  .favorite {
+    display: inline-flex;
+    flex: none;
+    color: var(--favorite);
   }
   .title {
     overflow: hidden;
