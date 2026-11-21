@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { proposalCustomFields, proposalFieldLabel } from "./proposal-fields";
+import { keptByDefault, proposalCustomFields, proposalFieldLabel } from "./proposal-fields";
 
 describe("proposal fields", () => {
   it("names a known kind in the app's words and keeps the page label of an other value", () => {
@@ -21,5 +21,12 @@ describe("proposal fields", () => {
     );
     expect(fields.map((f) => f.key)).toEqual(["Phone", "Phone 2", "Password 2", "notes 2", "Pet 2"]);
     expect(fields.every((f) => !f.protected)).toBe(true);
+  });
+
+  it("ticks identity and address values at first and leaves a page's own fields opt-in", () => {
+    expect(keptByDefault({ kind: "givenName" })).toBe(true);
+    expect(keptByDefault({ kind: "city" })).toBe(true);
+    expect(keptByDefault({ kind: "email" })).toBe(true);
+    expect(keptByDefault({ kind: "other" })).toBe(false);
   });
 });

@@ -45,6 +45,15 @@ export function proposalFieldLabel(field: Pick<ProposalField, "kind" | "label">)
   }
 }
 
+/**
+ * Whether the review ticks a value at first: the identity and address values the extension
+ * recognised are kept by default, a field the page labelled itself (`other`) is opt-in, because
+ * its label is the page's word and its content may be anything.
+ */
+export function keptByDefault(field: Pick<ProposalField, "kind">): boolean {
+  return field.kind !== "other";
+}
+
 /** The custom fields the kept extra values become: unique keys, plain (not protected) values. */
 export function proposalCustomFields(fields: readonly ProposalField[], existing: readonly CustomFieldEdit[] = []): CustomFieldEdit[] {
   const taken = new Set([...RESERVED, ...existing.map((f) => f.key.toLowerCase())]);

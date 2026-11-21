@@ -1,11 +1,12 @@
 <script lang="ts">
   // The review of a registration form proposal, before its login opens in the editor: every extra
-  // value of the form with a checkbox (kept by default), and, when the form held an address the
+  // value of the form with a checkbox (identity and address values ticked, a field the page
+  // labelled itself unticked: see `keptByDefault`), and, when the form held an address the
   // vault has no Address entry for, "Also create an Address entry" (off by default). Nothing is
   // saved here: Continue reports the choice, the handler builds the editor model from it.
   import type { BrowserProposal_Serialize } from "../lib/bindings";
   import { t } from "../lib/i18n/index.svelte";
-  import { proposalFieldLabel } from "../lib/proposal-fields";
+  import { keptByDefault, proposalFieldLabel } from "../lib/proposal-fields";
   import Button from "../lib/ui/Button.svelte";
   import Modal from "../lib/ui/Modal.svelte";
 
@@ -20,7 +21,7 @@
   } = $props();
 
   // svelte-ignore state_referenced_locally
-  let keep = $state(proposal.extraFields.map(() => true));
+  let keep = $state(proposal.extraFields.map(keptByDefault));
   let withAddress = $state(false);
 </script>
 

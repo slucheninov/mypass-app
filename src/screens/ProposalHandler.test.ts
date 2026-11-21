@@ -239,13 +239,14 @@ describe("ProposalHandler", () => {
     const review = () => screen.findByRole("dialog", { name: "Review form fields" });
     const box = (name: RegExp) => screen.getByRole("checkbox", { name }) as HTMLInputElement;
 
-    it("lists every form value ticked and opens the editor with the kept ones as custom fields", async () => {
+    it("ticks the identity and address values, leaves the page's own fields unticked, and keeps what is ticked", async () => {
       const { fake } = await openApp();
       await fake.emit("proposalEvent", await proposeRegistration(fake, "r1", false));
       await review();
       // No editor yet: the review comes first.
       expect(navigation.editModel).toBeNull();
-      expect(screen.getAllByRole("checkbox").map((c) => (c as HTMLInputElement).checked)).toEqual([true, true, true, true]);
+      // The "other" value (a label the page chose) is opt-in.
+      expect(screen.getAllByRole("checkbox").map((c) => (c as HTMLInputElement).checked)).toEqual([true, true, false, true]);
       expect(screen.queryByRole("checkbox", { name: /Also create an Address entry/ })).toBeNull();
       const user = userEvent.setup();
       await user.click(box(/Phone/));
@@ -255,10 +256,20 @@ describe("ProposalHandler", () => {
       expect(navigation.editModel?.password).toBe("pw-r1");
       expect(navigation.editModel?.customFields).toEqual([
         { key: "Given Name", value: "Ann", protected: false },
-        { key: "Nickname", value: "annie", protected: false },
         { key: "City", value: "Lviv", protected: false },
       ]);
       expect(calls(fake, "entrySave")).toHaveLength(0);
+    });
+
+    it("keeps an other value only when the user ticks it", async () => {
+      const { fake } = await openApp();
+      await fake.emit("proposalEvent", await proposeRegistration(fake, "r1", false));
+      await review();
+      const user = userEvent.setup();
+      await user.click(box(/Nickname/));
+      await user.click(screen.getByRole("button", { name: "Continue" }));
+      await screen.findByTestId("proposal-banner");
+      expect(navigation.editModel?.customFields.map((f) => f.key)).toEqual(["Given Name", "Phone", "Nickname", "City"]);
     });
 
     it("offers the Address entry unticked and saves it only when ticked", async () => {
