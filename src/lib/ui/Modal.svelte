@@ -7,6 +7,8 @@
     onclose,
     children,
     footer,
+    icon,
+    subtitle,
     backdropCloses = true,
     focusDialog = false,
   }: {
@@ -15,6 +17,10 @@
     onclose: () => void;
     children: Snippet;
     footer?: Snippet;
+    /** A tile left of the title (a sheet with a subject, like the vault being opened); the dialog gets roomier padding. */
+    icon?: Snippet;
+    /** One muted line under the title. */
+    subtitle?: string;
     /** A click on the backdrop closes the dialog (default). */
     backdropCloses?: boolean;
     /** Focus the dialog itself, not its first control: for a dialog nobody asked for, where a stray key must not press a button. */
@@ -88,6 +94,7 @@
   >
     <div
       class="dialog"
+      class:roomy={icon !== undefined}
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}
@@ -95,7 +102,13 @@
       bind:this={dialog}
       {onkeydown}
     >
-      <h2 id={titleId}>{title}</h2>
+      <div class="header">
+        {#if icon}<div class="header-icon">{@render icon()}</div>{/if}
+        <div class="header-text">
+          <h2 id={titleId}>{title}</h2>
+          {#if subtitle}<p class="subtitle">{subtitle}</p>{/if}
+        </div>
+      </div>
       <div class="body">{@render children()}</div>
       {#if footer}<div class="footer">{@render footer()}</div>{/if}
     </div>
@@ -122,11 +135,33 @@
     border-radius: 10px;
     box-shadow: var(--shadow);
   }
+  .header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-6);
+    padding: 16px 20px 8px;
+  }
+  .header-icon {
+    display: flex;
+    flex: none;
+  }
+  .header-text {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
+  }
   h2 {
     margin: 0;
-    padding: 16px 20px 8px;
-    font-size: 15px;
+    font-size: var(--font-size-lg);
     font-weight: 600;
+  }
+  .subtitle {
+    margin: 0;
+    overflow: hidden;
+    color: var(--text-2);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .body {
     padding: 4px 20px 16px;
@@ -135,8 +170,17 @@
   .footer {
     display: flex;
     justify-content: flex-end;
-    gap: 8px;
+    gap: var(--space-4);
     padding: 12px 20px;
     border-top: var(--sep);
+  }
+  .roomy .header {
+    padding: var(--space-8) var(--space-8) var(--space-6);
+  }
+  .roomy .body {
+    padding: var(--space-2) var(--space-8) var(--space-7);
+  }
+  .roomy .footer {
+    padding: var(--space-6) var(--space-8);
   }
 </style>

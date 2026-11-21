@@ -56,6 +56,39 @@ describe("OpenVaultSheet", () => {
     expect(calls(fake, "vaultOpen")).toHaveLength(0);
   });
 
+  it("open_vault_sheet_shows_the_folder_in_one_line_with_the_full_path_as_tooltip", async () => {
+    const long = "/Users/someone/Library/Mobile Documents/com~apple~CloudDocs/Vaults/Family.kdbx";
+    renderWithBackend(OpenVaultSheet, { path: long, onclose: () => {} }, createFakeBackend({ session: "noVault" }));
+    const dialog = await screen.findByRole("dialog", { name: "Open vault" });
+    const chip = dialog.querySelector(".folder");
+    expect(chip?.getAttribute("title")).toBe("/Users/someone/Library/Mobile Documents/com~apple~CloudDocs/Vaults");
+    expect(chip?.textContent).toBe("/Users/someone/Library/Mobile Documents/com~apple~CloudDocs/Vaults");
+    // The file name is the subtitle of the header, next to the decorative vault tile.
+    expect(dialog.querySelector(".subtitle")?.textContent).toBe("Family.kdbx");
+    expect(dialog.querySelector(".tile svg")?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("open_button_is_disabled_with_a_spinner_while_opening", async () => {
+    const user = userEvent.setup();
+    const onclose = vi.fn();
+    const fake = createFakeBackend({ session: "noVault" });
+    let release: () => void = () => {};
+    const original = fake.handlers.vaultOpen;
+    fake.handlers.vaultOpen = async (args) => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return original(args);
+    };
+    renderWithBackend(OpenVaultSheet, { path: PATH, onclose }, fake);
+    const input = (await screen.findByLabelText("Master password")) as HTMLInputElement;
+    await user.type(input, `${FIXTURE_MASTER_PASSWORD}{Enter}`);
+    const open = screen.getByRole("button", { name: "Open" }) as HTMLButtonElement;
+    await waitFor(() => expect(open.disabled).toBe(true));
+    expect(open.querySelector(".spinner")).not.toBeNull();
+    expect(screen.getByRole("dialog").querySelector("form")?.getAttribute("aria-busy")).toBe("true");
+    release();
+    await waitFor(() => expect(onclose).toHaveBeenCalledTimes(1));
+  });
+
   it("open_vault_sheet_passes_axe", async () => {
     renderWithBackend(OpenVaultSheet, { path: PATH, onclose: () => {} }, createFakeBackend({ session: "noVault" }));
     await expectNoAxeViolations(await screen.findByRole("dialog"));

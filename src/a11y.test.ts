@@ -413,7 +413,8 @@ function modalKeys(): string[] {
       while (i < f.text.length && f.text.charAt(i) !== ">") {
         if (f.text.charAt(i) === "{") {
           const end = braced(f.text, i);
-          if (f.text.slice(m.index, i).trimEnd().endsWith("title=")) titleExpr = f.text.slice(i + 1, end - 1);
+          // `\stitle=`, so `subtitle=` is not taken for the title.
+          if (/\stitle=$/.test(f.text.slice(m.index, i).trimEnd())) titleExpr = f.text.slice(i + 1, end - 1);
           i = end;
         } else i++;
       }

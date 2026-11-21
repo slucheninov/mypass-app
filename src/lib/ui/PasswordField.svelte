@@ -10,6 +10,7 @@
     autocomplete = "current-password",
     toggle = false,
     focusOnMount = false,
+    large = false,
     oninput,
   }: {
     /** Visible label, already translated. */
@@ -18,6 +19,8 @@
     /** Adds the Show / Hide password button. */
     toggle?: boolean;
     focusOnMount?: boolean;
+    /** A taller field, for a sheet whose one job is this password. */
+    large?: boolean;
     /** Called with the current length (never the value) after every edit. */
     oninput?: (length: number) => void;
   } = $props();
@@ -54,7 +57,8 @@
 
 <div class="field">
   <label for={id}>{label}</label>
-  <div class="control">
+  <!-- The bordered box holds the input and, inside it on the right, the reveal button. -->
+  <div class="control" class:large class:with-toggle={toggle}>
     <input
       {id}
       bind:this={input}
@@ -82,19 +86,35 @@
   }
   label {
     color: var(--text-2);
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
   .control {
     display: flex;
     align-items: center;
-    gap: 4px;
-  }
-  input {
-    flex: 1;
-    min-width: 0;
-    padding: 5px 8px;
+    min-height: var(--field-height);
     border: 1px solid var(--control-border);
     border-radius: var(--radius);
     background: var(--bg);
+  }
+  .control.large {
+    min-height: 36px;
+  }
+  .control.with-toggle {
+    padding-right: 3px;
+  }
+  .control:focus-within {
+    border-color: var(--accent);
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  input {
+    flex: 1;
+    align-self: stretch;
+    min-width: 0;
+    padding: var(--space-3) var(--space-5);
+    border: 0;
+    border-radius: var(--radius);
+    outline: none;
+    background: transparent;
   }
 </style>

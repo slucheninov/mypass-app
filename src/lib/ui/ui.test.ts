@@ -18,6 +18,7 @@ import ContextMenu from "./ContextMenu.svelte";
 import FieldRow from "./FieldRow.svelte";
 import Icon from "./Icon.svelte";
 import { ICON_NAMES, ICON_PATHS } from "./icons";
+import Modal from "./Modal.svelte";
 import Segmented from "./Segmented.svelte";
 import Select from "./Select.svelte";
 import SplitPane from "./SplitPane.svelte";
@@ -38,6 +39,27 @@ describe("Modal", () => {
     expect(onclose).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(document.activeElement).toBe(opener);
+  });
+
+  it("modal_header_shows_an_icon_and_a_subtitle_when_given", () => {
+    render(Modal, {
+      props: {
+        open: true, title: "Sheet", subtitle: "file.kdbx", onclose: () => {},
+        icon: textSnippet("ICON"), children: textSnippet("body"),
+      },
+    });
+    const dialog = screen.getByRole("dialog", { name: "Sheet" });
+    expect(dialog.classList.contains("roomy")).toBe(true);
+    expect(dialog.querySelector(".header-icon")?.textContent).toBe("ICON");
+    expect(dialog.querySelector(".subtitle")?.textContent).toBe("file.kdbx");
+  });
+
+  it("modal_without_icon_keeps_the_plain_header", () => {
+    render(Modal, { props: { open: true, title: "Plain", onclose: () => {}, children: textSnippet("body") } });
+    const dialog = screen.getByRole("dialog", { name: "Plain" });
+    expect(dialog.classList.contains("roomy")).toBe(false);
+    expect(dialog.querySelector(".header-icon")).toBeNull();
+    expect(dialog.querySelector(".subtitle")).toBeNull();
   });
 
   it("modal_traps_tab_inside_dialog", async () => {
