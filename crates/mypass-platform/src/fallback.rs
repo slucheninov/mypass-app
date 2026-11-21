@@ -115,6 +115,22 @@ impl LaunchAtLogin for UnsupportedLaunchAtLogin {
     }
 }
 
+/// No app icon or appearance reading on this platform (Windows sets its window icons through the
+/// app shell instead).
+#[derive(Debug, Default)]
+#[cfg(any(not(target_os = "macos"), test))]
+pub(crate) struct UnsupportedAppIcon;
+
+#[cfg(any(not(target_os = "macos"), test))]
+impl crate::AppIcon for UnsupportedAppIcon {
+    fn system_dark(&self) -> PlatformResult<bool> {
+        Err(PlatformError::Unsupported("app icon"))
+    }
+    fn set_png(&self, _: &[u8]) -> PlatformResult<()> {
+        Err(PlatformError::Unsupported("app icon"))
+    }
+}
+
 /// No keyboard layout reading on this platform.
 #[derive(Debug, Default)]
 #[cfg(any(not(any(target_os = "macos", windows)), test))]
@@ -277,6 +293,7 @@ pub(crate) fn platform(paths: &AppPaths) -> Platform {
         host_registrar: Arc::new(UnsupportedHostRegistrar),
         launch_at_login: Arc::new(UnsupportedLaunchAtLogin),
         keyboard_layout: Arc::new(UnsupportedKeyboardLayout),
+        app_icon: Arc::new(UnsupportedAppIcon),
     }
 }
 
@@ -337,6 +354,14 @@ mod tests {
         assert!(r.status().is_empty());
         assert!(matches!(
             UnsupportedKeyboardLayout.current(),
+            Err(PlatformError::Unsupported(_))
+        ));
+        assert!(matches!(
+            crate::AppIcon::system_dark(&UnsupportedAppIcon),
+            Err(PlatformError::Unsupported(_))
+        ));
+        assert!(matches!(
+            crate::AppIcon::set_png(&UnsupportedAppIcon, b"png"),
             Err(PlatformError::Unsupported(_))
         ));
         let sink: Arc<dyn Fn(Option<String>) + Send + Sync> = Arc::new(|_| {});

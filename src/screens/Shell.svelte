@@ -110,6 +110,7 @@
     <div class="sidebar-toggle" bind:this={toggleBox} data-tauri-drag-region>
       <IconButton
         icon="sidebar"
+        iconSize={18}
         label={sidebarCollapsed ? t("Show sidebar") : t("Hide sidebar")}
         tooltip={`${sidebarCollapsed ? t("Show sidebar") : t("Hide sidebar")} (${shortcutLabel})`}
         expanded={!sidebarCollapsed}

@@ -164,9 +164,13 @@ explicitly unsigned development build without secrets on relevant pull requests.
 Per the owner's release policy, notarization is disabled even if unrelated Apple
 credentials are present in the environment. Users follow INSTALL.txt's
 `xattr -dr com.apple.quarantine` instructions. Developer ID signing/notarization,
-Intel/universal builds and `.kdbx` association are future work. Icons are generated
-with `pnpm tauri icon src-tauri/icons/source.png`; the source was recovered from
-the owner's old Swift AppIcon asset catalog (1024px `icon_512x512@2x.png`).
+Intel/universal builds and `.kdbx` association are future work. The app icon (the
+old app's key, without the fingerprint) is drawn by `node scripts/make-app-icons.mjs`
+in a light and a dark variant; the bundle icons are then generated with
+`pnpm tauri icon src-tauri/icons/source.png -o <tmp>`, copying only the files
+`tauri.conf.json` lists plus `icon.png` into `src-tauri/icons/`. The running app shows
+the dark variant in the Dock (macOS) and on its windows (Windows) while the effective
+theme is dark.
 
 The Rust test entry point also runs `scripts/tests/*.test.sh` (offline version,
 packaging and verification tests). Regenerate dependency notices with

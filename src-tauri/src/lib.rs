@@ -4,6 +4,7 @@
 //! `src/lib/bindings.ts` is generated from [`specta_builder`], never edited by hand; the command
 //! list is pinned by `tests/commands.snap`.
 
+pub mod app_icon;
 pub mod bridge;
 mod bridge_unlock;
 pub mod commands;
