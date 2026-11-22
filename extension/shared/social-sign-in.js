@@ -370,14 +370,35 @@ var mypassSocialSignIn = (function () {
     var stopped = false;
     var listeners = [];
 
+    // An extension reload invalidates this script's context while its DOM and listeners stay on
+    // the page; every entry point checks and, once the context is gone, removes the ring and
+    // every listener instead of throwing "Extension context invalidated".
+    function alive() {
+      if (stopped) return false;
+      if (typeof env.contextAlive === 'function' && !env.contextAlive()) {
+        stop();
+        return false;
+      }
+      return true;
+    }
+    function guarded(fn) {
+      return function (a, b) {
+        if (alive()) fn(a, b);
+      };
+    }
     function on(target, type, fn, options) {
       if (!target || typeof target.addEventListener !== 'function') return;
-      target.addEventListener(type, fn, options);
-      listeners.push([target, type, fn, options]);
+      var wrapped = guarded(fn);
+      target.addEventListener(type, wrapped, options);
+      listeners.push([target, type, wrapped, options]);
     }
     function send(message, callback) {
-      if (stopped || !message) return;
-      env.sendMessage(message, callback || function () {});
+      if (!message || !alive()) return;
+      try {
+        env.sendMessage(message, callback || function () {});
+      } catch (error) {
+        stop();
+      }
     }
     function rendered(node) {
       if (!node || typeof node.getBoundingClientRect !== 'function') return false;
@@ -388,6 +409,7 @@ var mypassSocialSignIn = (function () {
     }
     function clearHighlight() {
       if (!highlight) return;
+      if (highlight.observer) highlight.observer.disconnect();
       if (typeof highlight.host.remove === 'function') highlight.host.remove();
       highlight = null;
     }
@@ -404,7 +426,7 @@ var mypassSocialSignIn = (function () {
       placeScheduled = true;
       env.requestAnimationFrame(function () {
         placeScheduled = false;
-        place();
+        if (alive()) place();
       });
     }
     function show(provider) {
@@ -413,12 +435,19 @@ var mypassSocialSignIn = (function () {
       if (!target) return false;
       var overlay = buildHighlight(doc, env.t('socialSignInLastTime', [PROVIDER_NAMES[provider]]));
       doc.documentElement.appendChild(overlay.host);
-      highlight = { host: overlay.host, target: target };
+      highlight = { host: overlay.host, target: target, observer: null };
+      // The button can move without a scroll or a window resize (a banner above it, a font that
+      // loads late, a layout change); follow its size and the page's, one placement per frame.
+      if (typeof env.ResizeObserver === 'function') {
+        highlight.observer = new env.ResizeObserver(guarded(schedulePlace));
+        highlight.observer.observe(target);
+        if (doc.body) highlight.observer.observe(doc.body);
+      }
       place();
       return true;
     }
     function findWithRetries(provider, attempt) {
-      if (stopped || enabled !== true || remembered !== provider) return;
+      if (!alive() || enabled !== true || remembered !== provider) return;
       if (show(provider) || attempt >= FIND_RETRY_MS.length) return;
       env.setTimeout(function () { findWithRetries(provider, attempt + 1); }, FIND_RETRY_MS[attempt]);
     }
@@ -429,7 +458,7 @@ var mypassSocialSignIn = (function () {
     }
     function lookUp() {
       send({ type: 'getSocialSignIn', url: loc.href }, function (response) {
-        if (stopped || !response || response.type !== 'socialSignIn') return;
+        if (!alive() || !response || response.type !== 'socialSignIn') return;
         if (response.enabled === false) {
           turnOff();
           return;
@@ -463,7 +492,7 @@ var mypassSocialSignIn = (function () {
       send(recordMessageForFrameFocus(event, context(), doc, win.navigator));
     }
     function onSettingChanged(changes, area) {
-      if (stopped || area !== 'local' || !changes || !changes[SETTING_KEY]) return;
+      if (!alive() || area !== 'local' || !changes || !changes[SETTING_KEY]) return;
       if (changes[SETTING_KEY].newValue === false) {
         turnOff();
       } else if (enabled !== true) {
@@ -492,7 +521,7 @@ var mypassSocialSignIn = (function () {
       env.storageChanged.addListener(onSettingChanged);
     }
     var begin = function (stored) {
-      if (stopped) return;
+      if (!alive()) return;
       // The cached value only decides until the lookup answers; the lookup always goes out.
       if (enabled === null) enabled = stored !== false;
       lookUp();

@@ -1461,7 +1461,10 @@
         totpImageLoadListener = null;
         totpImageLoadListenerAttached = false;
       }
+      if (socialSignInPage) socialSignInPage.stop();
     }
+    // The social sign-in page controller (startSocialSignIn, below), or null.
+    let socialSignInPage = null;
     handleExtensionContextLost = teardownExtensionContext;
 
     // Adds the settings row, mounts the panel under the field and starts its ring ticker. Shared
@@ -1986,7 +1989,7 @@
     function startSocialSignIn() {
       if (!runsHere('socialSignIn') || location.protocol !== 'https:') return;
       const local = chrome.storage && chrome.storage.local;
-      shared.socialSignIn.startPage({
+      socialSignInPage = shared.socialSignIn.startPage({
         window,
         document,
         location,
@@ -2002,6 +2005,8 @@
         now: () => Date.now(),
         setTimeout: (fn, ms) => setTimeout(fn, ms),
         requestAnimationFrame: (fn) => requestAnimationFrame(fn),
+        ResizeObserver: typeof ResizeObserver === 'function' ? ResizeObserver : null,
+        contextAlive: () => isExtensionContextAlive(),
       });
     }
     startSocialSignIn();
