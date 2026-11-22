@@ -7,4 +7,5 @@ pub(crate) mod fill;
 pub(crate) mod generator;
 pub(crate) mod identifier;
 pub(crate) mod session_ops;
+pub(crate) mod social;
 pub(crate) mod text;

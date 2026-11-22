@@ -332,6 +332,23 @@ fn request_cases() -> Vec<(Request, &'static str)> {
             },
             r#"{"type":"getUnlockOptions","token":"tok-1"}"#,
         ),
+        (
+            Request::RecordSocialSignIn {
+                token: t(),
+                page_url: "https://example.com/login".into(),
+                provider: "google".into(),
+                pairing: None,
+            },
+            r#"{"type":"recordSocialSignIn","token":"tok-1","pageUrl":"https://example.com/login","provider":"google"}"#,
+        ),
+        (
+            Request::GetSocialSignIn {
+                token: t(),
+                url: "https://example.com".into(),
+                pairing: None,
+            },
+            r#"{"type":"getSocialSignIn","token":"tok-1","url":"https://example.com"}"#,
+        ),
     ]
 }
 
@@ -373,7 +390,7 @@ fn fill_person_carries_the_picked_address_id() {
 #[test]
 fn request_types_are_distinct_and_match_the_tags() {
     let set: BTreeSet<&str> = REQUEST_TYPES.iter().copied().collect();
-    assert_eq!(set.len(), 33);
+    assert_eq!(set.len(), 35);
     assert_eq!(set.len(), variant_count("Request"));
     let tags: BTreeSet<String> = request_cases()
         .iter()
@@ -929,6 +946,22 @@ fn response_cases() -> Vec<(Response, Value)> {
                 }],
             },
             json!({"type":"generatedPasswordHistory","entries":[{"id":"h1","password":"pw","url":"https://x.example","createdAt":1700000000000.0}]}),
+        ),
+        (
+            Response::SocialSignIn {
+                enabled: true,
+                provider: so("google"),
+                last_used: so("2026-11-22T10:00:00Z"),
+            },
+            json!({"type":"socialSignIn","enabled":true,"provider":"google","lastUsed":"2026-11-22T10:00:00Z"}),
+        ),
+        (
+            Response::SocialSignIn {
+                enabled: false,
+                provider: None,
+                last_used: None,
+            },
+            json!({"type":"socialSignIn","enabled":false}),
         ),
         (
             Response::Error {

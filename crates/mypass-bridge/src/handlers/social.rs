@@ -1,0 +1,407 @@
+//! `recordSocialSignIn` and `getSocialSignIn`: the "Sign in with ..." method remembered per site.
+//!
+//! Both answer `socialSignIn`. With the "Remember social sign-in" setting off they answer
+//! `enabled: false` and neither read nor write the vault. The page URL must parse as `https` with
+//! a host; anything else is refused before the vault is touched (the matcher would never match
+//! it anyway, and a record must never create an entry for a plain-HTTP page).
+//!
+//! A record goes through one `session.mutate_tracked` call (all or nothing, refused while
+//! quitting, autosaved). The target is the most recently used matching login (the
+//! `credential_candidates` rules: PSL-aware, https only, no bin, generator history or `never`
+//! mode). The same provider recorded less than a day ago writes nothing, so every click on the
+//! button does not add a history snapshot. With no matching login a new one is created in the
+//! root group: title the registrable domain, URL the page origin, no user name or password.
+
+use mypass_core::entry_ext::{EntryExt, EntryType};
+use mypass_core::matcher::{credential_candidates, registrable_domain_of};
+use mypass_kdbx::{Database, Entry, Timestamp};
+use mypass_session::fields::is_valid_user_target;
+use mypass_session::sign_in::{last_used_rank, record_sign_in, sign_in_of, SignIn, SignInProvider};
+use url::Url;
+
+use super::text::{is_clean_line, MAX_URL_CHARS};
+use crate::protocol::Response;
+use crate::service::Ctx;
+use crate::views::{error, session_error_response};
+
+/// A repeated record of the same provider within this many seconds writes nothing.
+const REFRESH_AFTER_SECS: i64 = 24 * 60 * 60;
+
+/// The page origin (`https://host[:port]`) of an https URL with a host, or `None`.
+fn https_origin(page_url: &str) -> Option<String> {
+    if !is_clean_line(page_url, MAX_URL_CHARS) {
+        return None;
+    }
+    let url = Url::parse(page_url.trim()).ok()?;
+    if url.scheme() != "https" || url.host_str().is_none_or(str::is_empty) {
+        return None;
+    }
+    Some(url.origin().ascii_serialization())
+}
+
+/// The matching logins in document order.
+fn matching_logins<'a>(db: &'a Database, page_url: &str) -> Vec<&'a Entry> {
+    credential_candidates(db, page_url)
+        .into_iter()
+        .filter(|e| e.entry_type() == EntryType::Login)
+        .collect()
+}
+
+/// The most recently used entry; on a tie the first in document order.
+fn most_recent<'a>(entries: impl DoubleEndedIterator<Item = &'a Entry>) -> Option<&'a Entry> {
+    // `max_by_key` keeps the last maximum, so walk backwards to keep the first.
+    entries.rev().max_by_key(|e| last_used_rank(e).0)
+}
+
+fn answer(sign_in: Option<SignIn>) -> Response {
+    Response::SocialSignIn {
+        enabled: true,
+        provider: sign_in.map(|s| s.provider.as_str().to_owned()),
+        last_used: sign_in
+            .and_then(|s| s.last_used)
+            .and_then(Timestamp::to_iso8601),
+    }
+}
+
+fn disabled() -> Response {
+    Response::SocialSignIn {
+        enabled: false,
+        provider: None,
+        last_used: None,
+    }
+}
+
+pub(crate) fn record_social_sign_in(ctx: &Ctx<'_>, page_url: &str, provider: &str) -> Response {
+    if !ctx.deps.settings.get().remember_social_sign_in {
+        return disabled();
+    }
+    let Some(origin) = https_origin(page_url) else {
+        return error("social sign-in needs an https page");
+    };
+    let Some(provider) = SignInProvider::parse(provider) else {
+        return error("unknown sign-in provider");
+    };
+    let page_url = page_url.trim();
+    let result = ctx.deps.session.mutate_tracked(|db, now| {
+        let target = most_recent(matching_logins(db, page_url).into_iter()).map(|e| e.uuid);
+        if let Some(id) = target {
+            let current = db.find_entry(id).and_then(sign_in_of);
+            if let Some(SignIn {
+                provider: stored,
+                last_used: Some(when),
+            }) = current
+            {
+                if stored == provider && now.0.saturating_sub(when.0) < REFRESH_AFTER_SECS {
+                    return Ok((current, false));
+                }
+            }
+            let changed = db.update_entry(id, now, |e| record_sign_in(e, provider, now))?;
+            return Ok((db.find_entry(id).and_then(sign_in_of), changed));
+        }
+        let root = db.root_id();
+        // The root is never the bin or a history group; the check keeps that true by construction.
+        is_valid_user_target(db, root)?;
+        let mut entry = Entry::new(now);
+        let title = registrable_domain_of(&origin).unwrap_or_else(|| origin.clone());
+        entry.set_field("Title", &title, false);
+        entry.set_field("URL", &origin, false);
+        record_sign_in(&mut entry, provider, now);
+        let stored = sign_in_of(&entry);
+        db.add_entry(root, entry, now)?;
+        Ok((stored, true))
+    });
+    match result {
+        Ok(stored) => answer(stored),
+        Err(e) => session_error_response(&e),
+    }
+}
+
+pub(crate) fn get_social_sign_in(ctx: &Ctx<'_>, url: &str) -> Response {
+    if !ctx.deps.settings.get().remember_social_sign_in {
+        return disabled();
+    }
+    if https_origin(url).is_none() {
+        return error("social sign-in needs an https page");
+    }
+    let url = url.trim();
+    let found = ctx.deps.session.with_db(|db| {
+        most_recent(
+            matching_logins(db, url)
+                .into_iter()
+                .filter(|e| sign_in_of(e).is_some()),
+        )
+        .and_then(sign_in_of)
+    });
+    match found {
+        Ok(sign_in) => answer(sign_in),
+        Err(_) => Response::Locked,
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+mod tests {
+    use super::*;
+    use crate::protocol::Request;
+    use crate::testing::{error_message, fx, resets_timer, sample_fx, send, Fx};
+    use mypass_session::session::{LockReason, SaveState};
+    use mypass_session::settings::SettingsPatch;
+    use mypass_session::sign_in::{SIGN_IN_LAST_USED, SIGN_IN_PROVIDER};
+    use std::time::Duration;
+    use uuid::Uuid;
+
+    fn record(f: &Fx, url: &str, provider: &str) -> Response {
+        send(f, |token, pairing| Request::RecordSocialSignIn {
+            token,
+            page_url: url.to_owned(),
+            provider: provider.to_owned(),
+            pairing,
+        })
+    }
+
+    fn get(f: &Fx, url: &str) -> Response {
+        send(f, |token, pairing| Request::GetSocialSignIn {
+            token,
+            url: url.to_owned(),
+            pairing,
+        })
+    }
+
+    fn provider_of(r: &Response) -> Option<String> {
+        let Response::SocialSignIn {
+            enabled: true,
+            provider,
+            ..
+        } = r
+        else {
+            panic!("expected an enabled SocialSignIn, got {r:?}");
+        };
+        provider.clone()
+    }
+
+    fn entry_count(f: &Fx) -> usize {
+        f.session
+            .with_db(|db| db.entries_excluding(&[]).len())
+            .unwrap()
+    }
+
+    fn field(f: &Fx, id: Uuid, key: &str) -> Option<String> {
+        f.session
+            .with_db(|db| db.find_entry(id).unwrap().field(key).map(str::to_owned))
+            .unwrap()
+    }
+
+    fn dirty(f: &Fx) -> bool {
+        f.session.status().save.state != SaveState::Idle
+    }
+
+    fn history_len(f: &Fx, id: Uuid) -> usize {
+        f.session
+            .with_db(|db| db.find_entry(id).unwrap().history.len())
+            .unwrap()
+    }
+
+    #[test]
+    fn plain_http_and_malformed_pages_are_refused_without_a_write() {
+        let (f, _) = sample_fx();
+        let before = entry_count(&f);
+        for url in [
+            "http://github.com/login",
+            "github.com/login",
+            "javascript:alert(1)",
+            "https://",
+            "https://github.com/\u{202e}x",
+            "",
+        ] {
+            let r = record(&f, url, "github");
+            assert_eq!(
+                error_message(&r),
+                "social sign-in needs an https page",
+                "{url}"
+            );
+            let r = get(&f, url);
+            assert_eq!(
+                error_message(&r),
+                "social sign-in needs an https page",
+                "{url}"
+            );
+        }
+        assert_eq!(entry_count(&f), before);
+        assert!(!dirty(&f));
+    }
+
+    #[test]
+    fn unknown_providers_are_refused() {
+        let (f, _) = sample_fx();
+        for p in ["twitter", "Google", ""] {
+            let r = record(&f, "https://github.com/login", p);
+            assert_eq!(error_message(&r), "unknown sign-in provider", "{p}");
+        }
+        assert!(!dirty(&f));
+    }
+
+    #[test]
+    fn records_on_the_psl_matching_login_and_reads_it_back() {
+        let (f, ids) = sample_fx();
+        let before = entry_count(&f);
+        // A subdomain of the stored https://github.com matches through the registrable domain.
+        let r = record(&f, "https://docs.github.com/en/login?next=/", "github");
+        assert_eq!(provider_of(&r).as_deref(), Some("github"));
+        assert_eq!(entry_count(&f), before, "an existing login is updated");
+        assert_eq!(
+            field(&f, ids.a, SIGN_IN_PROVIDER).as_deref(),
+            Some("github")
+        );
+        assert_eq!(
+            field(&f, ids.a, SIGN_IN_LAST_USED).as_deref(),
+            Some("2023-11-14T22:13:20Z")
+        );
+        assert!(dirty(&f));
+        // The `never`-mode, binned and history copies are never touched.
+        for id in [ids.g, ids.h, ids.never] {
+            assert_eq!(field(&f, id, SIGN_IN_PROVIDER), None);
+        }
+        let r = get(&f, "https://github.com/");
+        assert_eq!(provider_of(&r).as_deref(), Some("github"));
+        let Response::SocialSignIn { last_used, .. } = r else {
+            unreachable!()
+        };
+        assert_eq!(last_used.as_deref(), Some("2023-11-14T22:13:20Z"));
+        // A look-alike host is not the same site.
+        let r = get(&f, "https://github.com.evil.example/");
+        assert_eq!(provider_of(&r), None);
+    }
+
+    #[test]
+    fn with_no_matching_login_a_new_login_is_created_in_the_root() {
+        let (f, _) = sample_fx();
+        let before = entry_count(&f);
+        let r = record(&f, "https://login.shop.example.co.uk:8443/start", "apple");
+        assert_eq!(provider_of(&r).as_deref(), Some("apple"));
+        assert_eq!(entry_count(&f), before + 1);
+        let (title, url, user, pass, parent_is_root) = f
+            .session
+            .with_db(|db| {
+                let e = db
+                    .entries_excluding(&[])
+                    .into_iter()
+                    .find(|e| e.field(SIGN_IN_PROVIDER) == Some("apple"))
+                    .unwrap();
+                (
+                    e.field("Title").map(str::to_owned),
+                    e.field("URL").map(str::to_owned),
+                    e.field("UserName").map(str::to_owned),
+                    e.field("Password").map(str::to_owned),
+                    db.parent_of_entry(e.uuid) == Some(db.root_id()),
+                )
+            })
+            .unwrap();
+        assert_eq!(title.as_deref(), Some("example.co.uk"));
+        assert_eq!(
+            url.as_deref(),
+            Some("https://login.shop.example.co.uk:8443")
+        );
+        assert_eq!(user.filter(|u| !u.is_empty()), None);
+        assert_eq!(pass.filter(|p| !p.is_empty()), None);
+        assert!(parent_is_root);
+        // The page reads it back.
+        let r = get(&f, "https://login.shop.example.co.uk:8443/start");
+        assert_eq!(provider_of(&r).as_deref(), Some("apple"));
+    }
+
+    #[test]
+    fn the_most_recently_used_of_several_matching_logins_is_updated() {
+        let (f, ids) = sample_fx();
+        // A second example.org login, used after `b`.
+        let newer = f
+            .session
+            .mutate(|db, now| {
+                let mut e = Entry::new(now);
+                e.set_field("Title", "second", false);
+                e.set_field("URL", "https://www.example.org", false);
+                let id = e.uuid;
+                db.add_entry(db.root_id(), e, now)?;
+                Ok(id)
+            })
+            .unwrap();
+        f.session
+            .mutate(|db, _| {
+                db.find_entry_mut(ids.b).unwrap().accessed = Timestamp(1_000);
+                db.find_entry_mut(ids.b).unwrap().modified = Timestamp(1_000);
+                let e = db.find_entry_mut(newer).unwrap();
+                e.accessed = Timestamp(2_000_000_000);
+                Ok(())
+            })
+            .unwrap();
+        record(&f, "https://example.org/signin", "facebook");
+        assert_eq!(
+            field(&f, newer, SIGN_IN_PROVIDER).as_deref(),
+            Some("facebook")
+        );
+        assert_eq!(field(&f, ids.b, SIGN_IN_PROVIDER), None);
+    }
+
+    #[test]
+    fn a_repeat_within_a_day_writes_nothing_and_a_later_one_refreshes() {
+        let (f, ids) = sample_fx();
+        record(&f, "https://github.com/login", "github");
+        let snapshots = history_len(&f, ids.a);
+        f.session.flush().unwrap();
+        assert!(!dirty(&f));
+        f.sched.advance(Duration::from_secs(30));
+        record(&f, "https://github.com/login", "github");
+        assert!(!dirty(&f), "a repeat within a day is a no-op");
+        assert_eq!(history_len(&f, ids.a), snapshots);
+        // Another provider is written at once.
+        record(&f, "https://github.com/login", "google");
+        assert_eq!(
+            field(&f, ids.a, SIGN_IN_PROVIDER).as_deref(),
+            Some("google")
+        );
+        assert_eq!(history_len(&f, ids.a), snapshots + 1);
+    }
+
+    #[test]
+    fn the_setting_off_answers_disabled_and_touches_nothing() {
+        let (f, ids) = sample_fx();
+        f.settings
+            .update(SettingsPatch {
+                remember_social_sign_in: Some(false),
+                ..SettingsPatch::default()
+            })
+            .unwrap();
+        assert_eq!(record(&f, "https://github.com/login", "github"), disabled());
+        assert_eq!(get(&f, "https://github.com/login"), disabled());
+        // Off wins even over a malformed request: nothing is looked at.
+        assert_eq!(record(&f, "http://x", "nope"), disabled());
+        assert_eq!(field(&f, ids.a, SIGN_IN_PROVIDER), None);
+        assert!(!dirty(&f));
+    }
+
+    #[test]
+    fn both_requests_answer_locked_while_the_vault_is_locked() {
+        let (f, ids) = sample_fx();
+        f.session.lock(LockReason::Manual);
+        assert_eq!(
+            record(&f, "https://github.com/login", "github"),
+            Response::Locked
+        );
+        assert_eq!(get(&f, "https://github.com/login"), Response::Locked);
+        f.session
+            .unlock(secrecy::SecretString::from("pw".to_owned()))
+            .unwrap();
+        assert_eq!(field(&f, ids.a, SIGN_IN_PROVIDER), None);
+    }
+
+    #[test]
+    fn only_the_record_resets_the_idle_timer() {
+        let f = fx();
+        assert!(resets_timer(&f, || {
+            record(&f, "https://a.example/login", "google");
+        }));
+        let f = fx();
+        assert!(!resets_timer(&f, || {
+            get(&f, "https://a.example/login");
+        }));
+    }
+}

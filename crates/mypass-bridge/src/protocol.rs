@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 /// The wire `type` of every [`Request`] variant, in declaration order.
-pub const REQUEST_TYPES: [&str; 33] = [
+pub const REQUEST_TYPES: [&str; 35] = [
     "getCredentials",
     "getFavorites",
     "listEntries",
@@ -47,6 +47,8 @@ pub const REQUEST_TYPES: [&str; 33] = [
     "unlockWithPassword",
     "unlockWithDevice",
     "getUnlockOptions",
+    "recordSocialSignIn",
+    "getSocialSignIn",
 ];
 
 /// Inspect the tag without deserialising the other fields into serde's enum buffer.
@@ -365,6 +367,22 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pairing: Option<String>,
     },
+    /// The user clicked a social sign-in button (`provider`: `google`, `facebook`, `apple`,
+    /// `microsoft` or `github`) on the https page `pageUrl`: remember it on the matching login.
+    RecordSocialSignIn {
+        token: String,
+        page_url: String,
+        provider: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pairing: Option<String>,
+    },
+    /// The social sign-in method remembered for the https page `url`, if any.
+    GetSocialSignIn {
+        token: String,
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pairing: Option<String>,
+    },
 }
 
 /// A response from the app. It never carries the endpoint token.
@@ -469,6 +487,16 @@ pub enum Response {
     #[serde(rename = "generatedPasswordHistory")]
     PasswordHistory {
         entries: Vec<ExtensionPasswordHistoryItem>,
+    },
+    /// The answer to both social sign-in requests. `enabled` mirrors the app's "Remember social
+    /// sign-in" setting (when it is off nothing is looked up or stored); `provider` and
+    /// `lastUsed` (RFC 3339 UTC) are the method remembered for the page, absent when none is.
+    SocialSignIn {
+        enabled: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_used: Option<String>,
     },
     Error {
         message: String,
@@ -895,12 +923,50 @@ mod unlock_protocol_tests {
     }
 
     #[test]
-    fn request_types_lists_33_names_ending_with_the_unlock_requests() {
-        assert_eq!(REQUEST_TYPES.len(), 33);
+    fn request_types_lists_34_names_ending_with_the_social_sign_in_requests() {
+        assert_eq!(REQUEST_TYPES.len(), 35);
         assert!(REQUEST_TYPES.ends_with(&[
             "unlockWithPassword",
             "unlockWithDevice",
-            "getUnlockOptions"
+            "getUnlockOptions",
+            "recordSocialSignIn",
+            "getSocialSignIn",
         ]));
+    }
+
+    #[test]
+    fn social_sign_in_messages_use_the_spec_shapes() {
+        let wire = json!({"type": "recordSocialSignIn", "token": "t",
+            "pageUrl": "https://example.com/login", "provider": "google", "pairing": "p"});
+        let request: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(request.name(), "recordSocialSignIn");
+        assert_eq!(serde_json::to_value(request).unwrap(), wire);
+        let wire = json!({"type": "getSocialSignIn", "token": "t", "url": "https://example.com/"});
+        let request: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(request).unwrap(), wire);
+        assert_eq!(
+            serde_json::to_value(Response::SocialSignIn {
+                enabled: true,
+                provider: Some("github".into()),
+                last_used: Some("2026-11-22T10:00:00Z".into()),
+            })
+            .unwrap(),
+            json!({"type": "socialSignIn", "enabled": true, "provider": "github",
+                "lastUsed": "2026-11-22T10:00:00Z"})
+        );
+        assert_eq!(
+            serde_json::to_value(Response::SocialSignIn {
+                enabled: false,
+                provider: None,
+                last_used: None,
+            })
+            .unwrap(),
+            json!({"type": "socialSignIn", "enabled": false})
+        );
+        // A missing provider is malformed.
+        assert!(serde_json::from_value::<Request>(
+            json!({"type": "recordSocialSignIn", "token": "t", "pageUrl": "https://a.example"})
+        )
+        .is_err());
     }
 }

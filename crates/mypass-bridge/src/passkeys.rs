@@ -274,6 +274,8 @@ impl PasskeyHandler for PasskeyService {
             | Request::GeneratePassword { .. }
             | Request::RecordGeneratedPassword { .. }
             | Request::GetGeneratedPasswordHistory { .. }
+            | Request::RecordSocialSignIn { .. }
+            | Request::GetSocialSignIn { .. }
             | Request::DeleteGeneratedPassword { .. }
             | Request::UnlockWithPassword { .. }
             | Request::UnlockWithDevice { .. }

@@ -25,7 +25,7 @@ use mypass_session::session::{SessionEvent, SessionState, VaultSession};
 use mypass_session::settings::SettingsStore;
 
 use crate::diagnostics::DiagnosticsStore;
-use crate::handlers::{browse, create, fill, generator, identifier, session_ops};
+use crate::handlers::{browse, create, fill, generator, identifier, session_ops, social};
 use crate::pairing::PairingManager;
 use crate::passkeys::{PasskeyContext, PasskeyHandler};
 use crate::protocol::{Request, Response};
@@ -297,6 +297,10 @@ impl BridgeService {
             Request::DeleteGeneratedPassword { id, .. } => {
                 generator::delete_generated_password(ctx, id)
             }
+            Request::RecordSocialSignIn {
+                page_url, provider, ..
+            } => social::record_social_sign_in(ctx, page_url, provider),
+            Request::GetSocialSignIn { url, .. } => social::get_social_sign_in(ctx, url),
         }
     }
 }
@@ -359,7 +363,7 @@ mod tests {
     #[test]
     fn request_table_matches_wire_types() {
         let all = all_requests(None);
-        assert_eq!(all.len(), 33);
+        assert_eq!(all.len(), 35);
         for (r, name) in all.iter().zip(REQUEST_TYPES) {
             assert_eq!(r.name(), name);
         }
@@ -656,7 +660,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(n, 62);
+        assert_eq!(n, 66);
     }
 
     #[test]
