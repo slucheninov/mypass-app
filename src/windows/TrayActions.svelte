@@ -32,8 +32,12 @@
 </script>
 
 <TrayMenuRow key="back" label={t("Back")} icon="chevron-left" active={highlight === "back"} onclick={onback} onhover={() => onhover("back")} />
-<TrayMenuRow key="username" label={t("Copy user name")} active={highlight === "username"} onclick={() => void copy("username")} onhover={() => onhover("username")} />
-<TrayMenuRow key="password" label={t("Copy password")} active={highlight === "password"} onclick={() => void copy("password")} onhover={() => onhover("password")} />
+{#if entry.hasUsername}
+  <TrayMenuRow key="username" label={t("Copy user name")} active={highlight === "username"} onclick={() => void copy("username")} onhover={() => onhover("username")} />
+{/if}
+{#if entry.hasPassword}
+  <TrayMenuRow key="password" label={t("Copy password")} active={highlight === "password"} onclick={() => void copy("password")} onhover={() => onhover("password")} />
+{/if}
 {#if entry.hasTotp}
   <TrayMenuRow key="totp" label={t("Copy code")} active={highlight === "totp"} onclick={() => void copy("totp")} onhover={() => onhover("totp")} />
 {/if}

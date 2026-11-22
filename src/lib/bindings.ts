@@ -740,6 +740,8 @@ export type EntrySummary = {
 	subtitle: string,
 	entryType: EntryTypeDto,
 	favorite: boolean,
+	hasUsername: boolean,
+	hasPassword: boolean,
 	hasTotp: boolean,
 	hasPasskey: boolean,
 	attachmentCount: number,

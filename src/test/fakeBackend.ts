@@ -597,6 +597,8 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       };
       found.summary.title = found.model.title;
       found.summary.subtitle = found.model.username;
+      found.summary.hasUsername = found.model.username !== "";
+      found.summary.hasPassword = found.model.password !== "";
       found.summary.hasTotp = found.model.totp !== "";
       found.summary.attachmentCount = found.model.attachments.length;
       found.modified += 1;
@@ -779,6 +781,8 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         found.summary.title = title;
         found.summary.favorite = model.favorite;
         found.summary.subtitle = model.username;
+        found.summary.hasUsername = model.username !== "";
+        found.summary.hasPassword = model.password !== "";
         found.summary.groupId = model.groupId;
         // Like `save_entry`: a save into another group moves the entry, out of the bin too.
         found.summary.inRecycleBin = locate(model.groupId)?.node.isRecycleBin ?? false;
@@ -795,6 +799,8 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         entryType: model.entryType,
         groupId: model.groupId,
         favorite: model.favorite,
+        username: model.username,
+        password: model.password,
         hasTotp: model.totp !== "",
         modified: Date.now(),
       });

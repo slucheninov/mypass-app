@@ -303,6 +303,21 @@ describe("tray panel, entry actions", () => {
   });
 
   it.each([
+    { username: "", password: "test-password", action: "Copy password" },
+    { username: "octo", password: "", action: "Copy user name" },
+  ])("shows only $action when the other field is empty", async ({ username, password, action }) => {
+    const { user } = await unlockedTray((fake) => {
+      fake.state.entries = [makeEntry({
+        id: "partial", title: "Partial login", subtitle: "example.com", username, password, modified: 1,
+      })];
+    });
+    await user.click(await screen.findByRole("menuitem", { name: "Partial login" }));
+    const menu = await screen.findByRole("menu", { name: "Partial login" });
+    expect(within(menu).getAllByRole("menuitem").map((row) => row.getAttribute("aria-label")))
+      .toEqual(["Back", action]);
+  });
+
+  it.each([
     ["Copy user name", "username"],
     ["Copy password", "password"],
     ["Copy code", "totp"],

@@ -163,6 +163,8 @@ pub struct EntrySummary {
     pub subtitle: String,
     pub entry_type: EntryTypeDto,
     pub favorite: bool,
+    pub has_username: bool,
+    pub has_password: bool,
     pub has_totp: bool,
     pub has_passkey: bool,
     pub attachment_count: u32,
