@@ -1,6 +1,7 @@
 import { screen, waitFor } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadPlatform } from "../lib/platform.svelte";
 import { session } from "../lib/stores/session.svelte";
 import { expectNoAxeViolations } from "../test/axe";
 import { createFakeBackend } from "../test/fakeBackend";
@@ -59,6 +60,7 @@ describe("OpenVaultSheet", () => {
   it("open_vault_sheet_shows_the_short_location_in_one_line_with_the_full_path_as_tooltip", async () => {
     const long = "/Users/someone/Library/Mobile Documents/com~apple~CloudDocs/Vaults/Family.kdbx";
     renderWithBackend(OpenVaultSheet, { path: long, onclose: () => {} }, createFakeBackend({ session: "noVault" }));
+    await loadPlatform();
     const dialog = await screen.findByRole("dialog", { name: "Open vault" });
     const chip = dialog.querySelector(".folder .location");
     expect(chip?.getAttribute("title")).toBe(long);

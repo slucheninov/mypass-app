@@ -210,6 +210,7 @@ export type AppInfo = {
 	os: string,
 	/**  Device unlock (Touch ID, account password) can be used on this platform. */
 	deviceUnlockAvailable: boolean,
+	homeDir: string,
 };
 
 export type AttachmentMeta = {

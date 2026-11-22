@@ -454,6 +454,7 @@ impl AppCore {
         AppInfo {
             version: env!("CARGO_PKG_VERSION").to_owned(),
             os: std::env::consts::OS.to_owned(),
+            home_dir: self.paths().home().to_string_lossy().into_owned(),
             device_unlock_available: self.platform.device_unlock.availability()
                 != DeviceUnlockAvailability::Unavailable,
         }
@@ -1877,6 +1878,7 @@ mod tests {
         let f = fx();
         let info = f.core.app_info();
         assert!(info.device_unlock_available, "the fake has Touch ID");
+        assert_eq!(info.home_dir, f.core.paths().home().to_string_lossy());
         assert_eq!(info.os, std::env::consts::OS);
         assert!(!info.version.is_empty());
         let unsupported = core_with(

@@ -10,10 +10,9 @@ const same = (a: string | undefined, b: string): boolean => a !== undefined && a
 
 /** Names of the File Provider folders in `~/Library/CloudStorage`, by their prefix before `-`. */
 function cloudStorageProvider(folder: string): string {
+  if (/^GoogleDrive-.+$/i.test(folder)) return "Google Drive";
   const name = folder.split("-")[0] || folder;
   switch (name.toLowerCase()) {
-    case "googledrive":
-      return "Google Drive";
     case "onedrive":
       return "OneDrive";
     case "dropbox":
@@ -41,7 +40,6 @@ function cloudInHome(rel: string[]): Cloud | null {
   const top = rel[0];
   if (top === undefined) return null;
   if (same(top, "iCloudDrive")) return { provider: "iCloud Drive", below: rel.slice(1) };
-  if (same(top, "Google Drive")) return { provider: "Google Drive", below: rel.slice(1) };
   if (/^onedrive( - .+)?$/i.test(top)) return { provider: "OneDrive", below: rel.slice(1) };
   if (/^dropbox( \(.+\))?$/i.test(top)) return { provider: "Dropbox", below: rel.slice(1) };
   if (same(top, "Box")) return { provider: "Box", below: rel.slice(1) };
@@ -59,41 +57,49 @@ function tail(folders: string[], sep: string): string {
   return `…${sep}${folders.slice(-2).join(sep)}`;
 }
 
-/**
- * The short location of a vault file at `path` (macOS or Windows, `/` or `\`): `iCloud Drive`,
- * `Google Drive/Vaults`, `OneDrive/…/Vaults`, `~/Documents`, `D:\Vaults` or `…/Backups/Vaults`.
- * An empty string for a bare file name.
- */
-export function shortVaultLocation(path: string): string {
-  const unc = path.startsWith("\\\\");
-  const drive = /^[A-Za-z]:([\\/]|$)/.test(path);
-  const windows = unc || drive || (path.includes("\\") && !path.includes("/"));
-  const sep = windows ? "\\" : "/";
-  const parts = path.split(/[\\/]+/).filter(part => part !== "");
+/** Recognize the root before counting folder components. Windows canonical paths can be verbatim. */
+function parsePath(input: string) {
+  const path = input.replace(/^\\\\\?\\UNC\\/i, "\\\\").replace(/^\\\\\?\\(?=[A-Za-z]:)/, "");
+  const network = path.match(/^(\\\\|\/\/)([^\\/]+)[\\/]([^\\/]+)(?:[\\/]|$)/);
+  const drive = path.match(/^([A-Za-z]:)(?:[\\/]|$)/);
+  const windows = !!(network || drive || path.startsWith("\\"));
+  const sep = network?.[1] === "//" ? "/" : windows ? "\\" : "/";
+  const root = network
+    ? `${network[1]}${network[2]}${sep}${network[3]}`
+    : drive ? `${drive[1]}\\` : path.startsWith("/") ? "/" : path.startsWith("\\") ? "\\" : "";
+  const rest = path.slice(network?.[0].length ?? drive?.[0].length ?? root.length);
+  const parts = rest.split(/[\\/]+/).filter(Boolean);
+  return { root, parts, sep, windows, network: !!network };
+}
+
+/** Short location of a vault file, relative to the current user's home when applicable. */
+export function shortVaultLocation(path: string, homeDir: string | null = null): string {
+  const { root, parts, sep, windows, network } = parsePath(path);
   const folders = parts.slice(0, -1);
-  if (folders.length === 0) {
-    if (drive) return `${path.slice(0, 2)}\\`;
-    return path.startsWith("/") ? "/" : "";
+
+  // The legacy Google Drive mount has a fixed root and directory layout.
+  if (root === "/" && same(folders[0], "Volumes") && same(folders[1], "GoogleDrive")
+    && (same(folders[2], "My Drive") || same(folders[2], "Shared drives"))) {
+    return cloudLabel({ provider: "Google Drive", below: folders.slice(3) });
   }
 
-  // `G:\My Drive\…` (Google Drive for desktop on Windows) and `/Volumes/GoogleDrive/My Drive/…`.
-  const myDrive = drive ? 1 : same(folders[0], "Volumes") && /^googledrive/i.test(folders[1] ?? "") ? 2 : -1;
-  if (myDrive > 0 && (same(folders[myDrive], "My Drive") || same(folders[myDrive], "Shared drives"))) {
-    return cloudLabel({ provider: "Google Drive", below: folders.slice(myDrive + 1) });
+  if (network) {
+    if (folders.length === 0) return root;
+    return `${root}${sep}${folders.length > 2 ? tail(folders, sep) : folders.join(sep)}`;
   }
 
-  // The home folder: `/Users/<name>` on macOS, `<drive>:\Users\<name>` on Windows.
-  const users = drive ? 1 : 0;
-  const home = same(folders[users], "Users") && folders.length > users + 1 ? users + 2 : -1;
-  if (home > 0) {
-    const rel = folders.slice(home);
-    const cloud = cloudInHome(rel);
-    if (cloud) return cloudLabel(cloud);
-    return rel.length <= 2 ? ["~", ...rel].join(sep) : tail(rel, sep);
+  if (homeDir && !folders.includes("..")) {
+    const home = parsePath(homeDir);
+    const equal = (a: string | undefined, b: string) => windows ? same(a, b) : a === b;
+    if (root && equal(root.replaceAll("\\", "/"), home.root.replaceAll("\\", "/"))
+      && home.parts.every((part, i) => equal(folders[i], part))) {
+      const rel = folders.slice(home.parts.length);
+      const cloud = cloudInHome(rel);
+      if (cloud) return cloudLabel(cloud);
+      return rel.length <= 2 ? ["~", ...rel].join(sep) : tail(rel, sep);
+    }
   }
 
   if (folders.length > 2) return tail(folders, sep);
-  if (unc) return `\\\\${folders.join("\\")}`;
-  if (drive) return folders.length === 1 ? `${folders[0]}\\` : folders.join("\\");
-  return `/${folders.join("/")}`;
+  return `${root}${folders.join(sep)}`;
 }
