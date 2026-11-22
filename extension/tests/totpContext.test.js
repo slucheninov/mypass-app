@@ -69,3 +69,56 @@ test('the setup context is recognised in German, Ukrainian and Russian', () => {
     assert.equal(detectManualSetupKey(doc), 'JBSWY3DPEHPK3PXP', context);
   }
 });
+
+// A setup key is a distinct token on the page: the whole text of its own element (after a short
+// "Key:" label at most), a <code>-like element, or a read-only field's value. Words of a sentence
+// are never joined into a key: "Use the authenticator app to finish this step with code sent
+// here." read as THISSTEPWITHCODESENT.
+test('instruction prose next to 2FA wording never becomes a key', () => {
+  for (const prose of [
+    'Use the authenticator app to finish this step with code sent here.',
+    'Open your authenticator, then type this code from your phone here',
+    'Your secret key is JBSWY3DPEHPK3PXP enter it in your app',
+    'Your manual setup key is jbsw y3dp ehpk 3pxp then press next',
+  ]) {
+    const doc = parseHtml(`<main><h1>Two-factor authentication</h1><p>${prose}</p></main>`);
+    assert.equal(detectManualSetupKey(doc), null, prose);
+  }
+});
+
+test('a Google-style grouped lowercase key in its own element is offered', () => {
+  const doc = parseHtml('<main><h2>Can\'t scan it?</h2><ol><li>In the Google Authenticator app, tap +</li>'
+    + '<li>Enter your email address and this key (spaces don\'t matter):'
+    + '<div class="key"><strong>aabb ccdd eeff gghh iijj kkll mmnn oopp</strong></div></li></ol></main>');
+  assert.equal(detectManualSetupKey(doc), 'AABBCCDDEEFFGGHHIIJJKKLLMMNNOOPP');
+});
+
+test('a GitHub-style key in <code> is offered', () => {
+  const doc = parseHtml('<div class="two-factor"><p>Unable to scan? You can use the setup key to manually configure '
+    + 'your authenticator app.</p><p>Your two-factor secret <code>J4OS2Z7GTJ6S4VE3</code></p></div>');
+  assert.equal(detectManualSetupKey(doc), 'J4OS2Z7GTJ6S4VE3');
+});
+
+test('a key after a short label, in its own node, or in a read-only field is offered', () => {
+  const cases = [
+    '<p>Key: JBSW Y3DP EHPK 3PXP</p>',
+    '<p><b>Secret</b> JBSW Y3DP EHPK 3PXP</p>',
+    '<p>Schlüssel: JBSWY3DPEHPK3PXP</p>',
+    '<p>\u041a\u043b\u044e\u0447: jbsw y3dp ehpk 3pxp</p>',
+    '<input readonly value="JBSW Y3DP EHPK 3PXP">',
+    '<textarea readonly>jbswy3dpehpk3pxp</textarea>',
+  ];
+  for (const markup of cases) {
+    const doc = parseHtml(`<div><h2>Set up your authenticator app</h2>${markup}</div>`);
+    assert.equal(detectManualSetupKey(doc), 'JBSWY3DPEHPK3PXP', markup);
+  }
+  for (const markup of [
+    '<input value="JBSW Y3DP EHPK 3PXP">',
+    '<p>Copy this into the authenticator: JBSW Y3DP EHPK 3PXP</p>',
+    '<p>JBSW Y3DP EHPK 3PXP OK</p>',
+    '<p>JBSW  Y3DP EHPK 3PXP QRST UVWX 2345 6723 ABCD</p>',
+  ]) {
+    const doc = parseHtml(`<div><h2>Set up your authenticator app</h2>${markup}</div>`);
+    assert.equal(detectManualSetupKey(doc), null, markup);
+  }
+});
