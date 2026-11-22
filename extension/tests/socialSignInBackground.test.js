@@ -121,3 +121,23 @@ test("lookups come from the page or the popup and mirror the setting", async () 
   assert.equal(await request({ type: "getSocialSignIn", url: "https://shop.example/" }, { id: "other", url: "https://x" }), "refused");
   assert.equal(nativeCalls.length, 2);
 });
+
+test("a page learns only a method recorded on its own exact host", async () => {
+  const sender = page("https://www.shop.example/login");
+  replies = [{ type: "socialSignIn", enabled: true, provider: "google", host: "www.shop.example", lastUsed: "2026-11-22T10:00:00Z" }];
+  assert.deepEqual(await request({ type: "getSocialSignIn", url: sender.url }, sender),
+    { type: "socialSignIn", enabled: true, provider: "google", host: "www.shop.example" });
+
+  // Recorded on a sibling host under the same registrable domain: the page sees no method.
+  replies = [{ type: "socialSignIn", enabled: true, provider: "google", host: "accounts.shop.example" }];
+  assert.deepEqual(await request({ type: "getSocialSignIn", url: sender.url }, sender), { type: "socialSignIn", enabled: true });
+
+  // Picked in the app (no host): the page sees no method either.
+  replies = [{ type: "socialSignIn", enabled: true, provider: "apple" }];
+  assert.deepEqual(await request({ type: "getSocialSignIn", url: sender.url }, sender), { type: "socialSignIn", enabled: true });
+
+  // The popup is not the page: it still shows the method recorded elsewhere.
+  replies = [{ type: "socialSignIn", enabled: true, provider: "google", host: "accounts.shop.example" }];
+  const reply = await request({ type: "getSocialSignIn", url: sender.url }, popup);
+  assert.equal(reply.provider, "google");
+});

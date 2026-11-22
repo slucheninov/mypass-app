@@ -1366,11 +1366,14 @@ function socialSignInPageOf(message, sender) {
 
 async function handleSocialSignInMessage(message, sender) {
   if (message.type === "getSocialSignIn") {
-    const url = isAddressPopup(sender) ? message.url : socialSignInPageOf(message, sender);
+    const fromPopup = isAddressPopup(sender);
+    const url = fromPopup ? message.url : socialSignInPageOf(message, sender);
     if (typeof url !== "string" || !socialSignIn.isHttpsUrl(url)) return { type: "error", message: "invalid_request" };
     const response = await sendNativeMessageWithPairing({ type: "getSocialSignIn", url });
     await noteSocialSignInSetting(response);
-    return response;
+    // The popup is extension UI the page cannot see; a page only learns a method recorded on its
+    // own exact host (the ring it draws is observable by the page).
+    return fromPopup ? response : socialSignIn.responseForPage(response, url);
   }
   const pageUrl = socialSignInPageOf(message, sender);
   if (!pageUrl || !socialSignIn.isProvider(message.provider)) return { type: "error", message: "invalid_request" };

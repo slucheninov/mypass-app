@@ -2035,7 +2035,10 @@
             clearHighlight();
             return;
           }
-          rememberedProvider = social.isProvider(response.provider) ? response.provider : null;
+          // Only a method recorded on exactly this host is ringed (the service worker already
+          // strips any other; this is the second check).
+          const sameHost = typeof response.host === 'string' && response.host === location.hostname.toLowerCase();
+          rememberedProvider = sameHost && social.isProvider(response.provider) ? response.provider : null;
           if (rememberedProvider) findWithRetries(rememberedProvider, 0);
         });
       }

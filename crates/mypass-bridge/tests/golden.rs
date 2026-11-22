@@ -952,14 +952,16 @@ fn response_cases() -> Vec<(Response, Value)> {
                 enabled: true,
                 provider: so("google"),
                 last_used: so("2026-11-22T10:00:00Z"),
+                host: so("accounts.example.com"),
             },
-            json!({"type":"socialSignIn","enabled":true,"provider":"google","lastUsed":"2026-11-22T10:00:00Z"}),
+            json!({"type":"socialSignIn","enabled":true,"provider":"google","lastUsed":"2026-11-22T10:00:00Z","host":"accounts.example.com"}),
         ),
         (
             Response::SocialSignIn {
                 enabled: false,
                 provider: None,
                 last_used: None,
+                host: None,
             },
             json!({"type":"socialSignIn","enabled":false}),
         ),

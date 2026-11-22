@@ -221,4 +221,22 @@ assert.deepStrictEqual(
 assert.deepStrictEqual(social.prunePending({ x: { pageUrl: PAGE, provider: 'google', at: T0 + 5 } }, T0), {}, 'a future time is malformed');
 assert.deepStrictEqual(social.prunePending('nope', T0), {});
 
+// ---- what a page may learn: only a method recorded on its own exact host ----------------------
+{
+  const s = social;
+  const reply = (extra) => ({ type: 'socialSignIn', enabled: true, provider: 'github', ...extra });
+  assert.deepEqual(s.responseForPage(reply({ host: 'a.example' }), 'https://A.example/x'),
+    { type: 'socialSignIn', enabled: true, provider: 'github', host: 'a.example' });
+  for (const [response, url] of [
+    [reply({ host: 'b.a.example' }), 'https://a.example/'],
+    [reply({ host: 'a.example' }), 'https://b.a.example/'],
+    [reply({ host: 'a.example' }), 'http://a.example/'],
+    [reply({}), 'https://a.example/'],
+    [reply({ host: 'a.example', provider: 'twitter' }), 'https://a.example/'],
+  ]) assert.deepEqual(s.responseForPage(response, url), { type: 'socialSignIn', enabled: true });
+  assert.deepEqual(s.responseForPage({ type: 'socialSignIn', enabled: false, provider: 'github', host: 'a.example' }, 'https://a.example/'),
+    { type: 'socialSignIn', enabled: false });
+  assert.deepEqual(s.responseForPage({ type: 'locked' }, 'https://a.example/'), { type: 'locked' });
+}
+
 console.log('socialSignIn.test.js: detection, recording, highlight and queue OK');

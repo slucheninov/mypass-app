@@ -265,6 +265,30 @@ var mypassSocialSignIn = (function () {
     host.style.height = box.height + 'px';
   }
 
+  // The lowercase host of an https URL, or null.
+  function httpsHost(value) {
+    try {
+      var url = new URL(String(value || ''));
+      return url.protocol === 'https:' && url.hostname ? url.hostname.toLowerCase() : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // What a page may learn from a lookup. The ring is part of the page's DOM, so the page can see
+  // it: only a method recorded on exactly this page's host (`response.host`) is passed on, never
+  // one recorded on a sibling host under the same registrable domain or picked in the app (no
+  // host). Anything else reaches the page as "no method" (`enabled` is kept).
+  function responseForPage(response, pageUrl) {
+    if (!response || response.type !== 'socialSignIn') return response;
+    var host = httpsHost(pageUrl);
+    var recorded = typeof response.host === 'string' ? response.host.toLowerCase() : null;
+    if (response.enabled !== false && host && recorded === host && isProvider(response.provider)) {
+      return { type: 'socialSignIn', enabled: true, provider: response.provider, host: recorded };
+    }
+    return { type: 'socialSignIn', enabled: response.enabled !== false };
+  }
+
   // ---- pending records (the service worker) -------------------------------------------------
   // One record per tab and site (`tabId|origin`), the newest click wins. Records older than the
   // TTL, or malformed, are dropped by `prunePending`.
@@ -305,6 +329,8 @@ var mypassSocialSignIn = (function () {
     RING_COLOR: RING_COLOR,
     isProvider: isProvider,
     isHttpsUrl: isHttpsUrl,
+    httpsHost: httpsHost,
+    responseForPage: responseForPage,
     providerFromText: providerFromText,
     providerFromHref: providerFromHref,
     providerFromMarkers: providerFromMarkers,

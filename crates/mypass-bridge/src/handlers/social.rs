@@ -11,12 +11,20 @@
 //! mode). The same provider recorded less than a day ago writes nothing, so every click on the
 //! button does not add a history snapshot. With no matching login a new one is created in the
 //! root group: title the registrable domain, URL the page origin, no user name or password.
+//!
+//! Every record stores the page host (`MyPass.SignIn.host`). A lookup prefers the matching login
+//! recorded on exactly the page host and answers that host as `host`; the extension draws its
+//! ring on a page only when `host` equals the page's own host (a sibling site under the same
+//! registrable domain sees nothing), while its popup, which the page cannot observe, shows the
+//! method for any matching login.
 
 use mypass_core::entry_ext::{EntryExt, EntryType};
 use mypass_core::matcher::{credential_candidates, registrable_domain_of};
 use mypass_kdbx::{Database, Entry, Timestamp};
 use mypass_session::fields::is_valid_user_target;
-use mypass_session::sign_in::{last_used_rank, record_sign_in, sign_in_of, SignIn, SignInProvider};
+use mypass_session::sign_in::{
+    last_used_rank, record_sign_in, sign_in_host, sign_in_of, SignIn, SignInProvider,
+};
 use url::Url;
 
 use super::text::{is_clean_line, MAX_URL_CHARS};
@@ -27,16 +35,29 @@ use crate::views::{error, session_error_response};
 /// A repeated record of the same provider within this many seconds writes nothing.
 const REFRESH_AFTER_SECS: i64 = 24 * 60 * 60;
 
-/// The page origin (`https://host[:port]`) of an https URL with a host, or `None`.
-fn https_origin(page_url: &str) -> Option<String> {
+/// An https page: its origin (`https://host[:port]`) and its lowercase host.
+struct HttpsPage {
+    origin: String,
+    host: String,
+}
+
+/// The origin and host of an https URL with a host, or `None`.
+fn https_page(page_url: &str) -> Option<HttpsPage> {
     if !is_clean_line(page_url, MAX_URL_CHARS) {
         return None;
     }
     let url = Url::parse(page_url.trim()).ok()?;
-    if url.scheme() != "https" || url.host_str().is_none_or(str::is_empty) {
+    let host = url
+        .host_str()
+        .filter(|h| !h.is_empty())?
+        .to_ascii_lowercase();
+    if url.scheme() != "https" {
         return None;
     }
-    Some(url.origin().ascii_serialization())
+    Some(HttpsPage {
+        origin: url.origin().ascii_serialization(),
+        host,
+    })
 }
 
 /// The matching logins in document order.
@@ -53,13 +74,14 @@ fn most_recent<'a>(entries: impl DoubleEndedIterator<Item = &'a Entry>) -> Optio
     entries.rev().max_by_key(|e| last_used_rank(e).0)
 }
 
-fn answer(sign_in: Option<SignIn>) -> Response {
+fn answer(sign_in: Option<SignIn>, host: Option<String>) -> Response {
     Response::SocialSignIn {
         enabled: true,
         provider: sign_in.map(|s| s.provider.as_str().to_owned()),
         last_used: sign_in
             .and_then(|s| s.last_used)
             .and_then(Timestamp::to_iso8601),
+        host: sign_in.and(host),
     }
 }
 
@@ -68,14 +90,20 @@ fn disabled() -> Response {
         enabled: false,
         provider: None,
         last_used: None,
+        host: None,
     }
+}
+
+/// The method of `entry` with its recorded host.
+fn method_of(entry: &Entry) -> (Option<SignIn>, Option<String>) {
+    (sign_in_of(entry), sign_in_host(entry).map(str::to_owned))
 }
 
 pub(crate) fn record_social_sign_in(ctx: &Ctx<'_>, page_url: &str, provider: &str) -> Response {
     if !ctx.deps.settings.get().remember_social_sign_in {
         return disabled();
     }
-    let Some(origin) = https_origin(page_url) else {
+    let Some(HttpsPage { origin, host }) = https_page(page_url) else {
         return error("social sign-in needs an https page");
     };
     let Some(provider) = SignInProvider::parse(provider) else {
@@ -91,12 +119,16 @@ pub(crate) fn record_social_sign_in(ctx: &Ctx<'_>, page_url: &str, provider: &st
                 last_used: Some(when),
             }) = current
             {
-                if stored == provider && now.0.saturating_sub(when.0) < REFRESH_AFTER_SECS {
-                    return Ok((current, false));
+                let same_host = db.find_entry(id).and_then(sign_in_host) == Some(host.as_str());
+                if stored == provider
+                    && same_host
+                    && now.0.saturating_sub(when.0) < REFRESH_AFTER_SECS
+                {
+                    return Ok((db.find_entry(id).map(method_of), false));
                 }
             }
-            let changed = db.update_entry(id, now, |e| record_sign_in(e, provider, now))?;
-            return Ok((db.find_entry(id).and_then(sign_in_of), changed));
+            let changed = db.update_entry(id, now, |e| record_sign_in(e, provider, &host, now))?;
+            return Ok((db.find_entry(id).map(method_of), changed));
         }
         let root = db.root_id();
         // The root is never the bin or a history group; the check keeps that true by construction.
@@ -105,13 +137,14 @@ pub(crate) fn record_social_sign_in(ctx: &Ctx<'_>, page_url: &str, provider: &st
         let title = registrable_domain_of(&origin).unwrap_or_else(|| origin.clone());
         entry.set_field("Title", &title, false);
         entry.set_field("URL", &origin, false);
-        record_sign_in(&mut entry, provider, now);
-        let stored = sign_in_of(&entry);
+        record_sign_in(&mut entry, provider, &host, now);
+        let stored = method_of(&entry);
         db.add_entry(root, entry, now)?;
-        Ok((stored, true))
+        Ok((Some(stored), true))
     });
     match result {
-        Ok(stored) => answer(stored),
+        Ok(Some((stored, host))) => answer(stored, host),
+        Ok(None) => answer(None, None),
         Err(e) => session_error_response(&e),
     }
 }
@@ -120,20 +153,29 @@ pub(crate) fn get_social_sign_in(ctx: &Ctx<'_>, url: &str) -> Response {
     if !ctx.deps.settings.get().remember_social_sign_in {
         return disabled();
     }
-    if https_origin(url).is_none() {
+    let Some(page) = https_page(url) else {
         return error("social sign-in needs an https page");
-    }
+    };
     let url = url.trim();
     let found = ctx.deps.session.with_db(|db| {
-        most_recent(
-            matching_logins(db, url)
-                .into_iter()
-                .filter(|e| sign_in_of(e).is_some()),
-        )
-        .and_then(sign_in_of)
+        let with_method: Vec<&Entry> = matching_logins(db, url)
+            .into_iter()
+            .filter(|e| sign_in_of(e).is_some())
+            .collect();
+        // The method recorded on exactly this host wins: it is the only one the page may see.
+        let on_this_host = most_recent(
+            with_method
+                .iter()
+                .copied()
+                .filter(|e| sign_in_host(e) == Some(page.host.as_str())),
+        );
+        on_this_host
+            .or_else(|| most_recent(with_method.iter().copied()))
+            .map(method_of)
     });
     match found {
-        Ok(sign_in) => answer(sign_in),
+        Ok(Some((sign_in, host))) => answer(sign_in, host),
+        Ok(None) => answer(None, None),
         Err(_) => Response::Locked,
     }
 }
@@ -146,7 +188,7 @@ mod tests {
     use crate::testing::{error_message, fx, resets_timer, sample_fx, send, Fx};
     use mypass_session::session::{LockReason, SaveState};
     use mypass_session::settings::SettingsPatch;
-    use mypass_session::sign_in::{SIGN_IN_LAST_USED, SIGN_IN_PROVIDER};
+    use mypass_session::sign_in::{SIGN_IN_HOST, SIGN_IN_LAST_USED, SIGN_IN_PROVIDER};
     use std::time::Duration;
     use uuid::Uuid;
 
@@ -270,6 +312,80 @@ mod tests {
         // A look-alike host is not the same site.
         let r = get(&f, "https://github.com.evil.example/");
         assert_eq!(provider_of(&r), None);
+    }
+
+    fn host_of(r: &Response) -> Option<String> {
+        let Response::SocialSignIn { host, .. } = r else {
+            panic!("expected SocialSignIn, got {r:?}");
+        };
+        host.clone()
+    }
+
+    #[test]
+    fn a_record_stores_the_page_host_and_a_lookup_answers_it() {
+        let (f, ids) = sample_fx();
+        let r = record(&f, "https://Docs.GitHub.com/en/login", "github");
+        assert_eq!(host_of(&r).as_deref(), Some("docs.github.com"));
+        assert_eq!(
+            field(&f, ids.a, SIGN_IN_HOST).as_deref(),
+            Some("docs.github.com")
+        );
+        // The same host reads the host back, so the extension may ring the button there.
+        let r = get(&f, "https://docs.github.com/en/login");
+        assert_eq!(provider_of(&r).as_deref(), Some("github"));
+        assert_eq!(host_of(&r).as_deref(), Some("docs.github.com"));
+        // A sibling host still learns the method for the popup, with the host it was recorded
+        // on, which is not its own: the extension never rings anything there.
+        let r = get(&f, "https://github.com/");
+        assert_eq!(provider_of(&r).as_deref(), Some("github"));
+        assert_eq!(host_of(&r).as_deref(), Some("docs.github.com"));
+    }
+
+    #[test]
+    fn a_method_picked_in_the_app_has_no_host() {
+        let (f, ids) = sample_fx();
+        f.session
+            .mutate(|db, now| {
+                db.update_entry(ids.a, now, |e| {
+                    mypass_session::sign_in::set_sign_in_provider(e, Some(SignInProvider::Apple));
+                })?;
+                Ok(())
+            })
+            .unwrap();
+        let r = get(&f, "https://github.com/");
+        assert_eq!(provider_of(&r).as_deref(), Some("apple"));
+        assert_eq!(host_of(&r), None);
+    }
+
+    #[test]
+    fn the_method_recorded_on_the_page_host_wins_over_a_newer_sibling() {
+        let (f, ids) = sample_fx();
+        f.session
+            .mutate(|db, now| {
+                let mut e = Entry::new(now);
+                e.set_field("Title", "second", false);
+                e.set_field("URL", "https://www.example.org", false);
+                record_sign_in(&mut e, SignInProvider::Github, "login.example.org", now);
+                e.accessed = Timestamp(2_000_000_000);
+                let id = e.uuid;
+                db.add_entry(db.root_id(), e, now)?;
+                db.update_entry(ids.b, now, |e| {
+                    record_sign_in(
+                        e,
+                        SignInProvider::Google,
+                        "www.example.org",
+                        Timestamp(1_000),
+                    );
+                })?;
+                Ok(id)
+            })
+            .unwrap();
+        let r = get(&f, "https://www.example.org/signin");
+        assert_eq!(provider_of(&r).as_deref(), Some("google"));
+        assert_eq!(host_of(&r).as_deref(), Some("www.example.org"));
+        let r = get(&f, "https://login.example.org/");
+        assert_eq!(provider_of(&r).as_deref(), Some("github"));
+        assert_eq!(host_of(&r).as_deref(), Some("login.example.org"));
     }
 
     #[test]

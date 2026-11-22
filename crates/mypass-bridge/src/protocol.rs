@@ -490,13 +490,17 @@ pub enum Response {
     },
     /// The answer to both social sign-in requests. `enabled` mirrors the app's "Remember social
     /// sign-in" setting (when it is off nothing is looked up or stored); `provider` and
-    /// `lastUsed` (RFC 3339 UTC) are the method remembered for the page, absent when none is.
+    /// `lastUsed` (RFC 3339 UTC) are the method remembered for the page, absent when none is;
+    /// `host` is the lowercase host the method was recorded on (absent when it was picked in the
+    /// app). The extension rings a page's button only when `host` is that page's own host.
     SocialSignIn {
         enabled: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         last_used: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host: Option<String>,
     },
     Error {
         message: String,
@@ -949,16 +953,18 @@ mod unlock_protocol_tests {
                 enabled: true,
                 provider: Some("github".into()),
                 last_used: Some("2026-11-22T10:00:00Z".into()),
+                host: Some("github.com".into()),
             })
             .unwrap(),
             json!({"type": "socialSignIn", "enabled": true, "provider": "github",
-                "lastUsed": "2026-11-22T10:00:00Z"})
+                "lastUsed": "2026-11-22T10:00:00Z", "host": "github.com"})
         );
         assert_eq!(
             serde_json::to_value(Response::SocialSignIn {
                 enabled: false,
                 provider: None,
                 last_used: None,
+                host: None,
             })
             .unwrap(),
             json!({"type": "socialSignIn", "enabled": false})

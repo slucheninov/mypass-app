@@ -394,15 +394,19 @@ change is done.
     browser profile. That profile can access vault data after the owner unlocks and can try
     passwords at the bridge's throttled rate.
 - **Social sign-in.** `mypass_session::sign_in` stores the method on a login as the custom fields
-  `MyPass.SignIn.provider` (google, facebook, apple, microsoft, github) and `MyPass.SignIn.lastUsed`
-  (RFC 3339). The bridge requests `recordSocialSignIn` and `getSocialSignIn` (`handlers/social.rs`)
+  `MyPass.SignIn.provider` (google, facebook, apple, microsoft, github), `MyPass.SignIn.lastUsed`
+  (RFC 3339) and `MyPass.SignIn.host` (the page host the click was recorded on). The bridge requests `recordSocialSignIn` and `getSocialSignIn` (`handlers/social.rs`)
   are paired and refused while locked; https only and PSL-matched like credentials. A record goes on
   the most recently used matching login, or creates a root Login titled with the registrable domain;
   the same provider within a day writes nothing. With `rememberSocialSignIn` off both answer
   `enabled: false` and nothing is written. The extension (`shared/social-sign-in.js`) records only
   trusted clicks in the https top frame, keeps clicks made while locked in `chrome.storage.session`
   for ten minutes and sends them after unlock, and draws the remembered button's ring in a closed
-  shadow root under `<html>`.
+  shadow root under `<html>`, only on exactly the recorded host (the service worker strips any
+  other method from a page's lookup; the popup still shows it).
+  - **Residual risk (owner-accepted).** The page owns the DOM, so the ring is observable: the same
+    host can learn which provider was used there last time. Sibling hosts and methods picked in
+    the app are never revealed to a page.
 - **Passkeys.** `mypass_core::passkey` holds the pure parts: request parsing and origin validation (`https` only,
   the rpId must be a registrable suffix of the origin host through the Public Suffix List, no IP literals, no
   localhost exception, so passkeys never work on `localhost`), the ES256 ceremonies (`perform_create`,

@@ -3563,7 +3563,9 @@ mod tests {
         // A browser-recorded date shows in the detail and survives an unrelated edit.
         f.session
             .mutate(|db, now| {
-                db.update_entry(id, now, |e| record_sign_in(e, SignInProvider::Google, NOW))?;
+                db.update_entry(id, now, |e| {
+                    record_sign_in(e, SignInProvider::Google, "example.com", NOW)
+                })?;
                 Ok(())
             })
             .unwrap();
@@ -3656,7 +3658,9 @@ mod tests {
         // Meanwhile the browser records a click on "Sign in with Google".
         f.session
             .mutate(|db, now| {
-                db.update_entry(id, now, |e| record_sign_in(e, SignInProvider::Google, NOW))?;
+                db.update_entry(id, now, |e| {
+                    record_sign_in(e, SignInProvider::Google, "example.com", NOW)
+                })?;
                 Ok(())
             })
             .unwrap();
@@ -3675,7 +3679,9 @@ mod tests {
         };
         f.session
             .mutate(|db, now| {
-                db.update_entry(id, now, |e| record_sign_in(e, SignInProvider::Github, NOW))?;
+                db.update_entry(id, now, |e| {
+                    record_sign_in(e, SignInProvider::Github, "example.com", NOW)
+                })?;
                 Ok(())
             })
             .unwrap();

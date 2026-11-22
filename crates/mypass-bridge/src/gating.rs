@@ -623,6 +623,7 @@ mod tests {
                 enabled: true,
                 provider: None,
                 last_used: None,
+                host: None,
             },
         ] {
             assert!(r.was_served(), "{r:?}");

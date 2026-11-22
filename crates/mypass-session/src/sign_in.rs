@@ -2,12 +2,15 @@
 //! user clicked on the site last time, recorded by the browser extension and shown (and edited) in
 //! the app.
 //!
-//! Two unprotected custom fields hold it:
+//! Three unprotected custom fields hold it:
 //! - `MyPass.SignIn.provider`: one of `google`, `facebook`, `apple`, `microsoft`, `github`;
 //! - `MyPass.SignIn.lastUsed`: when the extension last saw the click, RFC 3339 UTC
-//!   (`YYYY-MM-DDTHH:MM:SSZ`), absent when the user picked the method in the editor.
+//!   (`YYYY-MM-DDTHH:MM:SSZ`), absent when the user picked the method in the editor;
+//! - `MyPass.SignIn.host`: the lowercase host of the page the click happened on, absent when the
+//!   user picked the method in the editor. The extension draws its ring only on exactly this
+//!   host, so a sibling site under the same registrable domain never learns the method.
 //!
-//! Both keys are reserved (they have their own UI, never a custom-field row). A provider value
+//! All keys are reserved (they have their own UI, never a custom-field row). A provider value
 //! this build does not know reads as no sign-in method, and the editor leaves such a value alone
 //! unless the user picks a method.
 
@@ -18,6 +21,8 @@ use serde::{Deserialize, Serialize};
 pub const SIGN_IN_PROVIDER: &str = "MyPass.SignIn.provider";
 /// The custom field holding the last use, RFC 3339 UTC.
 pub const SIGN_IN_LAST_USED: &str = "MyPass.SignIn.lastUsed";
+/// The custom field holding the host the click was recorded on.
+pub const SIGN_IN_HOST: &str = "MyPass.SignIn.host";
 
 /// A social sign-in provider MyPass recognises.
 #[derive(Serialize, Deserialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -78,17 +83,32 @@ pub fn sign_in_of(entry: &Entry) -> Option<SignIn> {
     })
 }
 
-/// Records a use of `provider` at `now`: both fields, unprotected.
-pub fn record_sign_in(entry: &mut Entry, provider: SignInProvider, now: Timestamp) {
+/// The host the entry's sign-in method was recorded on (lowercase), `None` when it has no
+/// method, the method was picked in the editor, or the stored value is empty.
+#[must_use]
+pub fn sign_in_host(entry: &Entry) -> Option<&str> {
+    sign_in_of(entry)?;
+    entry.field(SIGN_IN_HOST).filter(|h| !h.is_empty())
+}
+
+/// Records a use of `provider` on the page host `host` at `now`: all three fields, unprotected.
+/// The host is stored lowercase.
+pub fn record_sign_in(entry: &mut Entry, provider: SignInProvider, host: &str, now: Timestamp) {
     entry.set_field(SIGN_IN_PROVIDER, provider.as_str(), false);
     match now.to_iso8601() {
         Some(when) => entry.set_field(SIGN_IN_LAST_USED, &when, false),
         None => entry.remove_field(SIGN_IN_LAST_USED),
     }
+    let host = host.trim().to_ascii_lowercase();
+    if host.is_empty() {
+        entry.remove_field(SIGN_IN_HOST);
+    } else {
+        entry.set_field(SIGN_IN_HOST, &host, false);
+    }
 }
 
-/// Sets the method chosen in the editor. The same provider as stored keeps its last use; another
-/// one drops it (the date belonged to the old method); `None` removes both fields. Returns
+/// Sets the method chosen in the editor. The same provider as stored keeps its last use and
+/// host; another one drops them (they belonged to the old method); `None` removes all fields. Returns
 /// nothing: the caller compares the whole entry to see whether anything changed.
 pub fn set_sign_in_provider(entry: &mut Entry, provider: Option<SignInProvider>) {
     match provider {
@@ -101,12 +121,14 @@ pub fn set_sign_in_provider(entry: &mut Entry, provider: Option<SignInProvider>)
             {
                 entry.remove_field(SIGN_IN_PROVIDER);
                 entry.remove_field(SIGN_IN_LAST_USED);
+                entry.remove_field(SIGN_IN_HOST);
             }
         }
         Some(p) => {
             if sign_in_of(entry).map(|s| s.provider) != Some(p) {
                 entry.set_field(SIGN_IN_PROVIDER, p.as_str(), false);
                 entry.remove_field(SIGN_IN_LAST_USED);
+                entry.remove_field(SIGN_IN_HOST);
             }
         }
     }
@@ -146,9 +168,16 @@ mod tests {
     #[test]
     fn record_writes_both_fields_unprotected_and_reads_back() {
         let mut e = Entry::new(Timestamp(0));
-        record_sign_in(&mut e, SignInProvider::Github, Timestamp(1_700_000_000));
+        record_sign_in(
+            &mut e,
+            SignInProvider::Github,
+            "Login.Example.COM",
+            Timestamp(1_700_000_000),
+        );
         assert_eq!(e.field(SIGN_IN_PROVIDER), Some("github"));
         assert_eq!(e.field(SIGN_IN_LAST_USED), Some("2023-11-14T22:13:20Z"));
+        assert_eq!(e.field(SIGN_IN_HOST), Some("login.example.com"));
+        assert_eq!(sign_in_host(&e), Some("login.example.com"));
         assert!(e.fields.iter().all(|f| !f.protected));
         assert_eq!(
             sign_in_of(&e),
@@ -178,12 +207,20 @@ mod tests {
     #[test]
     fn editor_change_keeps_or_drops_the_date() {
         let mut e = Entry::new(Timestamp(0));
-        record_sign_in(&mut e, SignInProvider::Google, Timestamp(1_700_000_000));
+        record_sign_in(
+            &mut e,
+            SignInProvider::Google,
+            "a.example",
+            Timestamp(1_700_000_000),
+        );
         set_sign_in_provider(&mut e, Some(SignInProvider::Google));
         assert!(e.field(SIGN_IN_LAST_USED).is_some());
+        assert_eq!(sign_in_host(&e), Some("a.example"));
         set_sign_in_provider(&mut e, Some(SignInProvider::Apple));
         assert_eq!(e.field(SIGN_IN_PROVIDER), Some("apple"));
         assert_eq!(e.field(SIGN_IN_LAST_USED), None);
+        assert_eq!(e.field(SIGN_IN_HOST), None);
+        assert_eq!(sign_in_host(&e), None);
         set_sign_in_provider(&mut e, None);
         assert_eq!(e.field(SIGN_IN_PROVIDER), None);
         // An unknown stored value survives a save that did not pick a method.
@@ -199,7 +236,7 @@ mod tests {
         let mut e = Entry::new(Timestamp(100));
         e.accessed = Timestamp(300);
         assert_eq!(last_used_rank(&e), Timestamp(300));
-        record_sign_in(&mut e, SignInProvider::Google, Timestamp(500));
+        record_sign_in(&mut e, SignInProvider::Google, "a.example", Timestamp(500));
         assert_eq!(last_used_rank(&e), Timestamp(500));
         e.modified = Timestamp(900);
         assert_eq!(last_used_rank(&e), Timestamp(900));
