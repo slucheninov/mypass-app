@@ -4,6 +4,7 @@
 //! integers because JavaScript numbers cannot hold them).
 
 use crate::settings::GeneratorOptionsDto;
+pub use crate::sign_in::SignInProvider;
 use mypass_core::entry_ext::EntryType;
 use mypass_kdbx::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -176,6 +177,8 @@ pub struct EntrySummary {
     pub group_id: String,
     pub in_recycle_bin: bool,
     pub flags: Vec<SecurityFlag>,
+    /// The social sign-in method remembered on the entry (a list badge), `None` when it has none.
+    pub sign_in_provider: Option<SignInProvider>,
 }
 
 /// `count` is `None` for `Security`: the sidebar shows an em dash instead of a number.
@@ -451,6 +454,17 @@ pub struct EntryDetailDto {
     pub attachments: Vec<AttachmentMeta>,
     pub history_count: u32,
     pub in_recycle_bin: bool,
+    /// The social sign-in method remembered on the entry.
+    pub sign_in: Option<SignInDto>,
+}
+
+/// The social sign-in method of an entry: the provider and, when the browser recorded it, the
+/// last use (Unix milliseconds).
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SignInDto {
+    pub provider: SignInProvider,
+    pub last_used: Option<f64>,
 }
 
 /// A TOTP display value (the code is meant to be shown, the secret never leaves Rust).
@@ -620,6 +634,10 @@ pub struct EntryEditModel {
     /// bin, a save is refused unless this is set, and then it moves the entry to `group_id`.
     #[serde(default)]
     pub restore: bool,
+    /// The social sign-in method (`None`: none). Changing it drops the recorded last use; the
+    /// same provider keeps it. `serde(default)` keeps older stored drafts loadable.
+    #[serde(default)]
+    pub sign_in_provider: Option<SignInProvider>,
 }
 
 impl EntryEditModel {

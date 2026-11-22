@@ -220,6 +220,11 @@ pub struct Settings {
     // value falls back to `true` on its own, field by field, and an explicit `false` always wins.
     // A plain comment, not a doc comment, so the generated bindings do not change.
     pub passkey_proxy_enabled: bool,
+    // "Remember social sign-in" (Settings > Browser, default on): the bridge answers the
+    // extension's social sign-in lookups and records only while it is on, and the extension
+    // neither reports clicks nor highlights a button while it is off. A plain comment, like the
+    // one above, so the generated bindings carry no doc text.
+    pub remember_social_sign_in: bool,
     pub unlock_touch_id_enabled: bool,
     pub unlock_mac_password_enabled: bool,
     pub unlock_with_device_window: UnlockWithDeviceWindow,
@@ -250,6 +255,7 @@ impl Default for Settings {
             shortcut_show: String::new(),
             generator: GeneratorOptionsDto::default(),
             passkey_proxy_enabled: true,
+            remember_social_sign_in: true,
             unlock_touch_id_enabled: false,
             unlock_mac_password_enabled: false,
             unlock_with_device_window: UnlockWithDeviceWindow::EightHours,
@@ -354,6 +360,8 @@ pub struct SettingsPatch {
     pub generator: Option<GeneratorOptionsDto>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub passkey_proxy_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remember_social_sign_in: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unlock_with_device_window: Option<UnlockWithDeviceWindow>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -641,6 +649,7 @@ fn apply_patch(s: &mut Settings, p: SettingsPatch) -> Result<(), SettingsError> 
         launch_at_login,
         show_menu_bar_extra,
         passkey_proxy_enabled,
+        remember_social_sign_in,
         unlock_with_device_window,
         require_account_password_window,
         update_check_enabled,
@@ -1042,6 +1051,7 @@ mod tests {
                 symbols: false,
             }),
             passkey_proxy_enabled: Some(false),
+            remember_social_sign_in: Some(false),
             unlock_with_device_window: Some(UnlockWithDeviceWindow::Never),
             require_account_password_window: Some(RequireAccountPasswordWindow::SevenDays),
             update_check_enabled: Some(false),
@@ -1057,6 +1067,8 @@ mod tests {
             recent_vaults: vec!["/a.kdbx".into()],
             ..saved
         };
+        assert!(!saved.remember_social_sign_in);
+        assert!(Settings::default().remember_social_sign_in);
         assert_eq!(saved.shortcut_lock, "CommandOrControl+Alt+K");
         assert_eq!(saved.shortcut_show, "CommandOrControl+Shift+M");
         let reloaded = SettingsStore::load(path).get();

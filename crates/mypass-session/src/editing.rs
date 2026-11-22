@@ -24,6 +24,7 @@ use crate::fields::{
 };
 use crate::queries::{passkey_fingerprint, passkey_meta, person_of, totp_now};
 use crate::session::{SessionError, VaultSession};
+use crate::sign_in::{set_sign_in_provider, sign_in_of};
 use mypass_core::entry_ext::{EntryExt, EntryType, UriMatchMode, ENTRY_TYPE_FIELD};
 use mypass_core::passkey::PasskeyRecord;
 use mypass_core::TotpConfig;
@@ -122,6 +123,7 @@ pub fn new_model(entry_type: EntryTypeDto, group_id: Uuid) -> EntryEditModel {
         remove_passkey: false,
         passkey_ref: None,
         restore: false,
+        sign_in_provider: None,
     }
 }
 
@@ -235,6 +237,7 @@ pub fn edit_model(db: &Database, id: Uuid) -> Result<EntryEditModel, SessionErro
         remove_passkey: false,
         passkey_ref: passkey_fingerprint(entry),
         restore: false,
+        sign_in_provider: sign_in_of(entry).map(|s| s.provider),
     })
 }
 
@@ -542,6 +545,9 @@ fn apply(
             entry.set_field(&field.key, &field.value, field.protected);
         }
     }
+
+    // The sign-in method has its own select; its two reserved fields survive the rebuild above.
+    set_sign_in_provider(entry, model.sign_in_provider);
 
     // The passkey is removed only on an explicit request, after the field rebuild above (which
     // keeps every reserved `KPEX_PASSKEY_*` field), and inside `update_entry`, so the history
@@ -3517,5 +3523,87 @@ mod tests {
         assert_eq!(e.field("k"), Some("e".repeat(1_000).as_str()));
         let newest = e.history.last().unwrap();
         assert_eq!(newest.field("k"), Some("d".repeat(1_000).as_str()));
+    }
+
+    #[test]
+    fn sign_in_method_round_trips_through_the_editor_detail_and_list() {
+        use crate::dto::{Category, EntryQuery, Scope, SortKey, SortOrder};
+        use crate::queries::{entry_detail, list_entries, SearchScope};
+        use crate::sign_in::{record_sign_in, SignInProvider, SIGN_IN_LAST_USED, SIGN_IN_PROVIDER};
+        let f = fx();
+        let id = f.create(|m| {
+            m.title = "example.com".into();
+            m.urls = vec!["https://example.com".into()];
+            m.sign_in_provider = Some(SignInProvider::Google);
+        });
+        let e = f.entry(id);
+        assert_eq!(e.field(SIGN_IN_PROVIDER), Some("google"));
+        assert_eq!(e.field(SIGN_IN_LAST_USED), None);
+        assert_eq!(f.model(id).sign_in_provider, Some(SignInProvider::Google));
+        // Reserved: never a custom-field row in the detail or the editor.
+        assert!(f.model(id).custom_fields.is_empty());
+        let detail = f.db(|d| entry_detail(d, id).unwrap());
+        assert!(detail.custom_fields.is_empty());
+        assert_eq!(
+            detail.sign_in.as_ref().map(|s| s.provider),
+            Some(SignInProvider::Google)
+        );
+        assert_eq!(detail.sign_in.as_ref().and_then(|s| s.last_used), None);
+
+        // A browser-recorded date shows in the detail and survives an unrelated edit.
+        f.session
+            .mutate(|db, now| {
+                db.update_entry(id, now, |e| record_sign_in(e, SignInProvider::Google, NOW))?;
+                Ok(())
+            })
+            .unwrap();
+        let detail = f.db(|d| entry_detail(d, id).unwrap());
+        assert_eq!(
+            detail.sign_in.and_then(|s| s.last_used),
+            Some(1_700_000_000_000.0)
+        );
+        f.edit(id, |m| m.title = "Example".into());
+        assert!(f.entry(id).field(SIGN_IN_LAST_USED).is_some());
+
+        // The list shows it in the logins it belongs to, with a badge and no empty-password flag.
+        let q = EntryQuery {
+            scope: Scope::Category {
+                category: Category::All,
+            },
+            search: String::new(),
+            sort: SortKey::Title,
+            order: SortOrder::Ascending,
+        };
+        let rows = f.db(|d| list_entries(d, &q, SearchScope::App));
+        let row = rows
+            .iter()
+            .find(|r| r.id == id.simple().to_string())
+            .unwrap();
+        assert_eq!(row.sign_in_provider, Some(SignInProvider::Google));
+        assert!(row.flags.is_empty(), "{:?}", row.flags);
+
+        // Another provider drops the date; none removes both fields.
+        f.edit(id, |m| m.sign_in_provider = Some(SignInProvider::Github));
+        assert_eq!(f.entry(id).field(SIGN_IN_PROVIDER), Some("github"));
+        assert_eq!(f.entry(id).field(SIGN_IN_LAST_USED), None);
+        f.edit(id, |m| m.sign_in_provider = None);
+        let e = f.entry(id);
+        assert_eq!(e.field(SIGN_IN_PROVIDER), None);
+        let rows = f.db(|d| list_entries(d, &q, SearchScope::App));
+        let row = rows
+            .iter()
+            .find(|r| r.id == id.simple().to_string())
+            .unwrap();
+        assert_eq!(row.sign_in_provider, None);
+        assert!(row.flags.contains(&crate::dto::SecurityFlag::EmptyPassword));
+    }
+
+    #[test]
+    fn edit_model_without_sign_in_provider_still_deserialises() {
+        let f = fx();
+        let mut json = serde_json::to_value(new_model(EntryTypeDto::Login, f.root)).unwrap();
+        json.as_object_mut().unwrap().remove("signInProvider");
+        let model: EntryEditModel = serde_json::from_value(json).unwrap();
+        assert_eq!(model.sign_in_provider, None);
     }
 }
