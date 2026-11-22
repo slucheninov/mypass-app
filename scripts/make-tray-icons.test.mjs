@@ -42,14 +42,26 @@ test("the macOS tray icon is an 18 pt @2x template: black, shape in alpha only",
   assert.ok(opaque > 100, "a solid key, not a faint outline");
 });
 
-test("both icons draw one upright key, taller than wide", () => {
+test("both icons draw the tilted reference key", () => {
   for (const icon of [renderTemplate(), renderWindows()]) {
     const box = bounds(icon);
-    assert.ok(box.height > box.width * 1.5, `${box.width} x ${box.height}`);
-    // The bow has a hole: the pixel at its centre is empty.
-    const cx = Math.floor((9 / 18) * icon.width);
-    const cy = Math.floor((5.2 / 18) * icon.height);
-    assert.equal(icon.rgba[(cy * icon.width + cx) * 4 + 3], 0);
+    assert.ok(box.height > box.width, `${box.width} x ${box.height}`);
+    const { width, rgba } = icon;
+    // The hole's centre is slightly above and to the left of the bow centre.
+    const x = Math.floor(7.2 * width / 18);
+    const y = Math.floor(3.7 * width / 18);
+    assert.equal(rgba[(y * width + x) * 4 + 3], 0);
+    const mass = [0, 0];
+    const moment = [0, 0];
+    for (let row = 0; row < width; row++) {
+      const half = row < width / 2 ? 0 : 1;
+      for (let col = 0; col < width; col++) {
+        const alpha = rgba[(row * width + col) * 4 + 3];
+        mass[half] += alpha;
+        moment[half] += alpha * col;
+      }
+    }
+    assert.ok(moment[1] / mass[1] > moment[0] / mass[0], "the tip leans right");
   }
 });
 
