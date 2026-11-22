@@ -9,7 +9,7 @@
 
 use std::sync::Mutex;
 
-use crate::commands::app::MAIN_WINDOW;
+use crate::commands::app::{MAIN_WINDOW, SETTINGS_WINDOW};
 use mypass_platform::{LaunchAtLogin, LoginItemStatus, PlatformError};
 use mypass_session::session::SessionError;
 use mypass_session::settings::{Language, Settings, Theme};
@@ -27,6 +27,8 @@ pub enum Effect {
     RegisterHotkeys,
     /// Apply the colour theme to the native windows.
     ApplyTheme(Theme),
+    /// Refresh the Dock or taskbar icon from its own appearance setting.
+    RefreshAppIcon,
     /// Apply the language. Always followed by [`Effect::RebuildTrayMenu`] so the tray is never
     /// stale. The language may still be `System`; the caller resolves it.
     ApplyLanguage(Language),
@@ -37,7 +39,7 @@ pub enum Effect {
 }
 
 /// The effects needed to move from `old` to `new` settings: only what changed, in a fixed order
-/// (autostart, theme, language, tray visibility, hotkeys, auto-lock timeout).
+/// (autostart, theme, app icon, language, tray visibility, hotkeys, auto-lock timeout).
 pub fn settings_effects(old: &Settings, new: &Settings) -> Vec<Effect> {
     let mut effects = Vec::new();
     if old.launch_at_login != new.launch_at_login {
@@ -45,6 +47,9 @@ pub fn settings_effects(old: &Settings, new: &Settings) -> Vec<Effect> {
     }
     if old.theme != new.theme {
         effects.push(Effect::ApplyTheme(new.theme));
+    }
+    if old.app_icon != new.app_icon {
+        effects.push(Effect::RefreshAppIcon);
     }
     if old.language != new.language {
         effects.push(Effect::ApplyLanguage(new.language));
@@ -60,6 +65,11 @@ pub fn settings_effects(old: &Settings, new: &Settings) -> Vec<Effect> {
         effects.push(Effect::RearmAutoLock);
     }
     effects
+}
+
+/// The native windows that follow the app theme.
+pub fn themed_windows() -> [&'static str; 2] {
+    [MAIN_WINDOW, SETTINGS_WINDOW]
 }
 
 /// The OS name every OS-dependent shell rule is fed with (`close_action`, the hotkey rendering).
@@ -503,6 +513,30 @@ mod tests {
     fn effects_empty_when_nothing_changed() {
         let s = Settings::default();
         assert_eq!(settings_effects(&s, &s.clone()), Vec::<Effect>::new());
+    }
+
+    #[test]
+    fn app_icon_change_refreshes_the_icon_only() {
+        let old = Settings::default();
+        let icon = Settings {
+            app_icon: mypass_session::settings::AppIcon::Dark,
+            ..old.clone()
+        };
+        let theme = Settings {
+            theme: Theme::Dark,
+            ..old.clone()
+        };
+        assert_eq!(settings_effects(&old, &icon), [Effect::RefreshAppIcon]);
+        assert_eq!(
+            settings_effects(&old, &theme),
+            [Effect::ApplyTheme(Theme::Dark)]
+        );
+    }
+
+    #[test]
+    fn themed_windows_never_include_the_tray_panel() {
+        assert_eq!(themed_windows(), ["main", "settings"]);
+        assert!(!themed_windows().contains(&crate::tray::PANEL_WINDOW));
     }
 
     #[test]

@@ -97,6 +97,32 @@ pub(crate) fn platform(paths: &AppPaths) -> Platform {
 // App icon
 // ---------------------------------------------------------------------------------------------
 
+/// Sets the appearance of a single AppKit window on the main thread. The raw address is
+/// used only to find an existing window in AppKit's list, so it need not be dereferenced.
+pub fn set_window_dark(handle: *mut std::ffi::c_void, dark: Option<bool>) {
+    use objc2::rc::Retained;
+    use objc2_app_kit::{NSAppearance, NSAppearanceCustomization};
+    use objc2_foundation::ns_string;
+
+    let Some(main) = MainThreadMarker::new() else {
+        return;
+    };
+    let windows = NSApplication::sharedApplication(main).windows();
+    if let Some(window) = windows
+        .iter()
+        .find(|window| Retained::as_ptr(window).cast() == handle.cast_const())
+    {
+        let appearance = dark.and_then(|dark| {
+            NSAppearance::appearanceNamed(if dark {
+                ns_string!("NSAppearanceNameDarkAqua")
+            } else {
+                ns_string!("NSAppearanceNameAqua")
+            })
+        });
+        window.setAppearance(appearance.as_deref());
+    }
+}
+
 /// [`AppIcon`] over `NSApplication.applicationIconImage` (the Dock tile of the running app) and
 /// the global `AppleInterfaceStyle` default (the OS appearance, which the app's own forced
 /// `NSApp.appearance` never changes).

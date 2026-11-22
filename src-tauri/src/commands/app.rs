@@ -225,7 +225,14 @@ pub fn open_settings(app: &AppHandle, pane: Option<&str>) -> Result<(), ApiError
                 .visible(false)
                 .build()
                 .map_err(|e| super::internal(e.to_string()))?;
-            // A new window starts with the bundle icon; Windows shows the theme's one.
+            let handle = app.clone();
+            let themed = window.clone();
+            let _ = app.run_on_main_thread(move || {
+                if let Some(state) = handle.try_state::<AppState>() {
+                    crate::shell_runtime::apply_window_theme(&themed, state.0.settings.get().theme);
+                }
+            });
+            // Apply the selected app icon to the newly created Windows window.
             crate::shell_runtime::refresh_app_icon(app, true);
             window
         }

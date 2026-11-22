@@ -19,7 +19,7 @@ use crate::lifecycle::{
     sync_login_item_report, ExitGate, ExitOutcome, ExitRequest, ExternalWatcher, QuitPort,
     QuitWorkerGuard, ShellTarget, TrayRefresher, EXTERNAL_POLL,
 };
-use crate::shell::{close_action, current_os, show_main, CloseAction, PanelRect};
+use crate::shell::{close_action, current_os, show_main, themed_windows, CloseAction, PanelRect};
 use crate::state::{AppState, EditorDirty, ShellState};
 use crate::tray::{
     action_for_id, separator_before, TrayAction, TrayMenuModel, PANEL_WINDOW, TRAY_ID,
@@ -399,12 +399,41 @@ impl ShellTarget for TauriTarget {
     }
 
     fn apply_theme(&self, theme: Theme) {
-        self.on_main(move |app| app.set_theme(native_theme(theme)));
-        // Windows reports the new window themes later (`ThemeChanged`), which refreshes again.
+        self.on_main(move |app| apply_theme_to_windows(app, theme));
+    }
+
+    fn refresh_app_icon(&self) {
         refresh_app_icon(&self.app, false);
     }
 }
 
+fn apply_theme_to_windows(app: &AppHandle, theme: Theme) {
+    for window in themed_windows()
+        .into_iter()
+        .filter_map(|label| app.get_webview_window(label))
+    {
+        apply_window_theme(&window, theme);
+    }
+}
+
+pub(crate) fn apply_window_theme(window: &tauri::WebviewWindow, theme: Theme) {
+    #[cfg(target_os = "macos")]
+    if let Ok(handle) = window.ns_window() {
+        // Tao's instance-level setter changes NSApplication's appearance on macOS.
+        mypass_platform::set_window_dark(
+            handle,
+            match theme {
+                Theme::System => None,
+                Theme::Light => Some(false),
+                Theme::Dark => Some(true),
+            },
+        );
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = window.set_theme(native_theme(theme));
+}
+
+#[cfg(not(target_os = "macos"))]
 fn native_theme(theme: Theme) -> Option<tauri::Theme> {
     match theme {
         Theme::System => None,
@@ -416,7 +445,7 @@ fn native_theme(theme: Theme) -> Option<tauri::Theme> {
 // ---------------------------------------------------------------------------------------------
 // App icon
 
-/// Shows the app icon of the effective theme (`app_icon.rs`) on the main thread; `force` applies
+/// Shows the app icon for the selected icon appearance (`app_icon.rs`) on the main thread; `force` applies
 /// it even when unchanged (a new window, or the framework's own dev-mode Dock icon at `Ready`).
 /// Posted, never awaited.
 pub fn refresh_app_icon<R: Runtime>(app: &tauri::AppHandle<R>, force: bool) {
@@ -431,11 +460,11 @@ fn apply_app_icon<R: Runtime>(app: &tauri::AppHandle<R>, force: bool) {
     };
     let platform = core.0.platform();
     let window_dark = app
-        .get_webview_window(MAIN_WINDOW)
+        .get_webview_window(PANEL_WINDOW)
         .and_then(|window| window.theme().ok())
         .map(|theme| theme == tauri::Theme::Dark);
     let dark = app_icon::system_dark(platform.app_icon.system_dark().ok(), window_dark);
-    let variant = app_icon::app_icon_variant(core.0.settings.get().theme, dark);
+    let variant = app_icon::app_icon_variant(core.0.settings.get().app_icon, dark);
     if !shown.should_apply(variant, force) {
         return;
     }
@@ -530,7 +559,7 @@ pub fn start(app: &tauri::App) {
     start_external_poll(watcher.clone(), core.scheduler(), EXTERNAL_POLL);
     app.manage(watcher);
 
-    app.set_theme(native_theme(settings.theme));
+    apply_theme_to_windows(&handle, settings.theme);
     // The icon itself is applied at `RunEvent::Ready`, after the framework's own dev-mode icon.
     app.manage(AppIconState::default());
     apply_startup_ui(&handle, &core, &settings);
