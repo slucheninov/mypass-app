@@ -337,9 +337,10 @@ fn request_cases() -> Vec<(Request, &'static str)> {
                 token: t(),
                 page_url: "https://example.com/login".into(),
                 provider: "google".into(),
+                source: SocialSignInSource::Click,
                 pairing: None,
             },
-            r#"{"type":"recordSocialSignIn","token":"tok-1","pageUrl":"https://example.com/login","provider":"google"}"#,
+            r#"{"type":"recordSocialSignIn","token":"tok-1","pageUrl":"https://example.com/login","provider":"google","source":"click"}"#,
         ),
         (
             Request::GetSocialSignIn {

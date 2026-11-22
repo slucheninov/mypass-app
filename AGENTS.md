@@ -398,7 +398,10 @@ change is done.
   (RFC 3339) and `MyPass.SignIn.host` (the page host the click was recorded on). The bridge requests `recordSocialSignIn` and `getSocialSignIn` (`handlers/social.rs`)
   are paired and refused while locked; https only and PSL-matched like credentials. A record goes on
   the most recently used matching login, or creates a root Login titled with the registrable domain;
-  the same provider within a day writes nothing. With `rememberSocialSignIn` off both answer
+  a host is written at most once a day whatever the provider, except by a direct click naming
+  another provider. A `source: frame` record (a trusted pointer over a provider's own button frame,
+  e.g. `accounts.google.com`, within 1.5 s before the page lost focus to it) never creates an entry
+  or overrides that limit. With `rememberSocialSignIn` off both answer
   `enabled: false` and nothing is written. The extension (`shared/social-sign-in.js`) records only
   trusted clicks in the https top frame, keeps clicks made while locked in `chrome.storage.session`
   for ten minutes and sends them after unlock, and draws the remembered button's ring in a closed

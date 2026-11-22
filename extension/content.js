@@ -2045,7 +2045,17 @@
       function send(message) {
         if (message) sendRuntimeMessage(message, () => { void chrome.runtime.lastError; });
       }
-      const context = () => ({ pageUrl: location.href, enabled: enabled !== false });
+      // The page's last trusted pointer event, for the provider-frame heuristic: pointer events
+      // over a cross-origin frame never reach this document, so this is where the pointer was
+      // just before it entered the frame. Scripts cannot synthesize trusted pointer events.
+      let lastPointer = null;
+      const notePointer = (event) => {
+        if (!event || event.isTrusted !== true) return;
+        lastPointer = { x: event.clientX, y: event.clientY, at: Date.now() };
+      };
+      document.addEventListener('pointermove', notePointer, { capture: true, passive: true });
+      document.addEventListener('pointerdown', notePointer, { capture: true, passive: true });
+      const context = () => ({ pageUrl: location.href, enabled: enabled !== false, pointer: lastPointer, now: Date.now() });
 
       document.addEventListener('click', (event) => {
         if (enabled === null || enabled === false) return;

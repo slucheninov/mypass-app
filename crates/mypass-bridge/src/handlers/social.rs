@@ -8,9 +8,12 @@
 //! A record goes through one `session.mutate_tracked` call (all or nothing, refused while
 //! quitting, autosaved). The target is the most recently used matching login (the
 //! `credential_candidates` rules: PSL-aware, https only, no bin, generator history or `never`
-//! mode). The same provider recorded less than a day ago writes nothing, so every click on the
-//! button does not add a history snapshot. With no matching login a new one is created in the
-//! root group: title the registrable domain, URL the page origin, no user name or password.
+//! mode). A host is written at most once a day, whatever the provider: a record on the host the
+//! target's method was recorded on less than a day ago writes nothing (no history snapshot per
+//! click, and a page cannot churn the entry), except a direct `click` naming another provider
+//! than the stored one. With no matching login a `click` creates a new one in the root group:
+//! title the registrable domain, URL the page origin, no user name or password. A `frame` record
+//! (the heuristic for a provider's cross-origin button frame) never creates an entry.
 //!
 //! Every record stores the page host (`MyPass.SignIn.host`). A lookup prefers the matching login
 //! recorded on exactly the page host and answers that host as `host`; the extension draws its
@@ -28,11 +31,11 @@ use mypass_session::sign_in::{
 use url::Url;
 
 use super::text::{is_clean_line, MAX_URL_CHARS};
-use crate::protocol::Response;
+use crate::protocol::{Response, SocialSignInSource};
 use crate::service::Ctx;
 use crate::views::{error, session_error_response};
 
-/// A repeated record of the same provider within this many seconds writes nothing.
+/// A host recorded less than this many seconds ago is not written again (see the module doc).
 const REFRESH_AFTER_SECS: i64 = 24 * 60 * 60;
 
 /// An https page: its origin (`https://host[:port]`) and its lowercase host.
@@ -99,7 +102,12 @@ fn method_of(entry: &Entry) -> (Option<SignIn>, Option<String>) {
     (sign_in_of(entry), sign_in_host(entry).map(str::to_owned))
 }
 
-pub(crate) fn record_social_sign_in(ctx: &Ctx<'_>, page_url: &str, provider: &str) -> Response {
+pub(crate) fn record_social_sign_in(
+    ctx: &Ctx<'_>,
+    page_url: &str,
+    provider: &str,
+    source: SocialSignInSource,
+) -> Response {
     if !ctx.deps.settings.get().remember_social_sign_in {
         return disabled();
     }
@@ -120,15 +128,18 @@ pub(crate) fn record_social_sign_in(ctx: &Ctx<'_>, page_url: &str, provider: &st
             }) = current
             {
                 let same_host = db.find_entry(id).and_then(sign_in_host) == Some(host.as_str());
-                if stored == provider
-                    && same_host
-                    && now.0.saturating_sub(when.0) < REFRESH_AFTER_SECS
-                {
+                let written_today = same_host && now.0.saturating_sub(when.0) < REFRESH_AFTER_SECS;
+                let direct_change = source == SocialSignInSource::Click && stored != provider;
+                if written_today && !direct_change {
                     return Ok((db.find_entry(id).map(method_of), false));
                 }
             }
             let changed = db.update_entry(id, now, |e| record_sign_in(e, provider, &host, now))?;
             return Ok((db.find_entry(id).map(method_of), changed));
+        }
+        // The frame heuristic only ever updates a login that already exists.
+        if source != SocialSignInSource::Click {
+            return Ok((None, false));
         }
         let root = db.root_id();
         // The root is never the bin or a history group; the check keeps that true by construction.
@@ -193,10 +204,15 @@ mod tests {
     use uuid::Uuid;
 
     fn record(f: &Fx, url: &str, provider: &str) -> Response {
+        record_from(f, url, provider, SocialSignInSource::Click)
+    }
+
+    fn record_from(f: &Fx, url: &str, provider: &str, source: SocialSignInSource) -> Response {
         send(f, |token, pairing| Request::RecordSocialSignIn {
             token,
             page_url: url.to_owned(),
             provider: provider.to_owned(),
+            source,
             pairing,
         })
     }
@@ -458,23 +474,95 @@ mod tests {
     }
 
     #[test]
-    fn a_repeat_within_a_day_writes_nothing_and_a_later_one_refreshes() {
+    fn a_host_is_written_once_a_day_unless_a_click_changes_the_provider() {
         let (f, ids) = sample_fx();
         record(&f, "https://github.com/login", "github");
         let snapshots = history_len(&f, ids.a);
         f.session.flush().unwrap();
         assert!(!dirty(&f));
         f.sched.advance(Duration::from_secs(30));
+        // The same provider again, by click or frame: nothing is written.
         record(&f, "https://github.com/login", "github");
+        record_from(
+            &f,
+            "https://github.com/login",
+            "github",
+            SocialSignInSource::Frame,
+        );
         assert!(!dirty(&f), "a repeat within a day is a no-op");
         assert_eq!(history_len(&f, ids.a), snapshots);
-        // Another provider is written at once.
+        // Another provider through the frame heuristic: the daily limit holds.
+        let r = record_from(
+            &f,
+            "https://github.com/login",
+            "google",
+            SocialSignInSource::Frame,
+        );
+        assert_eq!(provider_of(&r).as_deref(), Some("github"));
+        assert_eq!(
+            field(&f, ids.a, SIGN_IN_PROVIDER).as_deref(),
+            Some("github")
+        );
+        assert!(!dirty(&f));
+        // Another provider through a direct click is written at once.
         record(&f, "https://github.com/login", "google");
         assert_eq!(
             field(&f, ids.a, SIGN_IN_PROVIDER).as_deref(),
             Some("google")
         );
         assert_eq!(history_len(&f, ids.a), snapshots + 1);
+        // A day later the frame heuristic may refresh the entry.
+        f.session.flush().unwrap();
+        f.sched
+            .advance(Duration::from_secs(REFRESH_AFTER_SECS.unsigned_abs() + 1));
+        // The idle timer locked the vault meanwhile.
+        if f.session.with_db(|_| ()).is_err() {
+            f.session
+                .unlock(secrecy::SecretString::from("pw".to_owned()))
+                .unwrap();
+        }
+        record_from(
+            &f,
+            "https://github.com/login",
+            "apple",
+            SocialSignInSource::Frame,
+        );
+        assert_eq!(field(&f, ids.a, SIGN_IN_PROVIDER).as_deref(), Some("apple"));
+    }
+
+    #[test]
+    fn another_host_of_the_site_is_not_limited_by_this_hosts_write() {
+        let (f, ids) = sample_fx();
+        record(&f, "https://github.com/login", "github");
+        f.sched.advance(Duration::from_secs(30));
+        record_from(
+            &f,
+            "https://gist.github.com/",
+            "github",
+            SocialSignInSource::Frame,
+        );
+        assert_eq!(
+            field(&f, ids.a, SIGN_IN_HOST).as_deref(),
+            Some("gist.github.com")
+        );
+    }
+
+    #[test]
+    fn the_frame_heuristic_never_creates_an_entry() {
+        let (f, _) = sample_fx();
+        let before = entry_count(&f);
+        let r = record_from(
+            &f,
+            "https://new.example/login",
+            "google",
+            SocialSignInSource::Frame,
+        );
+        assert_eq!(provider_of(&r), None);
+        assert_eq!(entry_count(&f), before);
+        assert!(!dirty(&f));
+        // A direct click on the same page does.
+        record(&f, "https://new.example/login", "google");
+        assert_eq!(entry_count(&f), before + 1);
     }
 
     #[test]

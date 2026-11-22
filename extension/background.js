@@ -1325,9 +1325,9 @@ function noteSocialSignInSetting(response) {
   });
 }
 
-async function queueSocialSignIn(tabId, pageUrl, provider) {
+async function queueSocialSignIn(tabId, pageUrl, provider, source) {
   const records = await sessionGetValue(SOCIAL_SIGN_IN_PENDING_KEY);
-  await sessionSetValue(SOCIAL_SIGN_IN_PENDING_KEY, socialSignIn.addPending(records, tabId, pageUrl, provider, Date.now()));
+  await sessionSetValue(SOCIAL_SIGN_IN_PENDING_KEY, socialSignIn.addPending(records, tabId, pageUrl, provider, Date.now(), source));
 }
 
 function flushSocialSignInQueue() {
@@ -1343,7 +1343,7 @@ function flushSocialSignInQueue() {
     for (const key of keys) {
       const record = live[key];
       const response = await sendNativeMessageWithPairing({
-        type: "recordSocialSignIn", pageUrl: record.pageUrl, provider: record.provider
+        type: "recordSocialSignIn", pageUrl: record.pageUrl, provider: record.provider, source: record.source
       });
       await noteSocialSignInSetting(response);
       // Locked again (or the app went away mid-flush): keep it for the next unlock.
@@ -1377,10 +1377,12 @@ async function handleSocialSignInMessage(message, sender) {
   }
   const pageUrl = socialSignInPageOf(message, sender);
   if (!pageUrl || !socialSignIn.isProvider(message.provider)) return { type: "error", message: "invalid_request" };
-  const response = await sendNativeMessageWithPairing({ type: "recordSocialSignIn", pageUrl, provider: message.provider });
+  // Anything but an explicit click is the weaker frame heuristic.
+  const source = message.source === "click" ? "click" : "frame";
+  const response = await sendNativeMessageWithPairing({ type: "recordSocialSignIn", pageUrl, provider: message.provider, source });
   await noteSocialSignInSetting(response);
   if (response && response.type === "locked") {
-    await queueSocialSignIn(sender.tab.id, pageUrl, message.provider);
+    await queueSocialSignIn(sender.tab.id, pageUrl, message.provider, source);
     return { type: "queued" };
   }
   return response;

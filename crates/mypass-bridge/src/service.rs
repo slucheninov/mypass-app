@@ -298,8 +298,11 @@ impl BridgeService {
                 generator::delete_generated_password(ctx, id)
             }
             Request::RecordSocialSignIn {
-                page_url, provider, ..
-            } => social::record_social_sign_in(ctx, page_url, provider),
+                page_url,
+                provider,
+                source,
+                ..
+            } => social::record_social_sign_in(ctx, page_url, provider, *source),
             Request::GetSocialSignIn { url, .. } => social::get_social_sign_in(ctx, url),
         }
     }

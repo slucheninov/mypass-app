@@ -134,7 +134,7 @@ assert.strictEqual(social.providerForClickTarget(el('div', {}, ['Sign in with Go
 // ---- trusted-click-only recording ------------------------------------------------------------
 const google = el('button', {}, ['Continue with Google']);
 assert.deepStrictEqual(social.recordMessageForClick(click(google), { pageUrl: PAGE }), {
-  type: 'recordSocialSignIn', pageUrl: PAGE, provider: 'google'
+  type: 'recordSocialSignIn', pageUrl: PAGE, provider: 'google', source: 'click'
 });
 assert.strictEqual(social.recordMessageForClick(click(google, false), { pageUrl: PAGE }), null, 'a script click() never records');
 assert.strictEqual(social.recordMessageForClick({ target: google }, { pageUrl: PAGE }), null, 'isTrusted must be exactly true');
@@ -142,18 +142,53 @@ assert.strictEqual(social.recordMessageForClick(click(google), { pageUrl: 'http:
 assert.strictEqual(social.recordMessageForClick(click(google), { pageUrl: PAGE, enabled: false }), null, 'setting off');
 assert.strictEqual(social.recordMessageForClick(click(el('button', {}, ['Sign in'])), { pageUrl: PAGE }), null);
 
-// Google's rendered button is a cross-origin iframe: the window blur plus a live activation.
+// Google's rendered button is a cross-origin iframe: the window blur, a live activation and a
+// trusted pointer over the provider's own frame right before it.
 const frame = el('iframe', { src: 'https://accounts.google.com/gsi/button?theme=outline' });
+frame.getBoundingClientRect = () => ({ left: 100, top: 200, width: 240, height: 40 });
 const doc = { activeElement: frame };
 const active = { userActivation: { isActive: true } };
-assert.deepStrictEqual(social.recordMessageForFrameFocus({ isTrusted: true }, { pageUrl: PAGE }, doc, active), {
-  type: 'recordSocialSignIn', pageUrl: PAGE, provider: 'google'
+const NOW = 1_800_000_000_000;
+// The last pointermove the page saw sits on the frame's edge as the pointer entered it.
+const near = { x: 99, y: 210, at: NOW - 400 };
+const frameContext = (extra) => ({ pageUrl: PAGE, pointer: near, now: NOW, ...extra });
+assert.deepStrictEqual(social.recordMessageForFrameFocus({ isTrusted: true }, frameContext(), doc, active), {
+  type: 'recordSocialSignIn', pageUrl: PAGE, provider: 'google', source: 'frame'
 });
-assert.strictEqual(social.recordMessageForFrameFocus({ isTrusted: true }, { pageUrl: PAGE }, doc, { userActivation: { isActive: false } }), null);
-assert.strictEqual(social.recordMessageForFrameFocus({ isTrusted: true }, { pageUrl: PAGE }, doc, {}), null, 'no API: fail closed');
-assert.strictEqual(social.recordMessageForFrameFocus({ isTrusted: false }, { pageUrl: PAGE }, doc, active), null);
-assert.strictEqual(social.recordMessageForFrameFocus({ isTrusted: true }, { pageUrl: PAGE },
-  { activeElement: el('iframe', { src: 'https://ads.example/' }) }, active), null);
+assert.strictEqual(social.recordMessageForFrameFocus({ isTrusted: true }, frameContext(), doc, { userActivation: { isActive: false } }), null);
+assert.strictEqual(social.recordMessageForFrameFocus({ isTrusted: true }, frameContext(), doc, {}), null, 'no API: fail closed');
+assert.strictEqual(social.recordMessageForFrameFocus({ isTrusted: false }, frameContext(), doc, active), null);
+assert.strictEqual(social.recordMessageForFrameFocus({ isTrusted: true }, frameContext({ enabled: false }), doc, active), null);
+// Rule: only frames served by a provider's own sign-in host count; a site path never does.
+for (const src of ['https://ads.example/', 'https://shop.example/auth/google', 'http://accounts.google.com/gsi/button',
+  'https://accounts.google.com.evil.example/', 'https://www.facebook.com.evil.example/plugins/login_button']) {
+  const other = el('iframe', { src });
+  other.getBoundingClientRect = frame.getBoundingClientRect;
+  assert.strictEqual(social.recordMessageForFrameFocus({ isTrusted: true }, frameContext(), { activeElement: other }, active), null, src);
+}
+assert.deepStrictEqual(['https://appleid.apple.com/x', 'https://www.facebook.com/v18.0/plugins/login_button.php',
+  'https://login.microsoftonline.com/common', 'https://login.live.com/', 'https://github.com/login/oauth/x']
+  .map((src) => social.providerFromFrameSrc(src)), ['apple', 'facebook', 'microsoft', 'microsoft', 'github']);
+// Rule: no pointer, a pointer elsewhere on the page, or one older than 1500 ms never records
+// (focus moved into the frame by script alone).
+for (const pointer of [
+  null,
+  { x: 20, y: 20, at: NOW - 100 },
+  { x: 99, y: 210, at: NOW - social.FRAME_POINTER_WINDOW_MS - 1 },
+  { x: 99, y: 210, at: NOW + 5 },
+  { x: 100 - social.FRAME_POINTER_SLOP_PX - 1, y: 210, at: NOW - 100 },
+  { x: 200, y: 200 + 40 + social.FRAME_POINTER_SLOP_PX + 1, at: NOW - 100 },
+  { x: NaN, y: 210, at: NOW - 100 },
+]) {
+  assert.strictEqual(social.recordMessageForFrameFocus({ isTrusted: true }, frameContext({ pointer }), doc, active), null, JSON.stringify(pointer));
+}
+assert.ok(social.recordMessageForFrameFocus({ isTrusted: true },
+  frameContext({ pointer: { x: 220, y: 220, at: NOW - social.FRAME_POINTER_WINDOW_MS } }), doc, active), 'inside, at the limit');
+// A frame with no box (hidden) never records.
+const flat = el('iframe', { src: 'https://accounts.google.com/gsi/button' });
+flat.getBoundingClientRect = () => ({ left: 0, top: 0, width: 0, height: 0 });
+assert.strictEqual(social.recordMessageForFrameFocus({ isTrusted: true },
+  frameContext({ pointer: { x: 0, y: 0, at: NOW } }), { activeElement: flat }, active), null);
 
 // ---- highlight selection ---------------------------------------------------------------------
 const textOnly = el('button', {}, ['Sign in with GitHub']);
@@ -211,6 +246,8 @@ queue = social.addPending(queue, 7, 'https://shop.example/other', 'apple', T0 + 
 queue = social.addPending(queue, 8, 'https://shop.example/login', 'github', T0 + 2000);
 assert.deepStrictEqual(Object.keys(queue).sort(), ['7|https://shop.example', '8|https://shop.example']);
 assert.strictEqual(queue['7|https://shop.example'].provider, 'apple', 'the newest click of a tab and site wins');
+assert.strictEqual(queue['7|https://shop.example'].source, 'frame', 'no source is the weaker frame heuristic');
+assert.strictEqual(social.addPending({}, 7, PAGE, 'google', T0, 'click')['7|https://shop.example'].source, 'click');
 assert.deepStrictEqual(social.addPending({}, 7, 'http://shop.example/', 'google', T0), {}, 'https only');
 assert.deepStrictEqual(social.addPending({}, 7, 'https://shop.example/', 'myspace', T0), {});
 assert.deepStrictEqual(

@@ -102,6 +102,19 @@ impl<'de> Deserialize<'de> for WirePassword {
     }
 }
 
+/// How the extension saw a social sign-in click.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SocialSignInSource {
+    /// A trusted click on the button in the page's own top frame.
+    Click,
+    /// The heuristic for a provider's cross-origin button frame (a trusted pointer over the frame
+    /// right before the page lost focus to it). Weaker: it never creates an entry and never
+    /// overrides the once-a-day limit.
+    #[default]
+    Frame,
+}
+
 /// A request from the extension. Every variant carries the endpoint `token`; the ones the Swift app
 /// accepts a pairing secret on end with `pairing`.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -369,10 +382,13 @@ pub enum Request {
     },
     /// The user clicked a social sign-in button (`provider`: `google`, `facebook`, `apple`,
     /// `microsoft` or `github`) on the https page `pageUrl`: remember it on the matching login.
+    /// `source` says how the extension saw it; a missing value is the weaker `frame`.
     RecordSocialSignIn {
         token: String,
         page_url: String,
         provider: String,
+        #[serde(default)]
+        source: SocialSignInSource,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pairing: Option<String>,
     },
@@ -941,10 +957,28 @@ mod unlock_protocol_tests {
     #[test]
     fn social_sign_in_messages_use_the_spec_shapes() {
         let wire = json!({"type": "recordSocialSignIn", "token": "t",
-            "pageUrl": "https://example.com/login", "provider": "google", "pairing": "p"});
+            "pageUrl": "https://example.com/login", "provider": "google", "source": "click",
+            "pairing": "p"});
         let request: Request = serde_json::from_value(wire.clone()).unwrap();
         assert_eq!(request.name(), "recordSocialSignIn");
         assert_eq!(serde_json::to_value(request).unwrap(), wire);
+        // A missing source is the weaker frame heuristic; an unknown one is malformed.
+        let request: Request = serde_json::from_value(json!({"type": "recordSocialSignIn",
+            "token": "t", "pageUrl": "https://example.com/", "provider": "google"}))
+        .unwrap();
+        assert!(matches!(
+            request,
+            Request::RecordSocialSignIn {
+                source: SocialSignInSource::Frame,
+                ..
+            }
+        ));
+        assert!(
+            serde_json::from_value::<Request>(json!({"type": "recordSocialSignIn",
+            "token": "t", "pageUrl": "https://example.com/", "provider": "google",
+            "source": "script"}))
+            .is_err()
+        );
         let wire = json!({"type": "getSocialSignIn", "token": "t", "url": "https://example.com/"});
         let request: Request = serde_json::from_value(wire.clone()).unwrap();
         assert_eq!(serde_json::to_value(request).unwrap(), wire);

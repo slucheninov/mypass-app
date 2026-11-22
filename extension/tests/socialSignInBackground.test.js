@@ -51,12 +51,20 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 test("a page records its own url, not the one the message names", async () => {
   const sender = page("https://shop.example/login?next=/cart");
-  const reply = await request({ type: "recordSocialSignIn", pageUrl: "https://shop.example/", provider: "google" }, sender);
+  const reply = await request({ type: "recordSocialSignIn", pageUrl: "https://shop.example/", provider: "google", source: "click" }, sender);
   assert.deepEqual(reply, { type: "socialSignIn", enabled: true });
   assert.deepEqual(nativeCalls, [{
-    type: "recordSocialSignIn", pageUrl: "https://shop.example/login?next=/cart", provider: "google", pairing: "proof",
+    type: "recordSocialSignIn", pageUrl: "https://shop.example/login?next=/cart", provider: "google", source: "click", pairing: "proof",
   }]);
   assert.equal(local[SOCIAL_SIGN_IN_ENABLED_KEY], true);
+});
+
+test("anything but an explicit click is sent on as the frame heuristic", async () => {
+  const sender = page("https://shop.example/");
+  for (const source of [undefined, "frame", "script", 1]) {
+    await request({ type: "recordSocialSignIn", pageUrl: sender.url, provider: "google", source }, sender);
+  }
+  assert.deepEqual(nativeCalls.map((m) => m.source), ["frame", "frame", "frame", "frame"]);
 });
 
 test("records from the wrong place never reach the app", async () => {

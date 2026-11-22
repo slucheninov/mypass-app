@@ -487,6 +487,7 @@ pub(crate) fn all_requests(pairing: Option<&str>) -> Vec<Request> {
             token: t(),
             page_url: "https://a.example/login".into(),
             provider: "google".into(),
+            source: crate::protocol::SocialSignInSource::Click,
             pairing: p(),
         },
         Request::GetSocialSignIn {

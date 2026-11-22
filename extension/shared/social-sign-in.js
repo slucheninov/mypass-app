@@ -19,6 +19,23 @@ var mypassSocialSignIn = (function () {
   // A pending record waits this long for the vault to be unlocked, then it is dropped.
   var PENDING_TTL_MS = 10 * 60 * 1000;
   var RING_COLOR = '#73b359';
+  // The frame heuristic: the last trusted pointer event of the page must have been over the
+  // provider frame (its box grown by the slop: pointer events over a cross-origin frame go to the
+  // frame, so the page's last one lands on or just outside its edge) at most this long before the
+  // page lost focus to it.
+  var FRAME_POINTER_WINDOW_MS = 1500;
+  var FRAME_POINTER_SLOP_PX = 8;
+  // The hosts whose own button frames the heuristic trusts (never a site's /auth/<provider> path).
+  var FRAME_HOSTS = {
+    'accounts.google.com': 'google',
+    'appleid.apple.com': 'apple',
+    'www.facebook.com': 'facebook',
+    'web.facebook.com': 'facebook',
+    'facebook.com': 'facebook',
+    'login.microsoftonline.com': 'microsoft',
+    'login.live.com': 'microsoft',
+    'github.com': 'github'
+  };
   var MAX_TEXT = 120;
   // What a click can land on: the clickable element itself, or an SDK container around it.
   var CLICKABLE = 'a[href],button,[role="button"],input[type="submit"],input[type="button"],'
@@ -97,6 +114,19 @@ var mypassSocialSignIn = (function () {
     if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
     var own = path.match(/\/(?:auth|oauth2?|login|signin|sign-in|sso|connect|social|accounts)\/(google|facebook|apple|microsoft|github)(?:[\/._-]|$)/);
     return own ? own[1] : null;
+  }
+
+  // The provider of a button frame served by the provider's own sign-in host, or null.
+  function providerFromFrameSrc(src, base) {
+    if (typeof src !== 'string' || !src || src.length > 4096) return null;
+    try {
+      var url = new URL(src, base || undefined);
+      if (url.protocol !== 'https:') return null;
+      var host = url.hostname.toLowerCase().replace(/\.$/, '');
+      return Object.prototype.hasOwnProperty.call(FRAME_HOSTS, host) ? FRAME_HOSTS[host] : null;
+    } catch (error) {
+      return null;
+    }
   }
 
   function attr(el, name) {
@@ -183,21 +213,46 @@ var mypassSocialSignIn = (function () {
     if (!event || event.isTrusted !== true) return null;
     if (!context || context.enabled === false || !isHttpsUrl(context.pageUrl)) return null;
     var provider = providerForClickTarget(event.target, context.pageUrl);
-    return provider ? { type: 'recordSocialSignIn', pageUrl: context.pageUrl, provider: provider } : null;
+    return provider ? { type: 'recordSocialSignIn', pageUrl: context.pageUrl, provider: provider, source: 'click' } : null;
+  }
+
+  // Whether the trusted pointer `{x, y, at}` (client coordinates, ms) was over `rect` at most
+  // FRAME_POINTER_WINDOW_MS before `now`.
+  function pointerWasOver(pointer, rect, now) {
+    if (!pointer || !rect || typeof now !== 'number') return false;
+    var x = pointer.x;
+    var y = pointer.y;
+    var at = pointer.at;
+    if (![x, y, at, rect.left, rect.top, rect.width, rect.height].every(function (n) {
+      return typeof n === 'number' && isFinite(n);
+    })) return false;
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    var age = now - at;
+    if (age < 0 || age > FRAME_POINTER_WINDOW_MS) return false;
+    var slop = FRAME_POINTER_SLOP_PX;
+    return x >= rect.left - slop && x <= rect.left + rect.width + slop
+      && y >= rect.top - slop && y <= rect.top + rect.height + slop;
   }
 
   // A sign-in button that is a cross-origin iframe (Google's rendered button) never shows the
-  // click to this page: the window loses focus to the frame instead. With a live user activation
-  // (the browser propagates it to the parent; page script cannot forge it) that is the click.
+  // click to this page: the window loses focus to the frame instead. That counts only for a frame
+  // served by the provider's own sign-in host, with a live user activation, and when the page's
+  // last trusted pointer event (`context.pointer`, which page script cannot synthesize) was over
+  // that frame within FRAME_POINTER_WINDOW_MS of the blur (`context.now`). Focus moved by script
+  // alone never records. The bridge treats the result as weaker than a click (`source: frame`):
+  // it never creates an entry and never overrides the once-a-day limit.
   function recordMessageForFrameFocus(event, context, doc, nav) {
     if (!event || event.isTrusted !== true) return null;
     if (!context || context.enabled === false || !isHttpsUrl(context.pageUrl)) return null;
     var active = doc && doc.activeElement;
     if (!active || String(active.tagName || '').toLowerCase() !== 'iframe') return null;
+    var provider = providerFromFrameSrc(attr(active, 'src'), context.pageUrl);
+    if (!provider) return null;
     var activation = nav && nav.userActivation;
     if (!activation || activation.isActive !== true) return null;
-    var provider = providerFromHref(attr(active, 'src'), context.pageUrl);
-    return provider ? { type: 'recordSocialSignIn', pageUrl: context.pageUrl, provider: provider } : null;
+    var rect = typeof active.getBoundingClientRect === 'function' ? active.getBoundingClientRect() : null;
+    if (!pointerWasOver(context.pointer, rect, context.now)) return null;
+    return { type: 'recordSocialSignIn', pageUrl: context.pageUrl, provider: provider, source: 'frame' };
   }
 
   // The visible buttons of `provider` on the page, strongest signal first, then document order.
@@ -308,16 +363,17 @@ var mypassSocialSignIn = (function () {
       if (!record || typeof record !== 'object' || !isProvider(record.provider)) return;
       if (typeof record.at !== 'number' || now - record.at > PENDING_TTL_MS || record.at > now) return;
       if (!isHttpsUrl(record.pageUrl)) return;
-      out[key] = record;
+      out[key] = { pageUrl: record.pageUrl, provider: record.provider, at: record.at,
+        source: record.source === 'click' ? 'click' : 'frame' };
     });
     return out;
   }
 
-  function addPending(records, tabId, pageUrl, provider, now) {
+  function addPending(records, tabId, pageUrl, provider, now, source) {
     var next = prunePending(records, now);
     var key = pendingKey(tabId, pageUrl);
     if (key && isProvider(provider) && isHttpsUrl(pageUrl)) {
-      next[key] = { pageUrl: pageUrl, provider: provider, at: now };
+      next[key] = { pageUrl: pageUrl, provider: provider, at: now, source: source === 'click' ? 'click' : 'frame' };
     }
     return next;
   }
@@ -334,6 +390,10 @@ var mypassSocialSignIn = (function () {
     providerFromText: providerFromText,
     providerFromHref: providerFromHref,
     providerFromMarkers: providerFromMarkers,
+    providerFromFrameSrc: providerFromFrameSrc,
+    pointerWasOver: pointerWasOver,
+    FRAME_POINTER_WINDOW_MS: FRAME_POINTER_WINDOW_MS,
+    FRAME_POINTER_SLOP_PX: FRAME_POINTER_SLOP_PX,
     detect: detect,
     providerForClickTarget: providerForClickTarget,
     recordMessageForClick: recordMessageForClick,
