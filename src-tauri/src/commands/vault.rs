@@ -200,18 +200,27 @@ pub async fn vault_location_change(
     .await
 }
 
-/// The webview's reason key is advisory only; Rust chooses the catalog reason.
+/// The webview's reason key is advisory only; Rust chooses the catalog reason. `automatic` marks
+/// the prompt an unlock screen starts by itself when it is shown (Touch ID first): it is refused
+/// as `Cancelled`, without a prompt, while another prompt is in flight or within two seconds of
+/// the last prompt ending (`PromptCoordinator::claim_automatic`).
 #[tauri::command]
 #[specta::specta]
 pub async fn vault_unlock_device(
     state: State<'_, AppState>,
     reason_key: String,
+    automatic: bool,
 ) -> Result<SessionStatus, ApiError> {
     let _ = reason_key;
     let core = state.0.clone();
     blocking(move || {
         let reason = crate::i18n::t(core.settings.get().language, "Unlock MyPass", &[]);
-        core.device_unlock.unlock_with_device(&reason)?;
+        if automatic {
+            core.device_unlock
+                .unlock_with_device_automatically(&reason)?;
+        } else {
+            core.device_unlock.unlock_with_device(&reason)?;
+        }
         core.vault_status()
     })
     .await

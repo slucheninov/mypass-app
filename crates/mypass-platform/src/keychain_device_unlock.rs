@@ -154,6 +154,8 @@ pub(crate) fn map_la_error(code: i64) -> PlatformError {
         // userCancel, userFallback (the fallback button is hidden for the biometrics policy, so
         // this only means "not now"), systemCancel, appCancel (also our own timeout).
         -2 | -3 | -4 | -9 => PlatformError::Cancelled,
+        // authenticationFailed: the prompt rejected the finger or the password.
+        -1 => PlatformError::AuthenticationFailed,
         // biometryLockout.
         -8 => PlatformError::Lockout,
         // passcodeNotSet, biometryNotAvailable, biometryNotEnrolled.
@@ -708,6 +710,7 @@ mod tests {
             assert_eq!(map_la_error(code), PlatformError::Cancelled, "{code}");
         }
         assert_eq!(map_la_error(-8), PlatformError::Lockout);
+        assert_eq!(map_la_error(-1), PlatformError::AuthenticationFailed);
         for code in [-5, -6, -7] {
             assert_eq!(
                 map_la_error(code),
@@ -715,7 +718,7 @@ mod tests {
                 "{code}"
             );
         }
-        for code in [-1, -10, -1004, 0, 7] {
+        for code in [-10, -1004, 0, 7] {
             assert_eq!(
                 map_la_error(code),
                 PlatformError::Failed(format!("local authentication error {code}"))
@@ -741,12 +744,7 @@ mod tests {
                     "local authentication error -1004".to_owned(),
                 )),
             ),
-            (
-                Err(-1),
-                Unknown(PlatformError::Failed(
-                    "local authentication error -1".to_owned(),
-                )),
-            ),
+            (Err(-1), Unknown(PlatformError::AuthenticationFailed)),
             (
                 Ok(None),
                 Unknown(PlatformError::Failed(
@@ -777,10 +775,7 @@ mod tests {
             (-8, PlatformError::Lockout),
             (-6, PlatformError::NotEnrolledOnDevice),
             (-5, PlatformError::NotEnrolledOnDevice),
-            (
-                -1,
-                PlatformError::Failed("local authentication error -1".to_owned()),
-            ),
+            (-1, PlatformError::AuthenticationFailed),
         ] {
             let f = fixture();
             f.du.enroll(DeviceUnlockMode::Biometrics, "vault-a", &secret("pw"))

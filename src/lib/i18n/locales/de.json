@@ -588,5 +588,9 @@
   "None": "Keine",
   "Sign in with %@": "Anmelden mit {0}",
   "Remember social sign-in": "Social-Login merken",
-  "When you sign in to a website with Google, Facebook, Apple, Microsoft or GitHub, the browser extension remembers which one and highlights it next time.": "Wenn du dich auf einer Website mit Google, Facebook, Apple, Microsoft oder GitHub anmeldest, merkt sich die Browsererweiterung die Methode und hebt sie beim nächsten Mal hervor."
+  "When you sign in to a website with Google, Facebook, Apple, Microsoft or GitHub, the browser extension remembers which one and highlights it next time.": "Wenn du dich auf einer Website mit Google, Facebook, Apple, Microsoft oder GitHub anmeldest, merkt sich die Browsererweiterung die Methode und hebt sie beim nächsten Mal hervor.",
+  "Touch your Touch ID sensor": "Lege deinen Finger auf Touch ID",
+  "Touch ID didn’t recognize your fingerprint 3 times. Enter your master password.": "Touch ID hat deinen Fingerabdruck dreimal nicht erkannt. Gib dein Master-Passwort ein.",
+  "Try Touch ID again": "Touch ID erneut versuchen",
+  "Not recognized. Try again.": "Nicht erkannt. Versuche es erneut."
 }

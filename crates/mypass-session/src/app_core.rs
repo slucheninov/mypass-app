@@ -80,6 +80,8 @@ pub enum ErrorCode {
     /// The CSV file has no content.
     CsvEmpty,
     Cancelled,
+    /// The device prompt did not recognize the user (a rejected finger or password).
+    AuthenticationFailed,
     Lockout,
     Invalidated,
     NotEnrolledOnDevice,
@@ -155,6 +157,9 @@ impl From<PlatformError> for ApiError {
             PlatformError::Failed(m) => Self::new(C::Internal, m.clone()),
             PlatformError::SecretStoreTampered => Self::new(C::Internal, e.to_string()),
             PlatformError::Cancelled => Self::new(C::Cancelled, String::new()),
+            PlatformError::AuthenticationFailed => {
+                Self::new(C::AuthenticationFailed, String::new())
+            }
             PlatformError::Lockout => Self::new(C::Lockout, String::new()),
             PlatformError::Invalidated => Self::new(C::Invalidated, String::new()),
             PlatformError::NotEnrolledOnDevice => Self::new(C::NotEnrolledOnDevice, String::new()),
@@ -1512,6 +1517,10 @@ mod tests {
     fn platform_error_to_api_error_covers_device_unlock_variants() {
         let cases = [
             (PlatformError::Cancelled, ErrorCode::Cancelled),
+            (
+                PlatformError::AuthenticationFailed,
+                ErrorCode::AuthenticationFailed,
+            ),
             (PlatformError::Lockout, ErrorCode::Lockout),
             (PlatformError::Invalidated, ErrorCode::Invalidated),
             (

@@ -355,6 +355,17 @@ change is done.
   `browser_proposal_take` is the one command that hands a browser's proposed password to the webview, once, after
   the user opened the proposal; like typed input it may land in an encrypted editor draft. `browser_status` never
   returns a secret or a hash.
+- **Touch ID first.** With Touch ID enabled and offered, the unlock card (main window, tray panel) shows the
+  Touch ID view and starts one prompt by itself when its window is shown and focused (`device.attach()` in
+  `src/lib/stores/device.svelte.ts`; never while hidden, minimized, autostarted to the tray or in the background, and
+  not at once after a lock in front of the user). One prompt in flight app-wide is the Rust
+  `PromptCoordinator`; an automatic prompt (`vault_unlock_device` with `automatic: true`) is also refused as
+  `Cancelled`, without a prompt, within `AUTOMATIC_PROMPT_DEBOUNCE` (2 s) of the last prompt ending.
+  `LAErrorAuthenticationFailed` is the distinct `authenticationFailed` code: three of them in one lock spell (counted
+  per window) switch to the password form; `cancelled` waits for a press, and `lockout`, `notEnrolledOnDevice` and
+  `deviceUnlockUnavailable` switch to the password form for the rest of the lock spell. The fallback button of the
+  Touch ID sheet stays hidden, so macOS never reports a separate "use password" choice. With only the Mac password
+  mode enabled the screen keeps the button and never prompts by itself.
 - **Browser bridge.** Three hops: the extension talks to `mypass-host` (native messaging, one host process per
   message), the host to the app's loopback server (`127.0.0.1`, `mypass_bridge::server`, thread per connection, no async
   runtime). The host never links the session, core or KDBX crates. Each launch draws a fresh token and port and

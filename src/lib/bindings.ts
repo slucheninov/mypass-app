@@ -49,8 +49,13 @@ export const commands = {
 	updateCheckNow: () => typedError<UpdateStatus_Serialize, ApiError>(__TAURI_INVOKE("update_check_now")),
 	updateDismiss: () => typedError<null, ApiError>(__TAURI_INVOKE("update_dismiss")),
 	updateOpenRelease: () => typedError<null, ApiError>(__TAURI_INVOKE("update_open_release")),
-	/**  The webview's reason key is advisory only; Rust chooses the catalog reason. */
-	vaultUnlockDevice: (reasonKey: string) => typedError<SessionStatus_Serialize, ApiError>(__TAURI_INVOKE("vault_unlock_device", { reasonKey })),
+	/**
+	 *  The webview's reason key is advisory only; Rust chooses the catalog reason. `automatic` marks
+	 *  the prompt an unlock screen starts by itself when it is shown (Touch ID first): it is refused
+	 *  as `Cancelled`, without a prompt, while another prompt is in flight or within two seconds of
+	 *  the last prompt ending (`PromptCoordinator::claim_automatic`).
+	 */
+	vaultUnlockDevice: (reasonKey: string, automatic: boolean) => typedError<SessionStatus_Serialize, ApiError>(__TAURI_INVOKE("vault_unlock_device", { reasonKey, automatic })),
 	draftClear: (entryId: string) => typedError<null, ApiError>(__TAURI_INVOKE("draft_clear", { entryId })),
 	draftSave: (entryId: string, notes: string) => typedError<boolean, ApiError>(__TAURI_INVOKE("draft_save", { entryId, notes })),
 	draftVersions: (entryId: string) => typedError<DraftVersionDto[], ApiError>(__TAURI_INVOKE("draft_versions", { entryId })),
@@ -833,7 +838,9 @@ export type ErrorCode = "locked" | "noVault" | "wrongPassword" | "alreadyExists"
 /**  The CSV is not valid UTF-8 text. */
 "csvNotUtf8" | 
 /**  The CSV file has no content. */
-"csvEmpty" | "cancelled" | "lockout" | "invalidated" | "notEnrolledOnDevice" | "deviceUnlockUnavailable" | "migrationLocked" | "migrationTargetUnreadable" | "migrationTargetNotAVault" | "migrationTargetPasswordMismatch" | "migrationTargetWriteFailed" | "migrationSourceInvalid" | "migrationSameFile" | "migrationValidationFailed" | 
+"csvEmpty" | "cancelled" | 
+/**  The device prompt did not recognize the user (a rejected finger or password). */
+"authenticationFailed" | "lockout" | "invalidated" | "notEnrolledOnDevice" | "deviceUnlockUnavailable" | "migrationLocked" | "migrationTargetUnreadable" | "migrationTargetNotAVault" | "migrationTargetPasswordMismatch" | "migrationTargetWriteFailed" | "migrationSourceInvalid" | "migrationSameFile" | "migrationValidationFailed" | 
 /**
  *  A retained vault copy was not deleted: the id is stale, or the copy no longer verifies
  *  (`message` names the reason, such as `changed`, `liveVaultMissing` or `staleId`).

@@ -54,6 +54,7 @@ const MESSAGES: Record<ErrorCode, () => string> = {
   csvNotUtf8: () => t("The file is not UTF-8 text"),
   csvEmpty: () => t("The file is empty"),
   cancelled: () => t("Cancelled"),
+  authenticationFailed: () => t("Not recognized. Try again."),
   lockout: () => t("Too many attempts. Use your master password."),
   invalidated: () => t("Device unlock was reset. Enter your master password."),
   notEnrolledOnDevice: () => t("No fingerprint or device password is set up on this computer"),

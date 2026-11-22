@@ -191,6 +191,10 @@ mod tests {
             map_la_error(code(LAError::BiometryLockout)),
             PlatformError::Lockout
         );
+        assert_eq!(
+            map_la_error(code(LAError::AuthenticationFailed)),
+            PlatformError::AuthenticationFailed
+        );
         for e in [
             LAError::PasscodeNotSet,
             LAError::BiometryNotAvailable,

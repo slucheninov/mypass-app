@@ -823,6 +823,7 @@ mod tests {
     fn platform_error_device_unlock_variants_are_distinct_and_display_text_has_no_secret() {
         let variants = [
             PlatformError::Cancelled,
+            PlatformError::AuthenticationFailed,
             PlatformError::Lockout,
             PlatformError::Invalidated,
             PlatformError::NotEnrolledOnDevice,

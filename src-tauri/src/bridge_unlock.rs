@@ -186,6 +186,8 @@ mod tests {
                 UnlockFailure::DeviceUnavailable,
             ),
             (ErrorCode::NoVault, UnlockFailure::InApp),
+            // The popup flow is unchanged by the distinct code: a rejected finger is a failure.
+            (ErrorCode::AuthenticationFailed, UnlockFailure::Failed),
             (ErrorCode::Internal, UnlockFailure::Failed),
         ] {
             assert_eq!(map_device_error(code), failure);
