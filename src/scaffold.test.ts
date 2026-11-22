@@ -47,6 +47,15 @@ function offenders(
   return files.filter(test).map((f) => f.path);
 }
 
+it("toolbar spacing matches the design", () => {
+  const shell = readFileSync(resolve("src/screens/Shell.svelte"), "utf8");
+  const toolbar = readFileSync(resolve("src/screens/Toolbar.svelte"), "utf8");
+  expect(shell).toMatch(/\.sidebar-toggle\s*\{[^}]*padding-left: var\(--space-6\)/);
+  expect(toolbar).toMatch(/\.toolbar\s*\{[^}]*gap: var\(--space-5\)/);
+  expect(toolbar).toMatch(/\.toolbar\s*\{[^}]*padding: 0 var\(--space-6\) 0 var\(--space-5\)/);
+  expect(shell).toMatch(/class="sidebar-toggle"[\s\S]*?<\/div>\s*<Toolbar\s/);
+});
+
 describe("source scan coverage", () => {
   it("sees the placeholder windows (the guards below are not vacuous)", () => {
     const paths = sourceFiles(["svelte"]).map((f) => f.path);

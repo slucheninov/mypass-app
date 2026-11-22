@@ -179,7 +179,7 @@
     display: flex;
     flex: none;
     align-items: center;
-    padding-left: var(--space-4);
+    padding-left: var(--space-6);
   }
   .body {
     flex: 1;
