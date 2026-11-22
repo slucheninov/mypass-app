@@ -107,6 +107,7 @@ pnpm build                       # production bundle into dist/
 - The `js` part runs `node --test scripts/` (the i18n converter and catalog tests; plain Node, nothing
   to install) and the extension suites (`scripts/test-extension.sh`: every `extension/tests/*.test.js` in its own `node` process, `N suites, M failed`; `--list` prints the discovered files). `--no-js` is only for a local machine without
   `node`, and it prints that the JavaScript suites were NOT run. It is never a way to report a change as tested when that change touches `extension/`.
+- When adding an extension suite or a `RUN.md` check, update its pin in `crates/repo-guards/tests/extension.rs` or `crates/repo-guards/tests/docs.rs`, respectively.
 - Windows: run `cargo` commands from PowerShell, and `scripts/*.sh` from Git Bash.
 
 ## Continuous integration
@@ -358,18 +359,21 @@ change is done.
 - **Settings gate.** Settings are reachable only while the vault is unlocked, enforced in the backend. Every
   settings-window command that reads security-relevant settings or state, changes a setting or runs a pane action
   (`settings_get`, `settings_update`, `settings_login_item_status`, backups, the `browser_*` pane commands,
-  `device_unlock_configure`, the `sync_*` commands, `update_check_now`, `vault_location_*`) calls
+  `device_unlock_status`, `device_unlock_configure`, the `sync_*` commands, `update_check_now`, `vault_location_*`) calls
   `commands::ensure_unlocked` as its first statement (after `into_secret`) and answers `Locked` or `NoVault`
   otherwise. `acl_tests.rs` classifies every settings-window command as gated or open with a reason and pins the
-  gate as the first statement. Locked and vault-less windows read only `settings_get_public` (theme, language,
-  shortcut hints, the update flag), and the main window follows a pairing code through `browser_pairing_status`, so
-  pairing while locked keeps working. Unless unlocked, the settings window shows a placeholder whose button calls
-  `app_show_main`, reads no pane data (`startStores({ whileLocked: false })`), and a lock drops the full settings from
-  its stores. The gate checks the session and then acts, so a lock landing mid-command may let that one command finish.
+  gate as the first statement. `SettingsChanged` carries only `PublicSettings` (theme, language, shortcut hints,
+  the update flag), also available through `settings_get_public`. Secondary-sync and pairing events carry no
+  payload. Unlocked settings panes re-query gated reads. The main window queries `browser_pairing_status`
+  in any session state. Unlock screens use the read-only `device_unlock_offer` for the button and its label.
+  The main window may list and remove recent vaults on the unlock screen; removal while locked or vault-less
+  changes only that list. The settings window shows a placeholder with an `app_show_main` button while locked
+  or vault-less, drops the full settings, and refreshes the public snapshot. Settings, device unlock and
+  secondary sync discard pane responses from before a lock. Settings updates, secondary disconnects and device
+  unlock configuration recheck the original unlocked session at the write.
   - **Residual risk (owner-accepted).** Settings are global app settings, not vault data: anyone with access to the
     OS session can still create or open another vault and change them there, or edit `settings.json`. The gate
-    protects against casual access through the UI of a locked app. `SettingsChanged` broadcasts still carry the full
-    settings to every webview; the stores keep only the public part unless unlocked.
+    protects against casual access through the UI of a locked app.
 - **Browser bridge.** Three hops: the extension talks to `mypass-host` (native messaging, one host process per
   message), the host to the app's loopback server (`127.0.0.1`, `mypass_bridge::server`, thread per connection, no async
   runtime). The host never links the session, core or KDBX crates. Each launch draws a fresh token and port and
@@ -418,8 +422,9 @@ change is done.
   e.g. `accounts.google.com`, within 1.5 s before the page lost focus to it) never creates an entry
   or overrides that limit. With `rememberSocialSignIn` off both answer
   `enabled: false` and nothing is written. The setting reaches the extension in every
-  `socialSignIn` reply and in `passkeyProxyStatus.rememberSocialSignIn` (the status poll a popup
-  open triggers); the service worker mirrors it into `chrome.storage.local`, open pages follow the
+  `socialSignIn` reply and in `passkeyProxyStatus.rememberSocialSignIn` while unlocked (the status poll a popup
+  open triggers). While locked or vault-less the field is absent and the service worker keeps its cached mirror.
+  The service worker mirrors reported values into `chrome.storage.local`, and open pages follow the
   change (off removes the ring and stops reporting, on looks up again), and while it is known off
   page lookups are answered locally for at most a minute before the bridge is asked again. The extension (`shared/social-sign-in.js`) records only
   trusted clicks in the https top frame, keeps clicks made while locked in `chrome.storage.session`
@@ -445,8 +450,9 @@ change is done.
   starts with `vault_matches(db)` (the root UUID recorded in phase one) before any check or write. A create is durable
   before the response (`flush`), and a failed flush rolls the entry back. The `passkey_proxy_enabled` setting (default
   on) detaches the extension's WebAuthn proxy when off. Locking does not detach it: while MyPass is locked the
-  proxy stays as it was, and the bridge gate answers every passkey request `locked`, so the page gets
-  `NotAllowedError` "MyPass is locked".
+  proxy stays as it was, and the bridge gate answers passkey ceremonies with `locked`, so the page gets
+  `NotAllowedError` "MyPass is locked". The paired status poll still reports whether the proxy is enabled,
+  and the extension's app-managed passkey switch is unavailable until MyPass is unlocked.
   - Stage 5 closed the missing per-ceremony UV/presence check and broad webview command access:
     per-window ACLs now restrict every command to its intended windows. Every macOS phase two
     verifies device-owner presence before taking the session lock. The
