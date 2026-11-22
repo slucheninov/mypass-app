@@ -39,6 +39,8 @@ impl UriMatchMode {
 pub enum EntryType {
     Login,
     Address,
+    /// A person (names, email, birth date and links to Address entries); never a credential.
+    Person,
     Card,
     Notes,
     Files,
@@ -108,6 +110,7 @@ impl EntryExt for Entry {
     fn entry_type(&self) -> EntryType {
         match self.field(ENTRY_TYPE_FIELD) {
             Some("Address") => EntryType::Address,
+            Some("Person") => EntryType::Person,
             Some("Card") => EntryType::Card,
             Some("Notes") => EntryType::Notes,
             Some("Files") => EntryType::Files,
@@ -279,6 +282,7 @@ mod tests {
         for (s, t) in [
             ("Login", EntryType::Login),
             ("Address", EntryType::Address),
+            ("Person", EntryType::Person),
             ("Card", EntryType::Card),
             ("Notes", EntryType::Notes),
             ("Files", EntryType::Files),
