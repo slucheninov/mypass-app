@@ -355,6 +355,21 @@ change is done.
   `browser_proposal_take` is the one command that hands a browser's proposed password to the webview, once, after
   the user opened the proposal; like typed input it may land in an encrypted editor draft. `browser_status` never
   returns a secret or a hash.
+- **Settings gate.** Settings are reachable only while the vault is unlocked, enforced in the backend. Every
+  settings-window command that reads security-relevant settings or state, changes a setting or runs a pane action
+  (`settings_get`, `settings_update`, `settings_login_item_status`, backups, the `browser_*` pane commands,
+  `device_unlock_configure`, the `sync_*` commands, `update_check_now`, `vault_location_*`) calls
+  `commands::ensure_unlocked` as its first statement (after `into_secret`) and answers `Locked` or `NoVault`
+  otherwise. `acl_tests.rs` classifies every settings-window command as gated or open with a reason and pins the
+  gate as the first statement. Locked and vault-less windows read only `settings_get_public` (theme, language,
+  shortcut hints, the update flag), and the main window follows a pairing code through `browser_pairing_status`, so
+  pairing while locked keeps working. Unless unlocked, the settings window shows a placeholder whose button calls
+  `app_show_main`, reads no pane data (`startStores({ whileLocked: false })`), and a lock drops the full settings from
+  its stores. The gate checks the session and then acts, so a lock landing mid-command may let that one command finish.
+  - **Residual risk (owner-accepted).** Settings are global app settings, not vault data: anyone with access to the
+    OS session can still create or open another vault and change them there, or edit `settings.json`. The gate
+    protects against casual access through the UI of a locked app. `SettingsChanged` broadcasts still carry the full
+    settings to every webview; the stores keep only the public part unless unlocked.
 - **Browser bridge.** Three hops: the extension talks to `mypass-host` (native messaging, one host process per
   message), the host to the app's loopback server (`127.0.0.1`, `mypass_bridge::server`, thread per connection, no async
   runtime). The host never links the session, core or KDBX crates. Each launch draws a fresh token and port and
