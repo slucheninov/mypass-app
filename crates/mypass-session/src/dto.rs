@@ -72,6 +72,7 @@ pub enum Category {
     Codes,
     Passkeys,
     Addresses,
+    People,
     Cards,
     Notes,
     Files,
@@ -84,6 +85,7 @@ pub enum Category {
 pub enum EntryTypeDto {
     Login,
     Address,
+    Person,
     Card,
     Notes,
     Files,
@@ -94,6 +96,7 @@ impl From<EntryType> for EntryTypeDto {
         match t {
             EntryType::Login => Self::Login,
             EntryType::Address => Self::Address,
+            EntryType::Person => Self::Person,
             EntryType::Card => Self::Card,
             EntryType::Notes => Self::Notes,
             EntryType::Files => Self::Files,
@@ -280,6 +283,86 @@ impl std::fmt::Debug for AddressDto {
     }
 }
 
+/// The fields of a Person entry. Every value is stored protected, so every copy is a secret copy:
+/// the type wipes itself on drop and its `Debug` prints nothing. `address_ids` are the linked
+/// Address entries in order (the first is the default address), as entry ids.
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonDto {
+    pub label: String,
+    pub given_name: String,
+    pub family_name: String,
+    pub middle_name: String,
+    pub email: String,
+    /// An ISO `YYYY-MM-DD` date, or empty.
+    pub birth_date: String,
+    pub address_ids: Vec<String>,
+}
+
+impl PersonDto {
+    /// An empty person. A plain constructor because the type wipes itself on drop.
+    pub fn empty() -> Self {
+        Self {
+            label: String::new(),
+            given_name: String::new(),
+            family_name: String::new(),
+            middle_name: String::new(),
+            email: String::new(),
+            birth_date: String::new(),
+            address_ids: Vec::new(),
+        }
+    }
+
+    /// The given, middle and family names joined by single spaces, the empty ones left out.
+    pub fn full_name(&self) -> String {
+        [
+            self.given_name.trim(),
+            self.middle_name.trim(),
+            self.family_name.trim(),
+        ]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+    }
+
+    /// Overwrites every string with zeros and empties it; also what `Drop` runs.
+    pub(crate) fn wipe(&mut self) {
+        self.label.zeroize();
+        self.given_name.zeroize();
+        self.family_name.zeroize();
+        self.middle_name.zeroize();
+        self.email.zeroize();
+        self.birth_date.zeroize();
+        for id in &mut self.address_ids {
+            id.zeroize();
+        }
+        self.address_ids.clear();
+    }
+}
+
+impl Drop for PersonDto {
+    fn drop(&mut self) {
+        self.wipe();
+    }
+}
+
+impl std::fmt::Debug for PersonDto {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PersonDto").finish_non_exhaustive()
+    }
+}
+
+/// A live Address entry a person links to, as the person's detail shows it (title and the list
+/// subtitle only, the address values stay in that entry).
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkedAddressDto {
+    pub id: String,
+    pub title: String,
+    pub subtitle: String,
+}
+
 /// Never carries the full number or the CVV.
 #[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Eq, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -358,6 +441,10 @@ pub struct EntryDetailDto {
     pub totp_digits: Option<u32>,
     pub passkey: Option<PasskeyMeta>,
     pub address: Option<AddressDto>,
+    pub person: Option<PersonDto>,
+    /// The person's linked Address entries that still exist outside the recycle bin, in the
+    /// person's order (missing and deleted ones are skipped). Empty for every other type.
+    pub person_addresses: Vec<LinkedAddressDto>,
     pub card: Option<CardDto>,
     pub has_notes: bool,
     pub custom_fields: Vec<CustomFieldDto>,
@@ -508,6 +595,9 @@ pub struct EntryEditModel {
     pub totp: String,
     pub notes: String,
     pub address: Option<AddressDto>,
+    /// `serde(default)` keeps encrypted drafts stored before this field existed loadable.
+    #[serde(default)]
+    pub person: Option<PersonDto>,
     pub card: Option<CardEdit>,
     pub custom_fields: Vec<CustomFieldEdit>,
     pub attachments: Vec<AttachmentMeta>,
@@ -582,6 +672,7 @@ pub enum FieldRef {
     CardNumber,
     CardCvv,
     Address { name: String },
+    Person { name: String },
     Totp,
     Custom { key: String },
 }
@@ -885,6 +976,42 @@ mod tests {
             std::mem::needs_drop::<AddressDto>(),
             "the address must run its wipe when dropped"
         );
+    }
+
+    #[test]
+    fn person_wipe_empties_every_field_debug_redacts_and_the_type_wipes_on_drop() {
+        let mut p = PersonDto::empty();
+        p.label = "Me".into();
+        p.given_name = "Taras".into();
+        p.middle_name = "Hryhorovych".into();
+        p.family_name = "Shevchenko".into();
+        p.email = "taras@example.test".into();
+        p.birth_date = "1814-03-09".into();
+        p.address_ids = vec!["0123456789abcdef0123456789abcdef".into()];
+        assert_eq!(p.full_name(), "Taras Hryhorovych Shevchenko");
+        let shown = format!("{p:?}");
+        for secret in [
+            "Taras",
+            "Shevchenko",
+            "taras@example.test",
+            "1814-03-09",
+            "0123",
+        ] {
+            assert!(!shown.contains(secret), "Debug leaked {secret}");
+        }
+        p.wipe();
+        assert_eq!(p, PersonDto::default());
+        assert!(std::mem::needs_drop::<PersonDto>());
+    }
+
+    #[test]
+    fn person_full_name_skips_empty_parts() {
+        let mut p = PersonDto::empty();
+        assert_eq!(p.full_name(), "");
+        p.family_name = " Doe ".into();
+        assert_eq!(p.full_name(), "Doe");
+        p.given_name = "Jane".into();
+        assert_eq!(p.full_name(), "Jane Doe");
     }
 
     #[test]
