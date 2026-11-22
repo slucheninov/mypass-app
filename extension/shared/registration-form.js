@@ -137,8 +137,8 @@ var mypassRegistrationForm = (() => {
   }
 
   // A field that takes a password: type=password, a text field marked autocomplete=new-password,
-  // or one the caller remembers as a password (`options.wasPassword`: content.js keeps every field
-  // it saw as type=password, so a field a show-password toggle turned into text still counts).
+  // or one the caller remembers as a password (`options.wasPassword`, from createPasswordMemory: a
+  // field a show-password toggle turned into text still counts while it holds the password).
   function isPasswordLike(node, options) {
     if (tagOf(node) !== 'INPUT') return false;
     const type = typeOf(node);
@@ -151,6 +151,88 @@ var mypassRegistrationForm = (() => {
   function usablePassword(node, isVisible, options) {
     return isPasswordLike(node, options) && editable(node, isVisible)
       && autocompleteToken(node) !== SENSITIVE && !formDetection.isSensitivePasswordHint(node);
+  }
+
+  // A show/hide control next to a field: a button, switch or checkbox in the field's parent or
+  // grandparent whose text, label, title, class or id says show, hide, reveal, toggle or eye (en,
+  // de, uk, ru; Cyrillic as escapes), or that controls the field (aria-controls).
+  const REVEAL_TOGGLE = new RegExp(['show', 'hide', 'reveal', 'toggle', 'eye', 'visib', 'anzeigen', 'zeigen',
+    'einblenden', 'ausblenden', 'verbergen',
+    '\u043f\u043e\u043a\u0430\u0437', // uk/ru "show"
+    '\u043f\u0440\u0438\u0445\u043e\u0432', // uk "hide"
+    '\u0441\u043a\u0440\u044b', // ru "hide"
+  ].join('|'), 'i');
+
+  function hasRevealToggle(node) {
+    const scopes = [];
+    for (let scope = node.parentElement, level = 0; scope && level < 2; scope = scope.parentElement, level += 1) {
+      scopes.push(scope);
+    }
+    for (const scope of scopes) {
+      if (typeof scope.querySelectorAll !== 'function') continue;
+      for (const control of scope.querySelectorAll('button, [role="button"], [role="switch"], input[type="checkbox"]')) {
+        if (control === node) continue;
+        const id = attr(node, 'id');
+        if (id && attr(control, 'aria-controls').split(/\s+/).includes(id)) return true;
+        const texts = [control.textContent, attr(control, 'aria-label'), attr(control, 'title'),
+          attr(control, 'class'), attr(control, 'id'), ...formDetection.labelTexts(control)];
+        if (texts.some((text) => REVEAL_TOGGLE.test(String(text || '')))) return true;
+      }
+    }
+    return false;
+  }
+
+  // FNV-1a over the UTF-16 code units: a value fingerprint, so the memory below holds no copy of
+  // a password.
+  function valueHash(value) {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < value.length; i += 1) {
+      hash ^= value.charCodeAt(i);
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return hash;
+  }
+
+  function fieldIdentity(node) {
+    return [attr(node, 'name'), attr(node, 'id'), attr(node, 'autocomplete'), readableLabel(node)].join('\u0000');
+  }
+
+  // Which text fields still count as password fields after a page's show toggle turned them into
+  // type=text (`wasPassword`, for isPasswordLike). `observe(node)` records a type=password field
+  // with a fingerprint of its value (content.js calls it on every input event and each sweep);
+  // `observeAll(root)` does that for every password field under `root`.
+  // A text field counts only when it was seen as a password holding a non-empty value and still
+  // holds that same value, or a changed one while a show/hide toggle sits next to it. The record
+  // is dropped once the value is emptied or the field's name, id, autocomplete or label changes
+  // (a wizard that reuses the input for its next step), so ordinary text is never taken for a
+  // password.
+  function createPasswordMemory() {
+    const records = new WeakMap();
+    function observe(node) {
+      if (tagOf(node) !== 'INPUT' || typeOf(node) !== 'password') return;
+      const value = String(node.value || '');
+      records.set(node, { identity: fieldIdentity(node), hash: value ? valueHash(value) : null });
+    }
+    function observeAll(root) {
+      if (!root || typeof root.querySelectorAll !== 'function') return;
+      for (const node of root.querySelectorAll('input[type="password"]')) observe(node);
+    }
+    function wasPassword(node) {
+      const record = records.get(node);
+      if (!record) return false;
+      if (typeOf(node) === 'password') {
+        observe(node);
+        return true;
+      }
+      const value = String(node.value || '');
+      if (!value || fieldIdentity(node) !== record.identity) {
+        records.delete(node);
+        return false;
+      }
+      if (record.hash === null) return false;
+      return valueHash(value) === record.hash || hasRevealToggle(node);
+    }
+    return { observe, observeAll, wasPassword };
   }
 
   function cleanText(text) {
@@ -700,7 +782,7 @@ var mypassRegistrationForm = (() => {
   return {
     MAX_FIELDS, MAX_LABEL, MAX_VALUE,
     classify, find, formFor, fillableFields, selectionFor, personSelections, fillSelection, capture,
-    newPasswordTargets, isPasswordLike,
+    newPasswordTargets, isPasswordLike, createPasswordMemory,
     personProfile, parseIsoDate,
     isSubmitControl, isScriptSubmitControl, isNativeSubmitControl, readableLabel,
   };

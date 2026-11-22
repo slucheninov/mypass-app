@@ -259,3 +259,78 @@ test('a hint after a generated password says the login will be offered for savin
   assert.equal(doc.querySelectorAll('[data-mypass-save-hint]').length, 0, 'hides by itself');
   assert.ok(timers.every((timer) => timer.ms >= 4000));
 });
+
+// Which text fields still count as passwords after a show toggle (registration-form.js
+// `createPasswordMemory`): only one seen as type=password whose value was typed while it was
+// one. Ordinary text typed later, an emptied field and a wizard step that reuses the input
+// under another name or label are text again.
+const registration = require('../shared/registration-form.js');
+const REVEAL = '<form id="f"><label for="email">Email</label><input id="email" type="email" name="email">'
+  + '<div class="field"><label for="pw">Password</label><input id="pw" type="password" name="password">'
+  + '<button type="button" class="toggle" aria-label="Show password"></button></div>'
+  + '<button type="submit">Create account</button></form>';
+
+function revealed(markup) {
+  const doc = parseHtml(markup);
+  const memory = registration.createPasswordMemory();
+  const pw = doc.getElementById('pw');
+  memory.observeAll(doc);
+  const typeAsPassword = (value) => { typeInto(pw, value); memory.observe(pw); };
+  return { doc, memory, pw, typeAsPassword };
+}
+
+test('a revealed field counts as a password while it holds what was typed as one', () => {
+  const r = revealed(REVEAL);
+  r.typeAsPassword('Gen-3rated!');
+  r.pw.setAttribute('type', 'text');
+  assert.equal(r.memory.wasPassword(r.pw), true);
+  r.pw.value = 'Gen-3rated!x';
+  assert.equal(r.memory.wasPassword(r.pw), true, 'edited after the reveal, next to its show/hide toggle');
+  r.pw.value = '';
+  assert.equal(r.memory.wasPassword(r.pw), false, 'emptied');
+  r.pw.value = 'Gen-3rated!';
+  assert.equal(r.memory.wasPassword(r.pw), false, 'an emptied field is forgotten for good');
+});
+
+test('a field empty while it was a password and typed into as text is ordinary text', () => {
+  const r = revealed(REVEAL);
+  r.pw.setAttribute('type', 'text');
+  r.pw.value = 'Olena Kovalenko';
+  assert.equal(r.memory.wasPassword(r.pw), false);
+});
+
+test('without a show/hide toggle an edited revealed field is ordinary text', () => {
+  const r = revealed(REVEAL.replace('<button type="button" class="toggle" aria-label="Show password"></button>', ''));
+  r.typeAsPassword('Gen-3rated!');
+  r.pw.setAttribute('type', 'text');
+  assert.equal(r.memory.wasPassword(r.pw), true, 'unchanged value');
+  r.pw.value = 'something else';
+  assert.equal(r.memory.wasPassword(r.pw), false);
+});
+
+test('a wizard step that reuses the input under another name, id, autocomplete or label is text', () => {
+  const changes = {
+    name: (pw) => pw.setAttribute('name', 'company'),
+    id: (pw, doc) => { pw.setAttribute('id', 'company'); doc.querySelector('label').setAttribute('for', 'company'); },
+    autocomplete: (pw) => pw.setAttribute('autocomplete', 'organization'),
+    label: (pw, doc) => { doc.querySelectorAll('label')[1].textContent = 'Company name'; },
+  };
+  for (const [what, change] of Object.entries(changes)) {
+    const r = revealed(REVEAL);
+    r.typeAsPassword('Gen-3rated!');
+    r.pw.setAttribute('type', 'text');
+    change(r.pw, r.doc);
+    assert.equal(r.memory.wasPassword(r.pw), false, what);
+    change(r.pw, r.doc);
+    assert.equal(r.memory.wasPassword(r.pw), false, `${what}: stays forgotten`);
+  }
+  // The next step's value is never captured as the new password.
+  const r = revealed(REVEAL);
+  r.typeAsPassword('Gen-3rated!');
+  r.pw.setAttribute('type', 'text');
+  r.pw.setAttribute('name', 'company');
+  r.doc.querySelectorAll('label')[1].textContent = 'Company name';
+  r.pw.value = 'Acme Ltd';
+  const form = registration.formFor(r.doc, r.pw, { wasPassword: r.memory.wasPassword });
+  assert.equal(form && form.newPassword, null, 'no new-password field left');
+});

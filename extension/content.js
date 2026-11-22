@@ -541,14 +541,14 @@
     input.dispatchEvent(new EventCtor('change', { bubbles: true }));
   }
 
-  // Every password field this script has seen, so a field a show-password toggle turned into
-  // type=text still counts as a password (for the confirm fill and for the save on submit).
-  const seenPasswordFields = new WeakSet();
-  const passwordMemory = { wasPassword: (node) => seenPasswordFields.has(node) };
+  // The password fields this script has seen, so a field a show-password toggle turned into
+  // type=text still counts as a password while it holds the password typed into it (for the
+  // confirm fill and for the save on submit; registration-form.js `createPasswordMemory`).
+  const passwordFieldMemory = shared.registrationForm.createPasswordMemory();
+  const passwordMemory = { wasPassword: passwordFieldMemory.wasPassword };
 
   function rememberPasswordFields(root) {
-    if (!root || typeof root.querySelectorAll !== 'function') return;
-    for (const node of root.querySelectorAll('input[type="password"]')) seenPasswordFields.add(node);
+    passwordFieldMemory.observeAll(root);
   }
 
   // A generated password goes into the field it was generated for and into the confirm or repeat
@@ -1972,6 +1972,8 @@
     document.addEventListener('submit', submitWatcher.onSubmit, true);
     document.addEventListener('click', submitWatcher.onClick, true);
     document.addEventListener('keydown', submitWatcher.onKeydown, true);
+    // Every value typed or filled into a password field, so a later reveal is recognised.
+    document.addEventListener('input', (event) => passwordFieldMemory.observe(event.target), true);
     window.addEventListener('pagehide', submitWatcher.onPageHide, true);
     window.addEventListener('popstate', submitWatcher.onUrlChange, true);
     window.addEventListener('hashchange', submitWatcher.onUrlChange, true);
