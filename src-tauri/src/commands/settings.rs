@@ -5,7 +5,7 @@ use crate::events::SettingsChanged;
 use crate::shell::{settings_effects, Effect};
 use crate::state::{AppState, EffectRunner, ShellState};
 use mypass_session::dto::LoginItemStatus;
-use mypass_session::{ApiError, AppCore, Settings, SettingsPatch};
+use mypass_session::{ApiError, AppCore, PublicSettings, Settings, SettingsPatch};
 use std::sync::{Mutex, PoisonError};
 use tauri::{AppHandle, State};
 use tauri_specta::Event;
@@ -13,7 +13,16 @@ use tauri_specta::Event;
 #[tauri::command]
 #[specta::specta]
 pub fn settings_get(state: State<'_, AppState>) -> Result<Settings, ApiError> {
+    super::ensure_unlocked(&state.0)?;
     state.0.settings_get()
+}
+
+/// The settings every window renders in any session state (theme, language, shortcut hints, the
+/// update flag). The full settings are served only while the vault is unlocked.
+#[tauri::command]
+#[specta::specta]
+pub fn settings_get_public(state: State<'_, AppState>) -> Result<PublicSettings, ApiError> {
+    state.0.settings_get_public()
 }
 
 /// The shortcut conflicts found while registering the global shortcuts at startup, once: the
@@ -72,6 +81,7 @@ pub async fn settings_update(
     shell: State<'_, ShellState>,
     patch: SettingsPatch,
 ) -> Result<Settings, ApiError> {
+    super::ensure_unlocked(&state.0)?;
     // The settings file is written atomically, so off the main thread.
     let core = state.0.clone();
     let gate = shell.settings_gate.clone();
@@ -94,6 +104,7 @@ pub async fn settings_update(
 #[tauri::command]
 #[specta::specta]
 pub fn settings_login_item_status(state: State<'_, AppState>) -> Result<LoginItemStatus, ApiError> {
+    super::ensure_unlocked(&state.0)?;
     state.0.settings_login_item_status()
 }
 

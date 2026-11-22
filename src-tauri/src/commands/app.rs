@@ -128,6 +128,7 @@ pub fn accepts_editor_report(label: &str) -> bool {
 #[tauri::command]
 #[specta::specta]
 pub fn app_reveal_backups(state: State<'_, AppState>) -> Result<(), ApiError> {
+    super::ensure_unlocked(&state.0)?;
     let folder = state.0.backup_folder()?;
     tauri_plugin_opener::reveal_item_in_dir(folder).map_err(|e| super::internal(e.to_string()))
 }

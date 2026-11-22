@@ -68,3 +68,29 @@ where
 pub fn ensure_unlocked(core: &mypass_session::AppCore) -> Result<(), ApiError> {
     core.session.with_db(|_| ()).map_err(ApiError::from)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_unlocked;
+    use crate::testing::{open_world, pw, world};
+    use mypass_session::ErrorCode;
+
+    #[test]
+    fn the_gate_refuses_without_a_vault_and_while_locked_and_passes_while_unlocked() {
+        let none = world();
+        assert_eq!(
+            ensure_unlocked(&none.core).unwrap_err().code,
+            ErrorCode::NoVault
+        );
+
+        let w = open_world();
+        assert!(ensure_unlocked(&w.core).is_ok());
+        w.core.vault_lock().unwrap();
+        assert_eq!(
+            ensure_unlocked(&w.core).unwrap_err().code,
+            ErrorCode::Locked
+        );
+        w.core.session.unlock(pw("pw")).unwrap();
+        assert!(ensure_unlocked(&w.core).is_ok());
+    }
+}

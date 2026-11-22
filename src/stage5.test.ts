@@ -1,3 +1,4 @@
+import { commands } from "./lib/bindings";
 import { update } from "./lib/stores/update.svelte";
 import { screen, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
@@ -160,8 +161,11 @@ it.each(["macos", "windows"])("secondary folder works on %s and stopping retains
   expect(screen.getByText("Stopping sync keeps the files in that folder.")).toBeTruthy();
 });
 it("locked vault cannot start a location change", async () => {
-  await renderSettingsApp({ session: "locked" }, { pane: "Vault" });
-  expect((await screen.findByRole("button", { name: "Move to a local folder…" }) as HTMLButtonElement).disabled).toBe(true);
+  const { fake } = await renderSettingsApp({ session: "locked" }, { pane: "Vault" });
+  // The settings window shows only its locked placeholder, and the backend refuses the commands.
+  expect(screen.queryByRole("button", { name: "Move to a local folder…" })).toBeNull();
+  expect(calls(fake, "vaultLocationPick")).toEqual([]);
+  expect(await commands.vaultLocationPick()).toMatchObject({ status: "error", error: { code: "locked" } });
 });
 it("switching configured modes and disabling both use no typed password", async () => {
   const { fake } = await renderSettingsApp({ deviceUnlockAvailable: true }, { pane: "Security", prepare: f => {

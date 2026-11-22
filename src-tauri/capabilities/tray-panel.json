@@ -17,6 +17,7 @@
     "allow-entry-touch",
     "allow-platform-keyboard-layout",
     "allow-settings-get",
+    "allow-settings-get-public",
     "allow-tray-panel-fit",
     "allow-tray-panel-hide",
     "allow-update-open-release",

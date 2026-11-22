@@ -588,5 +588,7 @@
   "None": "Нет",
   "Sign in with %@": "Вход через {0}",
   "Remember social sign-in": "Запоминать вход через соцсети",
-  "When you sign in to a website with Google, Facebook, Apple, Microsoft or GitHub, the browser extension remembers which one and highlights it next time.": "Когда вы входите на сайт через Google, Facebook, Apple, Microsoft или GitHub, расширение браузера запоминает способ и в следующий раз подсвечивает его."
+  "When you sign in to a website with Google, Facebook, Apple, Microsoft or GitHub, the browser extension remembers which one and highlights it next time.": "Когда вы входите на сайт через Google, Facebook, Apple, Microsoft или GitHub, расширение браузера запоминает способ и в следующий раз подсвечивает его.",
+  "MyPass is locked. Unlock it to change settings.": "MyPass заблокирован. Разблокируйте его, чтобы изменить настройки.",
+  "Open or create a vault to change settings.": "Откройте или создайте хранилище, чтобы изменить настройки."
 }

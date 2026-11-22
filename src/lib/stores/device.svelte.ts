@@ -31,9 +31,16 @@ class DeviceStore {
       await this.refresh().catch(() => {});
     }
   }
-  start() {
-    const off = session.onChange(() => { this.error = null; void this.refresh().catch(() => {}); });
-    void this.refresh().catch(() => {});
+  /** `whileLocked: false` (the settings window) reads nothing unless the vault is unlocked and
+   *  forgets the status on lock; the unlock screens keep it to offer device unlock. */
+  start({ whileLocked = true } = {}) {
+    const allowed = () => whileLocked || session.status.state === "unlocked";
+    const off = session.onChange(() => {
+      this.error = null;
+      if (allowed()) void this.refresh().catch(() => {});
+      else { this.#sequence++; this.status = null; }
+    });
+    if (allowed()) void this.refresh().catch(() => {});
     return () => { off(); this.#sequence++; this.status = null; this.error = null; };
   }
 }

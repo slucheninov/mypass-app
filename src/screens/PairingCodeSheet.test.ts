@@ -72,7 +72,7 @@ describe("PairingCodeSheet", () => {
     await fake.emit("pairingChallengeEvent", soon);
     await screen.findByRole("dialog", { name: "Pairing code" });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), { timeout: 4000 });
-    expect(calls(fake, "browserStatus").length).toBeGreaterThanOrEqual(2);
+    expect(calls(fake, "browserPairingStatus").length).toBeGreaterThanOrEqual(2);
     expect(browser.pairing).toBeNull();
   });
 

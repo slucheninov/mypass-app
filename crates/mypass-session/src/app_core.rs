@@ -982,6 +982,11 @@ impl AppCore {
         Ok(self.settings.get())
     }
 
+    /// The settings every window renders in any session state (see [`PublicSettings`]).
+    pub fn settings_get_public(&self) -> Result<crate::settings::PublicSettings, ApiError> {
+        Ok((&self.settings.get()).into())
+    }
+
     /// Applies the patch and re-arms the idle timer with the new timeout.
     pub fn settings_update(&self, patch: SettingsPatch) -> Result<Settings, ApiError> {
         let updated = self.settings.update(patch)?;

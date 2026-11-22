@@ -38,5 +38,7 @@ if (target) {
     saveToast: label !== "settings" && label !== "tray-panel",
     sync: label !== "tray-panel",
     theme: label !== "tray-panel",
+    // The settings window reads nothing but the session and the public settings unless unlocked.
+    whileLocked: label !== "settings",
   }).catch(() => {});
 }

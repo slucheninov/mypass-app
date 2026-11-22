@@ -8,6 +8,7 @@ use tauri::State;
 #[tauri::command]
 #[specta::specta]
 pub async fn backup_list(state: State<'_, AppState>) -> Result<BackupStatus, ApiError> {
+    super::ensure_unlocked(&state.0)?;
     let core = state.0.clone();
     blocking(move || core.backup_list()).await
 }
@@ -15,6 +16,7 @@ pub async fn backup_list(state: State<'_, AppState>) -> Result<BackupStatus, Api
 #[tauri::command]
 #[specta::specta]
 pub async fn backup_restore(state: State<'_, AppState>, id: String) -> Result<(), ApiError> {
+    super::ensure_unlocked(&state.0)?;
     let core = state.0.clone();
     blocking(move || core.backup_restore(&id)).await
 }

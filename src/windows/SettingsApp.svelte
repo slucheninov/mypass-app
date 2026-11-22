@@ -2,12 +2,20 @@
   // The settings window: a pane list on the left, the chosen pane on the right. The last pane is
   // remembered through `prefs` (layout preferences only, storage failures ignored). Every pane
   // reads and writes through the one `settings` store; nothing is rendered until it has loaded.
+  // Settings exist only while the vault is unlocked: otherwise (locked, no vault) the window shows
+  // a placeholder whose button brings up the main window, and reads nothing but the session and
+  // the public settings (theme, language). A lock switches to it at once; the backend refuses
+  // every settings read, change and pane action until the vault is unlocked again.
   import { onMount, tick } from "svelte";
+  import { api } from "../lib/api";
   import { events } from "../lib/bindings";
   import { t } from "../lib/i18n/index.svelte";
   import { readPref, writePref } from "../lib/prefs";
   import { listenTo } from "../lib/stores/browser.svelte";
+  import { session } from "../lib/stores/session.svelte";
   import { settings } from "../lib/stores/settings.svelte";
+  import { toasts } from "../lib/stores/toasts.svelte";
+  import Button from "../lib/ui/Button.svelte";
   import ToastHost from "../lib/ui/ToastHost.svelte";
   import About from "./settings/About.svelte";
   import Appearance from "./settings/Appearance.svelte";
@@ -81,6 +89,7 @@
 </script>
 
 <main data-testid="settings-app" class="settings">
+{#if session.status.state === "unlocked"}
   <nav class="panes">
     <div role="tablist" aria-orientation="vertical" aria-label={t("Settings")} bind:this={list}>
       {#each PANES as pane, index (pane)}
@@ -118,6 +127,16 @@
       {/if}
     {/if}
   </div>
+{:else if session.loaded}
+  <section class="locked" data-testid="settings-locked" aria-labelledby="settings-locked-text">
+    <p id="settings-locked-text">
+      {session.status.state === "locked" ? t("MyPass is locked. Unlock it to change settings.") : t("Open or create a vault to change settings.")}
+    </p>
+    <Button variant="primary" onclick={() => void toasts.guard(() => api.appShowMain())}>
+      {session.status.state === "locked" ? t("Unlock") : t("Open MyPass")}
+    </Button>
+  </section>
+{/if}
 </main>
 <ToastHost />
 
@@ -158,6 +177,20 @@
     min-width: 0;
     overflow-y: auto;
     padding: var(--space-7) 28px 28px;
+  }
+  .locked {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-5);
+    padding: 28px;
+    text-align: center;
+  }
+  .locked p {
+    margin: 0;
+    max-width: 360px;
   }
   h1 {
     margin: 0 0 var(--space-5);

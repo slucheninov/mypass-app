@@ -104,7 +104,8 @@ class BrowserStore {
   async requeryPairing(): Promise<void> {
     const seq = ++this.#pairingSeq;
     try {
-      const next = (await api.browserStatus()).pairing;
+      // The pairing-only read: the full status is served only while unlocked, pairing works locked too.
+      const next = await api.browserPairingStatus();
       // An event or a clear that landed meanwhile is newer than this answer.
       if (seq !== this.#pairingSeq) return;
       this.pairing = next && (next.expiresAt === null || next.expiresAt > Date.now()) ? next : null;

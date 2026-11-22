@@ -7,7 +7,7 @@
   let { active, onhover }: { active: boolean; onhover: () => void } = $props();
 </script>
 <div data-testid="tray-update-row">
-  {#if update.status.banner && settings.value?.updateCheckEnabled !== false}
+  {#if update.status.banner && settings.public?.updateCheckEnabled !== false}
     <TrayMenuRow key="update" {active} {onhover} label={t("MyPass %@ available…", [update.status.banner.version])} onclick={() => void update.open()} />
   {/if}
 </div>

@@ -27,7 +27,7 @@ pub fn unix_ms(seconds: i64) -> f64 {
 }
 
 /// A pairing code waiting for the browser. `expires_at` (Unix milliseconds) lets the UI count down and
-/// then re-query `browser_status`.
+/// then re-query `browser_pairing_status`.
 #[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PairingChallengeDto {
@@ -306,6 +306,7 @@ pub async fn browser_unregister_host(
     app_state: State<'_, AppState>,
     state: State<'_, BridgeState>,
 ) -> Result<Vec<BrowserRegistrationDto>, ApiError> {
+    super::ensure_unlocked(&app_state.0)?;
     let registrar = app_state.0.platform().host_registrar.clone();
     let bridge = state.inner().clone();
     super::blocking(move || {
@@ -600,6 +601,7 @@ pub async fn browser_status(
     app_state: State<'_, AppState>,
     state: State<'_, BridgeState>,
 ) -> Result<BrowserStatus, ApiError> {
+    super::ensure_unlocked(&app_state.0)?;
     let registrar = app_state.0.platform().host_registrar.clone();
     let store_kind = state.store_kind();
     let (handle, failure, host) = (state.handle(), state.start_failure(), state.bundled_host());
@@ -619,10 +621,32 @@ pub async fn browser_status(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn browser_revoke(state: State<'_, BridgeState>, id: String) -> Result<(), ApiError> {
+pub async fn browser_revoke(
+    app_state: State<'_, AppState>,
+    state: State<'_, BridgeState>,
+    id: String,
+) -> Result<(), ApiError> {
+    super::ensure_unlocked(&app_state.0)?;
     // Async: the revoke touches the Keychain, which must not run on the main thread.
     let state = state.inner().clone();
     super::blocking(move || revoke(&state, &id)).await
+}
+
+/// The pairing code the main window shows, if one is active. Served in every session state:
+/// pairing while locked is a feature (the code is shown by the app), so this is the one browser
+/// read that is not gated, and it carries nothing else.
+pub fn pairing_status(state: &BridgeState) -> Option<PairingChallengeDto> {
+    state
+        .handle()
+        .and_then(|h| h.pairing.active().as_ref().map(Into::into))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn browser_pairing_status(
+    state: State<'_, BridgeState>,
+) -> Result<Option<PairingChallengeDto>, ApiError> {
+    Ok(pairing_status(&state))
 }
 
 #[tauri::command]
@@ -633,7 +657,11 @@ pub fn browser_pairing_cancel(state: State<'_, BridgeState>) -> Result<(), ApiEr
 
 #[tauri::command]
 #[specta::specta]
-pub async fn browser_reset_pairings(state: State<'_, BridgeState>) -> Result<(), ApiError> {
+pub async fn browser_reset_pairings(
+    app_state: State<'_, AppState>,
+    state: State<'_, BridgeState>,
+) -> Result<(), ApiError> {
+    super::ensure_unlocked(&app_state.0)?;
     let state = state.inner().clone();
     super::blocking(move || reset_pairings(&state)).await
 }
@@ -644,6 +672,7 @@ pub async fn browser_reinstall_host(
     app_state: State<'_, AppState>,
     state: State<'_, BridgeState>,
 ) -> Result<Vec<BrowserRegistrationDto>, ApiError> {
+    super::ensure_unlocked(&app_state.0)?;
     let registrar = app_state.0.platform().host_registrar.clone();
     let bridge = state.inner().clone();
     super::blocking(move || {
@@ -666,7 +695,11 @@ pub fn browser_proposal_take(
 /// Reveals the extension folder with the same helper as `app_reveal_backups`.
 #[tauri::command]
 #[specta::specta]
-pub async fn browser_show_extension_folder(app: AppHandle) -> Result<(), ApiError> {
+pub async fn browser_show_extension_folder(
+    app: AppHandle,
+    app_state: State<'_, AppState>,
+) -> Result<(), ApiError> {
+    super::ensure_unlocked(&app_state.0)?;
     let folder = extension_folder_of(&app).ok_or(ApiError {
         code: ErrorCode::NotFound,
         message: String::new(),
@@ -781,6 +814,25 @@ mod tests {
             revoke(&f.state, "nope").unwrap_err().code,
             ErrorCode::InvalidInput
         );
+    }
+
+    /// Pairing while locked is a feature: the main window reads the code through
+    /// `browser_pairing_status`, which carries the code alone and is served without a vault.
+    #[test]
+    fn the_pairing_status_serves_the_code_while_locked() {
+        let f = fixture(false);
+        assert!(f.w.core.vault_status().unwrap().state != mypass_session::SessionState::Unlocked);
+        assert_eq!(pairing_status(&f.state), None);
+        f.handle()
+            .service
+            .handle(mypass_bridge::protocol::Request::StartPairing {
+                token: "t".into(),
+                browser: None,
+            });
+        let code = f.handle().pairing.active().unwrap().code;
+        assert_eq!(pairing_status(&f.state).map(|p| p.code), Some(code));
+        pairing_cancel(&f.state).unwrap();
+        assert_eq!(pairing_status(&f.state), None);
     }
 
     #[test]

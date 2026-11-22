@@ -22,6 +22,7 @@ pub async fn device_unlock_configure(
     mac_password: bool,
 ) -> Result<DeviceUnlockStatus, ApiError> {
     let password = password.as_mut().map(into_secret);
+    super::ensure_unlocked(&state.0)?;
     let core = state.0.clone();
     blocking(move || {
         let result = core

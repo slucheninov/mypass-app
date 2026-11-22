@@ -32,6 +32,7 @@ export const commands = {
 	backupList: () => typedError<BackupStatus_Serialize, ApiError>(__TAURI_INVOKE("backup_list")),
 	backupRestore: (id: string) => typedError<null, ApiError>(__TAURI_INVOKE("backup_restore", { id })),
 	browserPairingCancel: () => typedError<null, ApiError>(__TAURI_INVOKE("browser_pairing_cancel")),
+	browserPairingStatus: () => typedError<PairingChallengeDto | null, ApiError>(__TAURI_INVOKE("browser_pairing_status")),
 	browserProposalTake: (id: string) => typedError<BrowserProposal_Serialize, ApiError>(__TAURI_INVOKE("browser_proposal_take", { id })),
 	browserReinstallHost: () => typedError<BrowserRegistrationDto_Serialize[], ApiError>(__TAURI_INVOKE("browser_reinstall_host")),
 	browserResetPairings: () => typedError<null, ApiError>(__TAURI_INVOKE("browser_reset_pairings")),
@@ -105,6 +106,11 @@ export const commands = {
 	/**  The current keyboard layout's identifier, when the platform reports one. */
 	platformKeyboardLayout: () => typedError<string | null, ApiError>(__TAURI_INVOKE("platform_keyboard_layout")),
 	settingsGet: () => typedError<Settings_Serialize, ApiError>(__TAURI_INVOKE("settings_get")),
+	/**
+	 *  The settings every window renders in any session state (theme, language, shortcut hints, the
+	 *  update flag). The full settings are served only while the vault is unlocked.
+	 */
+	settingsGetPublic: () => typedError<PublicSettings, ApiError>(__TAURI_INVOKE("settings_get_public")),
 	settingsLoginItemStatus: () => typedError<LoginItemStatus, ApiError>(__TAURI_INVOKE("settings_login_item_status")),
 	settingsUpdate: (patch: SettingsPatch_Deserialize) => typedError<Settings_Serialize, ApiError>(__TAURI_INVOKE("settings_update", { patch })),
 	/**
@@ -1097,7 +1103,7 @@ export type PairedBrowserDto_Serialize = {
 
 /**
  *  A pairing code waiting for the browser. `expires_at` (Unix milliseconds) lets the UI count down and
- *  then re-query `browser_status`.
+ *  then re-query `browser_pairing_status`.
  */
 export type PairingChallengeDto = {
 	code: string,
@@ -1270,6 +1276,20 @@ export type ProposalFieldKind = "name" | "givenName" | "familyName" | "email" | 
 
 /**  What a save proposal is about. */
 export type ProposalKind = "login" | "totp";
+
+/**
+ *  The part of [`Settings`] every window renders whatever the session state: the appearance, the
+ *  language, the shortcut hints and whether update checks are on. Nothing here matters to
+ *  security, so it is the one settings read a locked or vault-less app serves; the full
+ *  [`Settings`] are served only while the vault is unlocked.
+ */
+export type PublicSettings = {
+	language: Language,
+	theme: Theme,
+	shortcutLock: string,
+	shortcutShow: string,
+	updateCheckEnabled: boolean,
+};
 
 /**  One row of the recent-vaults list. */
 export type RecentVaultDto = {

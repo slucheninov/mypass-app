@@ -588,5 +588,7 @@
   "None": "None",
   "Sign in with %@": "Sign in with {0}",
   "Remember social sign-in": "Remember social sign-in",
-  "When you sign in to a website with Google, Facebook, Apple, Microsoft or GitHub, the browser extension remembers which one and highlights it next time.": "When you sign in to a website with Google, Facebook, Apple, Microsoft or GitHub, the browser extension remembers which one and highlights it next time."
+  "When you sign in to a website with Google, Facebook, Apple, Microsoft or GitHub, the browser extension remembers which one and highlights it next time.": "When you sign in to a website with Google, Facebook, Apple, Microsoft or GitHub, the browser extension remembers which one and highlights it next time.",
+  "MyPass is locked. Unlock it to change settings.": "MyPass is locked. Unlock it to change settings.",
+  "Open or create a vault to change settings.": "Open or create a vault to change settings."
 }

@@ -12,6 +12,7 @@ pub fn update_status(state: State<'_, AppState>) -> UpdateStatus {
 #[tauri::command]
 #[specta::specta]
 pub async fn update_check_now(state: State<'_, AppState>) -> Result<UpdateStatus, ApiError> {
+    super::ensure_unlocked(&state.0)?;
     let service = state.0.update.clone();
     blocking(move || Ok(service.check(true))).await
 }
