@@ -23,17 +23,24 @@ pub enum UnlockFailure {
     InApp,
     #[error("unlock failed")]
     Failed,
+    /// The device prompt ran and did not recognize the user (a rejected fingerprint).
+    #[error("not recognized")]
+    NotRecognized,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DeviceOffer {
     pub offered: bool,
     pub touch_id: bool,
+    pub prompt_in_flight: bool,
 }
 
 pub trait VaultUnlocker: Send + Sync {
     fn unlock_with_password(&self, password: SecretString) -> Result<(), UnlockFailure>;
-    fn unlock_with_device(&self) -> Result<(), UnlockFailure>;
+    /// One device prompt. `automatic` when the popup starts it by itself on opening: the app then
+    /// refuses it as `Cancelled`, without a prompt, while another prompt is in flight or within
+    /// the app's debounce after the last one ended.
+    fn unlock_with_device(&self, automatic: bool) -> Result<(), UnlockFailure>;
     fn device_offer(&self) -> DeviceOffer;
 }
 
@@ -130,7 +137,10 @@ impl UnlockThrottle {
             }
             Err(UnlockFailure::InApp) => PasswordAttempt::InApp,
             Err(
-                UnlockFailure::Cancelled | UnlockFailure::DeviceUnavailable | UnlockFailure::Failed,
+                UnlockFailure::Cancelled
+                | UnlockFailure::DeviceUnavailable
+                | UnlockFailure::Failed
+                | UnlockFailure::NotRecognized,
             ) => PasswordAttempt::Failed,
         }
     }
@@ -173,7 +183,7 @@ impl VaultUnlocker for NoUnlocker {
         Err(UnlockFailure::Failed)
     }
 
-    fn unlock_with_device(&self) -> Result<(), UnlockFailure> {
+    fn unlock_with_device(&self, _automatic: bool) -> Result<(), UnlockFailure> {
         Err(UnlockFailure::Failed)
     }
 

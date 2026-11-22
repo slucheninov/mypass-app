@@ -1,15 +1,28 @@
 //! Device authentication may call Keychain/LocalAuthentication: every platform call is on a worker.
 use super::{blocking, into_secret};
 use crate::state::AppState;
-use mypass_session::{device_unlock::DeviceUnlockStatus, ApiError};
+use mypass_session::device_unlock::{DeviceUnlockOffer, DeviceUnlockStatus};
+use mypass_session::ApiError;
 use tauri::State;
+/// The full status (toggles, enrolment, block reason) for the Security pane; unlocked only.
 #[tauri::command]
 #[specta::specta]
 pub async fn device_unlock_status(
     state: State<'_, AppState>,
 ) -> Result<DeviceUnlockStatus, ApiError> {
+    let incarnation = super::ensure_unlocked(&state.0)?;
     let core = state.0.clone();
-    blocking(move || Ok(core.device_unlock.status())).await
+    blocking(move || core.device_unlock.status_for(incarnation)).await
+}
+/// What an unlock screen needs to show the device-unlock button, in any session state. Reads
+/// only: no reconcile, no setting written.
+#[tauri::command]
+#[specta::specta]
+pub async fn device_unlock_offer(
+    state: State<'_, AppState>,
+) -> Result<DeviceUnlockOffer, ApiError> {
+    let core = state.0.clone();
+    blocking(move || Ok(core.device_unlock.offer())).await
 }
 #[tauri::command]
 #[specta::specta]
@@ -22,13 +35,14 @@ pub async fn device_unlock_configure(
     mac_password: bool,
 ) -> Result<DeviceUnlockStatus, ApiError> {
     let password = password.as_mut().map(into_secret);
+    let incarnation = super::ensure_unlocked(&state.0)?;
     let core = state.0.clone();
     blocking(move || {
-        let result = core
-            .device_unlock
-            .configure(password, touch_id, mac_password);
+        let result =
+            core.device_unlock
+                .configure_for(incarnation, password, touch_id, mac_password);
         use tauri_specta::Event;
-        let _ = crate::events::SettingsChanged(core.settings.get()).emit(&app);
+        let _ = crate::events::SettingsChanged::of(&core.settings.get()).emit(&app);
         result
     })
     .await

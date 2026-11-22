@@ -1,7 +1,7 @@
 //! The passkey seam and its implementation, [`PasskeyService`] (the app wires it into the bridge;
 //! tests may inject a recording handler).
 //!
-//! Gate order: the bridge service answers quitting, then locked, then pairing, before a request
+//! Gate order: the bridge service answers quitting, then pairing, then locked, before a request
 //! reaches [`PasskeyHandler::handle`] (only `getPasskeyProxyStatus` passes the locked gate).
 //! Inside the handler the app-side toggle is checked first, before any parsing: Chrome's attach
 //! state can lag the setting, so the app refuses `passkeyCreate` / `passkeyGet` on its own
@@ -41,14 +41,14 @@ use crate::views::error;
 use errors::{create_error, get_error, NOT_ALLOWED};
 use pending::{Epoch, Pending, PendingCreate, PendingGet};
 
-/// What a passkey handler may use. `unlocked` is the lock state the gates saw for this request.
+/// What a passkey handler may use, including the unlocked incarnation seen at the bridge gate.
 pub struct PasskeyContext<'a> {
     pub session: &'a VaultSession,
     pub settings: &'a SettingsStore,
-    pub unlocked: bool,
+    pub unlocked_incarnation: Option<u64>,
 }
 
-/// Handles the seven passkey requests, after the quit, lock and pairing gates.
+/// Handles the seven passkey requests, after the quit, pairing and lock gates.
 pub trait PasskeyHandler: Send + Sync {
     fn handle(&self, ctx: &PasskeyContext<'_>, request: &Request) -> Response;
     /// Called when the session stops being unlocked and when the vault is switched while
@@ -154,16 +154,19 @@ impl PasskeyService {
     /// indefinitely (there is no push channel to tell it otherwise). `enabled` is reported
     /// separately, even while locked, so the extension learns the app-side opt-in on its own
     /// and resyncs its cache and attachment without waiting for a service worker restart: the
-    /// app is authoritative, the extension's flag is only a cache.
+    /// app is authoritative, the extension's flag is only a cache. It is the one setting served
+    /// while locked, because the proxy's attachment depends on it; every other preference (the
+    /// social sign-in one) is withheld until the vault is unlocked.
     fn status(ctx: &PasskeyContext<'_>) -> Response {
         let settings = ctx.settings.get();
         let enabled = settings.passkey_proxy_enabled;
+        let unlocked = ctx.unlocked_incarnation.is_some();
         Response::PasskeyProxyStatus {
-            unlocked: ctx.unlocked,
+            unlocked,
             paired: true,
-            attach_allowed: ctx.unlocked && enabled,
+            attach_allowed: unlocked && enabled,
             enabled,
-            remember_social_sign_in: settings.remember_social_sign_in,
+            remember_social_sign_in: unlocked.then_some(settings.remember_social_sign_in),
         }
     }
 
@@ -173,14 +176,20 @@ impl PasskeyService {
     /// start reads the file again. The UI hears about a real change only. Turning the feature
     /// off drops every pending ceremony, so nothing started before is confirmed after.
     fn set_enabled(&self, ctx: &PasskeyContext<'_>, enabled: bool) -> Response {
-        let before = ctx.settings.get().passkey_proxy_enabled;
-        // An `Io` error still applied the value in memory (see above); `InvalidValue` cannot
-        // come from a boolean. Either way the answer below reads back what is in force.
-        let _applied = ctx.settings.update(SettingsPatch {
-            passkey_proxy_enabled: Some(enabled),
-            ..SettingsPatch::default()
-        });
-        let stored = ctx.settings.get().passkey_proxy_enabled;
+        let Some(incarnation) = ctx.unlocked_incarnation else {
+            return Response::Locked;
+        };
+        let Some((before, stored)) = ctx.session.configure_if_incarnation(incarnation, || {
+            let before = ctx.settings.get().passkey_proxy_enabled;
+            // An `Io` error still applies the value in memory. Read back what is in force.
+            let _applied = ctx.settings.update(SettingsPatch {
+                passkey_proxy_enabled: Some(enabled),
+                ..SettingsPatch::default()
+            });
+            (before, ctx.settings.get().passkey_proxy_enabled)
+        }) else {
+            return Response::Locked;
+        };
         if !stored {
             self.pending().clear();
         }

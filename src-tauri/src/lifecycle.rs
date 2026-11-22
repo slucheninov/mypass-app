@@ -483,7 +483,7 @@ impl EffectRunner for ShellEffects {
 pub fn emit_settings<R: tauri::Runtime>(app: &tauri::AppHandle<R>, settings: Settings) {
     use tauri_specta::Event;
     // A window that is gone is not an error.
-    let _ = SettingsChanged(settings).emit(app);
+    let _ = SettingsChanged::of(&settings).emit(app);
 }
 
 /// Emits a save-state toast for a failed external check.

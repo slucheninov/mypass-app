@@ -6,7 +6,7 @@
   import Button from "../lib/ui/Button.svelte";
   import { toasts } from "../lib/stores/toasts.svelte";
 </script>
-{#if update.status.banner && settings.value?.updateCheckEnabled !== false}
+{#if update.status.banner && settings.public?.updateCheckEnabled !== false}
   <aside role="status" class="banner">
     <span>{t("MyPass %@ is available (you have %@)", [update.status.banner.version, platform.version ?? ""] )}</span>
     <Button onclick={() => void update.dismiss().catch(e => toasts.reportError(e))}>{t("Later")}</Button>

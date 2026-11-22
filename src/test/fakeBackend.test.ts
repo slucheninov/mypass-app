@@ -91,10 +91,11 @@ describe("fake backend", () => {
       status: "ok",
       data: { version: expect.any(String), os: "windows", deviceUnlockAvailable: true },
     });
+    expect(await commands.appHomeDir()).toEqual({ status: "ok", data: "C:\\Users\\someone" });
     // The main window's event bridge takes the startup hotkey conflicts and the pending new-entry
     // request when it mounts (the order of the two depends on listener registration).
     expect(fake.calls.map((c) => c.command).sort()).toEqual(
-      ["appInfo", "appTakeNewEntry", "browserStatus", "shortcutConflictsTake"],
+      ["appHomeDir", "appInfo", "appTakeNewEntry", "browserPairingStatus", "shortcutConflictsTake"],
     );
   });
 
@@ -134,12 +135,14 @@ describe("fake backend", () => {
   it("fake_sync_commands_match_the_backend", async () => {
     const fake = createFakeBackend({ session: "locked" });
     renderWithBackend(MainApp, {}, fake);
-    // No folder: `off`, checked before the lock state, like Rust.
+    // Like Rust: the settings gate comes first, folder or not.
+    expect(await commands.syncStatus()).toMatchObject({ status: "error", error: { code: "locked" } });
+    expect(await commands.syncNow()).toMatchObject({ status: "error", error: { code: "locked" } });
+    fake.state.session.state = "unlocked";
+    // No folder: `off`.
     expect(await commands.syncStatus()).toEqual({ status: "ok", data: { state: "off" } });
     expect(await commands.syncNow()).toEqual({ status: "ok", data: { state: "off" } });
     fake.state.settings.secondaryFolder = "/Volumes/Backup";
-    expect(await commands.syncNow()).toMatchObject({ status: "error", error: { code: "locked" } });
-    fake.state.session.state = "unlocked";
     expect(await commands.syncNow()).toEqual({ status: "ok", data: { state: "idle", lastSync: 1_700_000_000_000 } });
     expect(await commands.syncDisconnectSecondary()).toEqual({ status: "ok", data: null });
     expect(fake.state.settings.secondaryFolder).toBeNull();

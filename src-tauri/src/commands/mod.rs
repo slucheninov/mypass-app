@@ -64,7 +64,36 @@ where
 }
 
 /// `Locked` / `NoVault` unless the vault is open: checked before a dialog opens or a grant is
-/// consumed, so a locked app never asks the user for a file.
-pub fn ensure_unlocked(core: &mypass_session::AppCore) -> Result<(), ApiError> {
-    core.session.with_db(|_| ()).map_err(ApiError::from)
+/// consumed, so a locked app never asks the user for a file. Returns the unlocked session's
+/// incarnation: a command that writes later (on a worker, behind another lock) passes it to the
+/// write, which re-checks it at its commit point, so a lock, or a lock and a new unlock, landing
+/// in between refuses the write instead of letting it through.
+pub fn ensure_unlocked(core: &mypass_session::AppCore) -> Result<u64, ApiError> {
+    core.session.unlocked_incarnation().map_err(ApiError::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_unlocked;
+    use crate::testing::{open_world, pw, world};
+    use mypass_session::ErrorCode;
+
+    #[test]
+    fn the_gate_refuses_without_a_vault_and_while_locked_and_passes_while_unlocked() {
+        let none = world();
+        assert_eq!(
+            ensure_unlocked(&none.core).unwrap_err().code,
+            ErrorCode::NoVault
+        );
+
+        let w = open_world();
+        assert!(ensure_unlocked(&w.core).is_ok());
+        w.core.vault_lock().unwrap();
+        assert_eq!(
+            ensure_unlocked(&w.core).unwrap_err().code,
+            ErrorCode::Locked
+        );
+        w.core.session.unlock(pw("pw")).unwrap();
+        assert!(ensure_unlocked(&w.core).is_ok());
+    }
 }

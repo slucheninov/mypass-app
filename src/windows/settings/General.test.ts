@@ -303,9 +303,9 @@ describe("passkey proxy", () => {
 
   it("settings_toggle_follows_settings_changed_event", async () => {
     const { fake } = await renderSettingsApp();
-    await fake.emit("settingsChanged", { ...fake.state.settings, passkeyProxyEnabled: false });
+    await fake.changeSettings({ passkeyProxyEnabled: false });
     await waitFor(() => expect(toggle().getAttribute("aria-checked")).toBe("false"));
-    await fake.emit("settingsChanged", { ...fake.state.settings, passkeyProxyEnabled: true });
+    await fake.changeSettings({ passkeyProxyEnabled: true });
     await waitFor(() => expect(toggle().getAttribute("aria-checked")).toBe("true"));
   });
 });

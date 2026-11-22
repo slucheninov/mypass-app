@@ -40,6 +40,7 @@ pub fn commands() -> Commands<tauri::Wry> {
     use commands::{app, attachment, backup, browser, draft, entry, generator, group, import};
     use commands::{device, platform, settings, sidebar, sync, tray, update, vault};
     collect_commands![
+        app::app_home_dir,
         app::app_info,
         app::app_open_settings,
         app::app_quit,
@@ -53,6 +54,7 @@ pub fn commands() -> Commands<tauri::Wry> {
         backup::backup_list,
         backup::backup_restore,
         browser::browser_pairing_cancel,
+        browser::browser_pairing_status,
         browser::browser_proposal_take,
         browser::browser_reinstall_host,
         browser::browser_reset_pairings,
@@ -61,6 +63,7 @@ pub fn commands() -> Commands<tauri::Wry> {
         browser::browser_status,
         browser::browser_unregister_host,
         device::device_unlock_status,
+        device::device_unlock_offer,
         device::device_unlock_configure,
         device::device_unlock_consume_extension_request,
         update::update_status,
@@ -109,6 +112,7 @@ pub fn commands() -> Commands<tauri::Wry> {
         import::import_csv_preview,
         platform::platform_keyboard_layout,
         settings::settings_get,
+        settings::settings_get_public,
         settings::settings_login_item_status,
         settings::settings_update,
         settings::shortcut_conflicts_take,
@@ -139,10 +143,10 @@ pub fn commands() -> Commands<tauri::Wry> {
 /// bindings exporter go through it, so the generated TypeScript can never drift from the app.
 pub fn specta_builder() -> Builder<tauri::Wry> {
     use events::{
-        BridgeChangedEvent, ClipboardClearedEvent, NewEntryEvent, OpenEntryEvent,
-        PairingChallengeEvent, ProposalEvent, SaveStateChanged, SessionChanged, SettingsChanged,
-        SettingsPaneEvent, ShortcutConflictEvent, StorageStatusChanged, SyncStatusChanged,
-        UnlockRequestedEvent, UpdateChanged, VaultChanged,
+        BridgeChangedEvent, ClipboardClearedEvent, DeviceUnlockChanged, NewEntryEvent,
+        OpenEntryEvent, PairingChallengeEvent, ProposalEvent, SaveStateChanged, SessionChanged,
+        SettingsChanged, SettingsPaneEvent, ShortcutConflictEvent, StorageStatusChanged,
+        SyncStatusChanged, UnlockRequestedEvent, UpdateChanged, VaultChanged,
     };
     Builder::<tauri::Wry>::new()
         .commands(commands())
@@ -163,6 +167,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             SyncStatusChanged,
             UnlockRequestedEvent,
             VaultChanged,
+            DeviceUnlockChanged,
         ])
 }
 

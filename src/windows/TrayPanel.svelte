@@ -35,8 +35,8 @@
   const actions = $derived(selected?.epoch === session.lockEpoch && unlocked ? selected : null);
   const noVault = $derived(session.status.state === "noVault");
   const vaultKey = $derived(unlocked ? (session.status.vaultPath ?? "") : null);
-  const lockShortcut = $derived(formatShortcut(settings.value?.shortcutLock ?? "", platform.os));
-  const showShortcut = $derived(formatShortcut(settings.value?.shortcutShow ?? "", platform.os));
+  const lockShortcut = $derived(formatShortcut(settings.public?.shortcutLock ?? "", platform.os));
+  const showShortcut = $derived(formatShortcut(settings.public?.shortcutShow ?? "", platform.os));
   const primaryModifier = $derived(platform.os === "macos" ? "metaKey" : "ctrlKey");
   const settingsShortcut = $derived(primaryModifier === "metaKey" ? "⌘," : "Ctrl+,");
   const quitShortcut = $derived(primaryModifier === "metaKey" ? "⌘Q" : "Ctrl+Q");

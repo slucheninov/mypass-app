@@ -37,8 +37,8 @@ pub use dto::*;
 pub use secondary::{SecondaryError, SecondaryStatus, SecondarySync, SecondaryUnavailable};
 pub use session::{LockReason, SaveState, SaveStatus, SessionState, SessionStatus};
 pub use settings::{
-    BackupInterval, GeneratorOptionsDto, IdleTimeout, Language, RequireAccountPasswordWindow,
-    Settings, SettingsPatch, Theme, UnlockWithDeviceWindow,
+    BackupInterval, GeneratorOptionsDto, IdleTimeout, Language, PublicSettings,
+    RequireAccountPasswordWindow, Settings, SettingsPatch, Theme, UnlockWithDeviceWindow,
 };
 pub use storage::{ResolvedStorage, StorageStatus};
 pub use vault_files::VaultFileStatus;

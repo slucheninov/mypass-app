@@ -736,12 +736,34 @@ fn disconnect_clears_the_setting_and_checkpoint_and_leaves_the_copy() {
     let w = world();
     w.open();
     let copy = w.remote_bytes();
-    w.sync.disconnect().unwrap();
+    w.sync
+        .disconnect(w.session.unlocked_incarnation().unwrap())
+        .unwrap();
     assert_eq!(w.settings.get().secondary_folder, None);
     assert_eq!(w.sync.status(), SecondaryStatus::Off);
     assert_eq!(w.watch.active(), 0);
     assert_eq!(w.remote_bytes(), copy);
     assert_eq!(fs::read(w.checkpoint_file()).unwrap(), b"null");
+}
+
+/// A disconnect gated before a lock (and a new unlock) is refused at its commit point: the
+/// folder, the checkpoint and the watch stay as they were.
+#[test]
+fn a_disconnect_from_an_earlier_session_changes_nothing() {
+    let w = world();
+    w.open();
+    let incarnation = w.session.unlocked_incarnation().unwrap();
+    let folder = w.settings.get().secondary_folder;
+    assert!(folder.is_some());
+    w.session.lock(crate::session::LockReason::Manual);
+    let refused = w.sync.disconnect(incarnation).unwrap_err();
+    assert_eq!(refused.code, crate::app_core::ErrorCode::Locked);
+    assert_eq!(w.settings.get().secondary_folder, folder);
+    w.session.unlock(pw()).unwrap();
+    w.advance_ms(0);
+    assert!(w.sync.disconnect(incarnation).is_err());
+    assert_eq!(w.settings.get().secondary_folder, folder);
+    assert_ne!(fs::read(w.checkpoint_file()).unwrap(), b"null");
 }
 
 #[test]

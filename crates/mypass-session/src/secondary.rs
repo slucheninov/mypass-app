@@ -845,14 +845,20 @@ impl SecondarySync {
     }
 
     /// Stops syncing, retaining the remote copy and clearing its checkpoint best-effort.
-    pub fn disconnect(&self) -> Result<(), ApiError> {
-        let folder = self.0.settings.get().secondary_folder;
-        self.0.settings.set_secondary_folder(None)?;
-        self.rearm();
+    /// Only while the session is still the unlocked `incarnation` the caller's gate saw: the
+    /// setting is cleared under the session lock, so a lock (or a lock and a new unlock) landing
+    /// after the gate refuses with `Locked` and leaves everything as it was.
+    pub fn disconnect(&self, incarnation: u64) -> Result<(), ApiError> {
         let _gate = lock(&self.0.run_gate);
+        let vault = self.0.session.vault_id().zip(self.0.session.vault_path());
+        let folder = self.0.settings.get().secondary_folder;
+        self.0
+            .session
+            .configure_if_incarnation(incarnation, || self.0.settings.set_secondary_folder(None))
+            .ok_or_else(|| ApiError::from(crate::session::SessionError::Locked))??;
+        self.rearm();
         let checkpoint = || {
-            let vault_id = self.0.session.vault_id()?;
-            let primary = self.0.session.vault_path()?;
+            let (vault_id, primary) = vault?;
             let secondary = Path::new(folder.as_deref()?).join(primary.file_name()?);
             self.checkpoint_path(&vault_id, &primary, &secondary).ok()
         };
@@ -982,7 +988,7 @@ impl SecondarySync {
                     self.schedule(&mut st, Slot::Push, SECONDARY_PUSH_DEBOUNCE, RunKind::Push);
                 }
             }
-            SessionEvent::VaultChanged => {}
+            SessionEvent::VaultChanged | SessionEvent::DeviceUnlockChanged => {}
         }
     }
 

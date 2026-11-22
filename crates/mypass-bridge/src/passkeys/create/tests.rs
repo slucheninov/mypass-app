@@ -207,7 +207,7 @@ fn ctx<'a>(f: &'a Fx, settings: &'a SettingsStore, unlocked: bool) -> PasskeyCon
     PasskeyContext {
         session: &f.session,
         settings,
-        unlocked,
+        unlocked_incarnation: unlocked.then(|| f.session.unlocked_incarnation().unwrap()),
     }
 }
 
@@ -1010,6 +1010,7 @@ fn quitting_session_refuses_confirm_without_response_json() {
     let (f, svc, _ids) = sample_fx();
     create(&f, 57, &[]);
     let before = snapshot(&f);
+    let in_flight = ctx(&f, &f.settings, true);
     f.session.begin_quit();
     // The bridge gate answers first.
     assert_eq!(
@@ -1025,7 +1026,7 @@ fn quitting_session_refuses_confirm_without_response_json() {
         pairing: Some(f.secret.clone()),
     };
     assert_failure(
-        &svc.handle(&ctx(&f, &f.settings, true), &request),
+        &svc.handle(&in_flight, &request),
         "NotAllowedError",
         COULD_NOT_SAVE,
     );

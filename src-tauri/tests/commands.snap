@@ -1,3 +1,4 @@
+app_home_dir
 app_info
 app_open_settings
 app_quit
@@ -11,6 +12,7 @@ attachment_pick
 backup_list
 backup_restore
 browser_pairing_cancel
+browser_pairing_status
 browser_proposal_take
 browser_reinstall_host
 browser_reset_pairings
@@ -20,6 +22,7 @@ browser_status
 browser_unregister_host
 device_unlock_configure
 device_unlock_consume_extension_request
+device_unlock_offer
 device_unlock_status
 draft_clear
 draft_save
@@ -60,6 +63,7 @@ import_csv_commit
 import_csv_preview
 platform_keyboard_layout
 settings_get
+settings_get_public
 settings_login_item_status
 settings_update
 shortcut_conflicts_take

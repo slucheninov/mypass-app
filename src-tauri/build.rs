@@ -40,6 +40,7 @@ fn main() {
     // Listing every command opts the app into Tauri's IPC ACL, including tauri-specta handlers.
     // Keep this list explicit: the guards compare it to the registered command snapshot.
     let attributes = attributes.app_manifest(tauri_build::AppManifest::new().commands(&[
+        "app_home_dir",
         "app_info",
         "app_open_settings",
         "app_quit",
@@ -53,6 +54,7 @@ fn main() {
         "backup_list",
         "backup_restore",
         "browser_pairing_cancel",
+        "browser_pairing_status",
         "browser_proposal_take",
         "browser_reinstall_host",
         "browser_unregister_host",
@@ -62,6 +64,7 @@ fn main() {
         "browser_status",
         "device_unlock_configure",
         "device_unlock_consume_extension_request",
+        "device_unlock_offer",
         "device_unlock_status",
         "draft_clear",
         "draft_save",
@@ -102,6 +105,7 @@ fn main() {
         "import_csv_preview",
         "platform_keyboard_layout",
         "settings_get",
+        "settings_get_public",
         "settings_login_item_status",
         "settings_update",
         "shortcut_conflicts_take",

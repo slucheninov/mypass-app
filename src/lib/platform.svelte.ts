@@ -2,11 +2,12 @@ import { api } from "./api";
 
 export type Os = "macos" | "windows" | "linux";
 
-/** Capability state from `app_info`; the defaults keep capability-gated UI hidden until loaded. */
-export const platform: { os: Os | null; version: string | null; deviceUnlockAvailable: boolean } = $state({
+/** Platform information for the active window, with defaults until the backend responds. */
+export const platform: { os: Os | null; version: string | null; deviceUnlockAvailable: boolean; homeDir: string | null } = $state({
   os: null,
   version: null,
   deviceUnlockAvailable: false,
+  homeDir: null,
 });
 
 function narrowOs(os: string): Os | null {

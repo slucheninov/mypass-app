@@ -210,6 +210,7 @@ impl std::fmt::Debug for InMemorySecretStore {
 struct DeviceUnlockState {
     enrolled: HashMap<(DeviceUnlockModeKey, String), SecretString>,
     fail_next: Option<PlatformError>,
+    before_unlock_returns: Option<Box<dyn FnOnce() + Send>>,
     evaluations: usize,
     enrolls: usize,
     fail_next_presence: Option<PlatformError>,
@@ -252,6 +253,11 @@ impl FakeDeviceUnlock {
     /// The next `unlock` fails with `e` (and still counts as an evaluation).
     pub fn fail_next_unlock(&self, e: PlatformError) {
         lock(&self.state).fail_next = Some(e);
+    }
+
+    /// Runs once during the next successful unlock, before releasing the result to the caller.
+    pub fn before_unlock_returns(&self, hook: impl FnOnce() + Send + 'static) {
+        lock(&self.state).before_unlock_returns = Some(Box::new(hook));
     }
 
     /// Drops every `Biometrics` enrolment, like a changed fingerprint set.
@@ -327,10 +333,29 @@ impl DeviceUnlock for FakeDeviceUnlock {
         if let Some(e) = s.fail_next.take() {
             return Err(e);
         }
-        s.enrolled
+        let secret = s
+            .enrolled
             .get(&(mode.into(), vault_id.to_owned()))
             .map(|secret| SecretString::from(secret.expose_secret().to_owned()))
-            .ok_or(PlatformError::Invalidated)
+            .ok_or(PlatformError::Invalidated)?;
+        let hook = s.before_unlock_returns.take();
+        drop(s);
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(secret)
+    }
+
+    fn unlock_with_biometrics(
+        &self,
+        mode: DeviceUnlockMode,
+        vault_id: &str,
+        reason: &str,
+    ) -> PlatformResult<SecretString> {
+        if self.availability != (DeviceUnlockAvailability::Available { biometrics: true }) {
+            return Err(PlatformError::DeviceUnlockUnavailable);
+        }
+        self.unlock(mode, vault_id, reason)
     }
 
     fn forget(&self, vault_id: &str) -> PlatformResult<()> {
@@ -823,6 +848,7 @@ mod tests {
     fn platform_error_device_unlock_variants_are_distinct_and_display_text_has_no_secret() {
         let variants = [
             PlatformError::Cancelled,
+            PlatformError::AuthenticationFailed,
             PlatformError::Lockout,
             PlatformError::Invalidated,
             PlatformError::NotEnrolledOnDevice,

@@ -54,6 +54,7 @@ const MESSAGES: Record<ErrorCode, () => string> = {
   csvNotUtf8: () => t("The file is not UTF-8 text"),
   csvEmpty: () => t("The file is empty"),
   cancelled: () => t("Cancelled"),
+  authenticationFailed: () => t("Not recognized. Try again."),
   lockout: () => t("Too many attempts. Use your master password."),
   invalidated: () => t("Device unlock was reset. Enter your master password."),
   notEnrolledOnDevice: () => t("No fingerprint or device password is set up on this computer"),
@@ -100,6 +101,7 @@ async function shortcutConflictsTake() {
 
 /** One typed, already unwrapped async function per command. */
 export const api = {
+  appHomeDir: wrap(commands.appHomeDir),
   appInfo: wrap(commands.appInfo),
   appTakeNewEntry: wrap(commands.appTakeNewEntry),
   appOpenSettings: wrap(commands.appOpenSettings),
@@ -120,6 +122,7 @@ export const api = {
   browserRevoke: wrap(commands.browserRevoke),
   browserShowExtensionFolder: wrap(commands.browserShowExtensionFolder),
   browserStatus: wrap(commands.browserStatus),
+  browserPairingStatus: wrap(commands.browserPairingStatus),
   draftClear: wrap(commands.draftClear),
   draftSave: wrap(commands.draftSave),
   draftVersions: wrap(commands.draftVersions),
@@ -159,6 +162,7 @@ export const api = {
   importCsvPreview: wrap(commands.importCsvPreview),
   platformKeyboardLayout: wrap(commands.platformKeyboardLayout),
   settingsGet: wrap(commands.settingsGet),
+  settingsGetPublic: wrap(commands.settingsGetPublic),
   settingsLoginItemStatus: wrap(commands.settingsLoginItemStatus),
   settingsUpdate: wrap(commands.settingsUpdate),
   sidebarGet: wrap(commands.sidebarGet),
@@ -181,6 +185,7 @@ export const api = {
   vaultLocationProbe: wrap(commands.vaultLocationProbe),
   vaultLocationChange: wrap(commands.vaultLocationChange),
   deviceUnlockStatus: wrap(commands.deviceUnlockStatus),
+  deviceUnlockOffer: wrap(commands.deviceUnlockOffer),
   deviceUnlockConfigure: wrap(commands.deviceUnlockConfigure),
   deviceUnlockConsumeExtensionRequest: commands.deviceUnlockConsumeExtensionRequest,
   vaultUnlockDevice: wrap(commands.vaultUnlockDevice),

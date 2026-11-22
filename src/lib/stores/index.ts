@@ -18,15 +18,21 @@ import { settings } from "./settings.svelte";
  * activity reporter but never fetches the list or the sidebar. `saveToast: false` (tray panel, settings)
  * leaves the sticky "Saving failed" toast to the main window. `sync: false` keeps the tray
  * panel from querying sync/storage state that it does not render or have permission to read.
+ * `whileLocked: false` (settings) reads no device, storage or update state unless the vault is
+ * unlocked, and the settings store never reads more than the public settings then: the settings
+ * window shows only its locked placeholder.
  */
-export async function startStores(opts: { entries?: boolean; saveToast?: boolean; sync?: boolean; theme?: boolean } = {}): Promise<() => void> {
+export async function startStores(
+  opts: { entries?: boolean; saveToast?: boolean; sync?: boolean; theme?: boolean; whileLocked?: boolean } = {},
+): Promise<() => void> {
+  const whileLocked = opts.whileLocked ?? true;
   const withEntries = opts.entries ?? true;
   session.saveToasts = opts.saveToast ?? true;
   navigation.start();
   const stopActivity = startActivityReporter();
-  const stopDevice = device.start();
-  const stopUpdate = update.start();
-  const stopSync = opts.sync === false ? () => {} : sync.start();
+  const stopDevice = device.start({ whileLocked });
+  const stopUpdate = update.start({ whileLocked });
+  const stopSync = opts.sync === false ? () => {} : sync.start({ whileLocked });
   const results = await Promise.allSettled([
     settings.start({ followTheme: opts.theme }),
     withEntries ? entries.start() : Promise.resolve(),

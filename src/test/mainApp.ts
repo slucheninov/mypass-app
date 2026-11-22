@@ -1,5 +1,6 @@
 // Renders the real main window on a fake backend and starts the stores, the way `main.ts` does.
 import { afterEach } from "vitest";
+import { loadHomeDirectory } from "../lib/home-directory";
 import { loadPlatform } from "../lib/platform.svelte";
 import { startStores } from "../lib/stores";
 import { toasts } from "../lib/stores/toasts.svelte";
@@ -21,7 +22,7 @@ export async function renderMainApp(opts: FakeBackendOptions | FakeBackend = {},
   prepare?.(fake);
   const utils = renderWithBackend(MainApp, {}, fake);
   stops.push(await startStores());
-  await loadPlatform();
+  await Promise.all([loadPlatform(), loadHomeDirectory()]);
   return { ...utils, fake };
 }
 

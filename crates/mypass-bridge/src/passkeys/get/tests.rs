@@ -227,7 +227,7 @@ fn ctx<'a>(f: &'a Fx, settings: &'a SettingsStore, unlocked: bool) -> PasskeyCon
     PasskeyContext {
         session: &f.session,
         settings,
-        unlocked,
+        unlocked_incarnation: unlocked.then(|| f.session.unlocked_incarnation().unwrap()),
     }
 }
 

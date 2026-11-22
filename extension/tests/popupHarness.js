@@ -11,6 +11,7 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
 function openPopup({ reply, startedAt, now = 200_000 } = {}) {
   const elements = new Map();
   const listeners = {};
+  const storageListeners = [];
   const timers = new Map();
   const storage = startedAt == null ? {} : { pairingStartedAt: startedAt };
   const sent = [];
@@ -58,7 +59,7 @@ function openPopup({ reply, startedAt, now = 200_000 } = {}) {
     remove: (key, cb) => { delete storage[key]; cb?.(); },
   };
   const chrome = chromeI18n.install({
-    storage: { local, session },
+    storage: { local, session, onChanged: { addListener: (fn) => storageListeners.push(fn) } },
     runtime: {
       getURL: (relative) => 'chrome-extension://extension-id/' + relative,
       sendMessage(message, cb) {
@@ -117,6 +118,7 @@ function openPopup({ reply, startedAt, now = 200_000 } = {}) {
   }
   return {
     el, fire, advance, sent, storage, listeners, timers,
+    notifyStorage: (changes, area) => storageListeners.forEach((fn) => fn(changes, area)),
     focused: () => focused, closed: () => closed, windowsCreated, api: context.module.exports,
   };
 }

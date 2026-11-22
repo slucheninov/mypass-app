@@ -132,7 +132,7 @@ describe("Remember social sign-in setting", () => {
     await user().click(toggle());
     expect(calls(fake, "settingsUpdate").map((c) => c.args.patch)).toEqual([{ rememberSocialSignIn: false }]);
     await waitFor(() => expect(toggle().getAttribute("aria-checked")).toBe("false"));
-    await fake.emit("settingsChanged", { ...fake.state.settings, rememberSocialSignIn: true });
+    await fake.changeSettings({ rememberSocialSignIn: true });
     await waitFor(() => expect(toggle().getAttribute("aria-checked")).toBe("true"));
   });
 });

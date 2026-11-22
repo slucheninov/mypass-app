@@ -119,6 +119,18 @@
   "deviceUnlockUnavailable": {
     "message": "Touch ID isn't available. Use your master password."
   },
+  "touchIdCaption": {
+    "message": "Touch your Touch ID sensor"
+  },
+  "touchIdFailedThreeTimes": {
+    "message": "Touch ID didn't recognize your fingerprint 3 times. Enter your master password."
+  },
+  "tryTouchIdAgain": {
+    "message": "Try Touch ID again"
+  },
+  "deviceNotRecognized": {
+    "message": "Not recognized. Try again."
+  },
   "startingMyPass": {
     "message": "Starting MyPass…"
   },
@@ -699,7 +711,7 @@
     "message": "Could not open MyPass. Open the app and try again."
   },
   "passkeyChangeLocked": {
-    "message": "Unlock MyPass, then change passkeys."
+    "message": "Unlock MyPass to change this setting."
   },
   "passkeyChangeFailed": {
     "message": "Could not change passkeys. Open MyPass and try again."

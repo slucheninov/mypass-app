@@ -9,6 +9,7 @@ use tauri::State;
 #[tauri::command]
 #[specta::specta]
 pub async fn sync_status(state: State<'_, AppState>) -> Result<SecondaryStatus, ApiError> {
+    super::ensure_unlocked(&state.0)?;
     let core = state.0.clone();
     blocking(move || core.sync_status()).await
 }
@@ -16,6 +17,7 @@ pub async fn sync_status(state: State<'_, AppState>) -> Result<SecondaryStatus, 
 #[tauri::command]
 #[specta::specta]
 pub async fn sync_now(state: State<'_, AppState>) -> Result<SecondaryStatus, ApiError> {
+    super::ensure_unlocked(&state.0)?;
     let core = state.0.clone();
     blocking(move || core.sync_now()).await
 }
@@ -23,8 +25,9 @@ pub async fn sync_now(state: State<'_, AppState>) -> Result<SecondaryStatus, Api
 #[tauri::command]
 #[specta::specta]
 pub async fn sync_disconnect_secondary(state: State<'_, AppState>) -> Result<(), ApiError> {
+    let incarnation = super::ensure_unlocked(&state.0)?;
     let core = state.0.clone();
-    blocking(move || core.sync_disconnect_secondary()).await
+    blocking(move || core.sync_disconnect_secondary(incarnation)).await
 }
 
 /// The kept vault copies, for display. Listing deletes nothing; while the vault is unlocked
@@ -34,6 +37,7 @@ pub async fn sync_disconnect_secondary(state: State<'_, AppState>) -> Result<(),
 pub async fn sync_displaced_status(
     state: State<'_, AppState>,
 ) -> Result<DisplacedCopies, ApiError> {
+    super::ensure_unlocked(&state.0)?;
     let core = state.0.clone();
     blocking(move || core.sync_displaced_status()).await
 }

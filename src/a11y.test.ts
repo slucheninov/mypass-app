@@ -337,7 +337,7 @@ const SCENARIOS: Record<string, Scenario> = {
     opener.focus();
     const challenge = { code: "123456", browser: "Chrome", expiresAt: Date.now() + 60_000 };
     fake.state.browser.pairing = challenge;
-    await fake.emit("pairingChallengeEvent", challenge);
+    await fake.emit("pairingChallengeEvent", null);
     return { dialog: "Pairing code", opener };
   },
   // The review of a registration form proposal, raised by the backend like the pairing code.

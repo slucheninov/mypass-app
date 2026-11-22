@@ -321,6 +321,7 @@ fn request_cases() -> Vec<(Request, &'static str)> {
         (
             Request::UnlockWithDevice {
                 token: t(),
+                automatic: false,
                 pairing: None,
             },
             r#"{"type":"unlockWithDevice","token":"tok-1"}"#,
@@ -875,9 +876,20 @@ fn response_cases() -> Vec<(Response, Value)> {
                 paired: true,
                 attach_allowed: false,
                 enabled: false,
-                remember_social_sign_in: true,
+                remember_social_sign_in: Some(true),
             },
             json!({"type":"passkeyProxyStatus","unlocked":true,"paired":true,"attachAllowed":false,"enabled":false,"rememberSocialSignIn":true}),
+        ),
+        (
+            // Locked: the social sign-in preference is withheld, the key is absent.
+            Response::PasskeyProxyStatus {
+                unlocked: false,
+                paired: true,
+                attach_allowed: false,
+                enabled: true,
+                remember_social_sign_in: None,
+            },
+            json!({"type":"passkeyProxyStatus","unlocked":false,"paired":true,"attachAllowed":false,"enabled":true}),
         ),
         (
             Response::PasskeyProxyEnabled { enabled: true },
@@ -985,15 +997,22 @@ fn response_cases() -> Vec<(Response, Value)> {
             Response::DeviceUnlockUnavailable,
             json!({"type":"deviceUnlockUnavailable"}),
         ),
+        (
+            Response::DeviceNotRecognized { device_failures: 1 },
+            json!({"type":"deviceNotRecognized","deviceFailures":1}),
+        ),
         (Response::UnlockCancelled, json!({"type":"unlockCancelled"})),
         (Response::UnlockInApp, json!({"type":"unlockInApp"})),
         (
             Response::UnlockOptions {
                 device_unlock: true,
                 touch_id: true,
+                device_failures: 0,
+                device_blocked: false,
+                device_prompt_in_flight: false,
                 retry_after_secs: None,
             },
-            json!({"type":"unlockOptions","deviceUnlock":true,"touchId":true}),
+            json!({"type":"unlockOptions","deviceUnlock":true,"touchId":true,"deviceFailures":0,"deviceBlocked":false,"devicePromptInFlight":false}),
         ),
     ]
 }
@@ -1042,7 +1061,7 @@ fn passkey_proxy_status_decodes_without_enabled() {
             paired: false,
             attach_allowed: true,
             enabled: false,
-            remember_social_sign_in: false,
+            remember_social_sign_in: None,
         }
     );
 }

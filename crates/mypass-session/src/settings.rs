@@ -237,6 +237,32 @@ pub struct Settings {
     pub recent_vaults: Vec<String>,
 }
 
+/// The part of [`Settings`] every window renders whatever the session state: the appearance, the
+/// language, the shortcut hints and whether update checks are on. Nothing here matters to
+/// security, so it is the one settings read a locked or vault-less app serves; the full
+/// [`Settings`] are served only while the vault is unlocked.
+#[derive(Serialize, specta::Type, Clone, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicSettings {
+    pub language: Language,
+    pub theme: Theme,
+    pub shortcut_lock: String,
+    pub shortcut_show: String,
+    pub update_check_enabled: bool,
+}
+
+impl From<&Settings> for PublicSettings {
+    fn from(settings: &Settings) -> Self {
+        Self {
+            language: settings.language,
+            theme: settings.theme,
+            shortcut_lock: settings.shortcut_lock.clone(),
+            shortcut_show: settings.shortcut_show.clone(),
+            update_check_enabled: settings.update_check_enabled,
+        }
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -528,12 +554,12 @@ impl SettingsStore {
         let _ = self.persist(&guard);
     }
 
-    /// Removes `path` from the recent list and clears `vault_path` when it equals `path`.
-    /// Persisting is best effort.
-    pub fn forget_vault(&self, path: &str) {
+    /// Removes `path` from the recent list and, with `clear_startup`, clears `vault_path` when
+    /// it equals `path`. Persisting is best effort.
+    pub fn forget_vault(&self, path: &str, clear_startup: bool) {
         let mut guard = lock(&self.0.settings);
         guard.recent_vaults.retain(|p| p != path);
-        if guard.vault_path.as_deref() == Some(path) {
+        if clear_startup && guard.vault_path.as_deref() == Some(path) {
             guard.vault_path = None;
         }
         let _ = self.persist(&guard);
@@ -674,6 +700,41 @@ mod tests {
             .join("tests")
             .join("snapshots")
             .join("settings.default.json")
+    }
+
+    /// The locked windows' read carries exactly these fields and nothing security-relevant.
+    #[test]
+    fn public_settings_carry_only_what_a_locked_window_renders() {
+        let settings = Settings {
+            language: Language::Uk,
+            theme: Theme::Dark,
+            shortcut_lock: "CommandOrControl+Shift+K".into(),
+            shortcut_show: "CommandOrControl+Shift+M".into(),
+            update_check_enabled: false,
+            secondary_folder: Some("/secret/folder".into()),
+            vault_path: Some("/secret/v.kdbx".into()),
+            ..Settings::default()
+        };
+        let public = PublicSettings::from(&settings);
+        assert_eq!(public.language, Language::Uk);
+        assert_eq!(public.theme, Theme::Dark);
+        assert_eq!(public.shortcut_lock, "CommandOrControl+Shift+K");
+        assert_eq!(public.shortcut_show, "CommandOrControl+Shift+M");
+        assert!(!public.update_check_enabled);
+        let json = serde_json::to_value(&public).unwrap();
+        let mut keys: Vec<_> = json.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "language",
+                "shortcutLock",
+                "shortcutShow",
+                "theme",
+                "updateCheckEnabled"
+            ]
+        );
+        assert!(!json.to_string().contains("secret"));
     }
 
     #[test]
@@ -1140,11 +1201,16 @@ mod tests {
                 ..SettingsPatch::default()
             })
             .unwrap();
-        store.forget_vault("/a.kdbx");
+        store.forget_vault("/a.kdbx", true);
         let s = store.get();
         assert_eq!(s.recent_vaults, vec!["/b.kdbx".to_owned()]);
         assert_eq!(s.vault_path.as_deref(), Some("/b.kdbx"));
-        store.forget_vault("/b.kdbx");
+        store.forget_vault("/b.kdbx", false);
+        let s = store.get();
+        assert!(s.recent_vaults.is_empty());
+        assert_eq!(s.vault_path.as_deref(), Some("/b.kdbx"));
+        store.remember_vault("/b.kdbx");
+        store.forget_vault("/b.kdbx", true);
         let s = store.get();
         assert!(s.recent_vaults.is_empty());
         assert_eq!(s.vault_path, None);

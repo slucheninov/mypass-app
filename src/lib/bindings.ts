@@ -5,6 +5,8 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 
 /** Commands */
 export const commands = {
+	/**  Used by the main window and tray panel to shorten vault paths on the unlock screen. */
+	appHomeDir: () => typedError<string, ApiError>(__TAURI_INVOKE("app_home_dir")),
 	appInfo: () => typedError<AppInfo, ApiError>(__TAURI_INVOKE("app_info")),
 	/**  Shows the settings window (General pane). */
 	appOpenSettings: () => typedError<null, ApiError>(__TAURI_INVOKE("app_open_settings")),
@@ -32,6 +34,7 @@ export const commands = {
 	backupList: () => typedError<BackupStatus_Serialize, ApiError>(__TAURI_INVOKE("backup_list")),
 	backupRestore: (id: string) => typedError<null, ApiError>(__TAURI_INVOKE("backup_restore", { id })),
 	browserPairingCancel: () => typedError<null, ApiError>(__TAURI_INVOKE("browser_pairing_cancel")),
+	browserPairingStatus: () => typedError<PairingChallengeDto | null, ApiError>(__TAURI_INVOKE("browser_pairing_status")),
 	browserProposalTake: (id: string) => typedError<BrowserProposal_Serialize, ApiError>(__TAURI_INVOKE("browser_proposal_take", { id })),
 	browserReinstallHost: () => typedError<BrowserRegistrationDto_Serialize[], ApiError>(__TAURI_INVOKE("browser_reinstall_host")),
 	browserResetPairings: () => typedError<null, ApiError>(__TAURI_INVOKE("browser_reset_pairings")),
@@ -40,7 +43,13 @@ export const commands = {
 	browserShowExtensionFolder: () => typedError<null, ApiError>(__TAURI_INVOKE("browser_show_extension_folder")),
 	browserStatus: () => typedError<BrowserStatus_Serialize, ApiError>(__TAURI_INVOKE("browser_status")),
 	browserUnregisterHost: () => typedError<BrowserRegistrationDto_Serialize[], ApiError>(__TAURI_INVOKE("browser_unregister_host")),
+	/**  The full status (toggles, enrolment, block reason) for the Security pane; unlocked only. */
 	deviceUnlockStatus: () => typedError<DeviceUnlockStatus_Serialize, ApiError>(__TAURI_INVOKE("device_unlock_status")),
+	/**
+	 *  What an unlock screen needs to show the device-unlock button, in any session state. Reads
+	 *  only: no reconcile, no setting written.
+	 */
+	deviceUnlockOffer: () => typedError<DeviceUnlockOffer_Serialize, ApiError>(__TAURI_INVOKE("device_unlock_offer")),
 	deviceUnlockConfigure: (password: string | null, touchId: boolean, macPassword: boolean) => typedError<DeviceUnlockStatus_Serialize, ApiError>(__TAURI_INVOKE("device_unlock_configure", { password, touchId, macPassword })),
 	deviceUnlockConsumeExtensionRequest: () => __TAURI_INVOKE<boolean>("device_unlock_consume_extension_request"),
 	updateStatus: () => __TAURI_INVOKE<UpdateStatus_Serialize>("update_status"),
@@ -49,8 +58,13 @@ export const commands = {
 	updateCheckNow: () => typedError<UpdateStatus_Serialize, ApiError>(__TAURI_INVOKE("update_check_now")),
 	updateDismiss: () => typedError<null, ApiError>(__TAURI_INVOKE("update_dismiss")),
 	updateOpenRelease: () => typedError<null, ApiError>(__TAURI_INVOKE("update_open_release")),
-	/**  The webview's reason key is advisory only; Rust chooses the catalog reason. */
-	vaultUnlockDevice: (reasonKey: string) => typedError<SessionStatus_Serialize, ApiError>(__TAURI_INVOKE("vault_unlock_device", { reasonKey })),
+	/**
+	 *  The webview's reason key is advisory only; Rust chooses the catalog reason. `automatic` marks
+	 *  the prompt an unlock screen starts by itself when it is shown (Touch ID first): it is refused
+	 *  as `Cancelled`, without a prompt, while another prompt is in flight or within two seconds of
+	 *  the last prompt ending (`PromptCoordinator::claim_automatic`).
+	 */
+	vaultUnlockDevice: (reasonKey: string, automatic: boolean) => typedError<SessionStatus_Serialize, ApiError>(__TAURI_INVOKE("vault_unlock_device", { reasonKey, automatic })),
 	draftClear: (entryId: string) => typedError<null, ApiError>(__TAURI_INVOKE("draft_clear", { entryId })),
 	draftSave: (entryId: string, notes: string) => typedError<boolean, ApiError>(__TAURI_INVOKE("draft_save", { entryId, notes })),
 	draftVersions: (entryId: string) => typedError<DraftVersionDto[], ApiError>(__TAURI_INVOKE("draft_versions", { entryId })),
@@ -105,6 +119,11 @@ export const commands = {
 	/**  The current keyboard layout's identifier, when the platform reports one. */
 	platformKeyboardLayout: () => typedError<string | null, ApiError>(__TAURI_INVOKE("platform_keyboard_layout")),
 	settingsGet: () => typedError<Settings_Serialize, ApiError>(__TAURI_INVOKE("settings_get")),
+	/**
+	 *  The settings every window renders in any session state (theme, language, shortcut hints, the
+	 *  update flag). The full settings are served only while the vault is unlocked.
+	 */
+	settingsGetPublic: () => typedError<PublicSettings, ApiError>(__TAURI_INVOKE("settings_get_public")),
 	settingsLoginItemStatus: () => typedError<LoginItemStatus, ApiError>(__TAURI_INVOKE("settings_login_item_status")),
 	settingsUpdate: (patch: SettingsPatch_Deserialize) => typedError<Settings_Serialize, ApiError>(__TAURI_INVOKE("settings_update", { patch })),
 	/**
@@ -151,17 +170,18 @@ export const commands = {
 export const events = {
 	bridgeChangedEvent: makeEvent<BridgeChangedEvent, BridgeChangedEvent>("bridge-changed-event"),
 	clipboardClearedEvent: makeEvent<ClipboardClearedEvent, ClipboardClearedEvent>("clipboard-cleared-event"),
+	deviceUnlockChanged: makeEvent<DeviceUnlockChanged, DeviceUnlockChanged>("device-unlock-changed"),
 	newEntryEvent: makeEvent<NewEntryEvent, NewEntryEvent>("new-entry-event"),
 	openEntryEvent: makeEvent<OpenEntryEvent, OpenEntryEvent>("open-entry-event"),
-	pairingChallengeEvent: makeEvent<PairingChallengeEvent_Serialize, PairingChallengeEvent_Deserialize>("pairing-challenge-event"),
+	pairingChallengeEvent: makeEvent<PairingChallengeEvent, PairingChallengeEvent>("pairing-challenge-event"),
 	proposalEvent: makeEvent<ProposalEvent_Serialize, ProposalEvent_Deserialize>("proposal-event"),
 	saveStateChanged: makeEvent<SaveStateChanged_Serialize, SaveStateChanged_Deserialize>("save-state-changed"),
 	sessionChanged: makeEvent<SessionChanged_Serialize, SessionChanged_Deserialize>("session-changed"),
-	settingsChanged: makeEvent<SettingsChanged_Serialize, SettingsChanged_Deserialize>("settings-changed"),
+	settingsChanged: makeEvent<SettingsChanged, SettingsChanged>("settings-changed"),
 	settingsPaneEvent: makeEvent<SettingsPaneEvent, SettingsPaneEvent>("settings-pane-event"),
 	shortcutConflictEvent: makeEvent<ShortcutConflictEvent, ShortcutConflictEvent>("shortcut-conflict-event"),
 	storageStatusChanged: makeEvent<StorageStatusChanged, StorageStatusChanged>("storage-status-changed"),
-	syncStatusChanged: makeEvent<SyncStatusChanged_Serialize, SyncStatusChanged_Deserialize>("sync-status-changed"),
+	syncStatusChanged: makeEvent<SyncStatusChanged, SyncStatusChanged>("sync-status-changed"),
 	unlockRequestedEvent: makeEvent<UnlockRequestedEvent, UnlockRequestedEvent>("unlock-requested-event"),
 	updateChanged: makeEvent<UpdateChanged_Serialize, UpdateChanged_Deserialize>("update-changed"),
 	vaultChanged: makeEvent<VaultChanged, VaultChanged>("vault-changed"),
@@ -465,6 +485,52 @@ export type CustomFieldEdit = {
 	protected: boolean,
 };
 
+/**  Device unlock attempts changed for the locked vault. */
+export type DeviceUnlockChanged = null;
+
+/**  The text the unlock screen shows for device unlock. */
+export type DeviceUnlockLabel = "touchId" | "macPassword" | "touchIdOrMacPassword" | "masterPasswordRequired";
+
+/**
+ *  What an unlock screen needs to offer device unlock, and nothing more: no toggles, enrolment or
+ *  block reason. Served in any session state and read without side effects.
+ */
+export type DeviceUnlockOffer = DeviceUnlockOffer_Serialize | DeviceUnlockOffer_Deserialize;
+
+/**
+ *  What an unlock screen needs to offer device unlock, and nothing more: no toggles, enrolment or
+ *  block reason. Served in any session state and read without side effects.
+ */
+export type DeviceUnlockOffer_Deserialize = {
+	/**  The unlock screen may show the device-unlock button now. */
+	canOfferNow: boolean,
+	/**  The button label or the existing master-password prompt. */
+	label?: DeviceUnlockLabel | null,
+	/**  Live Touch ID can be offered under the current policy. */
+	touchIdAvailable: boolean,
+	/**  Rejected prompts in the current locked session, shared across all unlock surfaces. */
+	deviceFailures: number,
+	/**  The current locked session requires the master password after a terminal device error. */
+	deviceBlocked: boolean,
+};
+
+/**
+ *  What an unlock screen needs to offer device unlock, and nothing more: no toggles, enrolment or
+ *  block reason. Served in any session state and read without side effects.
+ */
+export type DeviceUnlockOffer_Serialize = {
+	/**  The unlock screen may show the device-unlock button now. */
+	canOfferNow: boolean,
+	/**  The button label or the existing master-password prompt. */
+	label: DeviceUnlockLabel | null,
+	/**  Live Touch ID can be offered under the current policy. */
+	touchIdAvailable: boolean,
+	/**  Rejected prompts in the current locked session, shared across all unlock surfaces. */
+	deviceFailures: number,
+	/**  The current locked session requires the master password after a terminal device error. */
+	deviceBlocked: boolean,
+};
+
 /**  What the Security pane and the unlock screen show about device unlock. */
 export type DeviceUnlockStatus = DeviceUnlockStatus_Serialize | DeviceUnlockStatus_Deserialize;
 
@@ -480,11 +546,10 @@ export type DeviceUnlockStatus_Deserialize = {
 	macPasswordEnabled: boolean,
 	/**  The unlock screen may show the device-unlock button now. */
 	canOfferNow: boolean,
-	/**
-	 *  What blocks the button: the toggles, the enrolment or a window. `None` when none of them
-	 *  does, and `can_offer_now` is then `available`.
-	 */
+	/**  The configured policy restriction, if any. Availability is checked separately. */
 	reason?: OfferBlock | null,
+	deviceFailures: number,
+	deviceBlocked: boolean,
 };
 
 /**  What the Security pane and the unlock screen show about device unlock. */
@@ -499,11 +564,10 @@ export type DeviceUnlockStatus_Serialize = {
 	macPasswordEnabled: boolean,
 	/**  The unlock screen may show the device-unlock button now. */
 	canOfferNow: boolean,
-	/**
-	 *  What blocks the button: the toggles, the enrolment or a window. `None` when none of them
-	 *  does, and `can_offer_now` is then `available`.
-	 */
+	/**  The configured policy restriction, if any. Availability is checked separately. */
 	reason: OfferBlock | null,
+	deviceFailures: number,
+	deviceBlocked: boolean,
 };
 
 /**  The retained copies of the open vault. */
@@ -833,12 +897,7 @@ export type ErrorCode = "locked" | "noVault" | "wrongPassword" | "alreadyExists"
 /**  The CSV is not valid UTF-8 text. */
 "csvNotUtf8" | 
 /**  The CSV file has no content. */
-"csvEmpty" | "cancelled" | "lockout" | "invalidated" | "notEnrolledOnDevice" | "deviceUnlockUnavailable" | "migrationLocked" | "migrationTargetUnreadable" | "migrationTargetNotAVault" | "migrationTargetPasswordMismatch" | "migrationTargetWriteFailed" | "migrationSourceInvalid" | "migrationSameFile" | "migrationValidationFailed" | 
-/**
- *  A retained vault copy was not deleted: the id is stale, or the copy no longer verifies
- *  (`message` names the reason, such as `changed`, `liveVaultMissing` or `staleId`).
- */
-"retainedCopyRefused" | "internal";
+"csvEmpty" | "cancelled" | "authenticationFailed" | "lockout" | "invalidated" | "notEnrolledOnDevice" | "deviceUnlockUnavailable" | "migrationLocked" | "migrationTargetUnreadable" | "migrationTargetNotAVault" | "migrationTargetPasswordMismatch" | "migrationTargetWriteFailed" | "migrationSourceInvalid" | "migrationSameFile" | "migrationValidationFailed" | "retainedCopyRefused" | "internal";
 
 /**  A single field to reveal or copy. `Totp` resolves to the current code. */
 export type FieldRef = { kind: "username" } | { kind: "password" } | { kind: "url" } | { kind: "urlAt"; index: number } | { kind: "notesBody" } | { kind: "cardNumber" } | { kind: "cardCvv" } | { kind: "address"; name: string } | { kind: "person"; name: string } | { kind: "totp" } | { kind: "custom"; key: string };
@@ -1097,7 +1156,7 @@ export type PairedBrowserDto_Serialize = {
 
 /**
  *  A pairing code waiting for the browser. `expires_at` (Unix milliseconds) lets the UI count down and
- *  then re-query `browser_status`.
+ *  then re-query `browser_pairing_status`.
  */
 export type PairingChallengeDto = {
 	code: string,
@@ -1106,25 +1165,12 @@ export type PairingChallengeDto = {
 };
 
 /**
- *  The pairing challenge changed: `Some` while a code is waiting for the browser, `None` once it
- *  was finished, cancelled, expired or the vault locked. Sent to the main window only (it carries
- *  the code the user types into the extension).
+ *  The pairing challenge changed (a code is waiting for the browser, or it was finished,
+ *  cancelled, expired or dismissed by a lock). Payload-free: Tauri also hands a targeted event to
+ *  `Any` listeners of other webviews, so the code never travels in it; the main window reads it
+ *  with `browser_pairing_status`.
  */
-export type PairingChallengeEvent = PairingChallengeEvent_Serialize | PairingChallengeEvent_Deserialize;
-
-/**
- *  The pairing challenge changed: `Some` while a code is waiting for the browser, `None` once it
- *  was finished, cancelled, expired or the vault locked. Sent to the main window only (it carries
- *  the code the user types into the extension).
- */
-export type PairingChallengeEvent_Deserialize = PairingChallengeDto | null;
-
-/**
- *  The pairing challenge changed: `Some` while a code is waiting for the browser, `None` once it
- *  was finished, cancelled, expired or the vault locked. Sent to the main window only (it carries
- *  the code the user types into the extension).
- */
-export type PairingChallengeEvent_Serialize = PairingChallengeDto | null;
+export type PairingChallengeEvent = null;
 
 /**  Whether the panel can leave the webview background transparent. */
 export type PanelMaterial = "native" | "solid";
@@ -1270,6 +1316,20 @@ export type ProposalFieldKind = "name" | "givenName" | "familyName" | "email" | 
 
 /**  What a save proposal is about. */
 export type ProposalKind = "login" | "totp";
+
+/**
+ *  The part of [`Settings`] every window renders whatever the session state: the appearance, the
+ *  language, the shortcut hints and whether update checks are on. Nothing here matters to
+ *  security, so it is the one settings read a locked or vault-less app serves; the full
+ *  [`Settings`] are served only while the vault is unlocked.
+ */
+export type PublicSettings = {
+	language: Language,
+	theme: Theme,
+	shortcutLock: string,
+	shortcutShow: string,
+	updateCheckEnabled: boolean,
+};
 
 /**  One row of the recent-vaults list. */
 export type RecentVaultDto = {
@@ -1482,14 +1542,12 @@ export type SessionStatus_Serialize = {
 /**  Every persisted setting. Exactly one `Default` impl; there is no tray-click-action setting. */
 export type Settings = Settings_Serialize | Settings_Deserialize;
 
-/**  The settings changed (every window shows the same ones). */
-export type SettingsChanged = SettingsChanged_Serialize | SettingsChanged_Deserialize;
-
-/**  The settings changed (every window shows the same ones). */
-export type SettingsChanged_Deserialize = Settings_Deserialize;
-
-/**  The settings changed (every window shows the same ones). */
-export type SettingsChanged_Serialize = Settings_Serialize;
+/**
+ *  The settings changed. A broadcast reaches every webview in any session state, so it carries
+ *  only the public part (theme, language, shortcut hints, the update flag); a window that shows
+ *  the full settings re-reads them through the gated `settings_get`.
+ */
+export type SettingsChanged = PublicSettings;
 
 /**  The settings window, already open, should select `pane` (for example `browser`). */
 export type SettingsPaneEvent = {
@@ -1781,14 +1839,11 @@ export type StorageStatus = {
  */
 export type StorageStatusChanged = StorageStatus;
 
-/**  The secondary-folder sync status changed. */
-export type SyncStatusChanged = SyncStatusChanged_Serialize | SyncStatusChanged_Deserialize;
-
-/**  The secondary-folder sync status changed. */
-export type SyncStatusChanged_Deserialize = SecondaryStatus_Deserialize;
-
-/**  The secondary-folder sync status changed. */
-export type SyncStatusChanged_Serialize = SecondaryStatus_Serialize;
+/**
+ *  The secondary-folder sync status changed. Payload-free, as every webview receives it in any
+ *  session state: the settings window re-reads the status through the gated `sync_status`.
+ */
+export type SyncStatusChanged = null;
 
 export type TargetProbe = TargetProbe_Serialize | TargetProbe_Deserialize;
 

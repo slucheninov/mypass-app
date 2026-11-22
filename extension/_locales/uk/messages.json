@@ -115,6 +115,18 @@
   "deviceUnlockUnavailable": {
     "message": "Touch ID недоступний. Скористайтеся майстер-паролем."
   },
+  "touchIdCaption": {
+    "message": "Прикладіть палець до Touch ID"
+  },
+  "touchIdFailedThreeTimes": {
+    "message": "Touch ID не впізнав відбиток 3 рази. Введіть майстер-пароль."
+  },
+  "tryTouchIdAgain": {
+    "message": "Спробувати Touch ID ще раз"
+  },
+  "deviceNotRecognized": {
+    "message": "Не розпізнано. Спробуйте ще раз."
+  },
   "startingMyPass": {
     "message": "Запускаємо MyPass…"
   },
@@ -695,7 +707,7 @@
     "message": "Не вдалося відкрити MyPass. Відкрийте програму й спробуйте ще раз."
   },
   "passkeyChangeLocked": {
-    "message": "Розблокуйте MyPass, а потім змініть параметр ключів доступу."
+    "message": "Розблокуйте MyPass, щоб змінити цей параметр."
   },
   "passkeyChangeFailed": {
     "message": "Не вдалося змінити параметр ключів доступу. Відкрийте MyPass і спробуйте ще раз."

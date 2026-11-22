@@ -21,7 +21,7 @@ use std::time::{Duration, SystemTime};
 
 use mypass_session::autolock::AutoLock;
 use mypass_session::scheduler::Scheduler;
-use mypass_session::session::{SessionEvent, SessionState, VaultSession};
+use mypass_session::session::{SessionError, SessionEvent, SessionState, VaultSession};
 use mypass_session::settings::SettingsStore;
 
 use crate::diagnostics::DiagnosticsStore;
@@ -156,17 +156,19 @@ impl BridgeService {
         if request.requires_pairing() && !deps.pairing.is_authorized(request.pairing()) {
             return Response::PairingRequired;
         }
-        let unlocked = deps.session.is_unlocked();
-        if !unlocked && !request.is_answerable_while_locked() {
-            return Response::Locked;
-        }
+        let unlocked_incarnation = match deps.session.unlocked_incarnation() {
+            Ok(incarnation) => Some(incarnation),
+            Err(SessionError::Quitting) => return error("MyPass is quitting"),
+            Err(_) if request.is_answerable_while_locked() => None,
+            Err(_) => return Response::Locked,
+        };
         let ctx = Ctx {
             deps,
             now: deps.scheduler.wall_now(),
             last_unlock_request: &self.last_unlock_request,
             throttle: &self.throttle,
         };
-        let response = Self::dispatch(&ctx, &mut request, unlocked);
+        let response = Self::dispatch(&ctx, &mut request, unlocked_incarnation);
         self.note_activity(&request, &response);
         response
     }
@@ -178,7 +180,11 @@ impl BridgeService {
         }
     }
 
-    fn dispatch(ctx: &Ctx<'_>, request: &mut Request, unlocked: bool) -> Response {
+    fn dispatch(
+        ctx: &Ctx<'_>,
+        request: &mut Request,
+        unlocked_incarnation: Option<u64>,
+    ) -> Response {
         match request {
             Request::GetCredentials { url, .. } => browse::get_credentials(ctx, url),
             Request::GetFavorites { .. } => browse::get_favorites(ctx),
@@ -262,7 +268,9 @@ impl BridgeService {
             Request::UnlockWithPassword { password, .. } => {
                 session_ops::unlock_with_password(ctx, std::mem::take(password))
             }
-            Request::UnlockWithDevice { .. } => session_ops::unlock_with_device(ctx),
+            Request::UnlockWithDevice { automatic, .. } => {
+                session_ops::unlock_with_device(ctx, *automatic)
+            }
             Request::GetUnlockOptions { .. } => session_ops::get_unlock_options(ctx),
             Request::LockVault { .. } => session_ops::lock_vault(ctx),
             Request::OpenApp { new_entry, .. } => session_ops::open_app(ctx, *new_entry),
@@ -280,7 +288,7 @@ impl BridgeService {
                 &PasskeyContext {
                     session: &ctx.deps.session,
                     settings: &ctx.deps.settings,
-                    unlocked,
+                    unlocked_incarnation,
                 },
                 request,
             ),
@@ -596,6 +604,7 @@ mod tests {
         f.unlocker.set_offer(crate::unlock::DeviceOffer {
             offered: true,
             touch_id: true,
+            prompt_in_flight: false,
         });
         let request = || named("getUnlockOptions", Some(&f.secret));
         assert_eq!(
@@ -603,6 +612,9 @@ mod tests {
             Response::UnlockOptions {
                 device_unlock: true,
                 touch_id: true,
+                device_failures: 0,
+                device_blocked: false,
+                device_prompt_in_flight: false,
                 retry_after_secs: None,
             }
         );
@@ -612,9 +624,65 @@ mod tests {
             Response::UnlockOptions {
                 device_unlock: true,
                 touch_id: true,
+                device_failures: 0,
+                device_blocked: false,
+                device_prompt_in_flight: false,
                 retry_after_secs: Some(30),
             }
         );
+    }
+
+    fn device_request(f: &Fx, automatic: bool) -> Request {
+        Request::UnlockWithDevice {
+            token: "tok".to_owned(),
+            automatic,
+            pairing: Some(f.secret.clone()),
+        }
+    }
+
+    fn device_failures(f: &Fx) -> u32 {
+        let response = f.svc.handle(named("getUnlockOptions", Some(&f.secret)));
+        let Response::UnlockOptions {
+            device_failures, ..
+        } = response
+        else {
+            panic!("expected UnlockOptions, got {response:?}");
+        };
+        device_failures
+    }
+
+    #[test]
+    fn cancelled_and_dropped_device_requests_never_count_a_failure() {
+        use crate::unlock::UnlockFailure;
+        let f = fx();
+        f.session.lock(LockReason::Manual);
+        f.unlocker.script_device(Err(UnlockFailure::Cancelled));
+        assert_eq!(
+            f.svc.handle(device_request(&f, true)),
+            Response::UnlockCancelled
+        );
+        // A popup reopened within the debounce of the last prompt start prompts nothing.
+        assert_eq!(
+            f.svc.handle(device_request(&f, true)),
+            Response::UnlockCancelled
+        );
+        assert_eq!(f.unlocker.device_calls(), 1);
+        assert_eq!(device_failures(&f), 0);
+    }
+
+    #[test]
+    fn the_automatic_flag_reaches_the_unlocker() {
+        use crate::unlock::UnlockFailure;
+        let f = fx();
+        f.session.lock(LockReason::Manual);
+        f.unlocker.script_device(Err(UnlockFailure::Cancelled));
+        f.unlocker.script_device(Err(UnlockFailure::Cancelled));
+        f.svc.handle(device_request(&f, false));
+        assert_eq!(f.unlocker.automatic_device_calls(), 0);
+        f.sched.advance(Duration::from_secs(2));
+        f.svc.handle(device_request(&f, true));
+        assert_eq!(f.unlocker.device_calls(), 2);
+        assert_eq!(f.unlocker.automatic_device_calls(), 1);
     }
 
     #[test]
@@ -767,7 +835,7 @@ mod tests {
                 paired: true,
                 attach_allowed: false,
                 enabled: true,
-                remember_social_sign_in: true,
+                remember_social_sign_in: None,
             }
         );
     }

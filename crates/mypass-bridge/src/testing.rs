@@ -110,6 +110,7 @@ pub(crate) struct FakeUnlocker {
     offer: Mutex<DeviceOffer>,
     password_calls: AtomicUsize,
     device_calls: AtomicUsize,
+    automatic_device_calls: AtomicUsize,
 }
 
 impl FakeUnlocker {
@@ -118,6 +119,9 @@ impl FakeUnlocker {
     }
     pub(crate) fn device_calls(&self) -> usize {
         self.device_calls.load(Ordering::SeqCst)
+    }
+    pub(crate) fn automatic_device_calls(&self) -> usize {
+        self.automatic_device_calls.load(Ordering::SeqCst)
     }
     pub(crate) fn script_password(&self, result: Result<(), UnlockFailure>) {
         self.passwords.lock().unwrap().push_back(result);
@@ -140,8 +144,11 @@ impl VaultUnlocker for FakeUnlocker {
             .unwrap_or(Err(UnlockFailure::Failed))
     }
 
-    fn unlock_with_device(&self) -> Result<(), UnlockFailure> {
+    fn unlock_with_device(&self, automatic: bool) -> Result<(), UnlockFailure> {
         self.device_calls.fetch_add(1, Ordering::SeqCst);
+        if automatic {
+            self.automatic_device_calls.fetch_add(1, Ordering::SeqCst);
+        }
         self.devices
             .lock()
             .unwrap()
@@ -203,7 +210,7 @@ pub(crate) fn passkey_fx_with_db(db: mypass_kdbx::Database) -> (Fx, Arc<PasskeyS
 }
 
 /// Builds the fixture; `make_passkeys` gets the fixture's scheduler and UI.
-fn fx_build(
+pub(crate) fn fx_build(
     db: mypass_kdbx::Database,
     make_passkeys: impl FnOnce(Arc<ManualScheduler>, Arc<RecordingUi>) -> Arc<dyn PasskeyHandler>,
 ) -> Fx {
@@ -477,6 +484,7 @@ pub(crate) fn all_requests(pairing: Option<&str>) -> Vec<Request> {
         },
         Request::UnlockWithDevice {
             token: t(),
+            automatic: false,
             pairing: p(),
         },
         Request::GetUnlockOptions {

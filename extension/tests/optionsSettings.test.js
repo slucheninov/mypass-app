@@ -25,13 +25,16 @@ el('appearance-theme').value = 'system';
 const sent = [];
 const created = [];
 let respond = (msg) => ({ type: 'ok' });
+let passkeyStatus = { type: 'passkeyProxyStatus', enabled: true };
+// One nav button, so a test can open the Autofill section again.
+const autofillNav = Object.assign(el('nav-autofill'), { getAttribute: () => 'autofill' });
 const stored = {};
 const chrome = {
   runtime: {
     lastError: undefined,
     getURL: (p) => 'chrome-extension://x/' + p,
     sendMessage(msg, cb) { sent.push(msg); if (cb) cb(msg.type === 'getPasskeyProxyStatus'
-      ? { type: 'passkeyProxyStatus', enabled: true } : respond(msg)); }
+      ? passkeyStatus : respond(msg)); }
   },
   tabs: { create: (o) => created.push(o) },
   commands: { getAll: (cb) => cb([]) },
@@ -42,13 +45,14 @@ const sandbox = {
   window: null,
   document: {
     getElementById: el,
-    querySelectorAll: () => [],
+    querySelectorAll: (selector) => (selector === '#settings-nav button' ? [autofillNav] : []),
     documentElement: { setAttribute() {} }
   }
 };
 require('./chromeI18nShim.js').install(chrome);
 sandbox.window = sandbox;
-sandbox.addEventListener = () => {};
+const windowListeners = {};
+sandbox.addEventListener = (type, fn) => { (windowListeners[type] ||= []).push(fn); };
 vm.createContext(sandbox);
 for (const file of ['shared/i18n.js', 'shared/autofill-settings.js', 'shared/notification-settings.js', 'shared/security-watch.js',
   'shared/appearance-settings.js', 'shared/theme.js', 'app/router.js', 'app/app.js']) {
@@ -104,6 +108,19 @@ el('autofill-passkey-signin').checked = true;
 el('autofill-passkey-signin').listeners.change[0]();
 assert.strictEqual(el('autofill-passkey-signin').checked, false, 'a locked vault puts the switch back');
 assert.match(el('autofill-passkey-error').textContent, /Unlock MyPass/);
+assert.strictEqual(el('autofill-passkey-signin').disabled, true);
+
+// While MyPass is locked the status carries no preferences and the switch is unavailable.
+passkeyStatus = { type: 'passkeyProxyStatus', enabled: true, unlocked: false, paired: true, attachAllowed: false };
+autofillNav.listeners.click[0]();
+assert.strictEqual(el('autofill-passkey-signin').disabled, true, 'locked: the passkey switch is unavailable');
+assert.strictEqual(el('autofill-passkey-error').hidden, false);
+assert.strictEqual(el('autofill-passkey-error').textContent, 'Unlock MyPass to change this setting.');
+passkeyStatus = { type: 'passkeyProxyStatus', enabled: false, unlocked: true, paired: true, attachAllowed: false, rememberSocialSignIn: true };
+windowListeners.focus.forEach(fn => fn());
+assert.strictEqual(el('autofill-passkey-signin').disabled, false, 'unlocked: the switch works again');
+assert.strictEqual(el('autofill-passkey-signin').checked, false);
+assert.strictEqual(el('autofill-passkey-error').hidden, true);
 
 // Notifications.
 el('notify-passkey-confirmation').checked = false;

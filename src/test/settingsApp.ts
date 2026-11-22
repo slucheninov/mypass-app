@@ -1,5 +1,5 @@
 // Renders the real settings window on a fake backend and starts the stores the way `main.ts` does
-// for the `settings` label (no entries fetch).
+// for the `settings` label (no entries fetch, nothing read while the vault is not unlocked).
 import { screen } from "@testing-library/svelte";
 import { afterEach } from "vitest";
 import { loadPlatform } from "../lib/platform.svelte";
@@ -32,9 +32,11 @@ export async function renderSettingsApp(
     // Storage may be unavailable in a test that breaks it on purpose.
   }
   const utils = renderWithBackend(SettingsApp, {}, fake);
-  stops.push(await startStores({ entries: false }));
+  stops.push(await startStores({ entries: false, whileLocked: false }));
   await loadPlatform();
-  await screen.findByRole("tablist");
+  // Unlocked, the panes; otherwise the locked placeholder.
+  if (fake.state.session.state === "unlocked") await screen.findByRole("tablist");
+  else await screen.findByTestId("settings-locked");
   return { ...utils, fake };
 }
 

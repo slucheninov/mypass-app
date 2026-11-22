@@ -1,6 +1,7 @@
 import { screen, waitFor } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadHomeDirectory } from "../lib/home-directory";
 import { session } from "../lib/stores/session.svelte";
 import { expectNoAxeViolations } from "../test/axe";
 import { createFakeBackend } from "../test/fakeBackend";
@@ -56,13 +57,14 @@ describe("OpenVaultSheet", () => {
     expect(calls(fake, "vaultOpen")).toHaveLength(0);
   });
 
-  it("open_vault_sheet_shows_the_folder_in_one_line_with_the_full_path_as_tooltip", async () => {
+  it("open_vault_sheet_shows_the_short_location_in_one_line_with_the_full_path_as_tooltip", async () => {
     const long = "/Users/someone/Library/Mobile Documents/com~apple~CloudDocs/Vaults/Family.kdbx";
     renderWithBackend(OpenVaultSheet, { path: long, onclose: () => {} }, createFakeBackend({ session: "noVault" }));
+    await loadHomeDirectory();
     const dialog = await screen.findByRole("dialog", { name: "Open vault" });
-    const chip = dialog.querySelector(".folder");
-    expect(chip?.getAttribute("title")).toBe("/Users/someone/Library/Mobile Documents/com~apple~CloudDocs/Vaults");
-    expect(chip?.textContent).toBe("/Users/someone/Library/Mobile Documents/com~apple~CloudDocs/Vaults");
+    const chip = dialog.querySelector(".folder .location");
+    expect(chip?.getAttribute("title")).toBe(long);
+    expect(chip?.querySelector('[aria-hidden="true"]')?.textContent).toBe("iCloud Drive/Vaults");
     // The file name is the subtitle of the header, next to the decorative vault tile.
     expect(dialog.querySelector(".subtitle")?.textContent).toBe("Family.kdbx");
     expect(dialog.querySelector(".tile svg")?.getAttribute("aria-hidden")).toBe("true");

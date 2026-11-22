@@ -635,9 +635,9 @@ fn locked_vault_answers_status_but_locks_ceremonies() {
     app.lock();
     assert_eq!(
         app.ext(json!({"type": "getPasskeyProxyStatus"})),
+        // Only the proxy opt-in while locked: the social sign-in preference is withheld.
         json!({"type": "passkeyProxyStatus", "unlocked": false, "paired": true,
-               "attachAllowed": false, "enabled": true,
-               "rememberSocialSignIn": true})
+               "attachAllowed": false, "enabled": true})
     );
     assert_eq!(app.handled(), 1);
     for message in all_seven().into_iter().skip(1) {

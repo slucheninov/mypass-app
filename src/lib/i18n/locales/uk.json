@@ -588,5 +588,11 @@
   "None": "Немає",
   "Sign in with %@": "Вхід через {0}",
   "Remember social sign-in": "Запам’ятовувати вхід через соцмережі",
-  "When you sign in to a website with Google, Facebook, Apple, Microsoft or GitHub, the browser extension remembers which one and highlights it next time.": "Коли ви входите на сайт через Google, Facebook, Apple, Microsoft або GitHub, розширення браузера запам’ятовує спосіб і наступного разу підсвічує його."
+  "When you sign in to a website with Google, Facebook, Apple, Microsoft or GitHub, the browser extension remembers which one and highlights it next time.": "Коли ви входите на сайт через Google, Facebook, Apple, Microsoft або GitHub, розширення браузера запам’ятовує спосіб і наступного разу підсвічує його.",
+  "MyPass is locked. Unlock it to change settings.": "MyPass заблоковано. Розблокуйте його, щоб змінити налаштування.",
+  "Open or create a vault to change settings.": "Відкрийте або створіть сховище, щоб змінити налаштування.",
+  "Touch your Touch ID sensor": "Прикладіть палець до Touch ID",
+  "Touch ID didn’t recognize your fingerprint 3 times. Enter your master password.": "Touch ID не впізнав відбиток 3 рази. Введіть головний пароль.",
+  "Try Touch ID again": "Спробувати Touch ID ще раз",
+  "Not recognized. Try again.": "Не розпізнано. Спробуйте ще раз."
 }

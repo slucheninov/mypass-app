@@ -250,8 +250,19 @@ test("the status poll a popup open triggers mirrors the setting", async () => {
   await request({ type: "getPasskeyProxyStatus" }, popup);
   assert.equal(writes, after);
   // Turned on in the app: the next poll flips the mirror.
-  replies = [{ type: "passkeyProxyStatus", unlocked: false, paired: true, attachAllowed: false, enabled: true, rememberSocialSignIn: true }, { type: "ok" }];
+  replies = [{ type: "passkeyProxyStatus", unlocked: true, paired: true, attachAllowed: true, enabled: true, rememberSocialSignIn: true }, { type: "ok" }];
   await request({ type: "getPasskeyProxyStatus" }, popup);
+  assert.equal(local[SOCIAL_SIGN_IN_ENABLED_KEY], true);
+});
+
+test("locked status preserves the last known social-sign-in setting", async () => {
+  replies = [{ type: "passkeyProxyStatus", unlocked: true, paired: true, attachAllowed: true, enabled: true, rememberSocialSignIn: true }, { type: "ok" }];
+  await request({ type: "getPasskeyProxyStatus" }, popup);
+  assert.equal(local[SOCIAL_SIGN_IN_ENABLED_KEY], true);
+
+  replies = [{ type: "passkeyProxyStatus", unlocked: false, paired: true, attachAllowed: false, enabled: true }, { type: "ok" }];
+  const status = await request({ type: "getPasskeyProxyStatus" }, popup);
+  assert.equal(Object.hasOwn(status, "rememberSocialSignIn"), false);
   assert.equal(local[SOCIAL_SIGN_IN_ENABLED_KEY], true);
 });
 

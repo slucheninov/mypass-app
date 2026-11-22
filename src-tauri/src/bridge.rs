@@ -74,7 +74,8 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 /// What the bridge tells the webview, and the one window it can open. A seam so tests record it.
 pub trait BridgeEvents: Send + Sync {
-    /// The pairing challenge (`None`: gone). Main window only.
+    /// The pairing challenge changed (`None`: gone). The app only nudges the main window, which
+    /// re-reads the code itself.
     fn pairing_challenge(&self, challenge: Option<PairingChallengeDto>);
     /// Paired browsers, diagnostics or registration changed. May broadcast.
     fn bridge_changed(&self);
@@ -96,9 +97,11 @@ pub trait BridgeEvents: Send + Sync {
 pub struct TauriBridgeEvents(pub AppHandle);
 
 impl BridgeEvents for TauriBridgeEvents {
-    fn pairing_challenge(&self, challenge: Option<PairingChallengeDto>) {
+    fn pairing_challenge(&self, _challenge: Option<PairingChallengeDto>) {
+        // Only a nudge: the code never travels in an event (other webviews' `Any` listeners
+        // receive targeted events too); the main window reads it with `browser_pairing_status`.
         // A window that is gone is not an error of the bridge.
-        let _ = PairingChallengeEvent(challenge).emit_to(&self.0, MAIN);
+        let _ = PairingChallengeEvent.emit_to(&self.0, MAIN);
     }
     fn bridge_changed(&self) {
         let _ = BridgeChangedEvent.emit(&self.0);
@@ -116,7 +119,7 @@ impl BridgeEvents for TauriBridgeEvents {
         let _ = crate::commands::app::open_settings(&self.0, pane);
     }
     fn settings_changed(&self, settings: Settings) {
-        let _ = SettingsChanged(settings).emit(&self.0);
+        let _ = SettingsChanged::of(&settings).emit(&self.0);
     }
 }
 
@@ -271,7 +274,7 @@ impl BridgeUi for TauriBridgeUi {
 
     fn passkey_proxy_changed(&self, _enabled: bool) {
         // The whole stored snapshot, not just the flag: the settings store of every window
-        // replaces its copy with what `SettingsChanged` carries (one source of truth, no event
+        // re-reads the settings after `SettingsChanged` (one source of truth, no event
         // of its own for this one field). Read and emitted under the gate `settings_update`
         // holds for its read, write and emit, so the two emitters cannot interleave and leave a
         // window with an older snapshot than the store (each one reads what is stored when it
@@ -1007,6 +1010,133 @@ mod tests {
     }
 
     #[test]
+    fn paired_browser_lock_revokes_pending_touch_id() {
+        use mypass_bridge::protocol::Response;
+
+        let f = fixture(true);
+        let handle = f.handle();
+        let secret = pair(&f);
+        let core = &f.w.core;
+        core.device_unlock
+            .configure(Some(crate::testing::pw("pw")), true, false)
+            .unwrap();
+        core.vault_lock().unwrap();
+        let lock_handle = handle.clone();
+        let lock_secret = secret.clone();
+        let (send, receive) = std::sync::mpsc::channel();
+        f.w.fake.device_unlock.before_unlock_returns(move || {
+            let lock = |pairing| {
+                lock_handle.service.handle(Request::LockVault {
+                    token: "t".into(),
+                    pairing,
+                })
+            };
+            assert_eq!(lock(None), Response::PairingRequired);
+            send.send(lock(Some(lock_secret))).unwrap();
+        });
+        let unlock = handle.service.handle(Request::UnlockWithDevice {
+            token: "t".into(),
+            pairing: Some(secret),
+            automatic: true,
+        });
+        assert!(
+            !core.session.is_unlocked(),
+            "the old prompt must not unlock"
+        );
+        assert_eq!(unlock, Response::UnlockCancelled);
+        assert_eq!(receive.try_recv().unwrap(), Response::Acknowledged);
+    }
+
+    #[test]
+    fn desktop_and_browser_share_one_failure_count() {
+        for surfaces in [["Main", "Main", "Tray"], ["Browser", "Browser", "Main"]] {
+            let f = fixture(true);
+            let handle = f.handle();
+            let secret = pair(&f);
+            let request = |kind| {
+                ask(
+                    &handle,
+                    &serde_json::json!({"type": kind, "pairing": secret}),
+                )
+            };
+            let core = &f.w.core;
+            let device = &core.device_unlock;
+            let platform = &f.w.fake.device_unlock;
+            device
+                .configure(Some(secrecy::SecretString::from("pw")), true, false)
+                .unwrap();
+            core.vault_lock().unwrap();
+            for (n, surface) in surfaces.into_iter().enumerate() {
+                platform.fail_next_unlock(PlatformError::AuthenticationFailed);
+                if surface == "Browser" {
+                    let result = request("unlockWithDevice");
+                    assert_eq!(result["type"], "deviceNotRecognized");
+                    assert_eq!(result["deviceFailures"], n + 1);
+                } else {
+                    let error = device.unlock_with_device(surface).unwrap_err();
+                    assert_eq!(
+                        error.code,
+                        mypass_session::app_core::ErrorCode::AuthenticationFailed
+                    );
+                }
+                assert_eq!(device.status().device_failures as usize, n + 1);
+                let options = request("getUnlockOptions");
+                assert_eq!(options["deviceFailures"], n + 1);
+                assert_eq!(options["retryAfterSecs"], serde_json::Value::Null);
+                f.w.clock.advance(Duration::from_secs(2));
+            }
+            let result = ask(
+                &handle,
+                &serde_json::json!({
+                    "type": "unlockWithDevice", "automatic": true, "pairing": secret
+                }),
+            );
+            assert_eq!(result["type"], "unlockCancelled");
+            assert!(device.unlock_with_device_automatically("Tray").is_err());
+            assert_eq!(platform.evaluation_count(), 3);
+            core.vault_unlock(secrecy::SecretString::from("pw"))
+                .unwrap();
+            core.vault_lock().unwrap();
+            assert_eq!(request("getUnlockOptions")["deviceFailures"], 0);
+        }
+    }
+
+    #[test]
+    fn browser_options_follow_a_desktop_lockout_until_the_next_lock_spell() {
+        let f = fixture(true);
+        let handle = f.handle();
+        let secret = pair(&f);
+        let options = || {
+            ask(
+                &handle,
+                &serde_json::json!({"type": "getUnlockOptions", "pairing": secret}),
+            )
+        };
+        let core = &f.w.core;
+        core.device_unlock
+            .configure(Some(secrecy::SecretString::from("pw")), true, true)
+            .unwrap();
+        core.vault_lock().unwrap();
+        assert_eq!(options()["deviceUnlock"], true);
+        f.w.fake
+            .device_unlock
+            .fail_next_unlock(PlatformError::Lockout);
+        let error = core.device_unlock.unlock_with_device("Main").unwrap_err();
+        assert_eq!(error.code, mypass_session::app_core::ErrorCode::Lockout);
+        let blocked = options();
+        assert_eq!(blocked["deviceBlocked"], true);
+        assert_eq!(blocked["deviceUnlock"], false);
+        assert!(core.device_unlock.status().device_blocked);
+        assert!(core.device_unlock.unlock_with_device("Tray").is_err());
+        assert_eq!(f.w.fake.device_unlock.evaluation_count(), 1);
+        core.vault_unlock(secrecy::SecretString::from("pw"))
+            .unwrap();
+        core.vault_lock().unwrap();
+        assert_eq!(options()["deviceBlocked"], false);
+        assert_eq!(options()["deviceUnlock"], true);
+    }
+
+    #[test]
     fn host_registration_failure_does_not_stop_the_server() {
         let f = unstarted(true, Some(PathBuf::from("/nonexistent/mypass-host")));
         f.w.fake
@@ -1123,7 +1253,7 @@ mod tests {
         assert!(!f.w.core.device_unlock.consume_extension_request());
         f.w.core
             .device_unlock
-            .unlock_with_device("Unlock MyPass")
+            .unlock_with_device_automatically("Unlock MyPass")
             .unwrap();
         assert_eq!(f.w.fake.device_unlock.evaluation_count(), 1);
         f.handle().service.handle(Request::RequestUnlock {

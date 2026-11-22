@@ -74,14 +74,12 @@ class BrowserStore {
   }
 
   /**
-   * Follows the pairing challenge (main window): the event, the one already active at mount, and a
-   * lock, which clears it. Returns the stop function, which clears it too.
+   * Follows the pairing challenge (main window): every change nudge (`PairingChallengeEvent`, which
+   * carries nothing) re-reads it with `browser_pairing_status`, as does the mount; a lock clears it. Returns the stop function, which clears it too.
    */
   watchPairing(): () => void {
-    const off = listenTo(events.pairingChallengeEvent, (challenge) => {
-      this.#pairingSeq++;
-      this.pairing = challenge;
-    });
+    // Payload-free: the code never travels in an event, the main window reads it itself.
+    const off = listenTo(events.pairingChallengeEvent, () => void this.requeryPairing());
     const offLock = session.onLocked(() => this.clearPairing());
     void this.requeryPairing();
     return () => {
@@ -104,7 +102,8 @@ class BrowserStore {
   async requeryPairing(): Promise<void> {
     const seq = ++this.#pairingSeq;
     try {
-      const next = (await api.browserStatus()).pairing;
+      // The pairing-only read: the full status is served only while unlocked, pairing works locked too.
+      const next = await api.browserPairingStatus();
       // An event or a clear that landed meanwhile is newer than this answer.
       if (seq !== this.#pairingSeq) return;
       this.pairing = next && (next.expiresAt === null || next.expiresAt > Date.now()) ? next : null;

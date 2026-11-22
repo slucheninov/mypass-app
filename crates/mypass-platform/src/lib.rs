@@ -65,7 +65,9 @@ pub use coordinated::{
     coordinated_files, map_download_status, Accessor, ChangeCallback, ConflictVersion,
     CoordinatedFiles, DownloadState, UnsupportedCoordinatedFiles,
 };
-pub use device_unlock::{DeviceUnlock, DeviceUnlockAvailability, DeviceUnlockMode};
+pub use device_unlock::{
+    DeviceUnlock, DeviceUnlockAvailability, DeviceUnlockMode, DEVICE_UNLOCK_TIMEOUT,
+};
 pub use endpoint_store::{
     app_shared_store, host_shared_store, select_shared_store, SharedStoreKind, SignatureProbe,
     StoreSide, APP_REQUIREMENT, HOST_IDENTIFIER, HOST_REQUIREMENT, TEAM_ID,

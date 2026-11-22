@@ -138,6 +138,15 @@ pub enum SessionEvent {
     VaultChanged,
     /// The save state changed.
     SaveChanged(SaveStatus),
+    /// The locked vault's device unlock attempts changed.
+    DeviceUnlockChanged,
+}
+
+/// Device authentication outcomes for the current locked vault.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DeviceUnlockAttempts {
+    pub failures: u32,
+    pub blocked: bool,
 }
 
 /// A session observer; runs after the session lock is released, on the calling thread.
@@ -421,6 +430,7 @@ pub(crate) struct Inner {
     /// the session, works outside the lock and comes back (the secondary sync) acts only while
     /// this is unchanged.
     pub(crate) incarnation: u64,
+    pub(crate) device_unlock_attempts: DeviceUnlockAttempts,
     /// The storage the open vault was resolved to (kept while locked, so an unlock reads through
     /// the same `FileIo`, cache and presenter).
     pub(crate) storage: Option<ResolvedStorage>,
@@ -453,6 +463,7 @@ impl Inner {
             snapshot_taken: false,
             disk_meta: None,
             incarnation: 0,
+            device_unlock_attempts: DeviceUnlockAttempts::default(),
             storage: None,
         }
     }
@@ -497,6 +508,7 @@ impl Inner {
         self.db = Some(db);
         self.password = Some(password);
         self.lock_reason = None;
+        self.device_unlock_attempts = DeviceUnlockAttempts::default();
         self.dirty_gen = 0;
         self.saved_gen = 0;
         self.pending_bytes = None;
@@ -556,6 +568,7 @@ impl std::fmt::Debug for VaultSession {
 pub(crate) struct Outbox {
     pub(crate) state_changed: bool,
     pub(crate) vault_changed: bool,
+    pub(crate) device_unlock_changed: bool,
     pub(crate) save: Option<SaveStatus>,
 }
 
@@ -852,6 +865,9 @@ impl VaultSession {
         if out.vault_changed {
             events.push(SessionEvent::VaultChanged);
         }
+        if out.device_unlock_changed {
+            events.push(SessionEvent::DeviceUnlockChanged);
+        }
         if let Some(s) = out.save {
             events.push(SessionEvent::SaveChanged(s));
         }
@@ -1055,6 +1071,35 @@ impl VaultSession {
             self.notify_storage();
         }
         r
+    }
+
+    pub fn device_unlock_attempts(&self) -> DeviceUnlockAttempts {
+        lock(&self.0.inner).device_unlock_attempts
+    }
+
+    /// A result from an older authorization cannot change the current lock spell's state.
+    pub(crate) fn record_device_unlock_failure(&self, incarnation: u64, terminal: bool) -> bool {
+        let changed = {
+            let mut inner = lock(&self.0.inner);
+            if inner.quitting || inner.db.is_some() || inner.incarnation != incarnation {
+                return false;
+            }
+            let attempts = &mut inner.device_unlock_attempts;
+            let before = *attempts;
+            if terminal {
+                attempts.blocked = true;
+            } else {
+                attempts.failures = attempts.failures.saturating_add(1);
+            }
+            *attempts != before
+        };
+        if changed {
+            self.emit(Outbox {
+                device_unlock_changed: true,
+                ..Outbox::default()
+            });
+        }
+        true
     }
 
     /// The locked vault right now, as `(incarnation, vault id)`: what a device unlock binds its
@@ -1384,7 +1429,7 @@ impl VaultSession {
 
     /// Commit a small configuration result only for the same unlocked session incarnation.
     /// The closure follows the session -> settings lock order and must not call the session.
-    pub(crate) fn configure_if_incarnation<R>(
+    pub fn configure_if_incarnation<R>(
         &self,
         incarnation: u64,
         f: impl FnOnce() -> R,

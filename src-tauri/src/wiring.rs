@@ -7,8 +7,8 @@
 
 use crate::bridge::{build_state, TauriBridgeEvents};
 use crate::events::{
-    ClipboardClearedEvent, SaveStateChanged, SessionChanged, StorageStatusChanged,
-    SyncStatusChanged, VaultChanged,
+    ClipboardClearedEvent, DeviceUnlockChanged, SaveStateChanged, SessionChanged,
+    StorageStatusChanged, SyncStatusChanged, VaultChanged,
 };
 use crate::files::{FileGrants, TauriFilePicker};
 use crate::hotkeys::ConflictGate;
@@ -29,6 +29,7 @@ use tauri_specta::Event;
 pub enum Outgoing {
     Session(SessionStatus),
     Vault,
+    DeviceUnlock,
     Save(SaveStatus),
 }
 
@@ -37,6 +38,7 @@ pub fn outgoing(event: &SessionEvent) -> Outgoing {
     match event {
         SessionEvent::StateChanged(status) => Outgoing::Session(status.clone()),
         SessionEvent::VaultChanged => Outgoing::Vault,
+        SessionEvent::DeviceUnlockChanged => Outgoing::DeviceUnlock,
         SessionEvent::SaveChanged(status) => Outgoing::Save(status.clone()),
     }
 }
@@ -58,7 +60,7 @@ pub fn tray_reaction(event: &SessionEvent) -> TrayReaction {
             TrayReaction::HideNow
         }
         SessionEvent::StateChanged(_) | SessionEvent::VaultChanged => TrayReaction::Refresh,
-        SessionEvent::SaveChanged(_) => TrayReaction::None,
+        SessionEvent::SaveChanged(_) | SessionEvent::DeviceUnlockChanged => TrayReaction::None,
     }
 }
 
@@ -67,6 +69,7 @@ fn emit(handle: &AppHandle, out: Outgoing) {
     let _ = match out {
         Outgoing::Session(status) => SessionChanged(status).emit(handle),
         Outgoing::Vault => VaultChanged.emit(handle),
+        Outgoing::DeviceUnlock => DeviceUnlockChanged.emit(handle),
         Outgoing::Save(status) => SaveStateChanged(status).emit(handle),
     };
 }
@@ -177,11 +180,13 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     core.clipboard
         .set_cleared_sink(Arc::new(EmitCleared(handle.clone())));
     let sync_handle = handle.clone();
-    core.secondary
-        .add_observer(Arc::new(move |status: &mypass_session::SecondaryStatus| {
+    core.secondary.add_observer(Arc::new(
+        move |_status: &mypass_session::SecondaryStatus| {
+            // Payload-free: every webview hears it; the settings window re-reads `sync_status`.
             // A window that is gone is not an error of the backend.
-            let _ = SyncStatusChanged(status.clone()).emit(&sync_handle);
-        }));
+            let _ = SyncStatusChanged.emit(&sync_handle);
+        },
+    ));
     let storage_handle = handle.clone();
     core.session
         .add_storage_observer(Arc::new(move |status: &mypass_session::StorageStatus| {

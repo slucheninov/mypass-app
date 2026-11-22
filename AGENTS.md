@@ -31,7 +31,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `src-tauri` (package `mypass-app`, lib `mypass_app_lib`) | implemented | The Tauri 2 app shell: the typed commands and events (`tauri-specta`), capabilities, native file dialogs, plugins, tray, global hotkeys, single instance, quit flow, native-side i18n; a workspace member listed explicitly |
 | `mypass-bridge` | implemented | Browser bridge protocol, codec, endpoint, relay and loopback server (`server` feature, off for the host); the passkey service (`passkeys`) |
 | `mypass-host` | implemented | Native messaging host binary; never links the session, core or KDBX crates |
-| `extension/` | implemented | The Chromium extension (Manifest V3 JavaScript, vendored `vendor/jsQR.js`), with its 58 Node suites in `extension/tests/`, run by `scripts/test-extension.sh`; its text lives in `extension/_locales/{en,uk,ru,de}/messages.json` (`chrome.i18n`, read through `shared/i18n.js`, `en` is the default locale), pinned by `tests/locales.test.js` |
+| `extension/` | implemented | The Chromium extension (Manifest V3 JavaScript, vendored `vendor/jsQR.js`), with its 59 Node suites in `extension/tests/`, run by `scripts/test-extension.sh`; its text lives in `extension/_locales/{en,uk,ru,de}/messages.json` (`chrome.i18n`, read through `shared/i18n.js`, `en` is the default locale), pinned by `tests/locales.test.js` |
 
 ## Repo layout
 
@@ -58,7 +58,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `scripts/make-tray-icons.mjs` | Generates the tray icons from `scripts/key-shape.mjs`: the macOS 18 pt @2x template `src-tauri/icons/tray-template.png` and the green Windows `tray-windows.png`. A Node test compares the committed pixels with the generator |
 | `scripts/convert-xcstrings.mjs` | One-time converter of the old app's String Catalogs; its output (`src/lib/i18n/locales/{en,uk,ru}.json`, `src-tauri/resources/macos/{en,uk,ru}.lproj/InfoPlist.strings`) is then the hand-edited source of truth; `de.json` and `de.lproj` were written by hand and never went through it |
 | `.github/` | Workflows (`ci.yml`, `codeql.yml`), Dependabot config, issue forms, pull request template |
-| `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts), the Stage 2b UI walk-through and the Stage 3 browser bridge checklist (M1 to M14) and the Stage 4 passkey checklist (P1 to P13), Stage 5 checks (S1 to S21), cutover (C1 to C10) Stage 6 Windows checks (W1 to W17), the extension popup and page checks (E1 to E11), the person checks (PR1 to PR8), the social sign-in checks (SG1 to SG6) and the form fill fixes (FX1 to FX4) |
+| `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts), the Stage 2b UI walk-through and the Stage 3 browser bridge checklist (M1 to M14) and the Stage 4 passkey checklist (P1 to P13), Stage 5 checks (S1 to S22), cutover (C1 to C10) Stage 6 Windows checks (W1 to W17), the extension popup and page checks (E1 to E12), the person checks (PR1 to PR8), the social sign-in checks (SG1 to SG6) and the form fill fixes (FX1 to FX4) |
 | `docs/implementation/ROADMAP.md` | The only tracked document under `docs/`: unfinished work |
 | `LICENSE`, `THIRD_PARTY_NOTICES.md` | Apache-2.0 and the notices for vendored data and linked crates |
 
@@ -107,6 +107,7 @@ pnpm build                       # production bundle into dist/
 - The `js` part runs `node --test scripts/` (the i18n converter and catalog tests; plain Node, nothing
   to install) and the extension suites (`scripts/test-extension.sh`: every `extension/tests/*.test.js` in its own `node` process, `N suites, M failed`; `--list` prints the discovered files). `--no-js` is only for a local machine without
   `node`, and it prints that the JavaScript suites were NOT run. It is never a way to report a change as tested when that change touches `extension/`.
+- When adding an extension suite or a `RUN.md` check, update its pin in `crates/repo-guards/tests/extension.rs` or `crates/repo-guards/tests/docs.rs`, respectively.
 - Windows: run `cargo` commands from PowerShell, and `scripts/*.sh` from Git Bash.
 
 ## Continuous integration
@@ -355,6 +356,37 @@ change is done.
   `browser_proposal_take` is the one command that hands a browser's proposed password to the webview, once, after
   the user opened the proposal; like typed input it may land in an encrypted editor draft. `browser_status` never
   returns a secret or a hash.
+- **Settings gate.** Settings are reachable only while the vault is unlocked, enforced in the backend. Every
+  settings-window command that reads security-relevant settings or state, changes a setting or runs a pane action
+  (`settings_get`, `settings_update`, `settings_login_item_status`, backups, the `browser_*` pane commands,
+  `device_unlock_status`, `device_unlock_configure`, the `sync_*` commands, `update_check_now`, `vault_location_*`) calls
+  `commands::ensure_unlocked` as its first statement (after `into_secret`) and answers `Locked` or `NoVault`
+  otherwise. `acl_tests.rs` classifies every settings-window command as gated or open with a reason and pins the
+  gate as the first statement. `SettingsChanged` carries only `PublicSettings` (theme, language, shortcut hints,
+  the update flag), also available through `settings_get_public`. Secondary-sync and pairing events carry no
+  payload. Unlocked settings panes re-query gated reads. The main window queries `browser_pairing_status`
+  in any session state. Unlock screens use the read-only `device_unlock_offer` for the button and its label.
+  The main window may list and remove recent vaults on the unlock screen; removal while locked or vault-less
+  changes only that list. The settings window shows a placeholder with an `app_show_main` button while locked
+  or vault-less, drops the full settings, and refreshes the public snapshot. Settings, device unlock and
+  secondary sync discard pane responses from before a lock. Settings updates, secondary disconnects and device
+  unlock configuration recheck the original unlocked session at the write.
+  - **Residual risk (owner-accepted).** Settings are global app settings, not vault data: anyone with access to the
+    OS session can still create or open another vault and change them there, or edit `settings.json`. The gate
+    protects against casual access through the UI of a locked app.
+- **Touch ID first.** The main window and tray read the live device-unlock offer on show and on the
+  payload-free `device-unlock-changed` signal. With live biometrics, the unlock card prompts on show
+  when focused, excluding a lock in the foreground until the window is shown again. The popup reads
+  `unlockOptions` when opened and on its locked poll, and sends at most one automatic request per
+  opening. Automatic requests use the biometrics-only policy. Explicit device-unlock buttons may
+  use the broader policy selected by the settings.
+  The Rust `PromptCoordinator` keeps the native slot until evaluation returns. A lock, unlock or
+  vault switch revokes the result's session authorization independently of the slot. Automatic
+  requests also observe `AUTOMATIC_PROMPT_DEBOUNCE` (2 s after a prompt ends).
+  The session counts rejected prompts across all surfaces. Three failures require an explicit
+  retry or the master password. Terminal device errors suppress device unlock for that locked
+  vault. The count and terminal state reset on unlock or vault switch. The popup observes the
+  outcome of a prompt from a closed popup through its locked poll.
 - **Browser bridge.** Three hops: the extension talks to `mypass-host` (native messaging, one host process per
   message), the host to the app's loopback server (`127.0.0.1`, `mypass_bridge::server`, thread per connection, no async
   runtime). The host never links the session, core or KDBX crates. Each launch draws a fresh token and port and
@@ -403,8 +435,9 @@ change is done.
   e.g. `accounts.google.com`, within 1.5 s before the page lost focus to it) never creates an entry
   or overrides that limit. With `rememberSocialSignIn` off both answer
   `enabled: false` and nothing is written. The setting reaches the extension in every
-  `socialSignIn` reply and in `passkeyProxyStatus.rememberSocialSignIn` (the status poll a popup
-  open triggers); the service worker mirrors it into `chrome.storage.local`, open pages follow the
+  `socialSignIn` reply and in `passkeyProxyStatus.rememberSocialSignIn` while unlocked (the status poll a popup
+  open triggers). While locked or vault-less the field is absent and the service worker keeps its cached mirror.
+  The service worker mirrors reported values into `chrome.storage.local`, and open pages follow the
   change (off removes the ring and stops reporting, on looks up again), and while it is known off
   page lookups are answered locally for at most a minute before the bridge is asked again. The extension (`shared/social-sign-in.js`) records only
   trusted clicks in the https top frame, keeps clicks made while locked in `chrome.storage.session`
@@ -430,8 +463,9 @@ change is done.
   starts with `vault_matches(db)` (the root UUID recorded in phase one) before any check or write. A create is durable
   before the response (`flush`), and a failed flush rolls the entry back. The `passkey_proxy_enabled` setting (default
   on) detaches the extension's WebAuthn proxy when off. Locking does not detach it: while MyPass is locked the
-  proxy stays as it was, and the bridge gate answers every passkey request `locked`, so the page gets
-  `NotAllowedError` "MyPass is locked".
+  proxy stays as it was, and the bridge gate answers passkey ceremonies with `locked`, so the page gets
+  `NotAllowedError` "MyPass is locked". The paired status poll still reports whether the proxy is enabled,
+  and the extension's app-managed passkey switch is unavailable until MyPass is unlocked.
   - Stage 5 closed the missing per-ceremony UV/presence check and broad webview command access:
     per-window ACLs now restrict every command to its intended windows. Every macOS phase two
     verifies device-owner presence before taking the session lock. The

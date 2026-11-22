@@ -13,6 +13,7 @@ import type {
   EntryTypeDto,
   ApiError,
   HistoryReveal,
+  DeviceUnlockOffer_Serialize,
   DeviceUnlockStatus_Serialize,
   UpdateStatus_Serialize,
   AttachmentMeta,
@@ -210,6 +211,9 @@ export interface FakeBackend {
   install(): void;
   /** Delivers a backend event to the listeners registered through the generated `events`. */
   emit(event: EventName, payload?: unknown): Promise<void>;
+  /** Changes the stored settings outside the webview and broadcasts `SettingsChanged` like the
+   *  backend does: with the public part only. */
+  changeSettings(patch: Partial<Settings_Serialize>): Promise<void>;
 }
 
 const snake = (name: string) => name.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
@@ -229,7 +233,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       endpointStore: "developmentFile",
       canReinstallHost: true,
     },
-    device: { available: deviceUnlockAvailable, biometrics: deviceUnlockAvailable, enrolled: false, touchIdEnabled: false, macPasswordEnabled: false, canOfferNow: false, reason: "disabled" },
+    device: { available: deviceUnlockAvailable, biometrics: deviceUnlockAvailable, enrolled: false, touchIdEnabled: false, macPasswordEnabled: false, canOfferNow: false, reason: "disabled", deviceFailures: 0, deviceBlocked: false },
     extensionUnlockRequested: false,
     update: { status: { state: "idle" }, banner: null },
     browserReinstall: [],
@@ -275,6 +279,36 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
   const publish = (event: EventName, payload: unknown) => void emit(kebab(event), payload ?? null);
   const requireUnlocked = () => {
     if (state.session.state !== "unlocked") throw apiError("locked");
+  };
+  /** Like Rust's `ensure_unlocked`, the gate of every settings read, change and pane action:
+   *  `noVault` without a vault, `locked` while locked. */
+  const settingsGate = () => {
+    if (state.session.state === "noVault") throw apiError("noVault");
+    requireUnlocked();
+  };
+  /** Like Rust's `PublicSettings`: what `settings_get_public` and every `SettingsChanged` carry. */
+  const publicSettings = () => ({
+    language: state.settings.language,
+    theme: state.settings.theme,
+    shortcutLock: state.settings.shortcutLock,
+    shortcutShow: state.settings.shortcutShow,
+    updateCheckEnabled: state.settings.updateCheckEnabled,
+  });
+  /** Like Rust's `DeviceUnlockService::offer`: the button and the current unlock flow. */
+  const deviceOffer = (): DeviceUnlockOffer_Serialize => {
+    const d = state.device;
+    const canOfferNow = d.available && d.canOfferNow;
+    const method = !canOfferNow ? null
+      : d.touchIdEnabled && d.macPasswordEnabled ? "touchIdOrMacPassword" as const
+        : d.touchIdEnabled ? "touchId" as const : "macPassword" as const;
+    const expired = d.reason === "deviceWindowExpired" || d.reason === "accountWindowExpired";
+    return {
+      canOfferNow,
+      label: expired ? "masterPasswordRequired" : method,
+      touchIdAvailable: canOfferNow && d.biometrics && d.touchIdEnabled,
+      deviceFailures: d.deviceFailures,
+      deviceBlocked: d.deviceBlocked,
+    };
   };
   const findEntry = (id: string) => {
     const found = state.entries.find((e) => e.summary.id === id);
@@ -416,6 +450,9 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
   const pickedFiles = new Map<string, PickedFile>();
 
   const setSession = (next: SessionStatus_Serialize) => {
+    if (state.session.state !== next.state || state.session.vaultPath !== next.vaultPath) {
+      Object.assign(state.device, { deviceFailures: 0, deviceBlocked: false });
+    }
     state.session = next;
     publish("sessionChanged", structuredClone(next));
     return structuredClone(next);
@@ -442,6 +479,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
   };
 
   const handlers = {
+    appHomeDir: () => os === "windows" ? "C:\\Users\\someone" : "/Users/someone",
     appInfo: () => ({
       version: "0.0.0-test",
       os,
@@ -462,7 +500,10 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     appShowMain: () => null,
     appRecordActivity: () => null,
     // Only the call log matters: the file manager opens on the Rust side.
-    appRevealBackups: () => null,
+    appRevealBackups: () => {
+      settingsGate();
+      return null;
+    },
     // Like Rust: the save dialog opens there; `false` means the user cancelled it.
     attachmentExport: ({ entryId, name }) => {
       requireUnlocked();
@@ -477,7 +518,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       for (const file of picked) pickedFiles.set(file.token, file);
       return picked;
     },
-    backupList: () => ({
+    backupList: () => (settingsGate(), {
       items: structuredClone(state.backups),
       lastFailure: structuredClone(state.backupFailure),
       count: state.settings.backupCount,
@@ -485,6 +526,8 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     }),
     // Like Rust: the vault is replaced and locked; a wrong-password backup is `invalidInput`.
     // The Browser pane's backend. Only the state and the events are modelled; the window and the file manager live in Rust.
+    // Like Rust: only the active code, in every session state (pairing while locked is a feature).
+    browserPairingStatus: () => structuredClone(state.browser.pairing),
     browserPairingCancel: () => {
       state.browser.pairing = null;
       publish("pairingChallengeEvent", null);
@@ -497,12 +540,14 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       return structuredClone(model);
     },
     browserUnregisterHost: () => {
+      settingsGate();
       state.browser.registrations = state.browser.registrations.map((r) => ({ ...r, state: "missing", detail: null }));
       publish("bridgeChangedEvent", null);
       return structuredClone(state.browser.registrations);
     },
-    browserReinstallHost: () => structuredClone(state.browserReinstall),
+    browserReinstallHost: () => (settingsGate(), structuredClone(state.browserReinstall)),
     browserResetPairings: () => {
+      settingsGate();
       state.browser.paired = [];
       state.browser.pairingStoreFailed = false;
       state.browser.listening = true;
@@ -510,13 +555,15 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       return null;
     },
     browserRevoke: ({ id }) => {
+      settingsGate();
       state.browser.paired = state.browser.paired.filter((b) => b.id !== id);
       publish("bridgeChangedEvent", null);
       return null;
     },
-    browserShowExtensionFolder: () => null,
-    browserStatus: () => structuredClone(state.browser),
+    browserShowExtensionFolder: () => (settingsGate(), null),
+    browserStatus: () => (settingsGate(), structuredClone(state.browser)),
     backupRestore: ({ id }) => {
+      settingsGate();
       if (state.restoreFailure) {
         const code = state.restoreFailure;
         state.restoreFailure = null;
@@ -1035,9 +1082,12 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       return { imported: preview.total, skipped: preview.skipped.length };
     },
     platformKeyboardLayout: () => keyboardLayout,
-    settingsGet: () => structuredClone(state.settings),
-    settingsLoginItemStatus: () => state.loginItem,
+    settingsGet: () => (settingsGate(), structuredClone(state.settings)),
+    // Like Rust: the subset every window renders, in every session state.
+    settingsGetPublic: () => publicSettings(),
+    settingsLoginItemStatus: () => (settingsGate(), state.loginItem),
     settingsUpdate: ({ patch }) => {
+      settingsGate();
       if (state.settingsFailure) {
         const code = state.settingsFailure;
         state.settingsFailure = null;
@@ -1066,39 +1116,41 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       next.backupCount = Math.min(50, Math.max(1, next.backupCount));
       next.clipboardClearSeconds = Math.floor((Math.min(120, Math.max(10, next.clipboardClearSeconds)) + 2) / 5) * 5;
       state.settings = next;
-      publish("settingsChanged", structuredClone(state.settings));
+      publish("settingsChanged", publicSettings());
       return structuredClone(state.settings);
     },
     // Take-once like the Rust list: what the hotkey layer could not register at startup.
     shortcutConflictsTake: () => state.shortcutConflicts.splice(0),
-    // Like Rust: `off` without a folder (checked first), otherwise the vault must be open; a
+    // Like Rust: the vault must be unlocked (checked first), `off` without a folder; a
     // successful sync reports `idle` with the fake's fixed clock.
     syncNow: () => {
+      settingsGate();
       if (state.settings.secondaryFolder === null) {
         state.sync = { state: "off" };
         return structuredClone(state.sync);
       }
       requireUnlocked();
       state.sync = { state: "idle", lastSync: 1_700_000_000_000 };
-      publish("syncStatusChanged", structuredClone(state.sync));
+      publish("syncStatusChanged", null);
       return structuredClone(state.sync);
     },
     syncConnectSecondary: () => {
       requireUnlocked();
       state.settings.secondaryFolder = "/fake/secondary";
-      publish("settingsChanged", structuredClone(state.settings));
+      publish("settingsChanged", publicSettings());
       state.sync = { state: "idle", lastSync: 1_700_000_000_000 };
-      publish("syncStatusChanged", structuredClone(state.sync));
+      publish("syncStatusChanged", null);
       return structuredClone(state.sync);
     },
-    deviceUnlockStatus: () => structuredClone(state.device),
+    deviceUnlockStatus: () => (settingsGate(), structuredClone(state.device)),
+    deviceUnlockOffer: () => deviceOffer(),
     deviceUnlockConfigure: ({ password, touchId, macPassword }) => {
-      requireUnlocked();
+      settingsGate();
       if ((touchId || macPassword) && !state.device.enrolled && password !== state.masterPassword) throw apiError("wrongPassword");
       state.device = { ...state.device, enrolled: touchId || macPassword, touchIdEnabled: touchId, macPasswordEnabled: macPassword, canOfferNow: touchId || macPassword, reason: touchId || macPassword ? null : "disabled" };
       state.settings.unlockTouchIdEnabled = touchId;
       state.settings.unlockMacPasswordEnabled = macPassword;
-      publish("settingsChanged", structuredClone(state.settings));
+      publish("settingsChanged", publicSettings());
       return structuredClone(state.device);
     },
     deviceUnlockConsumeExtensionRequest: () => { const pending = state.extensionUnlockRequested; state.extensionUnlockRequested = false; return pending; },
@@ -1110,11 +1162,11 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     trayPanelFit: () => "native",
     trayPanelHide: () => null,
     updateStatus: () => structuredClone(state.update),
-    updateCheckNow: () => { state.update.status = { state: "upToDate", checkedAt: 1_700_000_000_000 }; publish("updateChanged", structuredClone(state.update)); return structuredClone(state.update); },
+    updateCheckNow: () => { settingsGate(); state.update.status = { state: "upToDate", checkedAt: 1_700_000_000_000 }; publish("updateChanged", structuredClone(state.update)); return structuredClone(state.update); },
     updateDismiss: () => { state.update.banner = null; publish("updateChanged", structuredClone(state.update)); return null; },
     updateOpenRelease: () => null,
-    syncStatus: () => structuredClone(state.sync),
-    syncDisplacedStatus: () => structuredClone(state.displaced),
+    syncStatus: () => (settingsGate(), structuredClone(state.sync)),
+    syncDisplacedStatus: () => (settingsGate(), structuredClone(state.displaced)),
     syncDisplacedDelete: ({ id }) => {
       if (state.session.state !== "unlocked") throw apiError("locked");
       const copies = state.displaced.copies.filter((copy) => copy.id !== id);
@@ -1124,10 +1176,11 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     },
     // Like Rust: forgets the folder (the copy in it stays) and reports `off`.
     syncDisconnectSecondary: () => {
+      settingsGate();
       state.settings.secondaryFolder = null;
-      publish("settingsChanged", structuredClone(state.settings));
+      publish("settingsChanged", publicSettings());
       state.sync = { state: "off" };
-      publish("syncStatusChanged", structuredClone(state.sync));
+      publish("syncStatusChanged", null);
       return null;
     },
     sidebarGet: () => {
@@ -1237,6 +1290,10 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     },
     emit(event, payload) {
       return emit(kebab(event), payload ?? null);
+    },
+    changeSettings(patch) {
+      state.settings = { ...state.settings, ...patch };
+      return emit("settings-changed", publicSettings());
     },
   };
 }

@@ -1,7 +1,7 @@
 //! The typed events the backend emits to the webview (`tauri-specta`); the names are stable
 //! (`session-changed`, `vault-changed`, ...), derived from the struct names.
 
-use mypass_session::{SaveStatus, SessionStatus, Settings};
+use mypass_session::{PublicSettings, SaveStatus, SessionStatus, Settings};
 use serde::{Deserialize, Serialize};
 
 /// Lock state, vault or path changed.
@@ -12,13 +12,25 @@ pub struct SessionChanged(pub SessionStatus);
 #[derive(Serialize, Deserialize, specta::Type, tauri_specta::Event, Clone, Debug)]
 pub struct VaultChanged;
 
+/// Device unlock attempts changed for the locked vault.
+#[derive(Serialize, Deserialize, specta::Type, tauri_specta::Event, Clone, Debug)]
+pub struct DeviceUnlockChanged;
+
 /// The save state changed.
 #[derive(Serialize, specta::Type, tauri_specta::Event, Clone, Debug)]
 pub struct SaveStateChanged(pub SaveStatus);
 
-/// The settings changed (every window shows the same ones).
-#[derive(Serialize, Deserialize, specta::Type, tauri_specta::Event, Clone, Debug)]
-pub struct SettingsChanged(pub Settings);
+/// The settings changed. A broadcast reaches every webview in any session state, so it carries
+/// only the public part (theme, language, shortcut hints, the update flag); a window that shows
+/// the full settings re-reads them through the gated `settings_get`.
+#[derive(Serialize, specta::Type, tauri_specta::Event, Clone, Debug)]
+pub struct SettingsChanged(pub PublicSettings);
+
+impl SettingsChanged {
+    pub fn of(settings: &Settings) -> Self {
+        Self(settings.into())
+    }
+}
 
 /// A copied secret was cleared from the clipboard.
 #[derive(Serialize, Deserialize, specta::Type, tauri_specta::Event, Clone, Debug)]
@@ -58,13 +70,12 @@ impl From<mypass_session::OpenEntryEvent> for OpenEntryEvent {
     }
 }
 
-use crate::commands::browser::PairingChallengeDto;
-
-/// The pairing challenge changed: `Some` while a code is waiting for the browser, `None` once it
-/// was finished, cancelled, expired or the vault locked. Sent to the main window only (it carries
-/// the code the user types into the extension).
+/// The pairing challenge changed (a code is waiting for the browser, or it was finished,
+/// cancelled, expired or dismissed by a lock). Payload-free: Tauri also hands a targeted event to
+/// `Any` listeners of other webviews, so the code never travels in it; the main window reads it
+/// with `browser_pairing_status`.
 #[derive(Serialize, Deserialize, specta::Type, tauri_specta::Event, Clone, PartialEq, Debug)]
-pub struct PairingChallengeEvent(pub Option<PairingChallengeDto>);
+pub struct PairingChallengeEvent;
 
 /// The paired browsers, their diagnostics or the host registration changed (re-query
 /// `browser_status`).
@@ -103,9 +114,10 @@ pub struct NewEntryEvent;
 #[derive(Serialize, Deserialize, specta::Type, tauri_specta::Event, Clone, Debug)]
 pub struct UnlockRequestedEvent;
 
-/// The secondary-folder sync status changed.
-#[derive(Serialize, specta::Type, tauri_specta::Event, Clone, Debug)]
-pub struct SyncStatusChanged(pub mypass_session::SecondaryStatus);
+/// The secondary-folder sync status changed. Payload-free, as every webview receives it in any
+/// session state: the settings window re-reads the status through the gated `sync_status`.
+#[derive(Serialize, Deserialize, specta::Type, tauri_specta::Event, Clone, Debug)]
+pub struct SyncStatusChanged;
 
 /// Where the open vault is stored, or how that storage is doing, changed (iCloud Drive: served
 /// from the offline copy, edits not in iCloud yet, still downloading).
@@ -120,3 +132,43 @@ pub struct SettingsPaneEvent {
 
 #[derive(Serialize, specta::Type, tauri_specta::Event, Clone, Debug)]
 pub struct UpdateChanged(pub mypass_session::update::UpdateStatus);
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    /// What crosses the webview boundary in a broadcast: the public settings only, and nothing at
+    /// all for the sync status and the pairing challenge.
+    #[test]
+    fn broadcasts_carry_no_settings_sync_state_or_pairing_code() {
+        let settings = Settings {
+            secondary_folder: Some("/Users/me/Dropbox".into()),
+            vault_path: Some("/Users/me/vault.kdbx".into()),
+            recent_vaults: vec!["/Users/me/vault.kdbx".into()],
+            ..Settings::default()
+        };
+        let json = serde_json::to_value(SettingsChanged::of(&settings)).unwrap();
+        let mut keys: Vec<_> = json.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "language",
+                "shortcutLock",
+                "shortcutShow",
+                "theme",
+                "updateCheckEnabled"
+            ]
+        );
+        assert!(!json.to_string().contains("/Users/me"));
+        assert_eq!(
+            serde_json::to_value(SyncStatusChanged).unwrap(),
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            serde_json::to_value(PairingChallengeEvent).unwrap(),
+            serde_json::Value::Null
+        );
+    }
+}

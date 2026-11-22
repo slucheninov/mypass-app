@@ -6,6 +6,10 @@
 
 use crate::{PlatformError, PlatformResult};
 use secrecy::SecretString;
+use std::time::Duration;
+
+/// Time before the platform cancels a device unlock evaluation.
+pub const DEVICE_UNLOCK_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// How the device proves the user is present.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +52,19 @@ pub trait DeviceUnlock: Send + Sync {
         vault_id: &str,
         reason: &str,
     ) -> PlatformResult<SecretString>;
+    /// Opens the existing enrolment using biometrics as the only authentication policy.
+    fn unlock_with_biometrics(
+        &self,
+        enrolment: DeviceUnlockMode,
+        vault_id: &str,
+        reason: &str,
+    ) -> PlatformResult<SecretString> {
+        if enrolment == DeviceUnlockMode::Biometrics {
+            self.unlock(enrolment, vault_id, reason)
+        } else {
+            Err(PlatformError::DeviceUnlockUnavailable)
+        }
+    }
     /// Removes every mode's enrolment of `vault_id`.
     fn forget(&self, vault_id: &str) -> PlatformResult<()>;
     /// Asks the device owner to prove presence (showing `reason`), with the policy that offers

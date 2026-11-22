@@ -1,6 +1,7 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { CommandName } from "../test/fakeBackend";
 import { settings } from "../lib/stores/settings.svelte";
 import { expectNoAxeViolations } from "../test/axe";
 import { calls } from "../test/mainApp";
@@ -55,7 +56,7 @@ describe("SettingsApp", () => {
       "thirtyMinutes",
     );
     fake.state.settings = { ...fake.state.settings, autoLockIdleTimeout: "oneHour", lockOnScreenLock: false };
-    await fake.emit("settingsChanged", structuredClone(fake.state.settings));
+    await fake.changeSettings({});
     await waitFor(() =>
       expect((screen.getByRole("combobox", { name: "Lock after inactivity" }) as HTMLSelectElement).value).toBe("oneHour"),
     );
@@ -133,5 +134,86 @@ describe("SettingsApp", () => {
     const { fake } = await renderSettingsApp();
     expect(calls(fake, "entryList")).toEqual([]);
     expect(settings.value).not.toBeNull();
+  });
+});
+
+/** Every read of settings or settings-pane data; none may run while the vault is not unlocked. */
+const PANE_READS: CommandName[] = [
+  "settingsGet",
+  "settingsLoginItemStatus",
+  "browserStatus",
+  "backupList",
+  "deviceUnlockStatus",
+  "syncStatus",
+  "syncDisplacedStatus",
+  "vaultStorageStatus",
+  "updateStatus",
+];
+
+describe("SettingsApp while the vault is not unlocked", () => {
+  it("shows the locked placeholder and reads no settings or pane data", async () => {
+    const { fake, container } = await renderSettingsApp({ session: "locked" });
+    expect(screen.getByText("MyPass is locked. Unlock it to change settings.")).toBeTruthy();
+    await expectNoAxeViolations(container);
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(settings.value).toBeNull();
+    for (const name of PANE_READS) expect(calls(fake, name), name).toEqual([]);
+  });
+
+  it("shows the placeholder without a vault too", async () => {
+    const { fake } = await renderSettingsApp({ session: "noVault" });
+    expect(screen.getByText("Open or create a vault to change settings.")).toBeTruthy();
+    expect(screen.queryByRole("tablist")).toBeNull();
+    for (const name of PANE_READS) expect(calls(fake, name), name).toEqual([]);
+    await userEvent.setup().click(screen.getByRole("button", { name: "Open MyPass" }));
+    expect(calls(fake, "appShowMain")).toHaveLength(1);
+  });
+
+  it("the Unlock button brings up the main window", async () => {
+    const user = userEvent.setup();
+    const { fake } = await renderSettingsApp({ session: "locked" });
+    await user.click(screen.getByRole("button", { name: "Unlock" }));
+    expect(calls(fake, "appShowMain")).toHaveLength(1);
+  });
+
+  it("still follows the theme and language while locked", async () => {
+    const { fake } = await renderSettingsApp({ session: "locked" }, {
+      prepare: (fake) => {
+        fake.state.settings.theme = "dark";
+        fake.state.settings.language = "de";
+      },
+    });
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
+    expect(screen.getByRole("button", { name: "Entsperren" })).toBeTruthy();
+    expect(calls(fake, "settingsGet")).toEqual([]);
+  });
+
+  it("switches to the placeholder on lock and drops the loaded settings", async () => {
+    const { fake } = await renderSettingsApp({}, { pane: "Security" });
+    expect(settings.value).not.toBeNull();
+    await fake.handlers.vaultLock({});
+    await screen.findByText("MyPass is locked. Unlock it to change settings.");
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Lock after inactivity" })).toBeNull();
+    expect(settings.value).toBeNull();
+  });
+
+  it("a settings broadcast while locked carries and reads nothing beyond the public part", async () => {
+    const { fake } = await renderSettingsApp({ session: "locked" });
+    await fake.changeSettings({ clipboardClearSeconds: 45, theme: "dark" });
+    await waitFor(() => expect(settings.public?.theme).toBe("dark"));
+    expect(settings.value).toBeNull();
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(calls(fake, "settingsGet")).toHaveLength(0);
+  });
+
+  it("loads the panes after an unlock", async () => {
+    const { fake } = await renderSettingsApp({ session: "locked" });
+    fake.state.session = { ...fake.state.session, state: "unlocked", lockReason: null };
+    await fake.emit("sessionChanged", structuredClone(fake.state.session));
+    await screen.findByRole("tablist");
+    await waitFor(() => expect(settings.value).not.toBeNull());
+    expect(calls(fake, "settingsGet").length).toBeGreaterThan(0);
   });
 });

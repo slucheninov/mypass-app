@@ -93,7 +93,7 @@ describe("backups", () => {
   });
 
   it("the_backup_list_reloads_after_an_unlock_or_a_vault_switch_but_not_a_save_state_change", async () => {
-    const { fake } = await open({ session: "locked" });
+    const { fake } = await open();
     await screen.findByRole("combobox", { name: "Backup interval" });
     await waitFor(() => expect(calls(fake, "backupList").length).toBeGreaterThan(0));
     const n = () => calls(fake, "backupList").length;
@@ -101,8 +101,14 @@ describe("backups", () => {
     await fake.emit("saveStateChanged", { state: "pending", message: null });
     await new Promise((r) => setTimeout(r, 20));
     expect(n()).toBe(start);
+    // A lock leaves the pane (the settings window shows its placeholder); an unlock reloads it.
+    fake.state.session = { ...fake.state.session, state: "locked", lockReason: "manual" };
+    await fake.emit("sessionChanged", structuredClone(fake.state.session));
+    await screen.findByTestId("settings-locked");
+    expect(n()).toBe(start);
     fake.state.backups = structuredClone(BACKUPS);
-    await fake.emit("sessionChanged", { ...fake.state.session, state: "unlocked", vaultPath: "/vaults/a.kdbx" });
+    fake.state.session = { ...fake.state.session, state: "unlocked", lockReason: null, vaultPath: "/vaults/a.kdbx" };
+    await fake.emit("sessionChanged", structuredClone(fake.state.session));
     await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(2));
     const afterUnlock = n();
     expect(afterUnlock).toBeGreaterThan(start);
@@ -210,7 +216,9 @@ describe("retained vault copies", () => {
     expect(screen.getByText(/Last synced/)).toBeTruthy();
 
     fake.state.displaced = { count: 0, copies: [], unavailable: [] };
-    await fake.emit("syncStatusChanged", { state: "idle", lastSync: 5000 });
+    // The event carries nothing: the pane re-reads the status through `sync_status`.
+    fake.state.sync = { state: "idle", lastSync: 5000 };
+    await fake.emit("syncStatusChanged", null);
     await waitFor(() => expect(screen.queryByTestId("displaced-copies")).toBeNull());
     expect(screen.queryByTestId("sync-recovery-file")).toBeNull();
   });

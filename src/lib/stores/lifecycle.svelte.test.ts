@@ -135,7 +135,7 @@ describe("listener lifecycle", () => {
     fake.calls.length = 0;
     await fake.emit("sessionChanged", sessionStatus("noVault"));
     await fake.emit("vaultChanged", null);
-    await fake.emit("settingsChanged", { ...fake.state.settings, theme: "dark" });
+    await fake.changeSettings({ theme: "dark" });
     await fake.emit("saveStateChanged", { state: "failed", message: "x" });
     await new Promise((r) => setTimeout(r, 20));
     expect(session.status.state).toBe("noVault");
