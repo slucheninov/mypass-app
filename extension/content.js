@@ -220,6 +220,33 @@
       : { panel: 'entries', entries, addresses };
   }
 
+  // The inline identity fill of one page. Each selection draws the next id, and a reply applies
+  // only while its id is still the latest: choosing person B while A's reply is pending drops
+  // A's reply whole (before or during the fill, through `stillCurrent`), so two identities are
+  // never mixed in one form. `send(message, reply)` asks the background and
+  // `fill(selection, values, stillCurrent)` writes; per request, `isPageCurrent()` says the page
+  // and the clicked field are unchanged.
+  function createIdentityFiller({ send, profile, fill }) {
+    let latest = 0;
+    return function requestIdentityFill(entry, selection, addressId, url, isPageCurrent) {
+      latest += 1;
+      const selectionId = latest;
+      const stillCurrent = () => selectionId === latest && isPageCurrent();
+      const person = entry.kind === 'person';
+      const message = { type: 'fillIdentity', id: entry.id, url };
+      if (person) message.kind = 'person';
+      if (person && addressId) message.addressId = addressId;
+      send(message, (response) => {
+        if (!response || response.type !== 'identity' || !stillCurrent()) return;
+        const values = person ? (response.person ? profile(response.person, response.address) : null)
+          : response.address;
+        if (!values) return;
+        fill(selection, values, stillCurrent);
+      });
+      return selectionId;
+    };
+  }
+
   // The address picker of one person: the person's linked addresses in their order, then every
   // other address. Rows carry no values, only ids, titles and names.
   function personAddressChoices(person, addresses) {
@@ -1529,22 +1556,21 @@
     // (a person with its chosen or default address); they go only into the controls of
     // `selection` (taken at the click), each checked again right before its write
     // (registration-form.js `fillSelection`), never elsewhere.
+    // Only the latest selection of this page fills (createIdentityFiller).
+    let identityFiller = null;
     function requestIdentityFill(input, entry, selection, addressId) {
       const pageUrl = location.href;
-      const stillCurrent = () => location.href === pageUrl && identityFeatureOn() && input.isConnected;
-      const person = entry.kind === 'person';
-      const message = { type: 'fillIdentity', id: entry.id, url: pageUrl };
-      if (person) message.kind = 'person';
-      if (person && addressId) message.addressId = addressId;
-      sendRuntimeMessage(message, (response) => {
-        if (typeof chrome !== 'undefined' && chrome && chrome.runtime) void chrome.runtime.lastError;
-        if (!response || response.type !== 'identity' || !stillCurrent()) return;
-        const values = person ? (response.person ? shared.registrationForm.personProfile(response.person, response.address) : null)
-          : response.address;
-        if (!values) return;
-        shared.registrationForm.fillSelection(document, selection, values,
-          shared.addressForm.setNativeAddressValue, { stillCurrent });
+      identityFiller = identityFiller || createIdentityFiller({
+        send: (message, reply) => sendRuntimeMessage(message, (response) => {
+          if (typeof chrome !== 'undefined' && chrome && chrome.runtime) void chrome.runtime.lastError;
+          reply(response);
+        }),
+        profile: (person, address) => shared.registrationForm.personProfile(person, address),
+        fill: (chosen, values, stillCurrent) => shared.registrationForm.fillSelection(document, chosen, values,
+          shared.addressForm.setNativeAddressValue, { stillCurrent }),
       });
+      identityFiller(entry, selection, addressId, pageUrl,
+        () => location.href === pageUrl && identityFeatureOn() && input.isConnected);
     }
 
     function togglePanel(input, kind, isNewPassword) {
@@ -1956,7 +1982,7 @@
       detectOtpauthLink, detectOtpauthText, isBase32Secret, detectManualSetupKey,
       decodeQrFromImage, detectQrCandidate,
       detectTotpCandidateWithPriority, shouldShowTotpBanner,
-      classifyGetCredentialsResponse, chooseInlinePanel, chooseIdentityPanel, personAddressChoices, requestSavePrompt, requestTotpPrompt,
+      classifyGetCredentialsResponse, chooseInlinePanel, chooseIdentityPanel, personAddressChoices, createIdentityFiller, requestSavePrompt, requestTotpPrompt,
       isTrustedActivation, hasLiveUserActivation, isUserSubmit, handleIconActivate, handleEntrySelect, trustedClickHandler,
       buildTotpCandidateQueryResponse, buildNewPasswordFieldQueryResponse, buildGeneratePasswordRow,
       classifyGeneratePasswordResponse, showGeneratePasswordMessage,
