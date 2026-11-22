@@ -6,7 +6,7 @@
 // - `src-tauri/icons/source.png`, 1024 px light: the input of `pnpm tauri icon` (bundle icons).
 // - `src-tauri/icons/source-dark.png`, 1024 px dark: the same tile for a dark appearance.
 // - `src-tauri/icons/app-light.png`, `app-dark.png`, 512 px: embedded in the app, which shows the
-//   one that matches the effective theme in the Dock (macOS) and on its windows (Windows).
+//   variant selected by the App icon setting in the Dock (macOS) and on its windows (Windows).
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";

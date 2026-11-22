@@ -169,8 +169,8 @@ green key) is drawn by `node scripts/make-app-icons.mjs`
 in a light and a dark variant; the bundle icons are then generated with
 `pnpm tauri icon src-tauri/icons/source.png -o <tmp>`, copying only the files
 `tauri.conf.json` lists plus `icon.png` into `src-tauri/icons/`. The running app shows
-the dark variant in the Dock (macOS) and on its windows (Windows) while the effective
-theme is dark.
+the selected App icon variant in the Dock (macOS) and on its windows (Windows).
+System follows the OS appearance.
 
 The Rust test entry point also runs `scripts/tests/*.test.sh` (offline version,
 packaging and verification tests). Regenerate dependency notices with
