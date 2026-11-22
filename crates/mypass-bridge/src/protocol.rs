@@ -462,6 +462,10 @@ pub enum Response {
         attach_allowed: bool,
         #[serde(default, deserialize_with = "null_as_default")]
         enabled: bool,
+        /// The app's "Remember social sign-in" setting, reported on every status poll (also while
+        /// locked) so the extension notices a change without waiting for a sign-in lookup.
+        #[serde(default, deserialize_with = "null_as_default")]
+        remember_social_sign_in: bool,
     },
     PasskeyProxyEnabled {
         enabled: bool,

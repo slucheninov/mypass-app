@@ -234,3 +234,55 @@ test("queue actions per lock change", () => {
   assert.equal(queueActionForLockChange("locked", "locked"), "keep");
   assert.equal(queueActionForLockChange("unlocked", "locked"), "clear");
 });
+
+// ---- the "Remember social sign-in" mirror: any reply, the status poll, the once-a-minute recheck --
+test("the status poll a popup open triggers mirrors the setting", async () => {
+  // Each poll is the status, then the diagnostics report ({type: "ok"}).
+  let writes = 0;
+  const set = chrome.storage.local.set;
+  chrome.storage.local.set = (value, callback) => { writes += 1; set(value, callback); };
+  replies = [{ type: "passkeyProxyStatus", unlocked: true, paired: true, attachAllowed: true, enabled: true, rememberSocialSignIn: false }, { type: "ok" }];
+  await request({ type: "getPasskeyProxyStatus" }, popup);
+  assert.equal(local[SOCIAL_SIGN_IN_ENABLED_KEY], false);
+  const after = writes;
+  // The same value again is not written again (onChanged fires once per change).
+  replies = [{ type: "passkeyProxyStatus", unlocked: true, paired: true, attachAllowed: true, enabled: true, rememberSocialSignIn: false }, { type: "ok" }];
+  await request({ type: "getPasskeyProxyStatus" }, popup);
+  assert.equal(writes, after);
+  // Turned on in the app: the next poll flips the mirror.
+  replies = [{ type: "passkeyProxyStatus", unlocked: false, paired: true, attachAllowed: false, enabled: true, rememberSocialSignIn: true }, { type: "ok" }];
+  await request({ type: "getPasskeyProxyStatus" }, popup);
+  assert.equal(local[SOCIAL_SIGN_IN_ENABLED_KEY], true);
+});
+
+test("while off, page lookups are answered locally for at most a minute", async () => {
+  const realNow = Date.now;
+  let clock = 1_800_000_000_000;
+  Date.now = () => clock;
+  try {
+    const sender = page("https://shop.example/login");
+    replies = [{ type: "socialSignIn", enabled: false }];
+    await request({ type: "getSocialSignIn", url: sender.url }, sender);
+    assert.equal(nativeCalls.length, 1);
+    assert.equal(local[SOCIAL_SIGN_IN_ENABLED_KEY], false);
+
+    clock += 30 * 1000;
+    assert.deepEqual(await request({ type: "getSocialSignIn", url: sender.url }, sender), { type: "socialSignIn", enabled: false });
+    assert.equal(nativeCalls.length, 1, "answered from the mirror");
+
+    // The popup always asks the app.
+    replies = [{ type: "socialSignIn", enabled: false }];
+    await request({ type: "getSocialSignIn", url: sender.url }, popup);
+    assert.equal(nativeCalls.length, 2);
+
+    // A minute after the app last said "off", the next page load asks again; it is on now.
+    clock += 61 * 1000;
+    replies = [{ type: "socialSignIn", enabled: true, provider: "google", host: "shop.example" }];
+    const reply = await request({ type: "getSocialSignIn", url: sender.url }, sender);
+    assert.equal(nativeCalls.length, 3);
+    assert.equal(reply.provider, "google");
+    assert.equal(local[SOCIAL_SIGN_IN_ENABLED_KEY], true);
+  } finally {
+    Date.now = realNow;
+  }
+});

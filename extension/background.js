@@ -153,7 +153,9 @@ function sendNativeMessage(message) {
       // drops them (see noteSocialSignInLockState).
       noteSocialSignInLockState(state);
       void applyActionIcon(state);
-      resolve(response);
+      // Any reply that carries the "Remember social sign-in" setting (a lookup, a record, the
+      // status poll every popup open triggers) updates the mirror before the caller sees it.
+      noteSocialSignInSetting(response).then(() => resolve(response), () => resolve(response));
     });
   });
 }
@@ -1312,8 +1314,11 @@ function sessionRemoveKey(key) {
 
 // Social sign-in. A click the content script reports while the vault is locked is kept in session
 // storage (one record per tab and site, dropped after ten minutes) and sent once a response shows
-// the vault unlocked. Every socialSignIn reply mirrors the app's "Remember social sign-in" setting
-// into storage.local, where content scripts read it before they record or draw anything.
+// the vault unlocked. Every reply carrying the app's "Remember social sign-in" setting (socialSignIn
+// replies and the passkeyProxyStatus poll) mirrors it into storage.local, where content scripts
+// read it before they record or draw anything and whose onChanged event tells loaded pages at
+// once. While the mirror says off, a page's lookup is answered from it, but at most for a minute
+// after the app last reported the setting; then the app is asked again, so an "off" never sticks.
 //
 // Every read and write of the queue runs on one promise chain, so concurrent clicks, a flush and a
 // clear never lose or clobber each other's records; a flush sends outside the chain and then
@@ -1330,13 +1335,36 @@ const SOCIAL_SIGN_IN_ENABLED_KEY = "socialSignInEnabled";
 let socialSignInFlush = null;
 let socialSignInQueueChain = Promise.resolve();
 let socialSignInLockState = null;
+const SOCIAL_SIGN_IN_RECHECK_MS = 60 * 1000;
+// The setting as last reported by the app in this service worker's life, and when.
+let socialSignInEnabledKnown = null;
+let socialSignInCheckedAt = 0;
 
+function socialSignInSettingOf(response) {
+  if (response && response.type === "socialSignIn" && typeof response.enabled === "boolean") return response.enabled;
+  if (response && response.type === "passkeyProxyStatus" && typeof response.rememberSocialSignIn === "boolean") {
+    return response.rememberSocialSignIn;
+  }
+  return null;
+}
+
+// Mirrors the setting into storage.local; only a change is written, so onChanged fires once per
+// change.
 function noteSocialSignInSetting(response) {
-  if (!response || response.type !== "socialSignIn" || typeof response.enabled !== "boolean") return Promise.resolve();
+  const value = socialSignInSettingOf(response);
+  if (value === null) return Promise.resolve();
+  socialSignInCheckedAt = Date.now();
+  if (value === socialSignInEnabledKnown) return Promise.resolve();
+  socialSignInEnabledKnown = value;
   return new Promise((resolve) => {
     if (!chrome.storage || !chrome.storage.local) { resolve(); return; }
-    chrome.storage.local.set({ [SOCIAL_SIGN_IN_ENABLED_KEY]: response.enabled }, () => resolve());
+    chrome.storage.local.set({ [SOCIAL_SIGN_IN_ENABLED_KEY]: value }, () => resolve());
   });
+}
+
+// A page lookup the mirror can answer without the app: the app said "off" less than a minute ago.
+function socialSignInKnownOff() {
+  return socialSignInEnabledKnown === false && Date.now() - socialSignInCheckedAt < SOCIAL_SIGN_IN_RECHECK_MS;
 }
 
 // Runs `step` after every queue step queued before it; a failed step never stalls the chain.
@@ -1385,7 +1413,6 @@ function flushSocialSignInQueue() {
       const response = await sendNativeMessageWithPairing({
         type: "recordSocialSignIn", pageUrl: record.pageUrl, provider: record.provider, source: record.source
       });
-      await noteSocialSignInSetting(response);
       // Locked again or the app went away mid-flush: the record stays queued.
       if (response && response.type !== "locked" && response.type !== "error") delivered[key] = record;
     }
@@ -1402,6 +1429,8 @@ function flushSocialSignInQueue() {
 }
 
 function resetSocialSignInStateForTests() {
+  socialSignInEnabledKnown = null;
+  socialSignInCheckedAt = 0;
   socialSignInFlush = null;
   socialSignInQueueChain = Promise.resolve();
   socialSignInLockState = null;
@@ -1421,8 +1450,8 @@ async function handleSocialSignInMessage(message, sender) {
     const fromPopup = isAddressPopup(sender);
     const url = fromPopup ? message.url : socialSignInPageOf(message, sender);
     if (typeof url !== "string" || !socialSignIn.isHttpsUrl(url)) return { type: "error", message: "invalid_request" };
+    if (!fromPopup && socialSignInKnownOff()) return { type: "socialSignIn", enabled: false };
     const response = await sendNativeMessageWithPairing({ type: "getSocialSignIn", url });
-    await noteSocialSignInSetting(response);
     // The popup is extension UI the page cannot see; a page only learns a method recorded on its
     // own exact host (the ring it draws is observable by the page).
     return fromPopup ? response : socialSignIn.responseForPage(response, url);
@@ -1432,7 +1461,6 @@ async function handleSocialSignInMessage(message, sender) {
   // Anything but an explicit click is the weaker frame heuristic.
   const source = message.source === "click" ? "click" : "frame";
   const response = await sendNativeMessageWithPairing({ type: "recordSocialSignIn", pageUrl, provider: message.provider, source });
-  await noteSocialSignInSetting(response);
   if (response && response.type === "locked") {
     await queueSocialSignIn(sender.tab.id, pageUrl, message.provider, source);
     return { type: "queued" };

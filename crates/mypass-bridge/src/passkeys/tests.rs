@@ -43,6 +43,30 @@ fn fill(svc: &PasskeyService, ids: &[i64]) {
 }
 
 #[test]
+fn status_reports_the_social_sign_in_setting_locked_or_not() {
+    let (f, svc) = passkey_fx();
+    let status = named("getPasskeyProxyStatus", Some(&f.secret));
+    for on in [false, true] {
+        f.settings
+            .update(SettingsPatch {
+                remember_social_sign_in: Some(on),
+                ..SettingsPatch::default()
+            })
+            .unwrap();
+        for unlocked in [true, false] {
+            let Response::PasskeyProxyStatus {
+                remember_social_sign_in,
+                ..
+            } = svc.handle(&ctx(&f, &f.settings, unlocked), &status)
+            else {
+                panic!("expected a status");
+            };
+            assert_eq!(remember_social_sign_in, on, "unlocked {unlocked}");
+        }
+    }
+}
+
+#[test]
 fn status_reports_enabled_and_attach_allowed_from_lock_state_and_toggle() {
     let (f, svc) = passkey_fx();
     let status = named("getPasskeyProxyStatus", Some(&f.secret));
@@ -60,6 +84,7 @@ fn status_reports_enabled_and_attach_allowed_from_lock_state_and_toggle() {
                 paired: true,
                 attach_allowed: attach,
                 enabled: on,
+                remember_social_sign_in: true,
             },
             "unlocked {unlocked}, enabled {on}"
         );
@@ -75,6 +100,7 @@ fn status_reports_enabled_and_attach_allowed_from_lock_state_and_toggle() {
             paired: true,
             attach_allowed: false,
             enabled: true,
+            remember_social_sign_in: true,
         }
     );
 }
@@ -90,6 +116,7 @@ fn status_is_enabled_when_toggle_never_touched() {
             paired: true,
             attach_allowed: true,
             enabled: true,
+            remember_social_sign_in: true,
         }
     );
 }
@@ -296,6 +323,7 @@ fn status_polling_never_resets_idle_timer_or_unlocks() {
                 paired: true,
                 attach_allowed: false,
                 enabled: true,
+                remember_social_sign_in: true,
             }
         );
         f.sched.advance(Duration::from_secs(30));

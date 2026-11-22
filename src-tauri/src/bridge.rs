@@ -1520,7 +1520,7 @@ mod tests {
             reply,
             serde_json::json!({
                 "type": "passkeyProxyStatus", "unlocked": true, "paired": true,
-                "attachAllowed": true, "enabled": true
+                "attachAllowed": true, "enabled": true, "rememberSocialSignIn": true
             })
         );
     }

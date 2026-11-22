@@ -156,12 +156,14 @@ impl PasskeyService {
     /// and resyncs its cache and attachment without waiting for a service worker restart: the
     /// app is authoritative, the extension's flag is only a cache.
     fn status(ctx: &PasskeyContext<'_>) -> Response {
-        let enabled = ctx.settings.get().passkey_proxy_enabled;
+        let settings = ctx.settings.get();
+        let enabled = settings.passkey_proxy_enabled;
         Response::PasskeyProxyStatus {
             unlocked: ctx.unlocked,
             paired: true,
             attach_allowed: ctx.unlocked && enabled,
             enabled,
+            remember_social_sign_in: settings.remember_social_sign_in,
         }
     }
 

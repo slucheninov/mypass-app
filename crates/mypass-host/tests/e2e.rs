@@ -789,7 +789,7 @@ fn windows_integration_passkey_status_and_ceremony_reach_the_passkey_service_end
         r,
         json!({
             "type":"passkeyProxyStatus","unlocked":true,"paired":true,
-            "attachAllowed":true,"enabled":true
+            "attachAllowed":true,"enabled":true,"rememberSocialSignIn":true
         })
     );
     // A create through the real host is routed and kept pending (the full ceremony is pinned

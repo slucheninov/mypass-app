@@ -1977,122 +1977,32 @@
       state, attachIcons, IS_TOP_FRAME, () => autofillSettingsReady && pageAutofillSettings.offerSaveTotp
     );
 
-    // Social sign-in (shared/social-sign-in.js decides): a trusted click on a "Sign in with ..."
-    // button is sent to the service worker, and the button remembered for this site gets a green
-    // ring. https top frame only. The "Remember social sign-in" setting of the app is mirrored by
-    // the service worker into storage.local; while it is off nothing is sent and nothing drawn.
+    // Social sign-in (shared/social-sign-in.js decides and draws): a trusted click on a "Sign in
+    // with ..." button is sent to the service worker, and the button remembered for exactly this
+    // host gets a green ring. https top frame only. The service worker mirrors the app's
+    // "Remember social sign-in" setting into storage.local; while it is off nothing is sent and
+    // nothing drawn, and a page load still asks (the service worker throttles that to once a
+    // minute), so turning it back on is noticed.
     function startSocialSignIn() {
       if (!runsHere('socialSignIn') || location.protocol !== 'https:') return;
-      const social = shared.socialSignIn;
-      const ENABLED_KEY = 'socialSignInEnabled';
-      const RETRY_MS = [1000, 2500, 5000];
-      let enabled = null;
-      let highlight = null;
-      let rememberedProvider = null;
-
-      function rendered(node) {
-        if (!node || typeof node.getBoundingClientRect !== 'function') return false;
-        const rect = node.getBoundingClientRect();
-        if (rect.width <= 0 || rect.height <= 0) return false;
-        const style = window.getComputedStyle ? window.getComputedStyle(node) : null;
-        return !(style && (style.visibility === 'hidden' || style.display === 'none'));
-      }
-      function clearHighlight() {
-        if (highlight) highlight.host.remove();
-        highlight = null;
-      }
-      function placeHighlight() {
-        if (!highlight) return;
-        if (!highlight.target.isConnected) {
-          clearHighlight();
-          return;
-        }
-        social.placeHighlight(highlight.host, highlight.target.getBoundingClientRect(), window.scrollX, window.scrollY);
-      }
-      function showHighlight(provider) {
-        clearHighlight();
-        const target = social.findProviderButtons(document, provider, rendered, location.href)[0];
-        if (!target) return false;
-        const label = i18n.t('socialSignInLastTime', [social.PROVIDER_NAMES[provider]]);
-        const overlay = social.buildHighlight(document, label);
-        document.documentElement.appendChild(overlay.host);
-        highlight = { host: overlay.host, target: target };
-        placeHighlight();
-        return true;
-      }
-      function findWithRetries(provider, attempt) {
-        if (enabled === false || rememberedProvider !== provider) return;
-        if (showHighlight(provider) || attempt >= RETRY_MS.length) return;
-        setTimeout(() => findWithRetries(provider, attempt + 1), RETRY_MS[attempt]);
-      }
-      function lookUp() {
-        if (enabled === false) return;
-        sendRuntimeMessage({ type: 'getSocialSignIn', url: location.href }, (response) => {
+      const local = chrome.storage && chrome.storage.local;
+      shared.socialSignIn.startPage({
+        window,
+        document,
+        location,
+        storage: local && typeof local.get === 'function' ? {
+          get: (keys, callback) => local.get(keys, (stored) => callback(chrome.runtime.lastError ? undefined : stored)),
+        } : null,
+        storageChanged: chrome.storage && chrome.storage.onChanged,
+        sendMessage: (message, callback) => sendRuntimeMessage(message, (response) => {
           void chrome.runtime.lastError;
-          if (!response || response.type !== 'socialSignIn') return;
-          if (response.enabled === false) {
-            enabled = false;
-            clearHighlight();
-            return;
-          }
-          // Only a method recorded on exactly this host is ringed (the service worker already
-          // strips any other; this is the second check).
-          const sameHost = typeof response.host === 'string' && response.host === location.hostname.toLowerCase();
-          rememberedProvider = sameHost && social.isProvider(response.provider) ? response.provider : null;
-          if (rememberedProvider) findWithRetries(rememberedProvider, 0);
-        });
-      }
-      function send(message) {
-        if (message) sendRuntimeMessage(message, () => { void chrome.runtime.lastError; });
-      }
-      // The page's last trusted pointer event, for the provider-frame heuristic: pointer events
-      // over a cross-origin frame never reach this document, so this is where the pointer was
-      // just before it entered the frame. Scripts cannot synthesize trusted pointer events.
-      let lastPointer = null;
-      const notePointer = (event) => {
-        if (!event || event.isTrusted !== true) return;
-        lastPointer = { x: event.clientX, y: event.clientY, at: Date.now() };
-      };
-      document.addEventListener('pointermove', notePointer, { capture: true, passive: true });
-      document.addEventListener('pointerdown', notePointer, { capture: true, passive: true });
-      const context = () => ({ pageUrl: location.href, enabled: enabled !== false, pointer: lastPointer, now: Date.now() });
-
-      document.addEventListener('click', (event) => {
-        if (enabled === null || enabled === false) return;
-        send(social.recordMessageForClick(event, context()));
-      }, true);
-      window.addEventListener('blur', (event) => {
-        if (enabled === null || enabled === false) return;
-        send(social.recordMessageForFrameFocus(event, context(), document, navigator));
+          callback(response);
+        }),
+        t: (key, substitutions) => i18n.t(key, substitutions),
+        now: () => Date.now(),
+        setTimeout: (fn, ms) => setTimeout(fn, ms),
+        requestAnimationFrame: (fn) => requestAnimationFrame(fn),
       });
-      let placeScheduled = false;
-      const schedulePlace = () => {
-        if (!highlight || placeScheduled) return;
-        placeScheduled = true;
-        requestAnimationFrame(() => {
-          placeScheduled = false;
-          placeHighlight();
-        });
-      };
-      window.addEventListener('scroll', schedulePlace, { capture: true, passive: true });
-      window.addEventListener('resize', schedulePlace, { passive: true });
-
-      const storage = chrome.storage && chrome.storage.local;
-      const begin = (stored) => {
-        enabled = stored !== false;
-        lookUp();
-      };
-      if (!storage || typeof storage.get !== 'function') begin(undefined);
-      else storage.get([ENABLED_KEY], (stored) => begin(chrome.runtime.lastError ? undefined : stored && stored[ENABLED_KEY]));
-      if (chrome.storage.onChanged && typeof chrome.storage.onChanged.addListener === 'function') {
-        chrome.storage.onChanged.addListener((changes, area) => {
-          if (area !== 'local' || !changes[ENABLED_KEY]) return;
-          const wasOff = enabled === false;
-          enabled = changes[ENABLED_KEY].newValue !== false;
-          if (!enabled) clearHighlight();
-          else if (wasOff) lookUp();
-        });
-      }
     }
     startSocialSignIn();
   }

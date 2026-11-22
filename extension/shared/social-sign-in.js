@@ -344,6 +344,170 @@ var mypassSocialSignIn = (function () {
     return { type: 'socialSignIn', enabled: response.enabled !== false };
   }
 
+  // ---- the page (content.js, the top frame of an https page) --------------------------------
+  // The service worker mirrors the app's "Remember social sign-in" setting into storage.local
+  // under this key and answers lookups; the page reads the mirror and follows its changes.
+  var SETTING_KEY = 'socialSignInEnabled';
+  var FIND_RETRY_MS = [1000, 2500, 5000];
+
+  // Starts the page side: records trusted sign-in clicks while the setting is on, and rings the
+  // button remembered for exactly this host. `env` is the page's world (content.js passes the
+  // real one, tests a fake): window, document, location, storage (storage.local: get), storageChanged
+  // (storage.onChanged), sendMessage(message, callback), t(key, substitutions), now(),
+  // setTimeout, requestAnimationFrame. A page load always asks the service worker (which answers
+  // from its cache at most once a minute while the setting is off), so a cached "off" never
+  // suppresses a later "on". Returns `{ stop, snapshot }`.
+  function startPage(env) {
+    var win = env.window;
+    var doc = env.document;
+    var loc = env.location;
+    var now = typeof env.now === 'function' ? env.now : function () { return Date.now(); };
+    var enabled = null;
+    var highlight = null;
+    var remembered = null;
+    var lastPointer = null;
+    var placeScheduled = false;
+    var stopped = false;
+    var listeners = [];
+
+    function on(target, type, fn, options) {
+      if (!target || typeof target.addEventListener !== 'function') return;
+      target.addEventListener(type, fn, options);
+      listeners.push([target, type, fn, options]);
+    }
+    function send(message, callback) {
+      if (stopped || !message) return;
+      env.sendMessage(message, callback || function () {});
+    }
+    function rendered(node) {
+      if (!node || typeof node.getBoundingClientRect !== 'function') return false;
+      var rect = node.getBoundingClientRect();
+      if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+      var style = win && typeof win.getComputedStyle === 'function' ? win.getComputedStyle(node) : null;
+      return !(style && (style.visibility === 'hidden' || style.display === 'none'));
+    }
+    function clearHighlight() {
+      if (!highlight) return;
+      if (typeof highlight.host.remove === 'function') highlight.host.remove();
+      highlight = null;
+    }
+    function place() {
+      if (!highlight) return;
+      if (!highlight.target.isConnected) {
+        clearHighlight();
+        return;
+      }
+      placeHighlight(highlight.host, highlight.target.getBoundingClientRect(), win.scrollX, win.scrollY);
+    }
+    function schedulePlace() {
+      if (!highlight || placeScheduled || stopped) return;
+      placeScheduled = true;
+      env.requestAnimationFrame(function () {
+        placeScheduled = false;
+        place();
+      });
+    }
+    function show(provider) {
+      clearHighlight();
+      var target = findProviderButtons(doc, provider, rendered, loc.href)[0];
+      if (!target) return false;
+      var overlay = buildHighlight(doc, env.t('socialSignInLastTime', [PROVIDER_NAMES[provider]]));
+      doc.documentElement.appendChild(overlay.host);
+      highlight = { host: overlay.host, target: target };
+      place();
+      return true;
+    }
+    function findWithRetries(provider, attempt) {
+      if (stopped || enabled !== true || remembered !== provider) return;
+      if (show(provider) || attempt >= FIND_RETRY_MS.length) return;
+      env.setTimeout(function () { findWithRetries(provider, attempt + 1); }, FIND_RETRY_MS[attempt]);
+    }
+    function turnOff() {
+      enabled = false;
+      remembered = null;
+      clearHighlight();
+    }
+    function lookUp() {
+      send({ type: 'getSocialSignIn', url: loc.href }, function (response) {
+        if (stopped || !response || response.type !== 'socialSignIn') return;
+        if (response.enabled === false) {
+          turnOff();
+          return;
+        }
+        enabled = true;
+        // Only a method recorded on exactly this host is ringed (the service worker already
+        // strips any other; this is the second check).
+        var host = String(loc.hostname || '').toLowerCase();
+        var sameHost = typeof response.host === 'string' && response.host === host;
+        remembered = sameHost && isProvider(response.provider) ? response.provider : null;
+        if (remembered) findWithRetries(remembered, 0);
+        else clearHighlight();
+      });
+    }
+    function context() {
+      return { pageUrl: loc.href, enabled: enabled === true, pointer: lastPointer, now: now() };
+    }
+    // The page's last trusted pointer event, for the provider-frame heuristic: pointer events
+    // over a cross-origin frame never reach this document, so this is where the pointer was just
+    // before it entered the frame. Scripts cannot synthesize trusted pointer events.
+    function notePointer(event) {
+      if (!event || event.isTrusted !== true) return;
+      lastPointer = { x: event.clientX, y: event.clientY, at: now() };
+    }
+    function onClick(event) {
+      if (enabled !== true) return;
+      send(recordMessageForClick(event, context()));
+    }
+    function onBlur(event) {
+      if (enabled !== true) return;
+      send(recordMessageForFrameFocus(event, context(), doc, win.navigator));
+    }
+    function onSettingChanged(changes, area) {
+      if (stopped || area !== 'local' || !changes || !changes[SETTING_KEY]) return;
+      if (changes[SETTING_KEY].newValue === false) {
+        turnOff();
+      } else if (enabled !== true) {
+        enabled = true;
+        lookUp();
+      }
+    }
+    function stop() {
+      if (stopped) return;
+      stopped = true;
+      clearHighlight();
+      listeners.forEach(function (l) { l[0].removeEventListener(l[1], l[2], l[3]); });
+      listeners = [];
+      if (env.storageChanged && typeof env.storageChanged.removeListener === 'function') {
+        env.storageChanged.removeListener(onSettingChanged);
+      }
+    }
+
+    on(doc, 'pointermove', notePointer, { capture: true, passive: true });
+    on(doc, 'pointerdown', notePointer, { capture: true, passive: true });
+    on(doc, 'click', onClick, true);
+    on(win, 'blur', onBlur);
+    on(win, 'scroll', schedulePlace, { capture: true, passive: true });
+    on(win, 'resize', schedulePlace, { passive: true });
+    if (env.storageChanged && typeof env.storageChanged.addListener === 'function') {
+      env.storageChanged.addListener(onSettingChanged);
+    }
+    var begin = function (stored) {
+      if (stopped) return;
+      // The cached value only decides until the lookup answers; the lookup always goes out.
+      if (enabled === null) enabled = stored !== false;
+      lookUp();
+    };
+    if (!env.storage || typeof env.storage.get !== 'function') begin(undefined);
+    else env.storage.get([SETTING_KEY], function (stored) { begin(stored ? stored[SETTING_KEY] : undefined); });
+
+    return {
+      stop: stop,
+      snapshot: function () {
+        return { enabled: enabled, remembered: remembered, ringed: highlight ? highlight.target : null, stopped: stopped };
+      }
+    };
+  }
+
   // ---- pending records (the service worker) -------------------------------------------------
   // One record per tab and site (`tabId|origin`), the newest click wins. Records older than the
   // TTL, or malformed, are dropped by `prunePending`.
@@ -417,6 +581,8 @@ var mypassSocialSignIn = (function () {
     highlightBox: highlightBox,
     buildHighlight: buildHighlight,
     placeHighlight: placeHighlight,
+    SETTING_KEY: SETTING_KEY,
+    startPage: startPage,
     pendingKey: pendingKey,
     prunePending: prunePending,
     addPending: addPending,
