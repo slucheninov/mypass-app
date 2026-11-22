@@ -41,8 +41,6 @@ pub fn commands() -> Commands<tauri::Wry> {
     use commands::{device, platform, settings, sidebar, sync, tray, update, vault};
     collect_commands![
         app::app_info,
-        app::app_new_entry,
-        app::app_open_entry,
         app::app_open_settings,
         app::app_quit,
         app::app_record_activity,
@@ -384,7 +382,6 @@ mod tests {
         let snapshot = fs::read_to_string(committed_snapshot()).unwrap();
         for required in [
             "platform_keyboard_layout",
-            "app_open_entry",
             "app_reveal_backups",
             "app_show_main",
             "app_quit",

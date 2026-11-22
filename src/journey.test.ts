@@ -340,18 +340,13 @@ describe("journeys", () => {
     expect(body()).not.toContain("notes-large-1");
   });
 
-  it("journey_tray_recent_detail_edit_opens_main_editor", async () => {
+  it("journey_tray_recent_copies_a_password_and_closes_the_panel", async () => {
     const { fake, user } = await unlocked();
-    // Rendered beside the main window without a second `install()`, which would drop its event listeners.
+    // Rendered beside the main window without replacing its backend event listeners.
     const tray = render(TrayPanel);
-    const recent = await tray.findByRole("menuitem", { name: "GitHub" });
-    await user.click(recent);
-    const edit = await tray.findAllByRole("button", { name: "Edit" });
-    await user.click(edit[edit.length - 1] as HTMLElement);
-    await waitFor(() => expect(calls(fake, "appOpenEntry")[0]?.args).toEqual({ id: "e-github", edit: true }));
-    await waitFor(() => expect(navigation.editModel?.id).toBe("e-github"));
-    expect(navigation.selectedId).toBe("e-github");
-    await waitFor(() => expect(screen.getAllByRole("button", { name: "Save" }).length).toBeGreaterThan(0));
+    await user.click(await tray.findByRole("menuitem", { name: "GitHub" }));
+    await user.click(await tray.findByRole("menuitem", { name: "Copy password" }));
+    await waitFor(() => expect(calls(fake, "trayPanelHide")).toHaveLength(1));
+    expect(calls(fake, "entryCopy")[0]?.args).toEqual({ id: "e-github", field: { kind: "password" } });
   });
 });
-

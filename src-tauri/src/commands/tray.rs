@@ -1,7 +1,7 @@
 //! `tray_*`: what the tray panel may read, and the rule that keeps it out of the recycle bin.
 //!
-//! The tray panel lists recent entries and restricts reads to live entries and its compact UI's
-//! fields. The caller label comes from the runtime and its capability controls each command.
+//! The tray panel lists recents and copies fields through `entry_copy`. The clipboard path
+//! restricts the tray to live entries and the three fields its menu offers.
 
 use crate::tray::{PanelMaterial, PANEL_WINDOW};
 use mypass_session::dto::FieldRef;
@@ -35,12 +35,11 @@ pub fn tray_panel_hide(window: tauri::WebviewWindow) -> Result<(), ApiError> {
     window.hide().map_err(|e| super::internal(e.to_string()))
 }
 
-/// The fields the tray panel shows and copies: the user name, the password, the first website and
-/// the one-time code.
+/// The fields the tray panel can copy: the user name, password and one-time code.
 pub fn tray_field(field: &FieldRef) -> bool {
     matches!(
         field,
-        FieldRef::Username | FieldRef::Password | FieldRef::Url | FieldRef::Totp
+        FieldRef::Username | FieldRef::Password | FieldRef::Totp
     )
 }
 
@@ -114,15 +113,11 @@ mod tests {
     fn the_tray_panel_reads_only_the_fields_it_shows() {
         let w = open_world();
         let id = w.login("Live");
-        for field in [
-            FieldRef::Username,
-            FieldRef::Password,
-            FieldRef::Url,
-            FieldRef::Totp,
-        ] {
+        for field in [FieldRef::Username, FieldRef::Password, FieldRef::Totp] {
             tray_access(&w.core, PANEL_WINDOW, &id, Some(&field)).unwrap();
         }
         for field in [
+            FieldRef::Url,
             FieldRef::UrlAt { index: 1 },
             FieldRef::NotesBody,
             FieldRef::CardNumber,

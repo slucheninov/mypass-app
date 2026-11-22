@@ -220,9 +220,9 @@ describe("main window event bridge", () => {
     expect(navigation.presentation).toBe("browse");
   });
 
-  it("the_tray_plus_records_a_login_request_that_the_main_window_takes", async () => {
+  it("the_main_window_opens_the_requested_login_editor", async () => {
     const { fake } = await mainApp();
-    await fake.handlers.appNewEntry({});
+    await requestNewEntry(fake, "login");
     await waitFor(() => expect(navigation.editModel?.entryType).toBe("login"));
     expect(fake.state.newEntryRequest).toBeNull();
   });

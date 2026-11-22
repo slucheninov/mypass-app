@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { api } from "../lib/api";
   import { events, type EntrySummary } from "../lib/bindings";
   import { t } from "../lib/i18n/index.svelte";
@@ -13,7 +13,7 @@
   import ToastHost from "../lib/ui/ToastHost.svelte";
   import { quietly } from "../lib/unlisten";
   import UnlockCard from "../screens/UnlockCard.svelte";
-  import TrayDetail from "./TrayDetail.svelte";
+  import TrayActions from "./TrayActions.svelte";
   import TrayEntryRow from "./TrayEntryRow.svelte";
   import TrayMenuRow from "./TrayMenuRow.svelte";
   import TrayUpdateRow from "./TrayUpdateRow.svelte";
@@ -22,7 +22,8 @@
   const recentKey = (id: string) => `recent:${id}`;
 
   let recents = $state<EntrySummary[]>([]);
-  let selectedId = $state<string | null>(null);
+  type Selection = { entry: EntrySummary; epoch: number };
+  let selected = $state.raw<Selection | null>(null);
   let highlight = $state<string | null>(null);
   let card: UnlockCard | undefined = $state();
   let panel: HTMLElement;
@@ -30,6 +31,7 @@
   let requests = 0;
 
   const unlocked = $derived(session.status.state === "unlocked");
+  const actions = $derived(selected?.epoch === session.lockEpoch && unlocked ? selected : null);
   const noVault = $derived(session.status.state === "noVault");
   const vaultKey = $derived(unlocked ? (session.status.vaultPath ?? "") : null);
   const lockShortcut = $derived(formatShortcut(settings.value?.shortcutLock ?? "", platform.os));
@@ -63,13 +65,13 @@
     const key = vaultKey;
     requests++;
     recents = [];
-    selectedId = null;
+    selected = null;
     highlight = null;
     if (key !== null) void loadRecents();
   });
 
   function clearOnHide(): void {
-    selectedId = null;
+    selected = null;
     highlight = null;
     card?.clear();
   }
@@ -129,9 +131,32 @@
     };
   });
 
-  function open(id: string) {
-    selectedId = id;
-    void toasts.guard(() => api.entryTouch(id));
+  async function focusHighlight(): Promise<void> {
+    await tick();
+    menuRows().find((row) => row.dataset.menuKey === activeKey)?.focus();
+  }
+
+  function menuRows(): HTMLButtonElement[] {
+    return Array.from(menu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? []);
+  }
+
+  function open(id: string): void {
+    const entry = recents.find((item) => item.id === id);
+    if (!entry || !unlocked) return;
+    const selection = { entry, epoch: session.lockEpoch };
+    selected = selection;
+    highlight = "back";
+    void focusHighlight();
+    void api.entryTouch(id).catch((e) => {
+      if (actions === selection) toasts.reportError(e);
+    });
+  }
+
+  function back(): void {
+    const entry = actions?.entry;
+    selected = null;
+    highlight = entry ? recentKey(entry.id) : null;
+    void focusHighlight();
   }
 
   const showMain = () => void toasts.guard(() => api.appShowMain());
@@ -141,9 +166,9 @@
 
   function onKey(event: KeyboardEvent): void {
     if (event.defaultPrevented || event.isComposing) return;
-    if (event.key === "Escape") {
+    if (event.key === "Escape" || (event.key === "ArrowLeft" && actions)) {
       event.preventDefault();
-      if (selectedId !== null) selectedId = null;
+      if (actions) back();
       else hide();
       return;
     }
@@ -157,7 +182,7 @@
     if (event.target instanceof HTMLElement && event.target.closest("input, textarea, select, [contenteditable]")) return;
     if (!menu || event.metaKey || event.ctrlKey || event.altKey) return;
 
-    const rows = Array.from(menu.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]'));
+    const rows = menuRows();
     if (rows.length === 0) return;
     const index = rows.findIndex((row) => row.dataset.menuKey === activeKey);
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -186,12 +211,20 @@
   {:else if !unlocked}
     <UnlockCard bind:this={card} compact />
   {/if}
-  {#if selectedId !== null && unlocked}
-    {#key selectedId}
-      <TrayDetail id={selectedId} onback={() => (selectedId = null)} />
-    {/key}
-  {:else}
-    <div role="menu" aria-label={t("MyPass")} bind:this={menu}>
+  <div role="menu" aria-label={actions?.entry.title ?? t("MyPass")} bind:this={menu}>
+    {#if actions}
+      {@const selection = actions}
+      {#key selection}
+        <TrayActions
+          entry={selection.entry}
+          highlight={activeKey}
+          onback={back}
+          ondone={hide}
+          onhover={(key) => (highlight = key)}
+          isCurrent={() => actions === selection}
+        />
+      {/key}
+    {:else}
       {#if unlocked}
         <div class="heading" aria-hidden="true">{t("Recent")}</div>
         {#if recents.length === 0}
@@ -218,8 +251,8 @@
       <TrayMenuRow key="settings" label={t("Settings…")} icon="gear" shortcut={settingsShortcut} active={activeKey === "settings"} onhover={() => (highlight = "settings")} onclick={openSettings} />
       <hr />
       <TrayMenuRow key="quit" label={t("Quit")} icon="power" shortcut={quitShortcut} active={activeKey === "quit"} onhover={() => (highlight = "quit")} onclick={quit} />
-    </div>
-  {/if}
+    {/if}
+  </div>
 </main>
 <ToastHost />
 

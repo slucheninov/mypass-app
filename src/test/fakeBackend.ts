@@ -436,23 +436,6 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       os,
       deviceUnlockAvailable,
     }),
-    // Like Rust: a locked session or a missing entry does nothing; otherwise the main window shows
-    // and `OpenEntryEvent` goes out (the window calls are not modelled).
-    appOpenEntry: ({ id, edit }) => {
-      if (state.session.state !== "unlocked") return null;
-      if (!state.entries.some((e) => e.summary.id === id)) return null;
-      publish("openEntryEvent", { id, edit });
-      return null;
-    },
-    // Like Rust: only an unlocked session records a request for a new login, then nudges the main
-    // window (a payload-free event) to take it.
-    appNewEntry: () => {
-      if (state.session.state === "unlocked") {
-        state.newEntryRequest = "login";
-        publish("newEntryEvent", null);
-      }
-      return null;
-    },
     // Like Rust: taken at most once, and only while unlocked (locked, the request keeps waiting).
     appTakeNewEntry: () => {
       if (state.session.state !== "unlocked") return null;

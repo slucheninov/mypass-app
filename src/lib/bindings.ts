@@ -6,9 +6,6 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 /** Commands */
 export const commands = {
 	appInfo: () => typedError<AppInfo, ApiError>(__TAURI_INVOKE("app_info")),
-	/**  The tray panel's "+": the main window opens the editor for a new login. */
-	appNewEntry: () => typedError<null, ApiError>(__TAURI_INVOKE("app_new_entry")),
-	appOpenEntry: (id: string, edit: boolean) => typedError<null, ApiError>(__TAURI_INVOKE("app_open_entry", { id, edit })),
 	/**  Shows the settings window (General pane). */
 	appOpenSettings: () => typedError<null, ApiError>(__TAURI_INVOKE("app_open_settings")),
 	appQuit: () => typedError<null, ApiError>(__TAURI_INVOKE("app_quit")),
