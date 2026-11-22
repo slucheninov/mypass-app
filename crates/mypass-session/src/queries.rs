@@ -9,13 +9,15 @@
 
 use crate::dto::{
     timestamp_ms, AddressDto, AttachmentMeta, CardDto, Category, CategoryCount, CustomFieldDto,
-    EntryDetailDto, EntryQuery, EntrySummary, EntryTypeDto, GroupNode, PasskeyDetails, PasskeyMeta,
-    Scope, SecurityFlag, Sidebar, SortKey, SortOrder, TotpDto,
+    EntryDetailDto, EntryQuery, EntrySummary, EntryTypeDto, GroupNode, LinkedAddressDto,
+    PasskeyDetails, PasskeyMeta, PersonDto, Scope, SecurityFlag, Sidebar, SortKey, SortOrder,
+    TotpDto,
 };
 use crate::fields::{
-    bin_id, is_history_group, EntryFields, ADDRESS_FIELDS, ADDRESS_LABELS, ADDRESS_PREFIX,
-    CARD_CVV, CARD_EXPIRY, CARD_HOLDER, CARD_NUMBER, GROUP_EMOJI, NOTES_BODY, PASSKEY_CREATED,
-    PASSKEY_CREDENTIAL_ID, PASSKEY_RELYING_PARTY, PASSKEY_USERNAME,
+    bin_id, is_history_group, parse_address_ids, EntryFields, ADDRESS_FIELDS, ADDRESS_LABELS,
+    ADDRESS_PREFIX, CARD_CVV, CARD_EXPIRY, CARD_HOLDER, CARD_NUMBER, GROUP_EMOJI, NOTES_BODY,
+    PASSKEY_CREATED, PASSKEY_CREDENTIAL_ID, PASSKEY_RELYING_PARTY, PASSKEY_USERNAME,
+    PERSON_ADDRESS_IDS, PERSON_FIELDS, PERSON_PREFIX,
 };
 use crate::session::SessionError;
 use mypass_core::entry_ext::{EntryExt, EntryType};
@@ -27,12 +29,13 @@ use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 /// The sidebar order of the smart categories.
-const CATEGORY_ORDER: [Category; 10] = [
+const CATEGORY_ORDER: [Category; 11] = [
     Category::All,
     Category::Favorites,
     Category::Codes,
     Category::Passkeys,
     Category::Addresses,
+    Category::People,
     Category::Cards,
     Category::Notes,
     Category::Files,
@@ -171,6 +174,7 @@ fn in_category(category: Category, item: &Item<'_>, audit: &Audit) -> bool {
         Category::Codes => e.otp_source().is_some(),
         Category::Passkeys => e.has_passkey(),
         Category::Addresses => e.entry_type() == EntryType::Address,
+        Category::People => e.entry_type() == EntryType::Person,
         Category::Cards => e.entry_type() == EntryType::Card,
         Category::Notes => e.entry_type() == EntryType::Notes,
         Category::Files => e.entry_type() == EntryType::Files,
@@ -196,7 +200,8 @@ fn contains_ci(haystack: &str, needle_lower: &str) -> bool {
 pub enum SearchScope {
     /// The in-app search: everything the user can see in the detail pane. Title, username, every
     /// URL, the KeePass notes, `MyPass.NotesBody`, the group name, the 14 address fields of
-    /// ADDRESS entries only, and attachment names.
+    /// ADDRESS entries only, the person fields of PERSON entries only (not the address links),
+    /// and attachment names.
     App,
     /// The stage 3 browser bridge (`searchEntries`). Only what picking a login to autofill needs:
     /// title, username and every URL (the `URL` field, the `KP2A_URL` array and any `KP2A_URL*`
@@ -255,7 +260,54 @@ pub fn entry_matches(entry: &Entry, group_name: &str, query: &str, scope: Search
     {
         return true;
     }
+    if entry.entry_type() == EntryType::Person
+        && entry.fields.iter().any(|f| {
+            f.key
+                .strip_prefix(PERSON_PREFIX)
+                .is_some_and(|name| name != PERSON_ADDRESS_IDS && PERSON_FIELDS.contains(&name))
+                && hit(f.value())
+        })
+    {
+        return true;
+    }
     entry.attachments.iter().any(|a| hit(&a.name))
+}
+
+/// The person fields of an entry as stored (no synthesised values); the links as entry ids in
+/// order, malformed parts and duplicates dropped. Shared with the editor and the browser bridge.
+pub fn person_of(entry: &Entry) -> PersonDto {
+    let get = |name: &str| {
+        entry
+            .field(&format!("{PERSON_PREFIX}{name}"))
+            .unwrap_or("")
+            .to_owned()
+    };
+    let ids = entry
+        .field(&format!("{PERSON_PREFIX}{PERSON_ADDRESS_IDS}"))
+        .map(parse_address_ids)
+        .unwrap_or_default();
+    PersonDto {
+        label: get("label"),
+        given_name: get("givenName"),
+        family_name: get("familyName"),
+        middle_name: get("middleName"),
+        email: get("email"),
+        birth_date: get("birthDate"),
+        address_ids: ids.iter().map(|id| id.simple().to_string()).collect(),
+    }
+}
+
+/// The Address entries a person links to that exist outside the recycle bin, in the person's
+/// order. A missing, deleted or non-address link is skipped silently.
+pub fn linked_addresses<'a>(db: &'a Database, person: &Entry) -> Vec<&'a Entry> {
+    let Some(text) = person.field(&format!("{PERSON_PREFIX}{PERSON_ADDRESS_IDS}")) else {
+        return Vec::new();
+    };
+    parse_address_ids(text)
+        .into_iter()
+        .filter_map(|id| db.find_entry(id))
+        .filter(|e| e.entry_type() == EntryType::Address && !db.is_in_recycle_bin(e.uuid))
+        .collect()
 }
 
 /// The 14 address fields of an entry, the label normalised to Home, Work or Other and an empty full
@@ -318,6 +370,15 @@ fn subtitle(entry: &Entry) -> String {
             [a.label.as_str(), a.full_name.as_str(), a.city.as_str()]
                 .into_iter()
                 .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(" \u{b7} ")
+        }
+        EntryType::Person => {
+            let p = person_of(entry);
+            let name = p.full_name();
+            [name.as_str(), p.email.as_str()]
+                .into_iter()
+                .filter(|s| !s.is_empty() && *s != entry.title())
                 .collect::<Vec<_>>()
                 .join(" \u{b7} ")
         }
@@ -567,6 +628,19 @@ pub fn entry_detail(db: &Database, id: Uuid) -> Option<EntryDetailDto> {
         totp_digits: totp.as_ref().map(|t| t.digits),
         passkey,
         address: (entry_type == EntryType::Address).then(|| address_of(entry)),
+        person: (entry_type == EntryType::Person).then(|| person_of(entry)),
+        person_addresses: if entry_type == EntryType::Person {
+            linked_addresses(db, entry)
+                .into_iter()
+                .map(|a| LinkedAddressDto {
+                    id: a.uuid.simple().to_string(),
+                    title: a.title().to_owned(),
+                    subtitle: subtitle(a),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        },
         card,
         has_notes,
         custom_fields,
@@ -846,7 +920,94 @@ mod tests {
         assert_eq!(get(Category::Files), Some(1));
         assert_eq!(get(Category::Deleted), Some(1));
         assert_eq!(get(Category::Security), None);
-        assert_eq!(counts.len(), 10);
+        assert_eq!(get(Category::People), Some(0));
+        assert_eq!(counts.len(), 11);
+    }
+
+    /// The sample vault plus a person linking, in order: a missing id, the live Home Address, a
+    /// deleted address and a login (not an address).
+    fn with_person(s: &mut Sample) -> Uuid {
+        let root = s.db.root_id();
+        let gone = typed(entry("Old Address"), "Address");
+        let gone_id = gone.uuid;
+        s.db.add_entry(root, gone, NOW).unwrap();
+        s.db.delete_entry(gone_id, NOW).unwrap();
+        let mut p = typed(entry("Me"), "Person");
+        p.set_field("MyPass.Person.label", "Me", true);
+        p.set_field("MyPass.Person.givenName", "Alice", true);
+        p.set_field("MyPass.Person.middleName", "Q", true);
+        p.set_field("MyPass.Person.familyName", "Example", true);
+        p.set_field("MyPass.Person.email", "alice@example.test", true);
+        p.set_field("MyPass.Person.birthDate", "1990-01-02", true);
+        let ids = [Uuid::from_u128(42), s.c, gone_id, s.a]
+            .map(|id| id.hyphenated().to_string())
+            .join(",");
+        p.set_field("MyPass.Person.addressIds", &ids, true);
+        let id = p.uuid;
+        s.db.add_entry(root, p, NOW).unwrap();
+        id
+    }
+
+    #[test]
+    fn person_detail_lists_only_live_linked_addresses_in_order() {
+        let mut s = sample_database();
+        let id = with_person(&mut s);
+        let d = entry_detail(&s.db, id).unwrap();
+        assert_eq!(d.entry_type, EntryTypeDto::Person);
+        let p = d.person.as_ref().unwrap();
+        assert_eq!(p.middle_name, "Q");
+        assert_eq!(p.birth_date, "1990-01-02");
+        // The stored links are all kept in the person (the editor shows them as they are)...
+        assert_eq!(p.address_ids.len(), 4);
+        // ...but the detail resolves only the live Address entries.
+        assert_eq!(
+            d.person_addresses,
+            [LinkedAddressDto {
+                id: simple(s.c),
+                title: "Home Address".into(),
+                subtitle: "Home \u{b7} Alice Example \u{b7} Kyiv".into(),
+            }]
+        );
+        assert!(d.address.is_none() && d.custom_fields.is_empty());
+        let address = entry_detail(&s.db, s.c).unwrap();
+        assert!(address.person.is_none() && address.person_addresses.is_empty());
+    }
+
+    #[test]
+    fn people_category_counts_persons_and_search_reads_person_fields_not_links() {
+        let mut s = sample_database();
+        let id = with_person(&mut s);
+        let list = list_entries(&s.db, &cat(Category::People, ""), SearchScope::App);
+        assert_eq!(ids(&list), [simple(id)]);
+        assert_eq!(list[0].entry_type, EntryTypeDto::Person);
+        assert_eq!(
+            list[0].subtitle,
+            "Alice Q Example \u{b7} alice@example.test"
+        );
+        let counts = sidebar(&s.db).categories;
+        let people = counts
+            .iter()
+            .find(|c| c.category == Category::People)
+            .unwrap();
+        assert_eq!(people.count, Some(1));
+        assert_eq!(search_ids(&s, "example.test"), [simple(id)]);
+        assert_eq!(search_ids(&s, "1990-01-02"), [simple(id)]);
+        // The link value is never searched.
+        assert!(search_ids(&s, &Uuid::from_u128(42).hyphenated().to_string()).is_empty());
+        // A login is never a person, whatever stray person fields it holds.
+        s.db.find_entry_mut(s.a)
+            .unwrap()
+            .set_field("MyPass.Person.email", "zz-stray@x.test", true);
+        assert!(search_ids(&s, "zz-stray").is_empty());
+        let autofill = list_entries(
+            &s.db,
+            &cat(Category::All, "alice@example"),
+            SearchScope::Autofill,
+        );
+        assert!(
+            autofill.is_empty(),
+            "the bridge search never reads person fields"
+        );
     }
 
     #[test]

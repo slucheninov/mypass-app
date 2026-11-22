@@ -33,6 +33,7 @@
   const newItems = $derived<MenuItem[]>([
     { id: "login", label: t("New Login") },
     { id: "address", label: t("New Address") },
+    { id: "person", label: t("New Person") },
     { id: "card", label: t("New Card") },
     { id: "notes", label: t("New Note") },
     { id: "files", label: t("New Files item") },

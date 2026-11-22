@@ -178,7 +178,12 @@ pub fn credential_candidates<'a>(db: &'a Database, target_url: &str) -> Vec<&'a 
     let entries: Vec<_> = db
         .entries_excluding(&excluded)
         .into_iter()
-        .filter(|e| !matches!(e.entry_type(), EntryType::Address | EntryType::Files))
+        .filter(|e| {
+            !matches!(
+                e.entry_type(),
+                EntryType::Address | EntryType::Person | EntryType::Files
+            )
+        })
         .collect();
     matching_entries(&entries, target_url)
 }
@@ -929,9 +934,9 @@ mod tests {
         assert!(credential_candidates(&db, "https://example.com").is_empty());
     }
     #[test]
-    fn address_and_files_entries_excluded_but_card_and_notes_follow_rule() {
+    fn address_person_and_files_entries_excluded_but_card_and_notes_follow_rule() {
         let mut db = Database::new("test");
-        for t in ["Address", "Files", "Card", "Notes"] {
+        for t in ["Address", "Person", "Files", "Card", "Notes"] {
             let mut e = make_entry("https://example.com", t);
             e.set_field(ENTRY_TYPE_FIELD, t, false);
             db.root.entries.push(e);

@@ -18,6 +18,7 @@ pub const CARD_EXPIRY: &str = "MyPass.ExpiryDate";
 pub const CARD_CVV: &str = "MyPass.CVV";
 pub const NOTES_BODY: &str = "MyPass.NotesBody";
 pub const ADDRESS_PREFIX: &str = "MyPass.Address.";
+pub const PERSON_PREFIX: &str = "MyPass.Person.";
 // The passkey field names and the `has_passkey` predicate are owned by `mypass_core::passkey`.
 pub use mypass_core::passkey::record::{
     PASSKEY_CREATED, PASSKEY_CREDENTIAL_ID, PASSKEY_FLAG_BE, PASSKEY_FLAG_BS, PASSKEY_PREFIX,
@@ -122,8 +123,24 @@ pub const ADDRESS_FIELDS: [&str; 14] = [
 ];
 pub const ADDRESS_LABELS: [&str; 3] = ["Home", "Work", "Other"];
 
+/// The fields of a Person entry, each stored protected as `MyPass.Person.<name>`. `birthDate` is
+/// an ISO `YYYY-MM-DD` date; `addressIds` lists the Address entries of the person, comma-separated
+/// UUIDs in order (the first is the default address).
+pub const PERSON_FIELDS: [&str; 7] = [
+    "label",
+    "givenName",
+    "familyName",
+    "middleName",
+    "email",
+    "birthDate",
+    "addressIds",
+];
+/// The person field that links Address entries.
+pub const PERSON_ADDRESS_IDS: &str = "addressIds";
+
 /// Keys with a dedicated UI that must never appear as generic custom-field rows. The `KPEX_*`
-/// keys are matched by prefix, `MyPass.Address.*` by the exact 14 keys, like the Swift set.
+/// keys are matched by prefix, `MyPass.Address.*` by the exact 14 keys, like the Swift set, and
+/// `MyPass.Person.*` by the exact keys of [`PERSON_FIELDS`].
 const STANDARD_KEYS: [&str; 14] = [
     "Title",
     "UserName",
@@ -140,6 +157,48 @@ const STANDARD_KEYS: [&str; 14] = [
     NOTES_BODY,
     mypass_core::entry_ext::URI_MATCH_MODE_FIELD,
 ];
+
+/// Whether `text` is a real calendar date written `YYYY-MM-DD` (years 0001 to 9999, leap years
+/// included): the stored form of a person's birth date.
+pub fn is_valid_birth_date(text: &str) -> bool {
+    let mut parts = text.split('-');
+    let (Some(y), Some(m), Some(d), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    let digits = |s: &str, n: usize| s.len() == n && s.bytes().all(|b| b.is_ascii_digit());
+    if !digits(y, 4) || !digits(m, 2) || !digits(d, 2) {
+        return false;
+    }
+    let (Ok(year), Ok(month), Ok(day)) = (y.parse::<u32>(), m.parse::<u32>(), d.parse::<u32>())
+    else {
+        return false;
+    };
+    let leap = (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400);
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    year >= 1 && (1..=days).contains(&day)
+}
+
+/// The ids a person's `addressIds` value names, in order, duplicates and malformed parts dropped.
+pub fn parse_address_ids(text: &str) -> Vec<Uuid> {
+    let mut out: Vec<Uuid> = Vec::new();
+    for id in text
+        .split(',')
+        .filter_map(|p| Uuid::parse_str(p.trim()).ok())
+    {
+        if !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    out
+}
 
 /// MyPass field conventions on a KeePass entry.
 pub trait EntryFields {
@@ -189,6 +248,9 @@ impl EntryFields for Entry {
             || key
                 .strip_prefix(ADDRESS_PREFIX)
                 .is_some_and(|name| ADDRESS_FIELDS.contains(&name))
+            || key
+                .strip_prefix(PERSON_PREFIX)
+                .is_some_and(|name| PERSON_FIELDS.contains(&name))
     }
 }
 
@@ -196,6 +258,56 @@ impl EntryFields for Entry {
 mod tests {
     use super::*;
     use mypass_kdbx::Timestamp;
+
+    #[test]
+    fn birth_dates_must_be_real_iso_dates() {
+        for ok in [
+            "2000-02-29",
+            "2024-02-29",
+            "1999-12-31",
+            "0001-01-01",
+            "1814-03-09",
+        ] {
+            assert!(is_valid_birth_date(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "1900-02-29",
+            "2023-02-29",
+            "2024-13-01",
+            "2024-00-10",
+            "2024-04-31",
+            "24-01-01",
+            "2024-1-01",
+            "2024/01/01",
+            "2024-01-01-01",
+            "0000-01-01",
+            "\u{663}024-01-01",
+            "01.02.2024",
+        ] {
+            assert!(!is_valid_birth_date(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn address_ids_parse_in_order_without_duplicates_or_junk() {
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        let text = format!(" {a} ,junk,{},{b},,{a}", b.simple());
+        assert_eq!(parse_address_ids(&text), [a, b]);
+        assert!(parse_address_ids("").is_empty());
+    }
+
+    #[test]
+    fn person_fields_are_reserved_keys_only_by_their_exact_names() {
+        for name in PERSON_FIELDS {
+            assert!(
+                Entry::is_reserved_key(&format!("{PERSON_PREFIX}{name}")),
+                "{name}"
+            );
+        }
+        assert!(!Entry::is_reserved_key("MyPass.Person.nickname"));
+    }
 
     #[test]
     fn favorite_round_trips_and_is_unprotected() {

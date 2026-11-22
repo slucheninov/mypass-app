@@ -19,6 +19,7 @@
   import IconButton from "../lib/ui/IconButton.svelte";
   import Modal from "../lib/ui/Modal.svelte";
   import AddressDetail from "./AddressDetail.svelte";
+  import PersonDetail from "./PersonDetail.svelte";
   import CardDetail from "./CardDetail.svelte";
   import CustomField from "./CustomField.svelte";
   import WebsitesSheet from "./editors/WebsitesSheet.svelte";
@@ -217,6 +218,8 @@
         <LoginDetail {detail} {group} onlargetype={showLargeType} onchangewebsite={changeWebsite} />
       {:else if detail.entryType === "address" && detail.address}
         <AddressDetail entryId={id} address={detail.address} onlargetype={showLargeType} />
+      {:else if detail.entryType === "person" && detail.person}
+        <PersonDetail entryId={id} person={detail.person} addresses={detail.personAddresses} onlargetype={showLargeType} />
       {:else if detail.entryType === "card" && detail.card}
         <CardDetail entryId={id} card={detail.card} {group} onlargetype={showLargeType} />
       {/if}

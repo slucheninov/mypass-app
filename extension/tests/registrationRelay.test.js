@@ -5,7 +5,7 @@
 const assert = require('node:assert/strict');
 if (!global.crypto) global.crypto = require('node:crypto').webcrypto;
 // Loaded before `chrome` exists, so content.js only defines its functions.
-const { chooseIdentityPanel, requestSavePrompt } = require('../content.js');
+const { chooseIdentityPanel, createIdentityFiller, requestSavePrompt } = require('../content.js');
 const formDetection = require('../shared/form-detection.js');
 
 let handler, native, showAddresses, nativeReply;
@@ -28,7 +28,9 @@ require('../background.js');
 function reset() {
   native = [];
   showAddresses = true;
-  nativeReply = (message) => message.type === 'listEntries'
+  nativeReply = (message) => message.type === 'listEntries' && message.category === 'people'
+    ? { type: 'credentialList', credentials: [] }
+    : message.type === 'listEntries'
     ? { type: 'credentialList', credentials: [
       { id: 'a1', title: 'Home', username: 'Ann Lee', password: 'never-sent' },
       { id: 'x'.repeat(65), title: 'Too long an id' },
@@ -47,11 +49,15 @@ function request(message, sender) {
 async function run() {
   reset();
   const list = await request({ type: 'getIdentitySuggestions', url: page }, content());
-  assert.deepEqual(list, { type: 'identityList', entries: [
-    { id: 'a1', title: 'Home', username: 'Ann Lee' },
-    { id: 'a2', title: 'Work', username: '' },
-  ] });
-  assert.deepEqual(native, [{ type: 'listEntries', category: 'addresses', pairing: 'paired' }]);
+  const rows = [
+    { id: 'a1', kind: 'address', title: 'Home', username: 'Ann Lee' },
+    { id: 'a2', kind: 'address', title: 'Work', username: '' },
+  ];
+  assert.deepEqual(list, { type: 'identityList', entries: rows, addresses: rows });
+  assert.deepEqual(native, [
+    { type: 'listEntries', category: 'people', pairing: 'paired' },
+    { type: 'listEntries', category: 'addresses', pairing: 'paired' },
+  ]);
 
   reset();
   const fill = await request({ type: 'fillIdentity', id: 'a1', url: page }, content());
@@ -108,7 +114,11 @@ async function run() {
   assert.equal(chooseIdentityPanel(undefined).panel, 'unavailable');
   assert.equal(chooseIdentityPanel({ type: 'identityList', entries: [] }).panel, 'identityEmpty');
   assert.deepEqual(chooseIdentityPanel({ type: 'identityList', entries: [{ id: 'a1', title: 'Home' }, { id: 3 }] }),
-    { panel: 'entries', entries: [{ id: 'a1', title: 'Home', username: '', hasTotp: false }] });
+    { panel: 'entries', entries: [{ id: 'a1', kind: 'address', title: 'Home', username: '', addressIds: [], hasTotp: false }],
+      addresses: [] });
+  // A person row never renders a value in the page, whatever the list carried.
+  assert.equal(chooseIdentityPanel({ type: 'identityList',
+    entries: [{ id: 'p1', kind: 'person', title: 'Me', username: 'me@example.test' }] }).entries[0].username, '');
 
   // The save prompt carries the captured fields, and only when there are some.
   const messages = [];
@@ -134,6 +144,57 @@ async function run() {
   assert.equal(requestSavePrompt(page, 'me', 'pw-4', {}, send, 1000), true);
   assert.equal(Object.hasOwn(messages[2], 'usernameIsEmail'), false);
 
+  // Inline person fills: only the latest selection's reply fills. Select A, then B while A's
+  // reply is pending; whichever order the replies arrive in, A never writes, and a stale reply
+  // is dropped whole even when it arrives in the middle of a newer fill.
+  for (const order of [['A', 'B'], ['B', 'A']]) {
+    const pending = new Map();
+    const writes = [];
+    const fill = createIdentityFiller({
+      send: (message, reply) => pending.set(message.id, reply),
+      profile: (person, address) => ({ ...person, city: address ? address.city : '' }),
+      fill: (selection, values, stillCurrent) => {
+        for (const key of ['givenName', 'email', 'city']) if (stillCurrent()) writes.push([selection, key, values[key]]);
+      },
+    });
+    const live = () => true;
+    fill({ id: 'A', kind: 'person' }, 'form', '', page, live);
+    fill({ id: 'B', kind: 'person' }, 'form', 'addr-b', page, live);
+    const reply = (id) => ({ type: 'identity', person: { givenName: id, email: `${id}@example.test` }, address: { city: `${id}-city` } });
+    for (const id of order) pending.get(id)(reply(id));
+    assert.deepEqual(writes, [['form', 'givenName', 'B'], ['form', 'email', 'B@example.test'], ['form', 'city', 'B-city']], order.join());
+  }
+  {
+    // A selection made while an earlier fill is still writing stops that fill at once.
+    let pendingReply = null;
+    const writes = [];
+    let selectMidway = null;
+    const fill = createIdentityFiller({
+      send: (message, reply) => { if (message.id === 'A') pendingReply = reply; },
+      profile: (person) => person,
+      fill: (selection, values, stillCurrent) => {
+        for (const key of ['givenName', 'email']) {
+          if (!stillCurrent()) return;
+          writes.push(values[key]);
+          if (selectMidway) { selectMidway(); selectMidway = null; }
+        }
+      },
+    });
+    fill({ id: 'A', kind: 'person' }, 'form', '', page, () => true);
+    selectMidway = () => fill({ id: 'B', kind: 'person' }, 'form', '', page, () => true);
+    pendingReply({ type: 'identity', person: { givenName: 'A', email: 'a@example.test' }, address: null });
+    assert.deepEqual(writes, ['A']);
+    // A page that changed since the click never fills, latest or not.
+    const changed = [];
+    const gone = createIdentityFiller({
+      send: (message, reply) => reply({ type: 'identity', person: { givenName: 'C' }, address: null }),
+      profile: (person) => person,
+      fill: (selection, values) => changed.push(values),
+    });
+    gone({ id: 'C', kind: 'person' }, 'form', '', page, () => false);
+    assert.deepEqual(changed, []);
+  }
+
   // The localized hints the detector relies on.
   const node = (attrs) => ({ name: '', id: '', labels: [], getAttribute: (name) => attrs[name] ?? null, ...attrs });
   assert.equal(formDetection.identityFieldHint(node({ name: 'given-name' })), 'givenName');
@@ -143,7 +204,7 @@ async function run() {
   assert.equal(formDetection.isRegistrationActionText('Konto erstellen'), true);
   assert.equal(formDetection.isRegistrationActionText('\u0417\u0430\u0440\u0435\u0454\u0441\u0442\u0440\u0443\u0432\u0430\u0442\u0438\u0441\u044f'), true);
   assert.equal(formDetection.isRegistrationActionText('Sign in'), false);
-  console.log('registrationRelay.test.js: identity list and fill gating, field whitelist, panel, prompt fields OK');
+  console.log('registrationRelay.test.js: identity list and fill gating, field whitelist, panel, prompt fields, latest-selection fill OK');
 }
 
 run().catch((error) => { console.error(error); process.exit(1); });

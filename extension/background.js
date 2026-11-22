@@ -1017,7 +1017,8 @@ function sendAddressToDocument(target, message) {
       resolve(chrome.runtime.lastError ? addressError('address_page_changed') : response);
     }));
 }
-async function prepareAddressFill() {
+async function prepareAddressFill(message) {
+  const person = !!(message && message.person === true);
   const tab = await activeAddressTab();
   if (!tab) return addressError('address_no_form');
   if (!(await readAutofillSettings()).showAddresses) return addressError('address_disabled');
@@ -1034,7 +1035,7 @@ async function prepareAddressFill() {
     };
     const timer = setTimeout(() => finish(addressError('address_no_form')), 5000);
     addressScans.set(challenge, { tabId: tab.id, url: tab.url, finish });
-    chrome.tabs.sendMessage(tab.id, { type: 'queryAddressForm', url: tab.url, challenge },
+    chrome.tabs.sendMessage(tab.id, { type: 'queryAddressForm', url: tab.url, challenge, person },
       { frameId: 0 }, () => {
         if (chrome.runtime.lastError) finish(addressError('address_no_form'));
       });
@@ -1088,17 +1089,132 @@ async function fillSelectedAddress(message) {
       ? result.code : 'address_page_changed');
 }
 
+// The popup's person fill: like fillSelectedAddress, but the native `fillPerson` answers with the
+// person and its address (the chosen one, else the person's default linked address, or none), and
+// the page fills both, the person's own fields included, into the chosen form.
+async function fillSelectedPerson(message) {
+  const target = addressTargets.get(message.token);
+  addressTargets.delete(message.token); // never replay a user's confirmation
+  const addressId = message.addressId === undefined ? undefined : message.addressId;
+  if (!target || Date.now() - target.at > ADDRESS_TARGET_TTL_MS
+    || !isIdentityId(message.id) || (addressId !== undefined && !isIdentityId(addressId))
+    || !target.forms.some((form) => form.id === message.groupId)) {
+    return addressError('address_page_changed');
+  }
+  const sameTab = (tab) => tab && tab.id === target.tabId && tab.url === target.url;
+  if (!(await readAutofillSettings()).showAddresses) return addressError('address_disabled');
+  if (!sameTab(await activeAddressTab())) return addressError('address_page_changed');
+  const filled = await nativePersonFill(message.id, addressId, target.url);
+  if (filled.type !== 'identity') return filled;
+  if (!(await readAutofillSettings()).showAddresses) return addressError('address_disabled');
+  if (!sameTab(await activeAddressTab())) return addressError('address_page_changed');
+  const result = await sendAddressToDocument(target, { type: 'applyAddress', url: target.url,
+    challenge: target.challenge, groupId: message.groupId, address: filled.address, person: filled.person });
+  return result && result.type === 'addressFilled' && Number.isInteger(result.filled) && result.filled > 0
+    ? { type: 'addressFilled', filled: result.filled }
+    : addressError(result && ['address_form_changed', 'address_no_values'].includes(result.code)
+      ? result.code : 'address_page_changed');
+}
+
 // --- Registration form identity fill -------------------------------------------------------
 //
 // The inline identity icon of a registration form (content.js, top frame only) lists the vault's
 // Address entries and fills the form from the chosen one. Unlike the popup-only browse views this
 // is asked by a content script, so every request must come from the top frame of an https page
 // whose url the message names, with the address switch on (re-read here, never trusted from the
-// page). The list carries only id, title and the person's name; the fill answers to the very
+// page). The list carries only id, title and an address's name, never a person field: a person row
+// is its title and its linked address ids (every person field is protected in the vault, and this
+// list reaches the page's shadow root before the user picks anyone). The fill answers to the very
 // document that asked (sendResponse), with the address fields only.
 const IDENTITY_LIST_LIMIT = 50;
 const IDENTITY_ADDRESS_FIELDS = Object.freeze(["fullName", "givenName", "familyName", "organization",
   "addressLine1", "addressLine2", "city", "region", "postalCode", "countryCode", "countryName", "phone", "email"]);
+const IDENTITY_PERSON_FIELDS = Object.freeze(["fullName", "givenName", "middleName", "familyName", "email", "birthDate"]);
+const IDENTITY_MAX_LINKS = 64;
+
+function isIdentityId(value) {
+  return typeof value === "string" && value.length > 0 && value.length <= 64;
+}
+
+function sanitizedFields(source, keys) {
+  const out = {};
+  for (const key of keys) {
+    const value = source && source[key];
+    out[key] = typeof value === "string" ? value.slice(0, 1024) : "";
+  }
+  return out;
+}
+
+// The native `fillPerson` for person `id` (with `addressId` when the user picked one), checked and
+// cut down to the person fields and the address fields: `{ type: 'identity', person, address }`
+// where `address` is null when the person has no live linked address.
+async function nativePersonFill(id, addressId, url) {
+  const request = { type: "fillPerson", id, url };
+  if (addressId !== undefined) request.addressId = addressId;
+  const response = await sendNativeMessageWithPairing(request);
+  if (response && ["locked", "pairingRequired"].includes(response.type)) return { type: response.type };
+  if (!response || response.type !== "person" || !response.person || typeof response.person.id !== "string"
+    || response.person.id.toLowerCase() !== id.toLowerCase()) return addressError("address_unavailable");
+  const address = response.address;
+  if (address !== undefined && address !== null && (typeof address !== "object" || typeof address.id !== "string"
+    || (addressId !== undefined && address.id.toLowerCase() !== addressId.toLowerCase()))) {
+    return addressError("address_unavailable");
+  }
+  const person = sanitizedFields(response.person, IDENTITY_PERSON_FIELDS);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(person.birthDate)) person.birthDate = "";
+  return { type: "identity", person, address: address ? sanitizedFields(address, IDENTITY_ADDRESS_FIELDS) : null };
+}
+
+function identityRows(response, kind) {
+  return response.credentials
+    .filter((entry) => entry && isIdentityId(entry.id) && typeof entry.title === "string")
+    .map((entry) => {
+      const row = {
+        id: entry.id,
+        kind,
+        title: entry.title.slice(0, 200),
+        // A person row never shows a value, even if an older app sends its email as the username.
+        username: kind !== "person" && typeof entry.username === "string" ? entry.username.slice(0, 200) : "",
+      };
+      if (kind === "person") {
+        row.addressIds = (Array.isArray(entry.addressIds) ? entry.addressIds : [])
+          .filter(isIdentityId).slice(0, IDENTITY_MAX_LINKS);
+      }
+      return row;
+    });
+}
+
+// People first, then the addresses no person links to; `addresses` holds every address, for the
+// person rows' address picker. A person's links keep only addresses this list has. Only the inline
+// panel (`raw` false) shows at most IDENTITY_LIST_LIMIT rows; the popup lists every entry, and the
+// address pickers (popup and inline) always get every address.
+async function identityList(raw) {
+  // `raw` (the popup) gets a failed listing back as it came, so the popup can tell a missing
+  // host or a stopped app apart, as it does for every other listing.
+  const people = await sendNativeMessageWithPairing({ type: "listEntries", category: "people" });
+  if (people && ["locked", "pairingRequired"].includes(people.type)) return raw ? people : { type: people.type };
+  const response = await sendNativeMessageWithPairing({ type: "listEntries", category: "addresses" });
+  if (response && ["locked", "pairingRequired"].includes(response.type)) return raw ? response : { type: response.type };
+  if (!response || response.type !== "credentialList" || !Array.isArray(response.credentials)) {
+    return raw ? response : addressError("address_unavailable");
+  }
+  const addresses = identityRows(response, "address");
+  const known = new Map(addresses.map((row) => [row.id.toLowerCase(), row.id]));
+  // An app without people (older than the person entry) answers an error: no people then.
+  const persons = people && people.type === "credentialList" && Array.isArray(people.credentials)
+    ? identityRows(people, "person") : [];
+  const linked = new Set();
+  for (const person of persons) {
+    person.addressIds = person.addressIds.map((id) => known.get(id.toLowerCase())).filter(Boolean);
+    for (const id of person.addressIds) linked.add(id);
+  }
+  const entries = [...persons, ...addresses.filter((row) => !linked.has(row.id))];
+  return {
+    type: "identityList",
+    entries: raw ? entries : entries.slice(0, IDENTITY_LIST_LIMIT),
+    addresses,
+  };
+}
 
 function isIdentitySender(message, sender) {
   return !!(isContentScriptSender(sender) && sender.frameId === 0 && typeof sender.documentId === "string"
@@ -1108,25 +1224,16 @@ function isIdentitySender(message, sender) {
 
 async function identitySuggestions() {
   if (!(await readAutofillSettings()).showAddresses) return addressError("address_disabled");
-  const response = await sendNativeMessageWithPairing({ type: "listEntries", category: "addresses" });
-  if (response && ["locked", "pairingRequired"].includes(response.type)) return { type: response.type };
-  if (!response || response.type !== "credentialList" || !Array.isArray(response.credentials)) {
-    return addressError("address_unavailable");
-  }
-  const entries = response.credentials
-    .filter((entry) => entry && typeof entry.id === "string" && entry.id.length <= 64 && typeof entry.title === "string")
-    .slice(0, IDENTITY_LIST_LIMIT)
-    .map((entry) => ({
-      id: entry.id,
-      title: entry.title.slice(0, 200),
-      username: typeof entry.username === "string" ? entry.username.slice(0, 200) : "",
-    }));
-  return { type: "identityList", entries };
+  return identityList();
 }
 
 async function identityFill(message, sender) {
-  if (typeof message.id !== "string" || !message.id || message.id.length > 64) return addressError("address_unavailable");
+  if (!isIdentityId(message.id)) return addressError("address_unavailable");
   if (!(await readAutofillSettings()).showAddresses) return addressError("address_disabled");
+  if (message.kind === "person") {
+    if (message.addressId !== undefined && !isIdentityId(message.addressId)) return addressError("address_unavailable");
+    return nativePersonFill(message.id, message.addressId, sender.url);
+  }
   const response = await sendNativeMessageWithPairing({ type: "fillAddress", id: message.id, url: sender.url });
   if (response && ["locked", "pairingRequired"].includes(response.type)) return { type: response.type };
   if (!response || response.type !== "address" || !response.address || typeof response.address.id !== "string"
@@ -1680,12 +1787,14 @@ function handleRuntimeMessage(message, sender, sendResponse) {
     sendResponse(acceptAddressReport(message, sender));
     return true;
   }
-  if (message && ['prepareAddressFill', 'fillAddress'].includes(message.type)) {
+  if (message && ['prepareAddressFill', 'fillAddress', 'fillPerson', 'getIdentityList'].includes(message.type)) {
     if (!isAddressPopup(sender)) {
       sendResponse(addressError('address_unauthorized'));
       return true;
     }
-    const operation = message.type === 'prepareAddressFill' ? prepareAddressFill() : fillSelectedAddress(message);
+    const operation = message.type === 'prepareAddressFill' ? prepareAddressFill(message)
+      : message.type === 'fillPerson' ? fillSelectedPerson(message)
+        : message.type === 'getIdentityList' ? identityList(true) : fillSelectedAddress(message);
     operation.then(sendResponse).catch(() => sendResponse(addressError('address_unavailable')));
     return true;
   }

@@ -15,7 +15,7 @@
   }: {
     label: string;
     value: string;
-    type?: "text" | "password";
+    type?: "text" | "password" | "date";
     placeholder?: string;
     autocomplete?: FullAutoFill;
     inputmode?: "numeric" | "text" | "tel" | "email";

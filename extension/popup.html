@@ -453,6 +453,15 @@
     }
     .address-fill-option { width: 100%; margin-left: 0; box-sizing: border-box; text-align: left; }
     .address-fill-back { align-self: flex-start; margin-top: 8px; margin-left: 0; }
+    .person-address-picker {
+      flex-shrink: 0; margin-left: auto; padding: 4px 8px; border: none; border-radius: 6px;
+      background: transparent; color: #007aff; font: inherit; font-size: 11px; cursor: pointer;
+    }
+    .person-address-picker:hover, .person-address-picker:focus-visible { background: rgba(0, 122, 255, 0.1); }
+    .address-picker-section { list-style: none; padding: 8px 4px 2px; font-size: 11px; font-weight: 600; opacity: 0.7; }
+    #list li:has(> .address-picker-option), #list li:has(> .address-fill-back) { list-style: none; padding: 2px 0; }
+    .address-picker-option { width: 100%; margin-left: 0; box-sizing: border-box; text-align: left;
+      overflow-wrap: anywhere; }
     #list {
       max-height: 360px;
       overflow: auto;

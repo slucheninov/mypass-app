@@ -18,6 +18,7 @@ function model(urls: string[], mode = "registrable-domain"): EntryEditModel_Seri
     uriMatchMode: mode,
     totp: "",
     notes: "",
+    person: null,
     address: null,
     card: null,
     customFields: [],

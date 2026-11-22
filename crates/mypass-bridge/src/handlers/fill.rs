@@ -1,4 +1,4 @@
-//! `fillCredential`, `fillAddress`, `getTotp`.
+//! `fillCredential`, `fillAddress`, `fillPerson`, `getTotp`.
 //!
 //! The TOTP code is computed from the entry's own `otp` parameters (digits, period, algorithm), so
 //! an `otpauth://` entry with 8 digits or SHA-256 fills the right code. The earlier app hard-coded
@@ -13,14 +13,15 @@ use std::time::UNIX_EPOCH;
 
 use mypass_core::entry_ext::{EntryExt, EntryType};
 use mypass_core::matcher::credential_candidates;
-use mypass_kdbx::Entry;
+use mypass_kdbx::{Database, Entry};
 use mypass_session::fields::EntryFields;
+use mypass_session::queries::linked_addresses;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::protocol::Response;
 use crate::service::Ctx;
-use crate::views::{address, error, parse_wire_id, session_error_response};
+use crate::views::{address, error, parse_wire_id, person, session_error_response};
 
 const NOT_FOUND: &str = "entry not found or domain mismatch";
 
@@ -126,6 +127,66 @@ pub(crate) fn fill_address(ctx: &Ctx<'_>, id: &str, url: &str) -> Response {
     }
     Response::Address {
         address: Box::new(address),
+    }
+}
+
+/// A live Address entry (outside the recycle bin) with id `id`.
+fn live_address(db: &Database, id: Uuid) -> Option<&Entry> {
+    db.find_entry(id)
+        .filter(|e| e.entry_type() == EntryType::Address && !db.is_in_recycle_bin(e.uuid))
+}
+
+/// The person `id` and the address to fill with it: `address_id` when given (any live Address
+/// entry the user picked; a gone one is an error), else the person's first live linked address.
+/// HTTPS only and gated like `fillAddress`; a person, like an address, is reusable across sites.
+pub(crate) fn fill_person(
+    ctx: &Ctx<'_>,
+    id: &str,
+    url: &str,
+    address_id: Option<&str>,
+) -> Response {
+    if !is_https_website_url(url) {
+        return error("Person autofill requires an HTTPS URL");
+    }
+    let wanted = parse_wire_id(id);
+    let picked = match address_id {
+        None => None,
+        Some(raw) => match parse_wire_id(raw) {
+            Some(uuid) => Some(uuid),
+            None => return error("Address not found"),
+        },
+    };
+    let found = ctx.deps.session.with_db(|db| {
+        let entry = wanted
+            .and_then(|id| db.find_entry(id))
+            .filter(|e| e.entry_type() == EntryType::Person && !db.is_in_recycle_bin(e.uuid))?;
+        let chosen = match picked {
+            Some(uuid) => Some(live_address(db, uuid).ok_or(())),
+            None => linked_addresses(db, entry).into_iter().next().map(Ok),
+        };
+        Some(match chosen {
+            Some(Err(())) => Err(()),
+            Some(Ok(a)) => Ok((entry.uuid, person(entry), Some((a.uuid, address(a))))),
+            None => Ok((entry.uuid, person(entry), None)),
+        })
+    });
+    let (uuid, person, address) = match found {
+        Ok(Some(Ok(f))) => f,
+        Ok(Some(Err(()))) => return error("Address not found"),
+        Ok(None) => return error("Person not found"),
+        Err(_) => return Response::Locked,
+    };
+    if let Err(r) = touch(ctx, uuid) {
+        return r;
+    }
+    if let Some((address_uuid, _)) = &address {
+        if let Err(r) = touch(ctx, *address_uuid) {
+            return r;
+        }
+    }
+    Response::Person {
+        person: Box::new(person),
+        address: address.map(|(_, a)| Box::new(a)),
     }
 }
 
@@ -535,5 +596,169 @@ mod tests {
         ] {
             assert_eq!(r, Response::Locked);
         }
+    }
+
+    fn person_req(
+        id: Uuid,
+        url: &'static str,
+        address_id: Option<String>,
+    ) -> impl FnOnce(String, Option<String>) -> Request {
+        move |token, pairing| Request::FillPerson {
+            token,
+            id: wire_id(id),
+            url: url.into(),
+            address_id,
+            pairing,
+        }
+    }
+
+    /// The sample vault plus a binned address, a person linked to [binned, gone, C] and a
+    /// second binned person. Returns (db, ids, person, binned address, binned person).
+    fn person_db() -> (mypass_kdbx::Database, Ids, Uuid, Uuid, Uuid) {
+        let (mut db, ids) = sample_database();
+        let now = mypass_kdbx::Timestamp::now();
+        let root = db.root_id();
+        let mut binned_address = Entry::new(now);
+        binned_address.set_field("MyPass.EntryType", "Address", false);
+        let binned = binned_address.uuid;
+        db.add_entry(root, binned_address, now).unwrap();
+        db.delete_entry(binned, now).unwrap();
+        let gone = Uuid::from_u128(0x1234);
+        let mut p = Entry::new(now);
+        p.set_field("Title", "Me", false);
+        p.set_field("MyPass.EntryType", "Person", false);
+        for (k, v) in [
+            ("label", "Me"),
+            ("givenName", "Alice"),
+            ("middleName", "Q"),
+            ("familyName", "Example"),
+            ("email", "alice@example.org"),
+            ("birthDate", "1990-02-03"),
+        ] {
+            p.set_field(&format!("MyPass.Person.{k}"), v, true);
+        }
+        let links = format!(
+            "{},{},{}",
+            binned.hyphenated(),
+            gone.hyphenated(),
+            ids.c.hyphenated()
+        );
+        p.set_field("MyPass.Person.addressIds", &links, true);
+        let person = p.uuid;
+        db.add_entry(root, p, now).unwrap();
+        let mut q = Entry::new(now);
+        q.set_field("MyPass.EntryType", "Person", false);
+        let binned_person = q.uuid;
+        db.add_entry(root, q, now).unwrap();
+        db.delete_entry(binned_person, now).unwrap();
+        (db, ids, person, binned, binned_person)
+    }
+
+    #[test]
+    fn fill_person_defaults_to_the_first_live_linked_address() {
+        let (db, ids, person, _, _) = person_db();
+        let f = fx_with_db(Arc::new(RecordingPasskeys::default()), db);
+        let r = send(
+            &f,
+            person_req(person, "https://shop.example/register", None),
+        );
+        let json = serde_json::to_value(&r).unwrap();
+        assert_eq!(json["type"], "person");
+        let p = &json["person"];
+        assert_eq!(p["id"], wire_id(person));
+        assert_eq!(p["givenName"], "Alice");
+        assert_eq!(p["middleName"], "Q");
+        assert_eq!(p["familyName"], "Example");
+        assert_eq!(p["fullName"], "Alice Example");
+        assert_eq!(p["email"], "alice@example.org");
+        assert_eq!(p["birthDate"], "1990-02-03");
+        assert_eq!(p["label"], "Me");
+        assert!(p.get("addressIds").is_none());
+        // The binned and the missing link are skipped silently.
+        assert_eq!(json["address"]["id"], wire_id(ids.c));
+        assert_eq!(json["address"]["city"], "Kyiv");
+    }
+
+    #[test]
+    fn fill_person_uses_the_picked_address_and_refuses_a_gone_one() {
+        let (db, ids, person, binned, _) = person_db();
+        let mut db = db;
+        let now = mypass_kdbx::Timestamp::now();
+        let mut other = Entry::new(now);
+        other.set_field("MyPass.EntryType", "Address", false);
+        other.set_field("MyPass.Address.city", "Lviv", true);
+        let other_id = other.uuid;
+        let root = db.root_id();
+        db.add_entry(root, other, now).unwrap();
+        let f = fx_with_db(Arc::new(RecordingPasskeys::default()), db);
+        // Any live address may be picked, linked or not.
+        let r = send(
+            &f,
+            person_req(person, "https://x.com", Some(wire_id(other_id))),
+        );
+        let json = serde_json::to_value(&r).unwrap();
+        assert_eq!(json["address"]["city"], "Lviv");
+        for bad in [
+            wire_id(binned),
+            wire_id(ids.a),
+            wire_id(Uuid::from_u128(0x1234)),
+            "garbage".to_string(),
+        ] {
+            let r = send(&f, person_req(person, "https://x.com", Some(bad.clone())));
+            assert_eq!(msg(&r), "Address not found", "{bad}");
+        }
+    }
+
+    #[test]
+    fn fill_person_without_a_live_link_fills_no_address() {
+        let (mut db, ids, person, _, _) = person_db();
+        let now = mypass_kdbx::Timestamp::now();
+        db.delete_entry(ids.c, now).unwrap();
+        let f = fx_with_db(Arc::new(RecordingPasskeys::default()), db);
+        let r = send(&f, person_req(person, "https://x.com", None));
+        let json = serde_json::to_value(&r).unwrap();
+        assert_eq!(json["type"], "person");
+        assert!(json.get("address").is_none(), "{json}");
+    }
+
+    #[test]
+    fn fill_person_requires_https_and_a_live_person() {
+        let (db, ids, person, _, binned_person) = person_db();
+        let f = fx_with_db(Arc::new(RecordingPasskeys::default()), db);
+        for bad in [
+            "http://x.com/form",
+            "ftp://x",
+            "https://u:p@x.com",
+            "",
+            "x.com",
+        ] {
+            let r = send(&f, person_req(person, bad, None));
+            assert_eq!(msg(&r), "Person autofill requires an HTTPS URL", "{bad}");
+        }
+        for id in [binned_person, ids.a, ids.c, Uuid::from_u128(0x1234)] {
+            let r = send(&f, person_req(id, "https://x.com", None));
+            assert_eq!(msg(&r), "Person not found");
+        }
+    }
+
+    #[test]
+    fn fill_person_is_gated_like_fill_address_and_resets_the_timer() {
+        let (db, _, person, _, _) = person_db();
+        let f = fx_with_db(Arc::new(RecordingPasskeys::default()), db);
+        assert!(resets_timer(&f, || {
+            assert!(matches!(
+                send(&f, person_req(person, "https://x.com", None)),
+                Response::Person { .. }
+            ));
+        }));
+        let unpaired = || person_req(person, "http://x.com", None)("tok".into(), None);
+        assert_eq!(f.svc.handle(unpaired()), Response::PairingRequired);
+        f.session.lock(mypass_session::session::LockReason::Manual);
+        assert_eq!(
+            send(&f, person_req(person, "http://x.com", None)),
+            Response::Locked
+        );
+        f.session.begin_quit();
+        assert_eq!(msg(&f.svc.handle(unpaired())), "MyPass is quitting");
     }
 }

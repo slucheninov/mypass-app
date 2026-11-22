@@ -571,10 +571,32 @@ function passkeyTargetSummary(pending, overrideMatch) {
 // The localised name of an address form the content script reported: a shipping or billing
 // purpose plus its position on the page. A report without them (an older content script) falls
 // back to its opaque label.
+// The popup's people-and-addresses listing as the credentialList every list renders: people
+// (entryType Person, with their linked address ids) first, then the unlinked addresses. Any other
+// answer (locked, pairing, a failed listing) passes through unchanged.
+function identityListAsCredentials(response) {
+  if (!response || response.type !== 'identityList' || !Array.isArray(response.entries)) return response;
+  return {
+    type: 'credentialList',
+    credentials: response.entries
+      .filter((entry) => entry && typeof entry.id === 'string' && typeof entry.title === 'string')
+      .map((entry) => ({
+        id: entry.id,
+        title: entry.title,
+        username: typeof entry.username === 'string' ? entry.username : '',
+        entryType: entry.kind === 'person' ? 'Person' : 'Address',
+        addressIds: entry.kind === 'person' && Array.isArray(entry.addressIds) ? entry.addressIds : [],
+        hasTotp: false,
+        hasPasskey: false,
+      })),
+  };
+}
+
 function addressFormName(form) {
   if (form && Number.isInteger(form.number)) {
     const key = form.purpose === 'shipping' ? 'addressFormShipping'
-      : form.purpose === 'billing' ? 'addressFormBilling' : 'addressFormGeneric';
+      : form.purpose === 'billing' ? 'addressFormBilling'
+        : form.purpose === 'person' ? 'addressFormPerson' : 'addressFormGeneric';
     return i18n.t(key, String(form.number));
   }
   return String((form && form.label) || '').toLowerCase();
@@ -944,8 +966,11 @@ if (typeof document !== 'undefined') {
     return messages[response && response.code] || i18n.t('addressFillFailed');
   }
 
-  function beginAddressFill(credential) {
+  // An Address row fills its address; a Person row fills the person with its default linked
+  // address, or with `addressId` when the user picked one in the address picker.
+  function beginAddressFill(credential, addressId) {
     if (!popupUrlMatch.isHttpsAddressPage(currentTabUrl)) return;
+    const person = credential.entryType === 'Person';
     const requestId = ++browseRequestId;
     listEl.innerHTML = '';
     listHeaderEl.textContent = i18n.t('addressChecking');
@@ -956,7 +981,7 @@ if (typeof document !== 'undefined') {
     messageEl.setAttribute('role', 'status');
     chooser.appendChild(messageEl);
     const fillFromPage = () => {
-      chrome.runtime.sendMessage({ type: 'prepareAddressFill' }, (response) => {
+      chrome.runtime.sendMessage({ type: 'prepareAddressFill', person }, (response) => {
         const runtimeError = chrome.runtime.lastError;
         if (requestId !== browseRequestId) return;
         const back = document.createElement('button');
@@ -984,8 +1009,11 @@ if (typeof document !== 'undefined') {
             if (!event.isTrusted) return;
             buttons.forEach((item) => { item.disabled = true; });
             messageEl.textContent = i18n.t('addressFilling');
-            chrome.runtime.sendMessage({ type: 'fillAddress', token: response.token,
-              groupId: form.id, id: credential.id }, (result) => {
+            const fill = person
+              ? { type: 'fillPerson', token: response.token, groupId: form.id, id: credential.id }
+              : { type: 'fillAddress', token: response.token, groupId: form.id, id: credential.id };
+            if (person && addressId) fill.addressId = addressId;
+            chrome.runtime.sendMessage(fill, (result) => {
               const failed = chrome.runtime.lastError;
               if (requestId !== browseRequestId) return;
               if (!failed && result && result.type === 'addressFilled') {
@@ -1029,6 +1057,58 @@ if (typeof document !== 'undefined') {
     });
   }
 
+  // The address picker of a Person row: its linked addresses first, then every other one. Only
+  // ids and titles are listed; choosing one starts the person fill with that address.
+  function beginAddressPicker(credential) {
+    if (!popupUrlMatch.isHttpsAddressPage(currentTabUrl)) return;
+    const requestId = ++browseRequestId;
+    listEl.innerHTML = '';
+    listHeaderEl.textContent = i18n.t('addressPickerHeader', credential.title);
+    chrome.runtime.sendMessage({ type: 'getIdentityList' }, (response) => {
+      void chrome.runtime.lastError;
+      if (requestId !== browseRequestId) return;
+      const addresses = response && response.type === 'identityList' && Array.isArray(response.addresses)
+        ? response.addresses : [];
+      const own = (response && Array.isArray(response.entries) ? response.entries : [])
+        .find((entry) => entry && entry.kind === 'person' && entry.id === credential.id);
+      const linkedIds = own && Array.isArray(own.addressIds) ? own.addressIds : (credential.addressIds || []);
+      const byId = new Map(addresses.map((entry) => [entry.id.toLowerCase(), entry]));
+      const linked = linkedIds.map((id) => byId.get(String(id).toLowerCase())).filter(Boolean);
+      const others = addresses.filter((entry) => !linked.includes(entry));
+      const section = (key) => {
+        const item = document.createElement('li');
+        item.className = 'address-picker-section';
+        item.textContent = i18n.t(key);
+        listEl.appendChild(item);
+      };
+      const option = (address) => {
+        const item = document.createElement('li');
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'btn-secondary address-picker-option';
+        button.textContent = address.username ? address.title + ' · ' + address.username : address.title;
+        button.addEventListener('click', (event) => {
+          if (event.isTrusted) beginAddressFill(credential, address.id);
+        });
+        item.appendChild(button);
+        listEl.appendChild(item);
+      };
+      if (linked.length) section('panelLinkedAddresses');
+      linked.forEach(option);
+      if (others.length) section('panelOtherAddresses');
+      others.forEach(option);
+      if (!addresses.length) section('panelNoAddresses');
+      const item = document.createElement('li');
+      const back = document.createElement('button');
+      back.type = 'button';
+      back.className = 'btn-secondary address-fill-back';
+      back.textContent = i18n.t('addressBack');
+      back.addEventListener('click', () => selectCategory('addresses'));
+      item.appendChild(back);
+      listEl.appendChild(item);
+    });
+  }
+
   renderCredentials = function (credentials, url, options) {
     listOwnedByTotpPicker = false;
     const openSavedUrl = !!(options && options.openSavedUrl);
@@ -1055,10 +1135,12 @@ if (typeof document !== 'undefined') {
       }
 
       item.appendChild(textCol);
-      if (credential.entryType === 'Address') {
+      const identity = credential.entryType === 'Address' || credential.entryType === 'Person';
+      if (identity) {
         item.tabIndex = 0;
         item.setAttribute('role', 'button');
-        item.setAttribute('aria-label', i18n.t('addressFillAria', credential.title));
+        item.setAttribute('aria-label', i18n.t(credential.entryType === 'Person' ? 'personFillAria' : 'addressFillAria',
+          credential.title));
         item.addEventListener('keydown', (event) => {
           if (event.isTrusted && (event.key === 'Enter' || event.key === ' ')) {
             event.preventDefault();
@@ -1076,8 +1158,23 @@ if (typeof document !== 'undefined') {
         item.appendChild(buildPasskeyBadgeElement());
       }
 
+      if (credential.entryType === 'Person') {
+        // The secondary control of a person row: fill with another address than the default.
+        const more = document.createElement('button');
+        more.type = 'button';
+        more.className = 'person-address-picker';
+        more.textContent = i18n.t('panelChooseAddress');
+        more.setAttribute('aria-label', i18n.t('panelChooseAddressFor', credential.title));
+        more.addEventListener('click', (event) => {
+          event.stopPropagation();
+          if (event.isTrusted) beginAddressPicker(credential);
+        });
+        more.addEventListener('keydown', (event) => event.stopPropagation());
+        item.appendChild(more);
+      }
+
       item.addEventListener('click', (event) => {
-        if (credential.entryType === 'Address') {
+        if (identity) {
           if (event.isTrusted) beginAddressFill(credential);
           return;
         }
@@ -1370,7 +1467,8 @@ if (typeof document !== 'undefined') {
     }
     if (kind === 'credentialList') {
       const credentials = popupUrlMatch.isHttpsAddressPage(currentTabUrl)
-        ? response.credentials : response.credentials.filter((entry) => entry.entryType !== 'Address');
+        ? response.credentials
+        : response.credentials.filter((entry) => entry.entryType !== 'Address' && entry.entryType !== 'Person');
       const browsing = popupContext.kind !== 'site';
       listHeaderEl.textContent = browsing ? categoryTitle(popupContext.category) : LIST_HEADER_TEXT;
       if (popupContext.kind === 'search') listHeaderEl.textContent = i18n.t('search');
@@ -1429,6 +1527,18 @@ if (typeof document !== 'undefined') {
 
   function queryCategory(category) {
     popupContext = { kind: 'category', category };
+    if (category === 'addresses') {
+      // People first, then the addresses no person links (background identityList).
+      const requestId = ++browseRequestId;
+      matchedSiteCredentials = [];
+      renderPasskeyProxyStatus();
+      chrome.runtime.sendMessage({ type: 'getIdentityList' }, (response) => {
+        void chrome.runtime.lastError;
+        if (requestId !== browseRequestId) return;
+        handleCredentialsResponse(identityListAsCredentials(response), null);
+      });
+      return;
+    }
     sendBrowse({ type: 'listEntries', category }, null);
   }
 
@@ -2242,6 +2352,8 @@ if (typeof document !== 'undefined') {
 if (typeof module !== 'undefined') {
   module.exports = {
     lockShortcutLabel,
+    identityListAsCredentials,
+    addressFormName,
     classifyGetCredentialsResponse: bridgeStatus.classifyGetCredentialsResponse,
     isPairingChallengeFresh,
     normalizePairingCode,

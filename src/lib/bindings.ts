@@ -414,7 +414,7 @@ export type CardEdit = {
 	cvv: string,
 };
 
-export type Category = "all" | "favorites" | "codes" | "passkeys" | "addresses" | "cards" | "notes" | "files" | "security" | "deleted";
+export type Category = "all" | "favorites" | "codes" | "passkeys" | "addresses" | "people" | "cards" | "notes" | "files" | "security" | "deleted";
 
 /**  `count` is `None` for `Security`: the sidebar shows an em dash instead of a number. */
 export type CategoryCount = CategoryCount_Serialize | CategoryCount_Deserialize;
@@ -595,6 +595,12 @@ export type EntryDetailDto_Deserialize = {
 	totpDigits?: number | null,
 	passkey?: PasskeyMeta_Deserialize | null,
 	address?: AddressDto | null,
+	person?: PersonDto | null,
+	/**
+	 *  The person's linked Address entries that still exist outside the recycle bin, in the
+	 *  person's order (missing and deleted ones are skipped). Empty for every other type.
+	 */
+	personAddresses: LinkedAddressDto[],
 	card?: CardDto | null,
 	hasNotes: boolean,
 	customFields: CustomFieldDto_Deserialize[],
@@ -623,6 +629,12 @@ export type EntryDetailDto_Serialize = {
 	totpDigits: number | null,
 	passkey: PasskeyMeta_Serialize | null,
 	address: AddressDto | null,
+	person: PersonDto | null,
+	/**
+	 *  The person's linked Address entries that still exist outside the recycle bin, in the
+	 *  person's order (missing and deleted ones are skipped). Empty for every other type.
+	 */
+	personAddresses: LinkedAddressDto[],
 	card: CardDto | null,
 	hasNotes: boolean,
 	customFields: CustomFieldDto_Serialize[],
@@ -654,6 +666,8 @@ export type EntryEditModel_Deserialize = {
 	totp: string,
 	notes: string,
 	address?: AddressDto | null,
+	/**  `serde(default)` keeps encrypted drafts stored before this field existed loadable. */
+	person?: PersonDto | null,
 	card?: CardEdit | null,
 	customFields: CustomFieldEdit[],
 	attachments: AttachmentMeta[],
@@ -699,6 +713,8 @@ export type EntryEditModel_Serialize = {
 	totp: string,
 	notes: string,
 	address: AddressDto | null,
+	/**  `serde(default)` keeps encrypted drafts stored before this field existed loadable. */
+	person: PersonDto | null,
 	card: CardEdit | null,
 	customFields: CustomFieldEdit[],
 	attachments: AttachmentMeta[],
@@ -752,7 +768,7 @@ export type EntrySummary = {
 	flags: SecurityFlag[],
 };
 
-export type EntryTypeDto = "login" | "address" | "card" | "notes" | "files";
+export type EntryTypeDto = "login" | "address" | "person" | "card" | "notes" | "files";
 
 /**  The stable error code the UI localises. Serialised in camelCase. */
 export type ErrorCode = "locked" | "noVault" | "wrongPassword" | "alreadyExists" | "notFound" | "invalidInput" | "limitExceeded" | "syncKdfLimitExceeded" | "corrupt" | "unsupported" | "changedOnDisk" | "io" | 
@@ -771,7 +787,7 @@ export type ErrorCode = "locked" | "noVault" | "wrongPassword" | "alreadyExists"
 "retainedCopyRefused" | "internal";
 
 /**  A single field to reveal or copy. `Totp` resolves to the current code. */
-export type FieldRef = { kind: "username" } | { kind: "password" } | { kind: "url" } | { kind: "urlAt"; index: number } | { kind: "notesBody" } | { kind: "cardNumber" } | { kind: "cardCvv" } | { kind: "address"; name: string } | { kind: "totp" } | { kind: "custom"; key: string };
+export type FieldRef = { kind: "username" } | { kind: "password" } | { kind: "url" } | { kind: "urlAt"; index: number } | { kind: "notesBody" } | { kind: "cardNumber" } | { kind: "cardCvv" } | { kind: "address"; name: string } | { kind: "person"; name: string } | { kind: "totp" } | { kind: "custom"; key: string };
 
 /**  Probe consumes a grant and returns a fresh grant for the user's strategy decision. */
 export type FolderProbe = FolderProbe_Serialize | FolderProbe_Deserialize;
@@ -949,6 +965,16 @@ export type ImportResult = {
 
 export type Language = "system" | "en" | "uk" | "ru" | "de";
 
+/**
+ *  A live Address entry a person links to, as the person's detail shows it (title and the list
+ *  subtitle only, the address values stay in that entry).
+ */
+export type LinkedAddressDto = {
+	id: string,
+	title: string,
+	subtitle: string,
+};
+
 export type LocationChangeRequest = {
 	folderToken: string,
 	strategy: MigrationStrategy,
@@ -1113,6 +1139,22 @@ export type PasskeyMeta_Serialize = {
 	 *  so the user can remove it. `serde(default)` keeps older stored drafts loadable.
 	 */
 	usable: boolean,
+};
+
+/**
+ *  The fields of a Person entry. Every value is stored protected, so every copy is a secret copy:
+ *  the type wipes itself on drop and its `Debug` prints nothing. `address_ids` are the linked
+ *  Address entries in order (the first is the default address), as entry ids.
+ */
+export type PersonDto = {
+	label: string,
+	givenName: string,
+	familyName: string,
+	middleName: string,
+	email: string,
+	/**  An ISO `YYYY-MM-DD` date, or empty. */
+	birthDate: string,
+	addressIds: string[],
 };
 
 /**

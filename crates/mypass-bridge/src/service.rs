@@ -218,6 +218,12 @@ impl BridgeService {
                 },
             ),
             Request::FillAddress { id, url, .. } => fill::fill_address(ctx, id, url),
+            Request::FillPerson {
+                id,
+                url,
+                address_id,
+                ..
+            } => fill::fill_person(ctx, id, url, address_id.as_deref()),
             Request::FillCredential { id, url, .. } => fill::fill_credential(ctx, id, url),
             Request::GetTotp { id, url, .. } => fill::get_totp(ctx, id, url),
             Request::ProposeSaveLogin {
@@ -353,7 +359,7 @@ mod tests {
     #[test]
     fn request_table_matches_wire_types() {
         let all = all_requests(None);
-        assert_eq!(all.len(), 32);
+        assert_eq!(all.len(), 33);
         for (r, name) in all.iter().zip(REQUEST_TYPES) {
             assert_eq!(r.name(), name);
         }
@@ -650,7 +656,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(n, 60);
+        assert_eq!(n, 62);
     }
 
     #[test]

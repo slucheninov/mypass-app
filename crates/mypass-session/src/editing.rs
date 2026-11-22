@@ -15,13 +15,14 @@
 
 use crate::dto::{
     timestamp_ms, AddressDto, AttachmentMeta, AttachmentOp, CardEdit, CustomFieldEdit,
-    EntryEditModel, EntryTypeDto, FieldRef, HistoryItem, HistoryReveal,
+    EntryEditModel, EntryTypeDto, FieldRef, HistoryItem, HistoryReveal, PersonDto,
 };
 use crate::fields::{
-    bin_id, require_not_history, EntryFields, ADDRESS_FIELDS, ADDRESS_LABELS, ADDRESS_PREFIX,
-    CARD_CVV, CARD_EXPIRY, CARD_HOLDER, CARD_NUMBER, GROUP_EMOJI, NOTES_BODY, OTP,
+    bin_id, is_valid_birth_date, require_not_history, EntryFields, ADDRESS_FIELDS, ADDRESS_LABELS,
+    ADDRESS_PREFIX, CARD_CVV, CARD_EXPIRY, CARD_HOLDER, CARD_NUMBER, GROUP_EMOJI, NOTES_BODY, OTP,
+    PERSON_ADDRESS_IDS, PERSON_FIELDS, PERSON_PREFIX,
 };
-use crate::queries::{passkey_fingerprint, passkey_meta, totp_now};
+use crate::queries::{passkey_fingerprint, passkey_meta, person_of, totp_now};
 use crate::session::{SessionError, VaultSession};
 use mypass_core::entry_ext::{EntryExt, EntryType, UriMatchMode, ENTRY_TYPE_FIELD};
 use mypass_core::passkey::PasskeyRecord;
@@ -33,6 +34,9 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
+
+/// Address entries a person may link to.
+pub const MAX_PERSON_ADDRESSES: usize = 64;
 
 /// Attachments an entry may hold; only further adds are refused beyond it.
 pub const MAX_ATTACHMENTS_PER_ENTRY: usize = 8;
@@ -55,6 +59,7 @@ fn core_type(kind: EntryTypeDto) -> EntryType {
     match kind {
         EntryTypeDto::Login => EntryType::Login,
         EntryTypeDto::Address => EntryType::Address,
+        EntryTypeDto::Person => EntryType::Person,
         EntryTypeDto::Card => EntryType::Card,
         EntryTypeDto::Notes => EntryType::Notes,
         EntryTypeDto::Files => EntryType::Files,
@@ -66,6 +71,7 @@ fn type_marker(kind: EntryTypeDto) -> Option<&'static str> {
     match kind {
         EntryTypeDto::Login => None,
         EntryTypeDto::Address => Some("Address"),
+        EntryTypeDto::Person => Some("Person"),
         EntryTypeDto::Card => Some("Card"),
         EntryTypeDto::Notes => Some("Notes"),
         EntryTypeDto::Files => Some("Files"),
@@ -107,6 +113,7 @@ pub fn new_model(entry_type: EntryTypeDto, group_id: Uuid) -> EntryEditModel {
         totp: String::new(),
         notes: String::new(),
         address: (entry_type == EntryTypeDto::Address).then(|| AddressDto::with_label("Home")),
+        person: (entry_type == EntryTypeDto::Person).then(PersonDto::empty),
         card: (entry_type == EntryTypeDto::Card).then(CardEdit::default),
         custom_fields: Vec::new(),
         attachments: Vec::new(),
@@ -192,6 +199,7 @@ pub fn edit_model(db: &Database, id: Uuid) -> Result<EntryEditModel, SessionErro
         totp: entry.otp_source().unwrap_or("").to_owned(),
         notes: field_or_empty(entry, notes_key(kind)),
         address: (kind == EntryType::Address).then(|| stored_address(entry)),
+        person: (kind == EntryType::Person).then(|| person_of(entry)),
         card: (kind == EntryType::Card).then(|| CardEdit {
             holder: field_or_empty(entry, CARD_HOLDER),
             number: field_or_empty(entry, CARD_NUMBER),
@@ -280,6 +288,14 @@ fn validate(model: &EntryEditModel) -> Result<UriMatchMode, SessionError> {
                 "a card entry needs its card".into(),
             ));
         }
+        EntryTypeDto::Person => match &model.person {
+            None => {
+                return Err(SessionError::InvalidInput(
+                    "a person entry needs its person".into(),
+                ));
+            }
+            Some(person) => validate_person(person)?,
+        },
         _ => {}
     }
     let mut seen = HashSet::new();
@@ -303,6 +319,53 @@ fn validate(model: &EntryEditModel) -> Result<UriMatchMode, SessionError> {
         }
     }
     Ok(mode)
+}
+
+/// A person's birth date is empty or a real `YYYY-MM-DD` date, and its links are well-formed
+/// entry ids within [`MAX_PERSON_ADDRESSES`].
+fn validate_person(person: &PersonDto) -> Result<(), SessionError> {
+    let birth = person.birth_date.trim();
+    if !birth.is_empty() && !is_valid_birth_date(birth) {
+        return Err(SessionError::InvalidInput(
+            "the birth date is not a YYYY-MM-DD date".into(),
+        ));
+    }
+    if person.address_ids.len() > MAX_PERSON_ADDRESSES {
+        return Err(SessionError::LimitExceeded(format!(
+            "a person links at most {MAX_PERSON_ADDRESSES} addresses"
+        )));
+    }
+    for id in &person.address_ids {
+        parse_id(id)?;
+    }
+    Ok(())
+}
+
+/// The stored form of a person's links: hyphenated lowercase ids, comma-separated, in order,
+/// duplicates dropped.
+fn address_ids_value(person: &PersonDto) -> String {
+    let mut seen = HashSet::new();
+    person
+        .address_ids
+        .iter()
+        .filter_map(|id| Uuid::parse_str(id.trim()).ok())
+        .filter(|id| seen.insert(*id))
+        .map(|id| id.hyphenated().to_string())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// The person values in the order of [`PERSON_FIELDS`].
+fn person_values(p: &PersonDto) -> [Zeroizing<String>; 7] {
+    [
+        Zeroizing::new(p.label.trim().to_owned()),
+        Zeroizing::new(p.given_name.trim().to_owned()),
+        Zeroizing::new(p.family_name.trim().to_owned()),
+        Zeroizing::new(p.middle_name.trim().to_owned()),
+        Zeroizing::new(p.email.trim().to_owned()),
+        Zeroizing::new(p.birth_date.trim().to_owned()),
+        Zeroizing::new(address_ids_value(p)),
+    ]
 }
 
 /// The attachment name a file at `path` would get (the same rule as [`read_attachment_file`]).
@@ -380,7 +443,18 @@ fn apply(
             address_values(a)[0].to_owned()
         }
         (_, EntryTypeDto::Address) => model.title.trim().to_owned(),
-        _ => model.title.clone(),
+        _ => match (&model.person, model.entry_type) {
+            (Some(p), EntryTypeDto::Person) if model.title.trim().is_empty() => {
+                let label = p.label.trim();
+                if label.is_empty() {
+                    p.full_name()
+                } else {
+                    label.to_owned()
+                }
+            }
+            (_, EntryTypeDto::Person) => model.title.trim().to_owned(),
+            _ => model.title.clone(),
+        },
     };
     put(entry, "Title", &title, false, true);
     put(entry, "UserName", &model.username, false, false);
@@ -442,6 +516,13 @@ fn apply(
         for (name, value) in ADDRESS_FIELDS.iter().zip(address_values(address)) {
             let key = format!("{ADDRESS_PREFIX}{name}");
             put(entry, &key, value, true, fresh);
+        }
+    }
+    if let (EntryTypeDto::Person, Some(person)) = (model.entry_type, &model.person) {
+        // Every person value is protected; a field is created only for a non-empty value.
+        for (name, value) in PERSON_FIELDS.iter().zip(person_values(person)) {
+            let key = format!("{PERSON_PREFIX}{name}");
+            put(entry, &key, &value, true, false);
         }
     }
 
@@ -643,6 +724,12 @@ fn plain_value(entry: &Entry, field: &FieldRef) -> Result<Zeroizing<String>, Ses
                 return Err(SessionError::InvalidInput("unknown address field".into()));
             }
             plain(&format!("{ADDRESS_PREFIX}{name}"))
+        }
+        FieldRef::Person { name } => {
+            if !PERSON_FIELDS.contains(&name.as_str()) || name == PERSON_ADDRESS_IDS {
+                return Err(SessionError::InvalidInput("unknown person field".into()));
+            }
+            plain(&format!("{PERSON_PREFIX}{name}"))
         }
         FieldRef::Totp => Err(SessionError::InvalidInput(
             "a one-time code is computed from the current entry only".into(),
@@ -1371,6 +1458,148 @@ mod tests {
         }
         // The stored full name is not synthesised from the parts.
         assert_eq!(f.model(id).address.clone().unwrap().full_name, "");
+    }
+
+    fn new_person(f: &Fx, edit: impl FnOnce(&mut PersonDto)) -> Uuid {
+        f.create_as(EntryTypeDto::Person, |m| {
+            if let Some(p) = m.person.as_mut() {
+                edit(p);
+            }
+        })
+    }
+
+    #[test]
+    fn new_person_stores_protected_fields_type_marker_and_ordered_links() {
+        let f = fx();
+        let home = Uuid::from_u128(0xa1);
+        let work = Uuid::from_u128(0xa2);
+        let id = new_person(&f, |p| {
+            p.given_name = "Olena".into();
+            p.middle_name = "Petrivna".into();
+            p.family_name = "Kovalenko".into();
+            p.email = " olena@example.test ".into();
+            p.birth_date = "1990-05-17".into();
+            p.address_ids = vec![
+                work.simple().to_string(),
+                home.hyphenated().to_string().to_uppercase(),
+                work.simple().to_string(),
+            ];
+        });
+        let e = f.entry(id);
+        assert_eq!(e.field(ENTRY_TYPE_FIELD), Some("Person"));
+        // No label: the title is the full name.
+        assert_eq!(e.title(), "Olena Petrivna Kovalenko");
+        assert_eq!(e.field("MyPass.Person.email"), Some("olena@example.test"));
+        assert_eq!(e.field("MyPass.Person.birthDate"), Some("1990-05-17"));
+        assert_eq!(
+            e.field("MyPass.Person.addressIds"),
+            Some(format!("{},{}", work.hyphenated(), home.hyphenated()).as_str())
+        );
+        for key in [
+            "givenName",
+            "middleName",
+            "familyName",
+            "email",
+            "birthDate",
+            "addressIds",
+        ] {
+            assert_eq!(
+                protected(&e, &format!("{PERSON_PREFIX}{key}")),
+                Some(true),
+                "{key}"
+            );
+        }
+        // An empty label is never written.
+        assert!(e.field("MyPass.Person.label").is_none());
+        let model = f.model(id);
+        let p = model.person.as_ref().unwrap();
+        assert_eq!(
+            p.address_ids,
+            [work.simple().to_string(), home.simple().to_string()]
+        );
+        assert_eq!(p.middle_name, "Petrivna");
+        // None of the person fields shows up as a custom field.
+        assert!(model.custom_fields.is_empty());
+    }
+
+    #[test]
+    fn person_title_prefers_the_title_then_the_label_then_the_name() {
+        let f = fx();
+        let labelled = new_person(&f, |p| {
+            p.label = "Me".into();
+            p.given_name = "Ada".into();
+        });
+        assert_eq!(f.entry(labelled).title(), "Me");
+        let titled = f.create_as(EntryTypeDto::Person, |m| {
+            m.title = "  Mum ".into();
+            m.person.as_mut().unwrap().label = "Home".into();
+        });
+        assert_eq!(f.entry(titled).title(), "Mum");
+    }
+
+    #[test]
+    fn person_save_refuses_bad_birth_dates_bad_links_and_a_missing_person() {
+        let f = fx();
+        let save = |edit: &dyn Fn(&mut EntryEditModel)| {
+            let mut m = new_model(EntryTypeDto::Person, f.root);
+            edit(&mut m);
+            save_entry(&f.session, m)
+        };
+        for bad in ["2023-02-29", "17.05.1990", "1990-5-17"] {
+            let r = save(&|m| m.person.as_mut().unwrap().birth_date = bad.into());
+            assert!(matches!(r, Err(SessionError::InvalidInput(_))), "{bad}");
+        }
+        let r = save(&|m| m.person.as_mut().unwrap().address_ids = vec!["nope".into()]);
+        assert!(matches!(r, Err(SessionError::InvalidInput(_))));
+        let r = save(&|m| {
+            m.person.as_mut().unwrap().address_ids = (0..=MAX_PERSON_ADDRESSES as u128)
+                .map(|n| Uuid::from_u128(n + 1).simple().to_string())
+                .collect();
+        });
+        assert!(matches!(r, Err(SessionError::LimitExceeded(_))));
+        let r = save(&|m| m.person = None);
+        assert!(matches!(r, Err(SessionError::InvalidInput(_))));
+        assert!(save(&|m| m.person.as_mut().unwrap().birth_date = "2024-02-29".into()).is_ok());
+    }
+
+    #[test]
+    fn person_fields_reveal_by_name_but_not_the_links() {
+        let f = fx();
+        let id = new_person(&f, |p| {
+            p.middle_name = "Ivanovych".into();
+            p.address_ids = vec![Uuid::from_u128(7).simple().to_string()];
+        });
+        let reveal = |name: &str| {
+            f.db(|d| {
+                reveal(
+                    d,
+                    id,
+                    &FieldRef::Person {
+                        name: name.to_owned(),
+                    },
+                )
+            })
+        };
+        assert_eq!(reveal("middleName").unwrap().as_str(), "Ivanovych");
+        assert_eq!(reveal("email").unwrap().as_str(), "");
+        for bad in ["addressIds", "nickname", "city"] {
+            assert!(
+                matches!(reveal(bad), Err(SessionError::InvalidInput(_))),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn clearing_a_person_link_list_keeps_the_field_empty() {
+        let f = fx();
+        let id = new_person(&f, |p| {
+            p.given_name = "Ada".into();
+            p.address_ids = vec![Uuid::from_u128(9).simple().to_string()];
+        });
+        f.edit(id, |m| m.person.as_mut().unwrap().address_ids.clear());
+        assert_eq!(f.entry(id).field("MyPass.Person.addressIds"), Some(""));
+        assert!(f.model(id).person.as_ref().unwrap().address_ids.is_empty());
     }
 
     #[test]
@@ -2781,6 +3010,9 @@ mod tests {
         assert_eq!(m.uri_match_mode, "registrable-domain");
         let m = new_model(EntryTypeDto::Address, g);
         assert_eq!(m.address.as_ref().map(|a| a.label.as_str()), Some("Home"));
+        assert!(m.person.is_none());
+        let m = new_model(EntryTypeDto::Person, g);
+        assert!(m.person.is_some() && m.address.is_none() && m.card.is_none());
         let m = new_model(EntryTypeDto::Login, g);
         assert!(m.card.is_none() && m.address.is_none());
     }
