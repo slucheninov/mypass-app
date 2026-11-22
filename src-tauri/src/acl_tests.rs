@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 const MAIN: &[&str] = &[
+    "app_home_dir",
     "app_info",
     "app_open_settings",
     "app_record_activity",
@@ -89,7 +90,6 @@ const SETTINGS: &[&str] = &[
     "browser_status",
     "browser_unregister_host",
     "device_unlock_configure",
-    "device_unlock_offer",
     "device_unlock_status",
     "settings_get",
     "settings_get_public",
@@ -112,6 +112,7 @@ const SETTINGS: &[&str] = &[
 ];
 
 const TRAY_PANEL: &[&str] = &[
+    "app_home_dir",
     "app_info",
     "app_open_settings",
     "app_quit",
@@ -167,18 +168,11 @@ const SETTINGS_GATED: &[&str] = &[
 /// Settings-window commands that stay open while the vault is not unlocked, each with the reason.
 /// None of them returns or changes a setting that matters to security.
 const SETTINGS_UNGATED: &[(&str, &str)] = &[
-    (
-        "app_info",
-        "version and platform information, including the home directory used in locked vault path labels",
-    ),
+    ("app_info", "version for About and platform capabilities"),
     ("app_record_activity", "a no-op while locked"),
     (
         "app_show_main",
         "the Unlock button of the locked placeholder",
-    ),
-    (
-        "device_unlock_offer",
-        "read-only unlock screen availability, label and prompt outcomes",
     ),
     (
         "settings_get_public",

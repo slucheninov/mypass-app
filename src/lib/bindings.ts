@@ -5,6 +5,8 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 
 /** Commands */
 export const commands = {
+	/**  Used by the main window and tray panel to shorten vault paths on the unlock screen. */
+	appHomeDir: () => typedError<string, ApiError>(__TAURI_INVOKE("app_home_dir")),
 	appInfo: () => typedError<AppInfo, ApiError>(__TAURI_INVOKE("app_info")),
 	/**  Shows the settings window (General pane). */
 	appOpenSettings: () => typedError<null, ApiError>(__TAURI_INVOKE("app_open_settings")),
@@ -222,7 +224,6 @@ export type AppInfo = {
 	os: string,
 	/**  Device unlock (Touch ID, account password) can be used on this platform. */
 	deviceUnlockAvailable: boolean,
-	homeDir: string,
 };
 
 export type AttachmentMeta = {

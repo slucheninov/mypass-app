@@ -40,6 +40,7 @@ pub fn commands() -> Commands<tauri::Wry> {
     use commands::{app, attachment, backup, browser, draft, entry, generator, group, import};
     use commands::{device, platform, settings, sidebar, sync, tray, update, vault};
     collect_commands![
+        app::app_home_dir,
         app::app_info,
         app::app_open_settings,
         app::app_quit,

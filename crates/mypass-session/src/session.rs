@@ -1429,7 +1429,7 @@ impl VaultSession {
 
     /// Commit a small configuration result only for the same unlocked session incarnation.
     /// The closure follows the session -> settings lock order and must not call the session.
-    pub(crate) fn configure_if_incarnation<R>(
+    pub fn configure_if_incarnation<R>(
         &self,
         incarnation: u64,
         f: impl FnOnce() -> R,

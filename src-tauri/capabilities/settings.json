@@ -29,7 +29,6 @@
     "allow-browser-status",
     "allow-browser-unregister-host",
     "allow-device-unlock-configure",
-    "allow-device-unlock-offer",
     "allow-device-unlock-status",
     "allow-settings-get",
     "allow-settings-get-public",

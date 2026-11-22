@@ -1,6 +1,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { mount, type Component } from "svelte";
 import "./app.css";
+import { loadHomeDirectory } from "./lib/home-directory";
 import { setLanguage } from "./lib/i18n/index.svelte";
 import { loadPlatform } from "./lib/platform.svelte";
 import { startStores } from "./lib/stores";
@@ -27,11 +28,12 @@ setLanguage("system");
 
 const target = document.getElementById("app");
 if (target) {
-  mount(rootFor(getCurrentWindow().label), { target });
+  const label = getCurrentWindow().label;
+  mount(rootFor(label), { target });
   // Bootstrap after the first paint: a slow or failing backend never blocks the window. A failure
   // leaves the stores at their safe defaults.
   void loadPlatform();
-  const label = getCurrentWindow().label;
+  if (label === "main" || label === "tray-panel") void loadHomeDirectory();
   // The sticky "Saving failed" toast is the main window's alone (unknown labels fall back to main).
   void startStores({
     entries: label !== "settings" && label !== "tray-panel",

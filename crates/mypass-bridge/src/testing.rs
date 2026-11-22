@@ -210,7 +210,7 @@ pub(crate) fn passkey_fx_with_db(db: mypass_kdbx::Database) -> (Fx, Arc<PasskeyS
 }
 
 /// Builds the fixture; `make_passkeys` gets the fixture's scheduler and UI.
-fn fx_build(
+pub(crate) fn fx_build(
     db: mypass_kdbx::Database,
     make_passkeys: impl FnOnce(Arc<ManualScheduler>, Arc<RecordingUi>) -> Arc<dyn PasskeyHandler>,
 ) -> Fx {

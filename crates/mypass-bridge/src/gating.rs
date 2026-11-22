@@ -145,6 +145,8 @@ impl Request {
             | Self::UnlockWithPassword { .. }
             | Self::UnlockWithDevice { .. }
             | Self::GetUnlockOptions { .. }
+            // A paired lock also revokes pending device authorization in an already locked vault.
+            | Self::LockVault { .. }
             | Self::OpenApp { .. } => true,
             Self::GetCredentials { .. }
             | Self::GetFavorites { .. }
@@ -158,7 +160,6 @@ impl Request {
             | Self::ProposeSaveLogin { .. }
             | Self::AddEntryIdentifier { .. }
             | Self::ProposeSaveTotp { .. }
-            | Self::LockVault { .. }
             | Self::SetPasskeyProxyEnabled { .. }
             | Self::PasskeyCreate { .. }
             | Self::PasskeyCreateConfirm { .. }
@@ -440,7 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn answerable_while_locked_is_exactly_ten() {
+    fn answerable_while_locked_is_exactly_eleven() {
         let expected = sorted(&[
             "requestUnlock",
             "getPasskeyProxyStatus",
@@ -452,9 +453,10 @@ mod tests {
             "unlockWithPassword",
             "unlockWithDevice",
             "getUnlockOptions",
+            "lockVault",
         ]);
         assert_eq!(names_where(Request::is_answerable_while_locked), expected);
-        assert_eq!(expected.len(), 10);
+        assert_eq!(expected.len(), 11);
     }
 
     #[test]

@@ -479,11 +479,11 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
   };
 
   const handlers = {
+    appHomeDir: () => os === "windows" ? "C:\\Users\\someone" : "/Users/someone",
     appInfo: () => ({
       version: "0.0.0-test",
       os,
       deviceUnlockAvailable,
-      homeDir: os === "windows" ? "C:\\Users\\someone" : "/Users/someone",
     }),
     // Like Rust: taken at most once, and only while unlocked (locked, the request keeps waiting).
     appTakeNewEntry: () => {

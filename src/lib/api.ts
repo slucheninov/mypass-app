@@ -101,6 +101,7 @@ async function shortcutConflictsTake() {
 
 /** One typed, already unwrapped async function per command. */
 export const api = {
+  appHomeDir: wrap(commands.appHomeDir),
   appInfo: wrap(commands.appInfo),
   appTakeNewEntry: wrap(commands.appTakeNewEntry),
   appOpenSettings: wrap(commands.appOpenSettings),

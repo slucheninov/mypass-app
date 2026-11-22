@@ -1010,6 +1010,44 @@ mod tests {
     }
 
     #[test]
+    fn paired_browser_lock_revokes_pending_touch_id() {
+        use mypass_bridge::protocol::Response;
+
+        let f = fixture(true);
+        let handle = f.handle();
+        let secret = pair(&f);
+        let core = &f.w.core;
+        core.device_unlock
+            .configure(Some(crate::testing::pw("pw")), true, false)
+            .unwrap();
+        core.vault_lock().unwrap();
+        let lock_handle = handle.clone();
+        let lock_secret = secret.clone();
+        let (send, receive) = std::sync::mpsc::channel();
+        f.w.fake.device_unlock.before_unlock_returns(move || {
+            let lock = |pairing| {
+                lock_handle.service.handle(Request::LockVault {
+                    token: "t".into(),
+                    pairing,
+                })
+            };
+            assert_eq!(lock(None), Response::PairingRequired);
+            send.send(lock(Some(lock_secret))).unwrap();
+        });
+        let unlock = handle.service.handle(Request::UnlockWithDevice {
+            token: "t".into(),
+            pairing: Some(secret),
+            automatic: true,
+        });
+        assert!(
+            !core.session.is_unlocked(),
+            "the old prompt must not unlock"
+        );
+        assert_eq!(unlock, Response::UnlockCancelled);
+        assert_eq!(receive.try_recv().unwrap(), Response::Acknowledged);
+    }
+
+    #[test]
     fn desktop_and_browser_share_one_failure_count() {
         for surfaces in [["Main", "Main", "Tray"], ["Browser", "Browser", "Main"]] {
             let f = fixture(true);

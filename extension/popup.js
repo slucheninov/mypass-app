@@ -632,7 +632,7 @@ if (typeof document !== 'undefined') {
   const initialTouch = { first: false, showDevice: false, method: 'device', failures: 0, blocked: false, inFlight: false };
   const touch = { ...initialTouch };
   // One automatic prompt per popup opening: a cancel waits for a press or the next opening.
-  let autoPrompted = false;
+  let mayAutoPrompt = true;
   let lockedMode = null;
   let unlockPanelRevision = 0;
   let unlockBusy = false;
@@ -1385,6 +1385,11 @@ if (typeof document !== 'undefined') {
     void refreshUnlockOptions(true);
   };
 
+  function presentExplicitLock() {
+    mayAutoPrompt = false;
+    presentLockedPanel();
+  }
+
   async function refreshUnlockOptions(initial = false) {
     if (optionsPending || unlockBusy) return;
     const revision = unlockPanelRevision;
@@ -1424,8 +1429,8 @@ if (typeof document !== 'undefined') {
     }
     if (retryDeadline === 0) showUnlockBackoff(options.retryAfterSecs);
     updateUnlockButtons();
-    if (initial && !autoPrompted && !touchIdView.hidden) {
-      autoPrompted = true;
+    if (initial && mayAutoPrompt && !touchIdView.hidden) {
+      mayAutoPrompt = false;
       void runDeviceUnlock(true);
     }
   }
@@ -2353,7 +2358,7 @@ if (typeof document !== 'undefined') {
       lockVaultBtn.disabled = false;
       moreDropdown.close(false);
       if (result?.type === 'ok' || result?.type === 'locked') {
-        presentLockedPanel();
+        presentExplicitLock();
         return;
       }
       showMenuError(result?.type === 'pairingRequired'
@@ -2479,7 +2484,7 @@ if (typeof document !== 'undefined') {
   // browse response before the security confirmation takes ownership of the UI.
   if (chrome.storage.onChanged) chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== 'session') return;
-    if (changes.vaultLockedNotice) presentLockedPanel();
+    if (changes.vaultLockedNotice) presentExplicitLock();
     if (changes[LAST_PASSKEY_FAILURE_KEY]) {
       pendingPasskeyRevision += 1;
       const failure = changes[LAST_PASSKEY_FAILURE_KEY].newValue;

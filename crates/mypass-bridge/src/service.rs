@@ -21,7 +21,7 @@ use std::time::{Duration, SystemTime};
 
 use mypass_session::autolock::AutoLock;
 use mypass_session::scheduler::Scheduler;
-use mypass_session::session::{SessionEvent, SessionState, VaultSession};
+use mypass_session::session::{SessionError, SessionEvent, SessionState, VaultSession};
 use mypass_session::settings::SettingsStore;
 
 use crate::diagnostics::DiagnosticsStore;
@@ -156,17 +156,19 @@ impl BridgeService {
         if request.requires_pairing() && !deps.pairing.is_authorized(request.pairing()) {
             return Response::PairingRequired;
         }
-        let unlocked = deps.session.is_unlocked();
-        if !unlocked && !request.is_answerable_while_locked() {
-            return Response::Locked;
-        }
+        let unlocked_incarnation = match deps.session.unlocked_incarnation() {
+            Ok(incarnation) => Some(incarnation),
+            Err(SessionError::Quitting) => return error("MyPass is quitting"),
+            Err(_) if request.is_answerable_while_locked() => None,
+            Err(_) => return Response::Locked,
+        };
         let ctx = Ctx {
             deps,
             now: deps.scheduler.wall_now(),
             last_unlock_request: &self.last_unlock_request,
             throttle: &self.throttle,
         };
-        let response = Self::dispatch(&ctx, &mut request, unlocked);
+        let response = Self::dispatch(&ctx, &mut request, unlocked_incarnation);
         self.note_activity(&request, &response);
         response
     }
@@ -178,7 +180,11 @@ impl BridgeService {
         }
     }
 
-    fn dispatch(ctx: &Ctx<'_>, request: &mut Request, unlocked: bool) -> Response {
+    fn dispatch(
+        ctx: &Ctx<'_>,
+        request: &mut Request,
+        unlocked_incarnation: Option<u64>,
+    ) -> Response {
         match request {
             Request::GetCredentials { url, .. } => browse::get_credentials(ctx, url),
             Request::GetFavorites { .. } => browse::get_favorites(ctx),
@@ -282,7 +288,7 @@ impl BridgeService {
                 &PasskeyContext {
                     session: &ctx.deps.session,
                     settings: &ctx.deps.settings,
-                    unlocked,
+                    unlocked_incarnation,
                 },
                 request,
             ),

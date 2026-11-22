@@ -2,7 +2,7 @@ import { api } from "./api";
 
 export type Os = "macos" | "windows" | "linux";
 
-/** Capability state from `app_info`; the defaults keep capability-gated UI hidden until loaded. */
+/** Platform information for the active window, with defaults until the backend responds. */
 export const platform: { os: Os | null; version: string | null; deviceUnlockAvailable: boolean; homeDir: string | null } = $state({
   os: null,
   version: null,
@@ -20,7 +20,6 @@ export async function loadPlatform(): Promise<void> {
     const info = await api.appInfo();
     platform.os = narrowOs(info.os);
     platform.version = info.version;
-    platform.homeDir = info.homeDir;
     platform.deviceUnlockAvailable = info.deviceUnlockAvailable;
     // A presentation hook for CSS (`:root[data-os]`), so spacing differences never need an OS
     // comparison in a component.

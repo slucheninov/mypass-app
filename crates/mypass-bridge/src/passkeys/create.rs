@@ -72,7 +72,7 @@ pub(crate) fn handle_create(
     request_details_json: &str,
     origin_url: &str,
 ) -> Response {
-    if !ctx.unlocked {
+    if ctx.unlocked_incarnation.is_none() {
         return Response::Locked;
     }
     let request = match parse_create(origin_url, request_details_json) {

@@ -70,6 +70,13 @@ pub fn app_info(state: State<'_, AppState>) -> Result<AppInfo, ApiError> {
     Ok(info(&state.0))
 }
 
+/// Used by the main window and tray panel to shorten vault paths on the unlock screen.
+#[tauri::command]
+#[specta::specta]
+pub fn app_home_dir(state: State<'_, AppState>) -> Result<String, ApiError> {
+    Ok(state.0.paths().home().to_string_lossy().into_owned())
+}
+
 /// User activity in a window (resets the idle timer); a no-op while locked.
 #[tauri::command]
 #[specta::specta]
@@ -224,6 +231,13 @@ mod tests {
         assert!(accepts_editor_report(MAIN_WINDOW));
         assert!(!accepts_editor_report(SETTINGS_WINDOW));
         assert!(!accepts_editor_report("tray-panel"));
+    }
+
+    #[test]
+    fn app_info_omits_the_home_directory() {
+        let w = world();
+        let info = serde_json::to_value(super::info(&w.core)).unwrap();
+        assert!(info.get("homeDir").is_none());
     }
 
     #[test]

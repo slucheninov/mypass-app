@@ -13,7 +13,7 @@ fn ctx<'a>(f: &'a Fx, settings: &'a SettingsStore, unlocked: bool) -> PasskeyCon
     PasskeyContext {
         session: &f.session,
         settings,
-        unlocked,
+        unlocked_incarnation: unlocked.then(|| f.session.unlocked_incarnation().unwrap()),
     }
 }
 
@@ -131,6 +131,28 @@ fn status_is_enabled_when_toggle_never_touched() {
             remember_social_sign_in: Some(true),
         }
     );
+}
+
+#[test]
+fn paired_toggle_is_rejected_after_lock_and_reunlock() {
+    struct RelockBeforeToggle(Arc<PasskeyService>);
+
+    impl PasskeyHandler for RelockBeforeToggle {
+        fn handle(&self, ctx: &PasskeyContext<'_>, request: &Request) -> Response {
+            ctx.session.lock(LockReason::Manual);
+            ctx.session.unlock(SecretString::from("pw")).unwrap();
+            self.0.handle(ctx, request)
+        }
+    }
+
+    let f = fx_build(fast_database("Passkey Test"), |sched, ui| {
+        Arc::new(RelockBeforeToggle(PasskeyService::new(sched, ui)))
+    });
+    let reply = f.svc.handle(set_enabled_request(&f, false));
+    assert!(f.session.is_unlocked());
+    assert!(f.settings.get().passkey_proxy_enabled);
+    assert_eq!(reply, Response::Locked);
+    assert!(f.ui.calls().is_empty());
 }
 
 #[test]
@@ -643,7 +665,7 @@ fn cancel_during_successful_presence_prevents_create() {
                 &PasskeyContext {
                     session: &presence_session,
                     settings: &presence_settings,
-                    unlocked: true,
+                    unlocked_incarnation: Some(presence_session.unlocked_incarnation().unwrap()),
                 },
                 &Request::PasskeyCancel {
                     token: "t".into(),
@@ -704,7 +726,9 @@ fn cancel_during_presence_prevents_replacement_and_get() {
                         &PasskeyContext {
                             session: &presence_session,
                             settings: &presence_settings,
-                            unlocked: true,
+                            unlocked_incarnation: Some(
+                                presence_session.unlocked_incarnation().unwrap(),
+                            ),
                         },
                         &Request::PasskeyCancel {
                             token: "t".into(),

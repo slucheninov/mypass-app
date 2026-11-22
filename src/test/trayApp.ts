@@ -1,6 +1,7 @@
 // Renders the real tray panel on a fake backend and starts the stores the way `main.ts` does for
 // the `tray-panel` label: no entries list, no "Saving failed" toast (that one belongs to `main`).
 import { afterEach } from "vitest";
+import { loadHomeDirectory } from "../lib/home-directory";
 import { loadPlatform } from "../lib/platform.svelte";
 import { startStores } from "../lib/stores";
 import { toasts } from "../lib/stores/toasts.svelte";
@@ -24,6 +25,6 @@ export async function renderTrayPanel(
   prepare?.(fake);
   const utils = renderWithBackend(TrayPanel, {}, fake);
   stops.push(await startStores({ entries: false, saveToast: false, sync: false, theme: false }));
-  await loadPlatform();
+  await Promise.all([loadPlatform(), loadHomeDirectory()]);
   return { ...utils, fake };
 }
