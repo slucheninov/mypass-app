@@ -4,6 +4,8 @@ const TIP = 70;
 export const KEY_BOUNDS = { width: 2 * BOW_RADIUS, height: TIP + BOW_RADIUS };
 // In canvas coordinates the positive tilt takes the downward shaft to the right.
 export const TILT_DEG = 22;
+// Raster output uses sqrt and the sine and cosine of this fixed angle.
+// Pixel comparisons run under the repository's pinned Node/V8 runtime.
 const angle = TILT_DEG * Math.PI / 180;
 const cosine = Math.cos(angle);
 const sine = Math.sin(angle);
