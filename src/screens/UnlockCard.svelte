@@ -112,8 +112,13 @@
   }
   .card.compact {
     width: 100%;
-    gap: 10px;
-    padding: 14px;
+    gap: 8px;
+    padding: 8px 9px;
+    border: 0;
+    background: transparent;
+  }
+  .compact h1 {
+    font-size: 13px;
   }
   .vault {
     display: flex;

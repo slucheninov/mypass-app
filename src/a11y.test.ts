@@ -88,7 +88,7 @@ describe("axe on the real windows", () => {
     const app = await renderTrayPanel({ session: "unlocked" });
     const user = userEvent.setup();
     await expectNoAxeViolations(app.container);
-    await user.click(await screen.findByRole("button", { name: "GitHub" }));
+    await user.click(await screen.findByRole("menuitem", { name: "GitHub" }));
     await screen.findByRole("region", { name: "GitHub" });
     await expectNoAxeViolations(app.container);
   });

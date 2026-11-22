@@ -23,7 +23,7 @@ export async function renderTrayPanel(
   for (const stop of stops.splice(0)) stop();
   prepare?.(fake);
   const utils = renderWithBackend(TrayPanel, {}, fake);
-  stops.push(await startStores({ entries: false, saveToast: false }));
+  stops.push(await startStores({ entries: false, saveToast: false, sync: false, theme: false }));
   await loadPlatform();
   return { ...utils, fake };
 }

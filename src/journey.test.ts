@@ -344,7 +344,7 @@ describe("journeys", () => {
     const { fake, user } = await unlocked();
     // Rendered beside the main window without a second `install()`, which would drop its event listeners.
     const tray = render(TrayPanel);
-    const recent = await tray.findByRole("button", { name: "GitHub" });
+    const recent = await tray.findByRole("menuitem", { name: "GitHub" });
     await user.click(recent);
     const edit = await tray.findAllByRole("button", { name: "Edit" });
     await user.click(edit[edit.length - 1] as HTMLElement);

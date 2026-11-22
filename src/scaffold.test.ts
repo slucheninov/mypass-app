@@ -237,7 +237,7 @@ describe("no_legacy_svelte_syntax", () => {
 
 describe("no_os_name_checks_outside_window_controls_and_reveal_label", () => {
   // Explicit Stage 6 Windows presentation/help branches; native capability checks stay separate.
-  const ALLOWED = ["WindowControls.svelte", "settings/Vault.svelte", "screens/Shell.svelte", "settings/Browser.svelte", "settings/General.svelte", "settings/Security.svelte"];
+  const ALLOWED = ["WindowControls.svelte", "windows/TrayPanel.svelte", "settings/Vault.svelte", "screens/Shell.svelte", "settings/Browser.svelte", "settings/General.svelte", "settings/Security.svelte"];
   const OS_CHECK = /\.os\s*[!=]==?|\bos\s*[!=]==?\s*["']/;
 
   it("OS names are compared only where the design allows", () => {
