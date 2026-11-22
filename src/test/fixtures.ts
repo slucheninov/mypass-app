@@ -11,13 +11,14 @@ import type {
   EntryDetailDto_Serialize,
   EntryEditModel_Serialize,
   EntryQuery,
-  EntrySummary,
+  EntrySummary_Serialize,
   GroupNode_Serialize,
   PasskeyMeta_Serialize,
   Scope,
   SecurityFlag,
   SessionStatus_Serialize,
   Settings_Serialize,
+  SignInDto_Serialize,
   Sidebar_Serialize,
 } from "../lib/bindings";
 
@@ -37,7 +38,7 @@ export const BIN_GROUP_ID = "group-bin";
 export const BANKING_GROUP_ID = "group-banking";
 
 export interface FixtureEntry {
-  summary: EntrySummary;
+  summary: EntrySummary_Serialize;
   model: EntryEditModel_Serialize;
   modified: number;
   /** KDBX `CreationTime`, `LastAccessTime` and `UsageCount` (the sort keys); default to `modified`, `modified` and 0. */
@@ -46,6 +47,8 @@ export interface FixtureEntry {
   usageCount?: number;
   /** What `entry_get` reports besides the edit model. */
   passkey: PasskeyMeta_Serialize | null;
+  /** The recorded last use of the sign-in method (`model.signInProvider`), Unix milliseconds. */
+  signInLastUsed?: number | null;
   /** Earlier versions, oldest first (the order of the KDBX `History` element). */
   history: HistoryVersion[];
 }
@@ -99,7 +102,7 @@ export interface EntrySpec {
   id: string;
   title: string;
   subtitle?: string;
-  entryType?: EntrySummary["entryType"];
+  entryType?: EntrySummary_Serialize["entryType"];
   groupId?: string;
   favorite?: boolean;
   hasTotp?: boolean;
@@ -123,6 +126,8 @@ export interface EntrySpec {
   created?: number;
   accessed?: number;
   usageCount?: number;
+  /** The social sign-in method and its recorded last use. */
+  signIn?: SignInDto_Serialize;
 }
 
 /** One entry of the fake vault; the summary and the edit model are kept consistent. */
@@ -138,6 +143,7 @@ export function makeEntry(spec: EntrySpec): FixtureEntry {
     accessed: spec.accessed ?? spec.modified,
     usageCount: spec.usageCount ?? 0,
     passkey: spec.passkey ?? null,
+    signInLastUsed: spec.signIn?.lastUsed ?? null,
     history: [],
     summary: {
       id: spec.id,
@@ -155,6 +161,7 @@ export function makeEntry(spec: EntrySpec): FixtureEntry {
       groupId,
       inRecycleBin: spec.inRecycleBin ?? false,
       flags: spec.flags ?? [],
+      ...(spec.signIn ? { signInProvider: spec.signIn.provider } : {}),
     },
     model: {
       id: spec.id,
@@ -178,6 +185,7 @@ export function makeEntry(spec: EntrySpec): FixtureEntry {
       removePasskey: false,
       passkeyRef: spec.passkey ? `passkey-ref-${spec.id}` : null,
       restore: false,
+      ...(spec.signIn ? { signInProvider: spec.signIn.provider } : {}),
     },
   };
   const versions: HistorySpec[] =
@@ -241,7 +249,7 @@ export function fixtureEntries(): FixtureEntry[] {
   ];
 }
 
-const TYPE_OF: Partial<Record<Category, EntrySummary["entryType"]>> = {
+const TYPE_OF: Partial<Record<Category, EntrySummary_Serialize["entryType"]>> = {
   addresses: "address",
   people: "person",
   cards: "card",
@@ -249,7 +257,7 @@ const TYPE_OF: Partial<Record<Category, EntrySummary["entryType"]>> = {
   files: "files",
 };
 
-function inScope(e: EntrySummary, scope: Scope): boolean {
+function inScope(e: EntrySummary_Serialize, scope: Scope): boolean {
   if (scope.kind === "group") return e.groupId === scope.groupId;
   switch (scope.category) {
     case "deleted":
@@ -315,7 +323,7 @@ export function listEntries(
   entries: FixtureEntry[],
   query: EntryQuery,
   groups: GroupNode_Serialize[] = fixtureGroups(),
-): EntrySummary[] {
+): EntrySummary_Serialize[] {
   const searching = query.search !== "";
   const nameOf = (id: string) => groupById(groups, id)?.name ?? "";
   let scoped: FixtureEntry[];
@@ -387,7 +395,7 @@ export function fixtureGroups(): GroupNode_Serialize[] {
 }
 
 /** A copy of the tree with every `count` set to the entries in that group's whole subtree. */
-function counted(nodes: GroupNode_Serialize[], summaries: EntrySummary[]): { nodes: GroupNode_Serialize[]; total: number } {
+function counted(nodes: GroupNode_Serialize[], summaries: EntrySummary_Serialize[]): { nodes: GroupNode_Serialize[]; total: number } {
   let total = 0;
   const out = nodes.map((node) => {
     const inner = counted(node.children, summaries);
@@ -455,6 +463,14 @@ export function detailOf(e: FixtureEntry, all: FixtureEntry[] = []): EntryDetail
     attachments: structuredClone(model.attachments),
     historyCount: e.history.length,
     inRecycleBin: summary.inRecycleBin,
+    ...(model.signInProvider
+      ? {
+          signIn: {
+            provider: model.signInProvider,
+            ...(e.signInLastUsed != null ? { lastUsed: e.signInLastUsed } : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -475,6 +491,7 @@ export function defaultSettings(): Settings_Serialize {
     shortcutShow: "",
     generator: { length: 20, lowercase: true, uppercase: true, digits: true, symbols: true },
     passkeyProxyEnabled: true,
+    rememberSocialSignIn: true,
     unlockTouchIdEnabled: false,
     unlockMacPasswordEnabled: false,
     unlockWithDeviceWindow: "eightHours",

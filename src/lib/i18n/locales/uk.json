@@ -582,5 +582,11 @@
   "Birthday": "Дата народження",
   "Review form fields": "Перегляд полів форми",
   "Choose the form fields to keep with the new login.": "Виберіть поля форми, які зберегти з новим логіном.",
-  "Also create an Address entry": "Також створити запис «Адреса»"
+  "Also create an Address entry": "Також створити запис «Адреса»",
+  "Sign-in method": "Спосіб входу",
+  "Last used %@": "Останній вхід: {0}",
+  "None": "Немає",
+  "Sign in with %@": "Вхід через {0}",
+  "Remember social sign-in": "Запам’ятовувати вхід через соцмережі",
+  "When you sign in to a website with Google, Facebook, Apple, Microsoft or GitHub, the browser extension remembers which one and highlights it next time.": "Коли ви входите на сайт через Google, Facebook, Apple, Microsoft або GitHub, розширення браузера запам’ятовує спосіб і наступного разу підсвічує його."
 }

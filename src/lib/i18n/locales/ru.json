@@ -582,5 +582,11 @@
   "Birthday": "Дата рождения",
   "Review form fields": "Просмотр полей формы",
   "Choose the form fields to keep with the new login.": "Выберите поля формы, которые сохранить с новым логином.",
-  "Also create an Address entry": "Также создать запись «Адрес»"
+  "Also create an Address entry": "Также создать запись «Адрес»",
+  "Sign-in method": "Способ входа",
+  "Last used %@": "Последний вход: {0}",
+  "None": "Нет",
+  "Sign in with %@": "Вход через {0}",
+  "Remember social sign-in": "Запоминать вход через соцсети",
+  "When you sign in to a website with Google, Facebook, Apple, Microsoft or GitHub, the browser extension remembers which one and highlights it next time.": "Когда вы входите на сайт через Google, Facebook, Apple, Microsoft или GitHub, расширение браузера запоминает способ и в следующий раз подсвечивает его."
 }

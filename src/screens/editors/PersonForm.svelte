@@ -5,7 +5,7 @@
   // The birth date is an ISO date from the date input; the backend validates it again on save.
   import { onMount } from "svelte";
   import { api } from "../../lib/api";
-  import type { EntrySummary, PersonDto } from "../../lib/bindings";
+  import type { EntrySummary_Serialize, PersonDto } from "../../lib/bindings";
   import { t } from "../../lib/i18n/index.svelte";
   import Button from "../../lib/ui/Button.svelte";
   import TextField from "../../lib/ui/TextField.svelte";
@@ -13,7 +13,7 @@
   let { person = $bindable(), birthDateError = null }: { person: PersonDto; birthDateError?: string | null } =
     $props();
 
-  let addresses = $state<EntrySummary[]>([]);
+  let addresses = $state<EntrySummary_Serialize[]>([]);
   let loaded = $state(false);
 
   onMount(() => {
@@ -34,7 +34,7 @@
 
   const known = $derived(new Map(addresses.map((a) => [a.id, a])));
   const linked = $derived(
-    person.addressIds.map((id) => known.get(id)).filter((a): a is EntrySummary => a !== undefined),
+    person.addressIds.map((id) => known.get(id)).filter((a): a is EntrySummary_Serialize => a !== undefined),
   );
   const unlinked = $derived(addresses.filter((a) => !person.addressIds.includes(a.id)));
 

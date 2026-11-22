@@ -177,7 +177,8 @@ pub struct EntrySummary {
     pub group_id: String,
     pub in_recycle_bin: bool,
     pub flags: Vec<SecurityFlag>,
-    /// The social sign-in method remembered on the entry (a list badge), `None` when it has none.
+    /// The social sign-in method remembered on the entry (a list badge), absent when it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sign_in_provider: Option<SignInProvider>,
 }
 
@@ -454,7 +455,8 @@ pub struct EntryDetailDto {
     pub attachments: Vec<AttachmentMeta>,
     pub history_count: u32,
     pub in_recycle_bin: bool,
-    /// The social sign-in method remembered on the entry.
+    /// The social sign-in method remembered on the entry, absent when it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sign_in: Option<SignInDto>,
 }
 
@@ -464,6 +466,7 @@ pub struct EntryDetailDto {
 #[serde(rename_all = "camelCase")]
 pub struct SignInDto {
     pub provider: SignInProvider,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_used: Option<f64>,
 }
 
@@ -636,7 +639,7 @@ pub struct EntryEditModel {
     pub restore: bool,
     /// The social sign-in method (`None`: none). Changing it drops the recorded last use; the
     /// same provider keeps it. `serde(default)` keeps older stored drafts loadable.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sign_in_provider: Option<SignInProvider>,
 }
 

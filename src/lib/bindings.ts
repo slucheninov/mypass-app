@@ -607,7 +607,7 @@ export type EntryDetailDto_Deserialize = {
 	attachments: AttachmentMeta[],
 	historyCount: number,
 	inRecycleBin: boolean,
-	/**  The social sign-in method remembered on the entry. */
+	/**  The social sign-in method remembered on the entry, absent when it has none. */
 	signIn?: SignInDto_Deserialize | null,
 };
 
@@ -643,8 +643,8 @@ export type EntryDetailDto_Serialize = {
 	attachments: AttachmentMeta[],
 	historyCount: number,
 	inRecycleBin: boolean,
-	/**  The social sign-in method remembered on the entry. */
-	signIn: SignInDto_Serialize | null,
+	/**  The social sign-in method remembered on the entry, absent when it has none. */
+	signIn?: SignInDto_Serialize,
 };
 
 /**
@@ -754,7 +754,7 @@ export type EntryEditModel_Serialize = {
 	 *  The social sign-in method (`None`: none). Changing it drops the recorded last use; the
 	 *  same provider keeps it. `serde(default)` keeps older stored drafts loadable.
 	 */
-	signInProvider: SignInProvider | null,
+	signInProvider?: SignInProvider,
 };
 
 export type EntryQuery = {
@@ -782,7 +782,7 @@ export type EntrySummary_Deserialize = {
 	groupId: string,
 	inRecycleBin: boolean,
 	flags: SecurityFlag[],
-	/**  The social sign-in method remembered on the entry (a list badge), `None` when it has none. */
+	/**  The social sign-in method remembered on the entry (a list badge), absent when it has none. */
 	signInProvider?: SignInProvider | null,
 };
 
@@ -802,8 +802,8 @@ export type EntrySummary_Serialize = {
 	groupId: string,
 	inRecycleBin: boolean,
 	flags: SecurityFlag[],
-	/**  The social sign-in method remembered on the entry (a list badge), `None` when it has none. */
-	signInProvider: SignInProvider | null,
+	/**  The social sign-in method remembered on the entry (a list badge), absent when it has none. */
+	signInProvider?: SignInProvider,
 };
 
 export type EntryTypeDto = "login" | "address" | "person" | "card" | "notes" | "files";
@@ -1687,7 +1687,7 @@ export type SignInDto_Deserialize = {
  */
 export type SignInDto_Serialize = {
 	provider: SignInProvider,
-	lastUsed: number | null,
+	lastUsed?: number | null,
 };
 
 /**  A social sign-in provider MyPass recognises. */

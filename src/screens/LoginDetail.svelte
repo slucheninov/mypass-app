@@ -10,6 +10,8 @@
   import Button from "../lib/ui/Button.svelte";
   import FieldRow from "../lib/ui/FieldRow.svelte";
   import Icon from "../lib/ui/Icon.svelte";
+  import ProviderMark from "../lib/ui/ProviderMark.svelte";
+  import { PROVIDER_NAME } from "../lib/sign-in";
   import { webLinks } from "../lib/ui/web-links";
   import { webUrl } from "../lib/web-url";
   import CopyFieldValue from "./CopyFieldValue.svelte";
@@ -71,6 +73,18 @@
     {/snippet}
   </DetailField>
 {/if}
+{#if detail.signIn}
+  {@const signIn = detail.signIn}
+  <div role="group" aria-label={t("Sign-in method")} data-testid="sign-in-method">
+    <FieldRow label={t("Sign-in method")}>
+      <span class="added"
+        ><ProviderMark provider={signIn.provider} />{PROVIDER_NAME[signIn.provider]}{#if signIn.lastUsed != null}<span class="muted"
+            >{t("Last used %@", [formatDate(signIn.lastUsed)])}</span
+          >{/if}</span
+      >
+    </FieldRow>
+  </div>
+{/if}
 {#if detail.passkey}
   {@const passkey = detail.passkey}
   <div class="passkey" role="group" aria-label={t("Passkey")}>
@@ -117,6 +131,10 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
+  }
+  .muted {
+    color: var(--text-2);
+    font-size: 12px;
   }
   .note {
     margin: 6px 0 4px;

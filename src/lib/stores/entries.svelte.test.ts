@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { EntrySummary } from "../bindings";
+import type { EntrySummary_Serialize } from "../bindings";
 import { createFakeBackend } from "../../test/fakeBackend";
 import { startStores } from "./index";
 import { entries } from "./entries.svelte";
@@ -47,7 +47,7 @@ describe("entries store", () => {
     const fake = await bootUnlocked();
     const github = fake.state.entries.find((e) => e.summary.id === "e-github")!.summary;
     const visa = fake.state.entries.find((e) => e.summary.id === "e-visa")!.summary;
-    const pending: ((rows: EntrySummary[]) => void)[] = [];
+    const pending: ((rows: EntrySummary_Serialize[]) => void)[] = [];
     fake.handlers.entryList = () => new Promise((resolve) => pending.push(resolve));
     const first = entries.setSort("modified");
     const second = entries.setSort("title");

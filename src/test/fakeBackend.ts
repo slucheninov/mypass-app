@@ -819,6 +819,10 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         found.summary.inRecycleBin = locate(model.groupId)?.node.isRecycleBin ?? false;
         found.summary.attachmentCount = attachments.length;
         found.summary.hasTotp = model.totp !== "";
+        // Like `set_sign_in_provider`: another provider drops the recorded last use.
+        if ((model.signInProvider ?? null) !== (found.summary.signInProvider ?? null)) found.signInLastUsed = null;
+        if (model.signInProvider) found.summary.signInProvider = model.signInProvider;
+        else delete found.summary.signInProvider;
         found.modified += 1;
         found.summary.modified = found.modified;
         changed();
@@ -838,6 +842,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       created.model = { ...saved, id: created.summary.id };
       created.summary.subtitle = model.username;
       created.summary.attachmentCount = attachments.length;
+      if (model.signInProvider) created.summary.signInProvider = model.signInProvider;
       state.entries.push(created);
       changed();
       return created.summary.id;

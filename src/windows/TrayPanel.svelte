@@ -2,7 +2,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount, tick } from "svelte";
   import { api } from "../lib/api";
-  import { events, type EntrySummary } from "../lib/bindings";
+  import { events, type EntrySummary_Serialize } from "../lib/bindings";
   import { t } from "../lib/i18n/index.svelte";
   import { lockGuard } from "../lib/lock-guard";
   import { platform } from "../lib/platform.svelte";
@@ -22,8 +22,8 @@
   const RECENT_LIMIT = 5;
   const recentKey = (id: string) => `recent:${id}`;
 
-  let recents = $state<EntrySummary[]>([]);
-  type Selection = { entry: EntrySummary; epoch: number };
+  let recents = $state<EntrySummary_Serialize[]>([]);
+  type Selection = { entry: EntrySummary_Serialize; epoch: number };
   let selected = $state.raw<Selection | null>(null);
   let highlight = $state<string | null>(null);
   let card: UnlockCard | undefined = $state();
