@@ -129,6 +129,7 @@ assertDisjoint('service worker', [
   'shared/notification-settings.js',
   'shared/autofill-settings.js',
   'shared/prompt-record.js',
+  'shared/social-sign-in.js',
   'background.js'
 ]);
 

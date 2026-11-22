@@ -1150,5 +1150,23 @@
         "content": "$1"
       }
     }
+  },
+  "socialSignInLastTime": {
+    "message": "Last time you signed in with $PROVIDER$",
+    "placeholders": {
+      "provider": {
+        "content": "$1",
+        "example": "Google"
+      }
+    }
+  },
+  "socialSignInPopupRow": {
+    "message": "Signed in with $PROVIDER$ last time",
+    "placeholders": {
+      "provider": {
+        "content": "$1",
+        "example": "Google"
+      }
+    }
   }
 }

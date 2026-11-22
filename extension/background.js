@@ -149,6 +149,8 @@ function sendNativeMessage(message) {
       }
       const state = message.type === "lockVault" && response.type === "ok"
         ? "locked" : iconStateForResponse(response);
+      // The vault became reachable: send the social sign-in clicks kept while it was locked.
+      if (state === "unlocked" && lastActionIcon !== "unlocked") void flushSocialSignInQueue();
       void applyActionIcon(state);
       resolve(response);
     });
@@ -221,6 +223,10 @@ const autofillSettings = typeof require === 'function'
 const promptRecords = typeof require === 'function'
   ? require('./shared/prompt-record.js')
   : mypassPromptRecord;
+// social-sign-in.js is importScripts'd before this file as well (the pending-queue helpers).
+const socialSignIn = typeof require === 'function'
+  ? require('./shared/social-sign-in.js')
+  : mypassSocialSignIn;
 // i18n.js is importScripts'd first too; user-visible text is looked up when it is shown, so the
 // browser UI language applies.
 const i18n = typeof require === 'function' ? require('./shared/i18n.js') : mypassI18n;
@@ -1303,6 +1309,80 @@ function sessionRemoveKey(key) {
   });
 }
 
+// Social sign-in. A click the content script reports while the vault is locked is kept in session
+// storage (one record per tab and site, dropped after ten minutes) and sent once a response shows
+// the vault unlocked. Every socialSignIn reply mirrors the app's "Remember social sign-in" setting
+// into storage.local, where content scripts read it before they record or draw anything.
+const SOCIAL_SIGN_IN_PENDING_KEY = "socialSignInPending";
+const SOCIAL_SIGN_IN_ENABLED_KEY = "socialSignInEnabled";
+let socialSignInFlush = null;
+
+function noteSocialSignInSetting(response) {
+  if (!response || response.type !== "socialSignIn" || typeof response.enabled !== "boolean") return Promise.resolve();
+  return new Promise((resolve) => {
+    if (!chrome.storage || !chrome.storage.local) { resolve(); return; }
+    chrome.storage.local.set({ [SOCIAL_SIGN_IN_ENABLED_KEY]: response.enabled }, () => resolve());
+  });
+}
+
+async function queueSocialSignIn(tabId, pageUrl, provider) {
+  const records = await sessionGetValue(SOCIAL_SIGN_IN_PENDING_KEY);
+  await sessionSetValue(SOCIAL_SIGN_IN_PENDING_KEY, socialSignIn.addPending(records, tabId, pageUrl, provider, Date.now()));
+}
+
+function flushSocialSignInQueue() {
+  if (socialSignInFlush) return socialSignInFlush;
+  socialSignInFlush = (async () => {
+    const live = socialSignIn.prunePending(await sessionGetValue(SOCIAL_SIGN_IN_PENDING_KEY), Date.now());
+    const keys = Object.keys(live);
+    if (keys.length === 0) {
+      await sessionRemoveKey(SOCIAL_SIGN_IN_PENDING_KEY);
+      return;
+    }
+    const kept = {};
+    for (const key of keys) {
+      const record = live[key];
+      const response = await sendNativeMessageWithPairing({
+        type: "recordSocialSignIn", pageUrl: record.pageUrl, provider: record.provider
+      });
+      await noteSocialSignInSetting(response);
+      // Locked again (or the app went away mid-flush): keep it for the next unlock.
+      if (response && (response.type === "locked" || response.type === "error")) kept[key] = record;
+    }
+    if (Object.keys(kept).length) await sessionSetValue(SOCIAL_SIGN_IN_PENDING_KEY, kept);
+    else await sessionRemoveKey(SOCIAL_SIGN_IN_PENDING_KEY);
+  })().catch(() => {}).finally(() => { socialSignInFlush = null; });
+  return socialSignInFlush;
+}
+
+// The page a content script speaks for: its own top frame, https, and the url it names is that
+// page's host. sender.url is what is sent on, never the message's url.
+function socialSignInPageOf(message, sender) {
+  if (!isContentScriptSender(sender) || sender.frameId !== 0 || typeof sender.url !== "string") return null;
+  if (!socialSignIn.isHttpsUrl(sender.url)) return null;
+  const named = message.type === "recordSocialSignIn" ? message.pageUrl : message.url;
+  return urlMatch.hostnameMatches(named, sender.url) ? sender.url : null;
+}
+
+async function handleSocialSignInMessage(message, sender) {
+  if (message.type === "getSocialSignIn") {
+    const url = isAddressPopup(sender) ? message.url : socialSignInPageOf(message, sender);
+    if (typeof url !== "string" || !socialSignIn.isHttpsUrl(url)) return { type: "error", message: "invalid_request" };
+    const response = await sendNativeMessageWithPairing({ type: "getSocialSignIn", url });
+    await noteSocialSignInSetting(response);
+    return response;
+  }
+  const pageUrl = socialSignInPageOf(message, sender);
+  if (!pageUrl || !socialSignIn.isProvider(message.provider)) return { type: "error", message: "invalid_request" };
+  const response = await sendNativeMessageWithPairing({ type: "recordSocialSignIn", pageUrl, provider: message.provider });
+  await noteSocialSignInSetting(response);
+  if (response && response.type === "locked") {
+    await queueSocialSignIn(sender.tab.id, pageUrl, message.provider);
+    return { type: "queued" };
+  }
+  return response;
+}
+
 // Reads the live records AND removes the expired ones from storage. Filtering alone would leave an
 // expired password or seed sitting in session storage until some later write; here the pruned
 // list is written back (deleting the key and the "!" badge when nothing is left). Every caller
@@ -1857,6 +1937,14 @@ function handleRuntimeMessage(message, sender, sendResponse) {
     });
     return true;
   }
+  // Social sign-in: the record from a page's own top frame (a popup or another extension page never
+  // records), the lookup from that page or the popup. Not in knownTypes: they are checked here.
+  if (message && (message.type === "recordSocialSignIn" || message.type === "getSocialSignIn")) {
+    if (message.type === "recordSocialSignIn" ? !isContentScriptSender(sender)
+      : !(isContentScriptSender(sender) || (isAddressPopup(sender) && !sender.tab))) return false;
+    handleSocialSignInMessage(message, sender).then(sendResponse, () => sendResponse({ type: "error" }));
+    return true;
+  }
   if (message && message.type === "getBrowserManagerDiagnostics") {
     if (sender && sender.tab && !isMyPassPage(sender)) return false;
     getBrowserManagerDiagnostics().then(async (result) => {
@@ -2269,6 +2357,9 @@ if (typeof module !== "undefined") {
     sendPairingCompletion,
     handleRuntimeMessage,
     noteFilledCredential,
+    flushSocialSignInQueue,
+    SOCIAL_SIGN_IN_PENDING_KEY,
+    SOCIAL_SIGN_IN_ENABLED_KEY,
     hostnameMatches: urlMatch.hostnameMatches,
     fillTargetMatches: urlMatch.fillTargetMatches,
     resolveSenderFillTarget,

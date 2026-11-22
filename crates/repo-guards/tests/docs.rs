@@ -187,9 +187,11 @@ fn cyrillic_allowed(rel: &str) -> bool {
             // The extension keeps localized keyword lists (and the tests that pin them) as copied.
             "extension/shared/form-detection.js"
                 | "extension/shared/page-identifier.js"
+                | "extension/shared/social-sign-in.js"
                 | "extension/tests/formDetection.test.js"
                 | "extension/tests/inlineIcon.test.js"
                 | "extension/tests/pageIdentifier.test.js"
+                | "extension/tests/socialSignIn.test.js"
                 // The extension's chrome.i18n catalogs (en and de stay Cyrillic-free).
                 | "extension/_locales/uk/messages.json"
                 | "extension/_locales/ru/messages.json"
@@ -213,9 +215,11 @@ fn cyrillic_allowlist_covers_only_the_translation_files() {
     for f in [
         "extension/shared/form-detection.js",
         "extension/shared/page-identifier.js",
+        "extension/shared/social-sign-in.js",
         "extension/tests/formDetection.test.js",
         "extension/tests/inlineIcon.test.js",
         "extension/tests/pageIdentifier.test.js",
+        "extension/tests/socialSignIn.test.js",
     ] {
         assert!(cyrillic_allowed(f), "{f}");
     }

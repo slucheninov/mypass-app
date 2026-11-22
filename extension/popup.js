@@ -6,6 +6,9 @@ const i18n = typeof require === 'function'
 const popupUrlMatch = typeof require === 'function'
   ? require('./shared/url-match.js')
   : mypassUrlMatch;
+const popupSocialSignIn = typeof require === 'function'
+  ? require('./shared/social-sign-in.js')
+  : mypassSocialSignIn;
 
 const PAIRING_STARTED_AT_KEY = 'pairingStartedAt';
 const PAIRING_CHALLENGE_TTL_MS = 120_000;
@@ -838,6 +841,8 @@ if (typeof document !== 'undefined') {
     }
     document.getElementById('passkey-diagnostics').hidden = PASSKEY_PANELS.includes(name) || name === 'prompt';
     document.getElementById('site-passkey-hint').hidden = true;
+    const socialRow = document.getElementById('site-social-sign-in');
+    if (socialRow) socialRow.hidden = true;
     const browse = name === 'credential-list' || name === 'empty';
     browserChrome.hidden = !browse;
     vaultSearch.hidden = !browse;
@@ -1485,6 +1490,7 @@ if (typeof document !== 'undefined') {
       renderCredentials(credentials, url, browsing ? { openSavedUrl: true, passkeyOnly } : { identifierOffer: identifierOffer });
       if (identifierOffer) paintIdentifierOffer(identifierOffer);
       else hideIdentifierOffer();
+      if (!browsing) paintSocialSignIn(popupContext.url, browseRequestId);
       const hint = document.getElementById('site-passkey-hint');
       if (hint) {
         hint.hidden = !passkeyOnly && (browsing || !credentials.some((entry) => entry.hasPasskey));
@@ -1492,6 +1498,27 @@ if (typeof document !== 'undefined') {
         if (!passkeyOnly) hint.hidden = true;
       }
     }
+  }
+
+  // "Signed in with Google last time" above the site's logins, when the app remembers a social
+  // sign-in for this site and the "Remember social sign-in" setting is on.
+  function paintSocialSignIn(url, requestId) {
+    const row = document.getElementById('site-social-sign-in');
+    if (!row || !popupSocialSignIn.isHttpsUrl(url)) return;
+    chrome.runtime.sendMessage({ type: 'getSocialSignIn', url }, (response) => {
+      void chrome.runtime.lastError;
+      if (requestId !== browseRequestId || popupContext.kind !== 'site') return;
+      if (!response || response.type !== 'socialSignIn' || response.enabled === false
+        || !popupSocialSignIn.isProvider(response.provider)) return;
+      const name = popupSocialSignIn.PROVIDER_NAMES[response.provider];
+      const mark = document.getElementById('site-social-sign-in-mark');
+      if (mark) {
+        mark.dataset.provider = response.provider;
+        mark.textContent = name.charAt(0);
+      }
+      document.getElementById('site-social-sign-in-text').textContent = i18n.t('socialSignInPopupRow', [name]);
+      row.hidden = false;
+    });
   }
 
   function emptyTitleForContext() {
