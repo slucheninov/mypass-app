@@ -1,10 +1,5 @@
 <script lang="ts">
-  // The tray panel window (340 x 520). It shares the stores and `api` with the main window.
-  // Locked, it shows the main window's unlock card; unlocked, a search field over the five most
-  // recent items (summaries only, no secret) or, while searching, the matching items, and a
-  // compact detail. Under both sits a native-style menu (Open MyPass, Lock, Settings, Quit).
-  // Showing and hiding the window (blur included) is the backend's; this component only reacts to
-  // the session and to a hide.
+  // The tray panel shows the current vault's recents or the unlock card.
   import { onMount } from "svelte";
   import { api } from "../lib/api";
   import { events, type EntrySummary } from "../lib/bindings";
@@ -16,7 +11,6 @@
   import { session } from "../lib/stores/session.svelte";
   import { settings } from "../lib/stores/settings.svelte";
   import { toasts } from "../lib/stores/toasts.svelte";
-  import Icon from "../lib/ui/Icon.svelte";
   import IconButton from "../lib/ui/IconButton.svelte";
   import ToastHost from "../lib/ui/ToastHost.svelte";
   import { quietly } from "../lib/unlisten";
@@ -27,30 +21,16 @@
   import TrayUpdateRow from "./TrayUpdateRow.svelte";
 
   const RECENT_LIMIT = 5;
-  const SEARCH_DELAY_MS = 120;
 
   let recents = $state<EntrySummary[]>([]);
-  let results = $state<EntrySummary[]>([]);
-  /** The (trimmed) text `results` answer; `null` while none does. Any other text, typed but not yet
-   *  searched or still in flight, shows no result and Enter opens nothing. */
-  let resultsFor = $state<string | null>(null);
-  let query = $state("");
   let selectedId = $state<string | null>(null);
   let card: UnlockCard | undefined = $state();
-  let searchInput: HTMLInputElement | undefined = $state();
   let requests = 0;
-  let searches = 0;
-  let searchTimer: ReturnType<typeof setTimeout> | null = null;
 
   const unlocked = $derived(session.status.state === "unlocked");
   const noVault = $derived(session.status.state === "noVault");
   // One key per unlocked stretch and vault: a save-state change replaces `status` but not this.
   const vaultKey = $derived(unlocked ? (session.status.vaultPath ?? "") : null);
-  const searched = $derived(query.trim());
-  const searching = $derived(searched !== "");
-  /** The results are those of the current text, not of an earlier one. */
-  const answered = $derived(resultsFor === searched);
-  const shown = $derived(searching ? (answered ? results : []) : recents);
   const lockShortcut = $derived(formatShortcut(settings.value?.shortcutLock ?? "", platform.os));
   const showShortcut = $derived(formatShortcut(settings.value?.shortcutShow ?? "", platform.os));
 
@@ -65,63 +45,12 @@
     }
   }
 
-  function stopSearchTimer(): void {
-    if (searchTimer !== null) clearTimeout(searchTimer);
-    searchTimer = null;
-  }
-
-  /** Runs the search for the current text through `tray_search`: the main window's matching
-   *  (title, user name, websites, the other visible fields) over the live entries only, never the
-   *  recycle bin, at most 50 (the main window has the full list). */
-  async function runSearch(): Promise<void> {
-    stopSearchTimer();
-    const text = query.trim();
-    const mine = ++searches;
-    if (text === "" || !unlocked) {
-      results = [];
-      resultsFor = null;
-      return;
-    }
-    const unchanged = lockGuard();
-    try {
-      const list = await api.traySearch(text);
-      // A response is used only for the text it answers, while nothing newer was asked and the
-      // vault is the same one (`lockGuard` also catches a switch to another vault).
-      if (mine === searches && unchanged() && text === query.trim()) {
-        results = list;
-        resultsFor = text;
-      }
-    } catch (e) {
-      if (mine === searches && unchanged()) toasts.reportError(e);
-    }
-  }
-
-  /** A change of the text invalidates the results at once; the search for it runs after a pause. */
-  function onSearchInput(): void {
-    results = [];
-    resultsFor = null;
-    stopSearchTimer();
-    searchTimer = setTimeout(() => void runSearch(), SEARCH_DELAY_MS);
-  }
-
-  function resetSearch(): void {
-    stopSearchTimer();
-    searches++;
-    query = "";
-    results = [];
-    resultsFor = null;
-  }
-
-  // Everything of one unlocked stretch, of one vault, is dropped whenever that changes: on a lock,
-  // and on a switch to another vault while unlocked (`unlocked -> unlocked` with another path,
-  // which never passes through `locked`). Bumping `requests` and `searches` discards the answers
-  // still in flight for the old vault. The next stretch starts at the list of its own recents.
+  // Locking or switching vaults discards any outstanding recents.
   $effect(() => {
     const key = vaultKey;
     requests++;
     recents = [];
     selectedId = null;
-    resetSearch();
     if (key !== null) void loadRecents();
   });
 
@@ -129,7 +58,6 @@
     // The panel is a long-lived hidden window: refresh when the vault changes and when it is shown.
     const clearOnHide = () => {
       selectedId = null;
-      resetSearch();
       // A half-typed master password does not wait in a hidden window.
       card?.clear();
     };
@@ -140,13 +68,11 @@
     const refresh = () => {
       if (!unlocked || document.visibilityState === "hidden") return;
       void loadRecents();
-      if (searching) void runSearch();
     };
-    // A shown panel puts the keyboard where the user starts: the search field or the password.
+    // A shown locked panel focuses the password.
     const onFocus = () => {
       refresh();
-      if (unlocked && selectedId === null) searchInput?.focus();
-      else if (!unlocked) card?.focus();
+      if (!unlocked) card?.focus();
     };
     document.addEventListener("visibilitychange", refresh);
     window.addEventListener("focus", onFocus);
@@ -162,7 +88,6 @@
       .catch(() => {});
     return () => {
       gone = true;
-      stopSearchTimer();
       if (off) quietly(off);
       offHidden();
       window.removeEventListener("blur", clearOnHide);
@@ -174,20 +99,6 @@
   function open(id: string) {
     selectedId = id;
     void toasts.guard(() => api.entryTouch(id));
-  }
-
-  function onSearchKey(event: KeyboardEvent): void {
-    if (event.key === "Escape" && query !== "") {
-      event.preventDefault();
-      resetSearch();
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      // Only results of the text as it is now: never those of an earlier text still on screen
-      // while the next search waits or runs.
-      if (searching && !answered) return;
-      const first = shown[0];
-      if (first) open(first.id);
-    }
   }
 
   const showMain = () => void toasts.guard(() => api.appShowMain());
@@ -218,28 +129,12 @@
         <IconButton icon="window" label={t("Open main window")} onclick={showMain} />
       </div>
     </header>
-    <label class="search">
-      <span class="search-icon"><Icon name="search" size={14} /></span>
-      <input
-        bind:this={searchInput}
-        bind:value={query}
-        type="search"
-        placeholder={t("Search")}
-        aria-label={t("Search")}
-        autocomplete="off"
-        spellcheck="false"
-        oninput={onSearchInput}
-        onkeydown={onSearchKey}
-      />
-    </label>
     <div class="content">
-      {#if searching && !answered}
-        <!-- The search for this text has not answered yet: nothing to show, nothing to open. -->
-      {:else if shown.length === 0}
-        <p class="empty">{searching ? t("No results") : t("Nothing here yet")}</p>
+      {#if recents.length === 0}
+        <p class="empty">{t("Nothing here yet")}</p>
       {:else}
-        <ul class="entries" aria-label={searching ? t("Search results") : t("Recent items")}>
-          {#each shown as item (item.id)}
+        <ul class="entries" aria-label={t("Recent items")}>
+          {#each recents as item (item.id)}
             <li><TrayEntryRow entry={item} onopen={open} /></li>
           {/each}
         </ul>
@@ -289,34 +184,6 @@
   .tools {
     display: flex;
     gap: 2px;
-  }
-  .search {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    height: 30px;
-    padding: 0 8px;
-    border: 1px solid var(--control-border);
-    border-radius: 8px;
-    background: var(--control-bg);
-    color: var(--text-2);
-  }
-  .search:focus-within {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
-  }
-  .search-icon {
-    display: inline-flex;
-  }
-  .search input {
-    flex: 1;
-    min-width: 0;
-    border: 0;
-    outline: none;
-    background: transparent;
-    color: var(--text);
-    font: inherit;
-    font-size: var(--font-size-md);
   }
   .content {
     flex: 1;

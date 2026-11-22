@@ -1078,17 +1078,6 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     updateDismiss: () => { state.update.banner = null; publish("updateChanged", structuredClone(state.update)); return null; },
     updateOpenRelease: () => null,
     syncStatus: () => structuredClone(state.sync),
-    // The backend's `tray_search`: every live entry, title order, never the recycle bin, at most 50.
-    traySearch: ({ query }) => {
-      requireUnlocked();
-      if (query.trim() === "") return [];
-      const all = listEntries(
-        state.entries,
-        { scope: { kind: "category", category: "all" }, search: query.trim(), sort: "title", order: "ascending" },
-        state.groups,
-      );
-      return all.filter((e) => !e.inRecycleBin).slice(0, 50);
-    },
     syncDisplacedStatus: () => structuredClone(state.displaced),
     syncDisplacedDelete: ({ id }) => {
       if (state.session.state !== "unlocked") throw apiError("locked");
