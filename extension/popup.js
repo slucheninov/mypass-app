@@ -1626,7 +1626,8 @@ if (typeof document !== 'undefined') {
       Card: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="2.2" y="5" width="19.6" height="14" rx="2.4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M2.2 9.6h19.6" stroke="currentColor" stroke-width="1.8"/></svg>',
       Notes: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><path d="M6.4 3.2h7.6l4.8 4.8v12.2a.6.6 0 0 1-.6.6H6.4a.6.6 0 0 1-.6-.6V3.8a.6.6 0 0 1 .6-.6z"/><path d="M13.6 3.6v4.8h4.8M8.8 13h6.4M8.8 16.4h4.2"/></svg>',
       Address: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><path d="M12 21s6.75-6 6.75-11.25a6.75 6.75 0 0 0-13.5 0C5.25 15 12 21 12 21z"/><circle cx="12" cy="9.75" r="2.25"/></svg>',
-      Files: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><path d="M18.75 11.25l-7.5 7.5a4.5 4.5 0 0 1-6.36-6.36l8.25-8.25a3 3 0 0 1 4.24 4.24L9 16.8a1.5 1.5 0 0 1-2.12-2.12l7.05-7.05"/></svg>'
+      Files: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><path d="M18.75 11.25l-7.5 7.5a4.5 4.5 0 0 1-6.36-6.36l8.25-8.25a3 3 0 0 1 4.24 4.24L9 16.8a1.5 1.5 0 0 1-2.12-2.12l7.05-7.05"/></svg>',
+      Totp: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><circle cx="12" cy="13" r="7.8"/><path d="M12 9v4l2.6 1.6M9.6 2.6h4.8"/></svg>'
     };
     // Login, card and note open the extension's own create window; an address and a files item
     // (which needs the app's file dialog) open in MyPass, straight into its editor.
@@ -1635,7 +1636,10 @@ if (typeof document !== 'undefined') {
       { type: 'Card', title: i18n.t('newCard'), iconClass: 'add-entry-icon-card' },
       { type: 'Notes', title: i18n.t('newNote'), iconClass: 'add-entry-icon-note' },
       { type: 'Address', title: i18n.t('newAddress'), iconClass: 'add-entry-icon-address', inApp: true },
-      { type: 'Files', title: i18n.t('newFile'), iconClass: 'add-entry-icon-files', inApp: true }
+      { type: 'Files', title: i18n.t('newFile'), iconClass: 'add-entry-icon-files', inApp: true },
+      // The paste field for an authenticator URL or key stays hidden until a page shows a real
+      // setup key; this row opens it on demand for a site whose key the scan did not find.
+      { type: 'Totp', title: i18n.t('newTotp'), iconClass: 'add-entry-icon-totp', local: openTotpPaste }
     ].forEach((choice) => {
       const button = document.createElement('button');
       button.type = 'button';
@@ -1651,10 +1655,21 @@ if (typeof document !== 'undefined') {
       label.textContent = choice.title;
       button.appendChild(icon);
       button.appendChild(label);
-      button.addEventListener('click', () => (choice.inApp ? openNewEntryInApp(choice.type) : openAddEntry(choice.type)));
+      button.addEventListener('click', () => {
+        if (choice.local) choice.local();
+        else if (choice.inApp) openNewEntryInApp(choice.type);
+        else openAddEntry(choice.type);
+      });
       addEntryMenu.appendChild(button);
       addEntryItems.push(button);
     });
+  }
+
+  function openTotpPaste() {
+    closeHeaderMenus();
+    addTotpErrorEl.hidden = true;
+    addTotpSection.hidden = false;
+    totpPasteInput.focus?.();
   }
 
   function openAddEntry(entryType) {

@@ -58,20 +58,20 @@ test('both header buttons are menu buttons wired to role=menu dropdowns', () => 
   assert.match(html, /<button id="more-menu-btn"[^>]*data-i18n-aria-label="moreActions"/);
 });
 
-test('the + menu holds only creation items: New login, card, note, address and file', () => {
+test('the + menu holds only creation items: New login, card, note, address, file and 2FA code', () => {
   const h = menuPopup();
   h.fire('add-entry-btn', 'click');
   const rows = h.el('add-entry-menu').children;
-  assert.deepStrictEqual(rows.map((row) => row.children[1].textContent), ['New login', 'New card', 'New note', 'New address', 'New file']);
+  assert.deepStrictEqual(rows.map((row) => row.children[1].textContent), ['New login', 'New card', 'New note', 'New address', 'New file', '2FA code']);
   assert.deepStrictEqual(rows.map((row) => row.children[0].className), [
     'add-entry-icon add-entry-icon-login', 'add-entry-icon add-entry-icon-card', 'add-entry-icon add-entry-icon-note',
-    'add-entry-icon add-entry-icon-address', 'add-entry-icon add-entry-icon-files',
+    'add-entry-icon add-entry-icon-address', 'add-entry-icon add-entry-icon-files', 'add-entry-icon add-entry-icon-totp',
   ]);
   for (const row of rows) {
     assert.match(row.children[0].innerHTML, /^<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"/);
     assert.match(row.children[0].innerHTML, /currentColor/);
   }
-  for (const cls of ['add-entry-icon-address', 'add-entry-icon-files']) {
+  for (const cls of ['add-entry-icon-address', 'add-entry-icon-files', 'add-entry-icon-totp']) {
     assert.match(html, new RegExp(`\\.${cls} \\{ color: #[0-9a-f]{6}; \\}`));
   }
   for (const row of rows) {
@@ -282,4 +282,15 @@ test('the locked panel centres its form and reserves the error line', () => {
   assert.match(reserved, /display: block !important/);
   assert.match(reserved, /visibility: hidden/);
   assert.match(html.match(/#unlock-error \{([^}]*)\}/)?.[1] || '', /min-height: 16px/);
+});
+
+test('2FA code opens the hidden paste section on demand, nothing else', () => {
+  const h = menuPopup();
+  assert.equal(h.el('add-totp-section').hidden, true, 'hidden while no setup key was found');
+  const sentBefore = h.sent.length;
+  clickRow(h, '2FA code');
+  assert.equal(h.el('add-entry-menu').hidden, true);
+  assert.equal(h.el('add-totp-section').hidden, false);
+  assert.equal(h.el('totp-paste-input').value, '', 'nothing is prefilled');
+  assert.equal(h.sent.length, sentBefore, 'no message is sent');
 });

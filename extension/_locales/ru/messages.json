@@ -405,6 +405,9 @@
   "newFile": {
     "message": "Новый файл"
   },
+  "newTotp": {
+    "message": "Код 2FA"
+  },
   "totpInvalid": {
     "message": "Введите действительный URL аутентификатора или секретный ключ"
   },

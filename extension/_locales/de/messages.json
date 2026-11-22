@@ -405,6 +405,9 @@
   "newFile": {
     "message": "Neue Datei"
   },
+  "newTotp": {
+    "message": "2FA-Code"
+  },
   "totpInvalid": {
     "message": "Gib eine gültige Authenticator-URL oder einen geheimen Schlüssel ein"
   },

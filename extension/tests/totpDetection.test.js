@@ -5,15 +5,17 @@ const {
   buildTotpCandidateQueryResponse,
 } = require('../content.js');
 
+const { parseHtml } = require('./miniDom.js');
+
+// A page with these links and this visible paragraph. The scan reads the DOM's visible text,
+// so the fixtures are real (mini) documents, not a bare textContent string.
 function fakeAnchor(href) {
-  return { getAttribute: (name) => (name === 'href' ? href : null) };
+  return href;
 }
 
 function fakeDoc({ links = [], bodyText = '' }) {
-  return {
-    querySelectorAll: (selector) => (selector === 'a[href]' ? links : []),
-    body: { textContent: bodyText },
-  };
+  const anchors = links.map((href) => `<a href="${href}">link</a>`).join('');
+  return parseHtml(`${anchors}<p>${bodyText}</p>`);
 }
 
 // detectOtpauthLink
@@ -39,7 +41,7 @@ assert.strictEqual(detectManualSetupKey(fakeDoc({ bodyText: 'JBSWY3DPEHPK3PXP wi
 
 // detectManualSetupKey — lowercase keys
 assert.strictEqual(
-  detectManualSetupKey(fakeDoc({ bodyText: 'Your secret is jbswy3dpehpk3pxp — enter it in your app' })),
+  detectManualSetupKey(fakeDoc({ bodyText: 'Your secret key is jbswy3dpehpk3pxp — enter it in your app' })),
   'JBSWY3DPEHPK3PXP',
   'single all-lowercase token accepted and normalised to uppercase'
 );
@@ -48,11 +50,11 @@ assert.strictEqual(
   'JBSWY3DPEHPK3PXP',
   'space-grouped all-lowercase tokens accepted'
 );
-// all-letter keys (no base32 digit in key) — single token
+// all-letter single tokens (no base32 digit) read as words, not keys
 assert.strictEqual(
-  detectManualSetupKey(fakeDoc({ bodyText: 'Your secret is aabbccddaabbccdd — enter it in your app' })),
-  'AABBCCDDAABBCCDD',
-  'standalone all-letter lowercase key accepted'
+  detectManualSetupKey(fakeDoc({ bodyText: 'Your secret key is aabbccddaabbccdd — enter it in your app' })),
+  null,
+  'standalone all-letter lowercase token rejected'
 );
 // all-letter keys — grouped
 assert.strictEqual(
@@ -62,7 +64,7 @@ assert.strictEqual(
 );
 // 32-char key in 8 groups of 4; largest-span-first returns the complete key, not a 16-char prefix
 assert.strictEqual(
-  detectManualSetupKey(fakeDoc({ bodyText: 'Your secret is aabb ccdd aabb ccdd eeff gghh iijj kkll' })),
+  detectManualSetupKey(fakeDoc({ bodyText: 'Your secret key is aabb ccdd aabb ccdd eeff gghh iijj kkll' })),
   'AABBCCDDAABBCCDDEEFFGGHHIIJJKKLL',
   '32-char lowercase key in 8 groups of 4 returned complete'
 );
@@ -81,7 +83,7 @@ assert.strictEqual(
 );
 // mixed-case tokens are not accepted (capitalized words, not TOTP keys)
 assert.strictEqual(
-  detectManualSetupKey(fakeDoc({ bodyText: 'Your secret Jbswy3dpEhpk3pxp is here' })),
+  detectManualSetupKey(fakeDoc({ bodyText: 'Your secret key Jbswy3dpEhpk3pxp is here' })),
   null,
   'mixed-case token rejected'
 );
@@ -104,12 +106,12 @@ const detectIn = (text) => detectManualSetupKey(fakeDoc({ bodyText: text }));
 
 // uppercase 32 chars: grouped 8x4 and standalone
 assert.strictEqual(detectIn(`Your manual setup key is ${groupsOf(KEY32, 4)} — enter it in your app`), KEY32, 'uppercase 32-char key in 8 groups of 4 returned complete');
-assert.strictEqual(detectIn(`Your secret is ${KEY32} — enter it in your app`), KEY32, 'standalone uppercase 32-char key');
-assert.strictEqual(detectIn(`Your secret is ${groupsOf(KEY32, 8)}`), KEY32, 'uppercase 32-char key in 4 groups of 8');
-assert.strictEqual(detectIn(`Your secret is ${groupsOf(KEY32, 16)}`), KEY32, 'uppercase 32-char key in 2 groups of 16 is not cut to its first token');
+assert.strictEqual(detectIn(`Your secret key is ${KEY32} — enter it in your app`), KEY32, 'standalone uppercase 32-char key');
+assert.strictEqual(detectIn(`Your secret key is ${groupsOf(KEY32, 8)}`), KEY32, 'uppercase 32-char key in 4 groups of 8');
+assert.strictEqual(detectIn(`Your secret key is ${groupsOf(KEY32, 16)}`), KEY32, 'uppercase 32-char key in 2 groups of 16 is not cut to its first token');
 // 16-char behaviour preserved
-assert.strictEqual(detectIn(`Your secret is ${groupsOf(KEY32.slice(0, 16), 4)}`), KEY32.slice(0, 16), 'uppercase 16-char grouped');
-assert.strictEqual(detectIn(`Your secret is ${KEY32.slice(0, 16)}`), KEY32.slice(0, 16), 'uppercase 16-char standalone');
+assert.strictEqual(detectIn(`Your secret key is ${groupsOf(KEY32.slice(0, 16), 4)}`), KEY32.slice(0, 16), 'uppercase 16-char grouped');
+assert.strictEqual(detectIn(`Your secret key is ${KEY32.slice(0, 16)}`), KEY32.slice(0, 16), 'uppercase 16-char standalone');
 // all-letter uppercase keys
 assert.strictEqual(
   detectIn('Your manual setup key is AABB CCDD AABB CCDD EEFF GGHH IIJJ KKLL'),
@@ -117,21 +119,21 @@ assert.strictEqual(
   'all-letter uppercase 32-char grouped key'
 );
 assert.strictEqual(
-  detectIn('Your secret is AABBCCDDAABBCCDDEEFFGGHHIIJJKKLL'),
-  'AABBCCDDAABBCCDDEEFFGGHHIIJJKKLL',
-  'all-letter uppercase 32-char standalone key'
+  detectIn('Your secret key is AABBCCDDAABBCCDDEEFFGGHHIIJJKKLL'),
+  null,
+  'an all-letter uppercase 32-char single token reads as a word'
 );
 // lowercase 32 stays complete
-assert.strictEqual(detectIn(`Your secret is ${groupsOf(KEY32, 4).toLowerCase()}`), KEY32, 'lowercase 32-char key in 8 groups of 4');
+assert.strictEqual(detectIn(`Your secret key is ${groupsOf(KEY32, 4).toLowerCase()}`), KEY32, 'lowercase 32-char key in 8 groups of 4');
 // no label, no key
 assert.strictEqual(detectIn(groupsOf(KEY32, 4)), null, 'uppercase 32-char key without a label returns null');
 
 // more than 8 groups: no silent truncation at an 8-token window
-assert.strictEqual(detectIn(`Your secret is ${groupsOf(KEY64, 4)}`), KEY64, 'uppercase 64-char key in 16 groups of 4');
-assert.strictEqual(detectIn(`Your secret is ${groupsOf(KEY64, 4).toLowerCase()}`), KEY64, 'lowercase 64-char key in 16 groups of 4');
-assert.strictEqual(detectIn(`Your secret is ${groupsOf(KEY128, 4)}`), KEY128, 'a key at the 128-char base32 cap is accepted');
-assert.strictEqual(detectIn(`Your secret is ${groupsOf(KEY128 + 'ABCD', 4)}`), null, 'a sequence past the 128-char cap fails closed instead of returning a prefix');
-assert.strictEqual(detectIn(`Your secret is ${groupsOf(KEY128 + 'ABCD', 4).toLowerCase()}`), null, 'lowercase sequence past the cap fails closed too');
+assert.strictEqual(detectIn(`Your secret key is ${groupsOf(KEY64, 4)}`), KEY64, 'uppercase 64-char key in 16 groups of 4');
+assert.strictEqual(detectIn(`Your secret key is ${groupsOf(KEY64, 4).toLowerCase()}`), KEY64, 'lowercase 64-char key in 16 groups of 4');
+assert.strictEqual(detectIn(`Your secret key is ${groupsOf(KEY128, 4)}`), KEY128, 'a key at the 128-char base32 cap is accepted');
+assert.strictEqual(detectIn(`Your secret key is ${groupsOf(KEY128 + 'ABCD', 4)}`), null, 'a sequence past the 128-char cap fails closed instead of returning a prefix');
+assert.strictEqual(detectIn(`Your secret key is ${groupsOf(KEY128 + 'ABCD', 4).toLowerCase()}`), null, 'lowercase sequence past the cap fails closed too');
 
 // A short prose word after a uniform-width key is never absorbed into the secret. Keys
 // whose final group is narrower than the rest are unsupported (indistinguishable from
@@ -139,18 +141,18 @@ assert.strictEqual(detectIn(`Your secret is ${groupsOf(KEY128 + 'ABCD', 4).toLow
 const KEY16 = KEY32.slice(0, 16);
 for (const word of ['OK', 'IN', 'TO', 'OR', 'A', 'AM']) {
   assert.strictEqual(
-    detectIn(`Secret: ${groupsOf(KEY16, 4)} ${word} your app`), KEY16,
+    detectIn(`Secret key: ${groupsOf(KEY16, 4)} ${word} your app`), KEY16,
     `16-char grouped key followed by "${word}" returns the exact key`
   );
   assert.strictEqual(
-    detectIn(`Secret: ${groupsOf(KEY32, 4)} ${word}`), KEY32,
+    detectIn(`Secret key: ${groupsOf(KEY32, 4)} ${word}`), KEY32,
     `32-char 8x4 key followed by "${word}" returns the exact key`
   );
 }
-assert.strictEqual(detectIn('Secret: JBSW Y3DP EHPK 3PXP OK'), KEY16, 'uppercase key plus OK');
-assert.strictEqual(detectIn('Secret: JBSW Y3DP EHPK 3PXP IN your app'), KEY16, 'uppercase key plus IN');
+assert.strictEqual(detectIn('Secret key: JBSW Y3DP EHPK 3PXP OK'), KEY16, 'uppercase key plus OK');
+assert.strictEqual(detectIn('Secret key: JBSW Y3DP EHPK 3PXP IN your app'), KEY16, 'uppercase key plus IN');
 assert.strictEqual(
-  detectIn(`Your secret is ${groupsOf(KEY16, 4).toLowerCase()} to continue`),
+  detectIn(`Your secret key is ${groupsOf(KEY16, 4).toLowerCase()} to continue`),
   KEY16,
   'lowercase keeps strict equal-width groups so a trailing prose word is never absorbed'
 );
@@ -159,27 +161,27 @@ assert.strictEqual(
 // keep the full key whichever case the letter groups use.
 const NUM_KEY = '23456723JBSWY3DPEHPK3PXPQRSTUVWX';
 assert.strictEqual(
-  detectIn('Secret: 2345 6723 jbsw y3dp ehpk 3pxp qrst uvwx'), NUM_KEY,
+  detectIn('Secret key: 2345 6723 jbsw y3dp ehpk 3pxp qrst uvwx'), NUM_KEY,
   'lowercase key with leading numeric groups'
 );
 assert.strictEqual(
-  detectIn('Secret: 2345 6723 JBSW Y3DP EHPK 3PXP QRST UVWX'), NUM_KEY,
+  detectIn('Secret key: 2345 6723 JBSW Y3DP EHPK 3PXP QRST UVWX'), NUM_KEY,
   'uppercase key with leading numeric groups'
 );
 assert.strictEqual(
-  detectIn('Secret: jbsw y3dp 2345 6723 ehpk 3pxp qrst uvwx'), 'JBSWY3DP23456723EHPK3PXPQRSTUVWX',
+  detectIn('Secret key: jbsw y3dp 2345 6723 ehpk 3pxp qrst uvwx'), 'JBSWY3DP23456723EHPK3PXPQRSTUVWX',
   'lowercase key with middle numeric groups'
 );
 assert.strictEqual(
-  detectIn('Secret: JBSW Y3DP 2345 6723 EHPK 3PXP QRST UVWX'), 'JBSWY3DP23456723EHPK3PXPQRSTUVWX',
+  detectIn('Secret key: JBSW Y3DP 2345 6723 EHPK 3PXP QRST UVWX'), 'JBSWY3DP23456723EHPK3PXPQRSTUVWX',
   'uppercase key with middle numeric groups'
 );
 assert.strictEqual(
-  detectIn('Secret: jbsw y3dp ehpk 3pxp qrst uvwx 2345 6723'), 'JBSWY3DPEHPK3PXPQRSTUVWX23456723',
+  detectIn('Secret key: jbsw y3dp ehpk 3pxp qrst uvwx 2345 6723'), 'JBSWY3DPEHPK3PXPQRSTUVWX23456723',
   'lowercase key with trailing numeric groups'
 );
 assert.strictEqual(
-  detectIn('Secret: JBSW Y3DP EHPK 3PXP QRST UVWX 2345 6723'), 'JBSWY3DPEHPK3PXPQRSTUVWX23456723',
+  detectIn('Secret key: JBSW Y3DP EHPK 3PXP QRST UVWX 2345 6723'), 'JBSWY3DPEHPK3PXPQRSTUVWX23456723',
   'uppercase key with trailing numeric groups'
 );
 // A numeric prefix of 16+ chars is a complete valid key on its own, and it starts at the same
@@ -202,7 +204,7 @@ assert.strictEqual(
   'uppercase label words of other widths are not absorbed into a grouped 32-char key'
 );
 assert.strictEqual(
-  detectIn(`SECRET CODE 0189 ${groupsOf(KEY32, 4)}`),
+  detectIn(`SECRET KEY CODE 0189 ${groupsOf(KEY32, 4)}`),
   KEY32,
   'a token outside the base32 alphabet ends the run instead of poisoning it'
 );
@@ -213,7 +215,7 @@ assert.strictEqual(
   'uppercase prose of mixed widths rejected'
 );
 // the detected value is a usable secret
-assert.strictEqual(isBase32Secret(detectIn(`Your secret is ${groupsOf(KEY32, 4)}`)), true);
+assert.strictEqual(isBase32Secret(detectIn(`Your secret key is ${groupsOf(KEY32, 4)}`)), true);
 
 // priority ordering
 const combinedDoc = fakeDoc({

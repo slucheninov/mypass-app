@@ -15,7 +15,77 @@ const totpBase32 = typeof require === 'function'
   : { isBase32Secret, normalizeBase32Candidate };
 
 const OTPAUTH_REGEX = /otpauth:\/\/totp\/[^\s"'<>]+/i;
-const MANUAL_KEY_LABEL_REGEX = /secret|manual|setup key|authenticator/i;
+// A setup key is offered only next to words that ask for one. Weak words ("secret",
+// "manual") are everywhere on ordinary pages (a "manual" gearbox, CSS `hyphens: manual`, an
+// OAuth `clientSecret` in a script), so the context has to name 2FA itself: in English,
+// German, Ukrainian and Russian. Cyrillic is written as escapes (this file is not one of
+// the files allowed to hold literal Cyrillic).
+const TOTP_CONTEXT_REGEX = new RegExp([
+  'authenticat(?:or|ion app)', '\\b2fa\\b', '\\bmfa\\b', '\\btotp\\b', 'two[\\s-]?factor',
+  'multi[\\s-]?factor', '(?:two|2)[\\s-]?step', 'setup[\\s-]?key', 'secret[\\s-]?key',
+  // de: Zwei-Faktor, 2-Faktor, Authentifizierungs-App, Einrichtungsschlüssel, geheimer Schlüssel
+  'zwei[\\s-]?faktor', '2[\\s-]?faktor', 'authentifizierungs[\\s-]?app',
+  'einrichtungs[\\s-]?schlüssel', 'geheimer\\s+schlüssel', 'geheimschlüssel',
+  // uk: authenticator, two-factor, two-step, secret key, setup key
+  '\u0430\u0432\u0442\u0435\u043d\u0442\u0438\u0444\u0456\u043a\u0430\u0442\u043e\u0440',
+  '\u0434\u0432\u043e\u0444\u0430\u043a\u0442\u043e\u0440\u043d',
+  '\u0434\u0432\u043e\u0435\u0442\u0430\u043f\u043d',
+  '\u0441\u0435\u043a\u0440\u0435\u0442\u043d\u0438\u0439\\s+\u043a\u043b\u044e\u0447',
+  '\u043a\u043b\u044e\u0447\\s+\u043d\u0430\u043b\u0430\u0448\u0442\u0443\u0432\u0430\u043d\u043d\u044f',
+  // ru: authenticator, two-factor, two-step, secret key, setup key
+  '\u0430\u0443\u0442\u0435\u043d\u0442\u0438\u0444\u0438\u043a\u0430\u0442\u043e\u0440',
+  '\u0434\u0432\u0443\u0445\u0444\u0430\u043a\u0442\u043e\u0440\u043d',
+  '\u0434\u0432\u0443\u0445\u044d\u0442\u0430\u043f\u043d',
+  '\u0441\u0435\u043a\u0440\u0435\u0442\u043d\u044b\u0439\\s+\u043a\u043b\u044e\u0447',
+  '\u043a\u043b\u044e\u0447\\s+\u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438',
+].join('|'), 'i');
+// How far up from the key's own element the context may sit: the key's line, its card and
+// the setup step around it, not the page as a whole.
+const CONTEXT_LEVELS = 4;
+
+// Text a person can see. Scripts, styles, metadata, templates and hidden subtrees hold
+// strings no setup page shows (an OAuth client secret, an "outdated browser" banner kept
+// in the DOM for later), so they never count as a key or as its context.
+const INVISIBLE_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'HEAD', 'META', 'LINK',
+  'TITLE', 'SVG', 'IFRAME', 'OBJECT', 'CANVAS', 'TEXTAREA', 'SELECT']);
+
+function isElementHidden(element) {
+  if (INVISIBLE_TAGS.has(element.tagName)) return true;
+  if (element.hidden || element.getAttribute('aria-hidden') === 'true') return true;
+  const view = element.ownerDocument && element.ownerDocument.defaultView;
+  if (!view || typeof view.getComputedStyle !== 'function') return false;
+  const style = view.getComputedStyle(element);
+  if (!style) return false;
+  return style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse'
+    || style.opacity === '0';
+}
+
+// The visible text nodes under `root`, in document order, as { text, element }.
+function visibleTextNodes(root) {
+  const out = [];
+  const visit = (node) => {
+    for (const child of node.childNodes || []) {
+      if (child.nodeType === 3) {
+        if (child.nodeValue && child.nodeValue.trim()) out.push({ text: child.nodeValue, element: node });
+      } else if (child.nodeType === 1 && !isElementHidden(child)) {
+        visit(child);
+      }
+    }
+  };
+  if (root && root.nodeType === 1 && isElementHidden(root)) return out;
+  if (root) visit(root);
+  return out;
+}
+
+function visibleText(root) {
+  return visibleTextNodes(root).map((entry) => entry.text).join(' ');
+}
+
+function scanRoot(root) {
+  const scope = root || (typeof document !== 'undefined' ? document : null);
+  if (!scope) return null;
+  return scope.body || scope;
+}
 
 function detectOtpauthLink(root) {
   const scope = root || document;
@@ -29,11 +99,11 @@ function detectOtpauthLink(root) {
 }
 
 function detectOtpauthText(root) {
-  const scope = root || document;
-  const body = scope.body || scope;
+  const body = scanRoot(root);
   if (!body) return null;
-  const text = body.textContent || '';
-  const match = text.match(OTPAUTH_REGEX);
+  // Cheap check first: most pages hold no otpauth URL at all, in any text.
+  if (!OTPAUTH_REGEX.test(body.textContent || '')) return null;
+  const match = visibleText(body).match(OTPAUTH_REGEX);
   return match ? match[0] : null;
 }
 
@@ -86,7 +156,10 @@ function extractKeyFromRun(run) {
     start = end;
   }
   for (const { start, end } of blocks) {
-    if (end - start === 1 && totpBase32.isBase32Secret(run[start])) {
+    // A lone token must hold a base32 digit: a 16+ letter word such as OUTDATEDINTERNET
+    // is a word, not a key. Grouped keys may be all letters (the equal-width groups already
+    // rule out prose).
+    if (end - start === 1 && /[2-7]/.test(run[start]) && totpBase32.isBase32Secret(run[start])) {
       return totpBase32.normalizeBase32Candidate(run[start]);
     }
   }
@@ -116,13 +189,31 @@ function collectRuns(tokens, tokenRegex) {
   return runs;
 }
 
+// True when the key's element or one of its nearest ancestors shows 2FA wording.
+function hasContextNear(element) {
+  let node = element;
+  for (let level = 0; node && level <= CONTEXT_LEVELS; level += 1) {
+    if (TOTP_CONTEXT_REGEX.test(visibleText(node))) return true;
+    if (node.tagName === 'BODY') return false;
+    node = node.parentElement;
+  }
+  return false;
+}
+
 function detectManualSetupKey(root) {
-  const scope = root || document;
-  const body = scope.body || scope;
+  const body = scanRoot(root);
   if (!body) return null;
-  const text = (body.textContent || '').replace(/\s+/g, ' ');
-  if (!MANUAL_KEY_LABEL_REGEX.test(text)) return null;
-  const tokens = text.split(' ').filter(Boolean);
+  // Cheap check first, over all text: no 2FA wording anywhere means no visible key context.
+  if (!TOTP_CONTEXT_REGEX.test(body.textContent || '')) return null;
+  const tokens = [];
+  const owners = [];
+  for (const entry of visibleTextNodes(body)) {
+    for (const token of entry.text.split(/\s+/)) {
+      if (!token) continue;
+      tokens.push(token);
+      owners.push(entry.element);
+    }
+  }
   // Document order decides which key wins. At the same start (leading numeric groups are
   // valid in both cases, so an uppercase and a lowercase run begin together) the longer run
   // goes first: the shorter one is only the numeric prefix of the complete key and would
@@ -132,7 +223,7 @@ function detectManualSetupKey(root) {
     .sort((a, b) => a.start - b.start || b.tokens.length - a.tokens.length);
   for (const run of runs) {
     const key = extractKeyFromRun(run.tokens);
-    if (key) return key;
+    if (key && hasContextNear(owners[run.start])) return key;
   }
   return null;
 }
