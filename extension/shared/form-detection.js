@@ -414,7 +414,43 @@ const CURRENT_PASSWORD_HINT = WORD([
   'текущий(?: пароль)?', 'старый(?: пароль)?', 'действующий(?: пароль)?', 'прежний(?: пароль)?',
 ].join('|'));
 
+// Birthday words, used alone (a whole birthday) and as the context of a split day, month or year.
+const BIRTHDAY_WORDS = [
+  'birthday', 'birth ?date', 'date of birth', 'dob', 'bday',
+  'geburtsdatum', 'geburtstag',
+  'дата народження', 'день народження',
+  'дата рождения', 'день рождения',
+];
+// The part words of a split birthday (day, month, year), in four languages.
+const BIRTHDAY_PARTS = {
+  bdayDay: ['day', 'dd', 'tag', 'день'],
+  bdayMonth: ['month', 'mm', 'monat', 'місяць', 'месяц'],
+  bdayYear: ['year', 'yyyy', 'yy', 'jahr', 'рік', 'год'],
+};
+const BIRTHDAY_WORD = BIRTHDAY_WORDS.join('|');
+// Whole-word names of one part: "birth year", "Geburtsjahr", "рік народження".
+const BIRTHDAY_PART_NAMES = {
+  bdayDay: [],
+  bdayMonth: ['birth ?month', 'geburtsmonat', 'місяць народження', 'месяц рождения'],
+  bdayYear: ['birth ?year', 'geburtsjahr', 'рік народження', 'год рождения'],
+};
+// "bday day", "dob_month", "birthDateYear", "day of birth", "geburtstag tag". Never "birth day",
+// which names a whole birthday as often as its day.
+const SPLIT_BIRTHDAY_HINTS = Object.entries(BIRTHDAY_PARTS).map(([kind, parts]) => {
+  const part = parts.join('|');
+  return [kind, WORD([
+    '(?:' + BIRTHDAY_WORD + ') (?:' + part + ')',
+    '(?:' + part + ') of (?:' + BIRTHDAY_WORD + '|birth)',
+    ...BIRTHDAY_PART_NAMES[kind],
+  ].join('|'))];
+});
+// A bare part word ("Day", "Monat", "Рік"), a split birthday only inside a birthday group.
+const BARE_BIRTHDAY_PARTS = Object.entries(BIRTHDAY_PARTS)
+  .map(([kind, parts]) => [kind, new RegExp('^(?:' + parts.join('|') + ')$')]);
+const BIRTHDAY_CONTEXT = WORD(BIRTHDAY_WORD);
+
 const IDENTITY_FIELD_HINTS = [
+  ...SPLIT_BIRTHDAY_HINTS,
   ['username', WORD([
     'user ?name', 'user id', 'userid', 'login(?: name| id)?', 'nick ?name', 'screen name', 'account name', 'display name',
     'benutzer(?: ?name)?', 'anmeldename', 'spitzname',
@@ -432,11 +468,13 @@ const IDENTITY_FIELD_HINTS = [
     'телефон', 'номер телефону', 'мобільний(?: телефон)?',
     'номер телефона', 'мобильный(?: телефон)?',
   ].join('|'))],
-  ['birthday', WORD([
-    'birthday', 'birth ?date', 'date of birth', 'dob', 'bday',
-    'geburtsdatum', 'geburtstag',
-    'дата народження', 'день народження',
-    'дата рождения', 'день рождения',
+  ['birthday', WORD(BIRTHDAY_WORD)],
+  // Before the given and family name: "middle name" and "ім'я по батькові" hold a name word too.
+  ['middleName', WORD([
+    'middle ?name', 'middle initial', 'mname', 'additional name', 'patronymic',
+    'zweiter vorname', 'weitere vornamen', 'zweitname',
+    'по батькові', 'ім я по батькові',
+    'отчество', 'имя отчество',
   ].join('|'))],
   ['familyName', WORD([
     'last ?name', 'family ?name', 'surname', 'lname',
@@ -512,12 +550,38 @@ function isEffectivelyDisabled(control) {
   return typeof control.matches === 'function' && control.matches(':disabled');
 }
 
+// The texts that name the group a control sits in: the legend of its fieldset and the label of an
+// enclosing role=group or role=radiogroup (aria-label, or the text aria-labelledby points at).
+function groupHints(control) {
+  const texts = [];
+  const fieldset = typeof control.closest === 'function' ? control.closest('fieldset') : null;
+  const legend = fieldset && Array.from(fieldset.children || []).find((child) => child.tagName === 'LEGEND');
+  if (legend) texts.push(legend.textContent);
+  const group = typeof control.closest === 'function' ? control.closest('[role="group"], [role="radiogroup"]') : null;
+  if (group) {
+    texts.push(group.getAttribute('aria-label'));
+    const doc = control.ownerDocument;
+    for (const id of String(group.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean)) {
+      const node = doc && typeof doc.getElementById === 'function' ? doc.getElementById(id) : null;
+      if (node) texts.push(node.textContent);
+    }
+  }
+  return texts.map(normalizedHint).filter(Boolean);
+}
+
 // The identity kind of a control from its texts, or null. Sensitive fields are never classified.
+// A control named only "Day", "Month" or "Year" (localized) is a part of a split birthday when its
+// fieldset legend or group label says birthday.
 function identityFieldHint(control) {
   const hints = controlHints(control);
   if (hints.some((hint) => SENSITIVE_FIELD_HINT.test(hint))) return null;
   for (const [kind, pattern] of IDENTITY_FIELD_HINTS) {
     if (hints.some((hint) => pattern.test(hint))) return kind;
+  }
+  for (const [kind, pattern] of BARE_BIRTHDAY_PARTS) {
+    if (hints.some((hint) => pattern.test(hint)) && groupHints(control).some((hint) => BIRTHDAY_CONTEXT.test(hint))) {
+      return kind;
+    }
   }
   return null;
 }

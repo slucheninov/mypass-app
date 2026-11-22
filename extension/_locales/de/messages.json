@@ -191,7 +191,7 @@
     "message": "Karten"
   },
   "categoryAddresses": {
-    "message": "Adressen"
+    "message": "Personen und Adressen"
   },
   "categoryNotes": {
     "message": "Notizen"
@@ -388,7 +388,7 @@
     "message": "Wähle einen Eintrag, um seine Website zu öffnen."
   },
   "noAddressesHint": {
-    "message": "Keine Adressen. Füge in MyPass über „Hinzufügen“ > „Adresse“ eine hinzu."
+    "message": "Keine Personen oder Adressen. Füge in MyPass über „Hinzufügen“ > „Person“ oder „Adresse“ eine hinzu."
   },
   "newLogin": {
     "message": "Neue Zugangsdaten"
@@ -629,10 +629,10 @@
     "message": "Gesicherte Karten im Menü eines Feldes einblenden."
   },
   "showAddressesTitle": {
-    "message": "Adressen anzeigen"
+    "message": "Personen und Adressen anzeigen"
   },
   "showAddressesHelper": {
-    "message": "Gesicherte Adressen einblenden, wenn du ein Formular über das Popup ausfüllst."
+    "message": "Gesicherte Personen und Adressen einblenden, wenn du ein Formular über das Popup oder ein Feld eines Registrierungsformulars ausfüllst."
   },
   "notificationsHelper": {
     "message": "Diese Mitteilungen gelten nur für diesen Browser."
@@ -974,7 +974,7 @@
     "message": "Karten vorschlagen"
   },
   "promptShowAddresses": {
-    "message": "Adressen vorschlagen"
+    "message": "Personen und Adressen vorschlagen"
   },
   "promptAutoSubmit": {
     "message": "Nach dem Ausfüllen von Zugangsdaten absenden"
@@ -1092,13 +1092,54 @@
     "message": "CVV"
   },
   "panelNoAddresses": {
-    "message": "Keine Adressen in MyPass"
+    "message": "Keine Personen oder Adressen in MyPass"
   },
   "promptFormFields": {
     "message": "Formularfelder"
   },
   "promptFormFieldsCount": {
     "message": "$P1$, in MyPass wählst du, welche gespeichert werden",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "panelChooseAddress": {
+    "message": "Adresse…"
+  },
+  "panelChooseAddressFor": {
+    "message": "Adresse für $P1$ wählen",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "panelLinkedAddresses": {
+    "message": "Verknüpfte Adressen"
+  },
+  "panelOtherAddresses": {
+    "message": "Weitere Adressen"
+  },
+  "addressFormPerson": {
+    "message": "Registrierungsformular $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "personFillAria": {
+    "message": "Person ausfüllen: $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "addressPickerHeader": {
+    "message": "Adresse für $P1$",
     "placeholders": {
       "p1": {
         "content": "$1"

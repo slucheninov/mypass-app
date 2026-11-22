@@ -191,7 +191,7 @@
     "message": "Картки"
   },
   "categoryAddresses": {
-    "message": "Адреси"
+    "message": "Особи та адреси"
   },
   "categoryNotes": {
     "message": "Нотатки"
@@ -388,7 +388,7 @@
     "message": "Виберіть запис, щоб відкрити його вебсайт."
   },
   "noAddressesHint": {
-    "message": "Немає адрес. Додайте адресу в MyPass через «Додати» > «Адреса»."
+    "message": "Немає осіб і адрес. Додайте їх у MyPass через «Додати» > «Особа» або «Додати» > «Адреса»."
   },
   "newLogin": {
     "message": "Новий логін"
@@ -629,10 +629,10 @@
     "message": "Додавати збережені картки до меню в полі."
   },
   "showAddressesTitle": {
-    "message": "Показувати адреси"
+    "message": "Показувати осіб і адреси"
   },
   "showAddressesHelper": {
-    "message": "Додавати збережені адреси, коли ви заповнюєте форму зі спливного вікна."
+    "message": "Додавати збережених осіб і адреси, коли ви заповнюєте форму зі спливного вікна або поля форми реєстрації."
   },
   "notificationsHelper": {
     "message": "Ці сповіщення зберігаються в цьому браузері."
@@ -974,7 +974,7 @@
     "message": "Пропонувати картки"
   },
   "promptShowAddresses": {
-    "message": "Пропонувати адреси"
+    "message": "Пропонувати осіб і адреси"
   },
   "promptAutoSubmit": {
     "message": "Надсилати після заповнення логіна"
@@ -1092,13 +1092,54 @@
     "message": "CVV"
   },
   "panelNoAddresses": {
-    "message": "У MyPass немає адрес"
+    "message": "У MyPass немає осіб і адрес"
   },
   "promptFormFields": {
     "message": "Поля форми"
   },
   "promptFormFieldsCount": {
     "message": "$P1$, які з них зберегти, ви оберете в MyPass",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "panelChooseAddress": {
+    "message": "Адреса…"
+  },
+  "panelChooseAddressFor": {
+    "message": "Вибрати адресу для $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "panelLinkedAddresses": {
+    "message": "Пов’язані адреси"
+  },
+  "panelOtherAddresses": {
+    "message": "Інші адреси"
+  },
+  "addressFormPerson": {
+    "message": "форма реєстрації $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "personFillAria": {
+    "message": "Заповнити особу: $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "addressPickerHeader": {
+    "message": "Адреса для $P1$",
     "placeholders": {
       "p1": {
         "content": "$1"

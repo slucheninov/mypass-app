@@ -190,9 +190,11 @@
     return entries.length === 0 ? { panel: 'empty', entries: [] } : { panel: 'entries', entries };
   }
 
-  // The identity panel of a registration form field lists the vault's Address entries (the
-  // background answers `identityList` with id, title and the person's name only). Same panel
-  // states as chooseInlinePanel; an empty vault says there is no address rather than no login.
+  // The identity panel of a registration form field lists the vault's people first, then the
+  // addresses no person links (the background answers `identityList` with id, kind, title and the
+  // email or name only; a person row also carries its linked address ids, the first one being the
+  // default). `addresses` is every address, for a person row's address picker. Same panel states
+  // as chooseInlinePanel; an empty vault says there is no person or address rather than no login.
   function chooseIdentityPanel(response) {
     if (response && response.type === 'locked') return { panel: 'locked', entries: [] };
     if (response && response.type === 'pairingRequired') return { panel: 'pairingRequired', entries: [] };
@@ -203,11 +205,28 @@
       .filter((entry) => entry && typeof entry.id === 'string' && entry.id && typeof entry.title === 'string')
       .map((entry) => ({
         id: entry.id,
+        kind: entry.kind === 'person' ? 'person' : 'address',
         title: entry.title,
         username: typeof entry.username === 'string' ? entry.username : '',
+        addressIds: entry.kind === 'person' && Array.isArray(entry.addressIds)
+          ? entry.addressIds.filter((id) => typeof id === 'string' && id) : [],
         hasTotp: false,
       }));
-    return entries.length === 0 ? { panel: 'identityEmpty', entries: [] } : { panel: 'entries', entries };
+    const addresses = (Array.isArray(response.addresses) ? response.addresses : [])
+      .filter((entry) => entry && typeof entry.id === 'string' && entry.id && typeof entry.title === 'string')
+      .map((entry) => ({ id: entry.id, kind: 'address', title: entry.title,
+        username: typeof entry.username === 'string' ? entry.username : '', hasTotp: false }));
+    return entries.length === 0 ? { panel: 'identityEmpty', entries: [], addresses }
+      : { panel: 'entries', entries, addresses };
+  }
+
+  // The address picker of one person: the person's linked addresses in their order, then every
+  // other address. Rows carry no values, only ids, titles and names.
+  function personAddressChoices(person, addresses) {
+    const byId = new Map((addresses || []).map((entry) => [entry.id.toLowerCase(), entry]));
+    const linked = (person.addressIds || []).map((id) => byId.get(id.toLowerCase())).filter(Boolean);
+    const linkedIds = new Set(linked.map((entry) => entry.id));
+    return { linked, others: (addresses || []).filter((entry) => !linkedIds.has(entry.id)) };
   }
 
   // The inline icon is a control the PAGE can see and dispatch events at, unlike the popup.
@@ -550,6 +569,12 @@
     '.entry-username{font-size:11px;color:#6e6e73;line-height:1.25;margin-top:1px;' +
     'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
     '.ring{flex-shrink:0;width:18px;height:18px;}' +
+    '.row-wrap{display:flex;align-items:center;gap:2px;}' +
+    '.row-wrap .row{flex:1 1 auto;min-width:0;}' +
+    '.row-more{all:unset;box-sizing:border-box;flex-shrink:0;padding:4px 8px;border-radius:6px;' +
+    'cursor:pointer;color:#007aff;font-size:11px;white-space:nowrap;}' +
+    '.row-more:hover,.row-more:focus-visible{background:#f5f5f7;}' +
+    '.section{padding:6px 10px 2px;color:#6e6e73;font-size:11px;font-weight:600;}' +
     '.ring svg{display:block;width:100%;height:100%;}' +
     '.message{padding:7px 10px;color:#6e6e73;}' +
     '.settings-row{margin-top:2px;border-top:1px solid #e5e5ea;border-radius:0 0 6px 6px;' +
@@ -568,6 +593,9 @@
     'box-shadow:0 4px 16px rgba(0,0,0,0.5);}' +
     '.row{color:#f5f5f7;}' +
     '.row:hover,.row:focus-visible{background:#2c2c2e;}' +
+    '.row-more{color:#0a84ff;}' +
+    '.row-more:hover,.row-more:focus-visible{background:#2c2c2e;}' +
+    '.section{color:#98989d;}' +
     '.entry-username{color:#98989d;}' +
     '.message{color:#98989d;}' +
     '.settings-row{border-top-color:#3a3a3c;color:#98989d;}' +
@@ -964,8 +992,29 @@
           ringCircles.push(ring.circle);
         }
 
-        row.addEventListener('click', (event) => callbacks.onSelect(event, entry.id));
-        root.appendChild(row);
+        if (routed.sectionBefore && routed.sectionBefore[entry.id]) {
+          const section = doc.createElement('div');
+          section.setAttribute('class', 'section');
+          section.textContent = routed.sectionBefore[entry.id];
+          root.appendChild(section);
+        }
+        row.addEventListener('click', (event) => callbacks.onSelect(event, entry.id, entry));
+        if (entry.kind === 'person' && callbacks.onMore) {
+          // A person row's secondary control picks another address than the default one.
+          const wrap = doc.createElement('div');
+          wrap.setAttribute('class', 'row-wrap');
+          wrap.appendChild(row);
+          const more = doc.createElement('button');
+          more.setAttribute('type', 'button');
+          more.setAttribute('class', 'row-more');
+          more.setAttribute('aria-label', i18n.t('panelChooseAddressFor', entry.title));
+          more.textContent = i18n.t('panelChooseAddress');
+          more.addEventListener('click', (event) => callbacks.onMore(event, entry));
+          wrap.appendChild(more);
+          root.appendChild(wrap);
+        } else {
+          root.appendChild(row);
+        }
         rows.push(row);
       }
     } else {
@@ -1417,8 +1466,10 @@
       }
     }
 
-    // The identity panel of a registration form field: the vault's Address entries. Choosing one
-    // fills every fillable field of that form at once (registration-form.js `fill`).
+    // The identity panel of a registration form field: the vault's people, then the addresses no
+    // person links. Choosing a row fills every fillable field of that form at once
+    // (registration-form.js `fillSelection`); a person brings its default linked address along,
+    // and a person row's secondary control opens the address picker for another one.
     function openIdentityPanel(input) {
       panelRequestId += 1;
       const requestId = panelRequestId;
@@ -1427,13 +1478,18 @@
         const routed = chooseIdentityPanel(response);
         const { host, shadow } = buildPanelHost(document);
         const content = buildPanelContent(document, routed, {
-          onSelect: (event, entryId) => {
+          onSelect: (event, entryId, entry) => {
             if (!isTrustedActivation(event)) return;
             // The exact controls to fill are fixed now, at the user's click, not when the reply
             // comes back.
             const selection = shared.registrationForm.selectionFor(document, input);
             closePanel();
-            if (selection) requestIdentityFill(input, entryId, selection);
+            if (selection) requestIdentityFill(input, entry || { id: entryId, kind: 'address' }, selection);
+          },
+          onMore: (event, person) => {
+            if (!isTrustedActivation(event)) return;
+            closePanel();
+            openAddressPicker(input, person, routed.addresses);
           },
           onUnlock: (event) => {
             if (isTrustedActivation(event)) {
@@ -1446,16 +1502,47 @@
       });
     }
 
-    // The background reads the chosen Address entry for this exact document and answers with its
-    // values; they go only into the controls of `selection` (taken at the click), each checked
-    // again right before its write (registration-form.js `fillSelection`), never elsewhere.
-    function requestIdentityFill(input, entryId, selection) {
+    // The address picker of one person row: its linked addresses first, then the others. Choosing
+    // one fills the person with that address instead of the default one.
+    function openAddressPicker(input, person, addresses) {
+      panelRequestId += 1;
+      const { linked, others } = personAddressChoices(person, addresses);
+      const entries = [...linked, ...others];
+      const sectionBefore = {};
+      if (linked.length) sectionBefore[linked[0].id] = i18n.t('panelLinkedAddresses');
+      if (others.length) sectionBefore[others[0].id] = i18n.t('panelOtherAddresses');
+      const routed = entries.length ? { panel: 'entries', entries, sectionBefore } : { panel: 'identityEmpty', entries: [] };
+      const { host, shadow } = buildPanelHost(document);
+      const content = buildPanelContent(document, routed, {
+        onSelect: (event, addressId) => {
+          if (!isTrustedActivation(event)) return;
+          const selection = shared.registrationForm.selectionFor(document, input);
+          closePanel();
+          if (selection) requestIdentityFill(input, person, selection, addressId);
+        },
+        onUnlock: () => {},
+      });
+      mountPanel(input, host, shadow, content);
+    }
+
+    // The background reads the chosen entry for this exact document and answers with its values
+    // (a person with its chosen or default address); they go only into the controls of
+    // `selection` (taken at the click), each checked again right before its write
+    // (registration-form.js `fillSelection`), never elsewhere.
+    function requestIdentityFill(input, entry, selection, addressId) {
       const pageUrl = location.href;
       const stillCurrent = () => location.href === pageUrl && identityFeatureOn() && input.isConnected;
-      sendRuntimeMessage({ type: 'fillIdentity', id: entryId, url: pageUrl }, (response) => {
+      const person = entry.kind === 'person';
+      const message = { type: 'fillIdentity', id: entry.id, url: pageUrl };
+      if (person) message.kind = 'person';
+      if (person && addressId) message.addressId = addressId;
+      sendRuntimeMessage(message, (response) => {
         if (typeof chrome !== 'undefined' && chrome && chrome.runtime) void chrome.runtime.lastError;
-        if (!response || response.type !== 'identity' || !response.address || !stillCurrent()) return;
-        shared.registrationForm.fillSelection(document, selection, response.address,
+        if (!response || response.type !== 'identity' || !stillCurrent()) return;
+        const values = person ? (response.person ? shared.registrationForm.personProfile(response.person, response.address) : null)
+          : response.address;
+        if (!values) return;
+        shared.registrationForm.fillSelection(document, selection, values,
           shared.addressForm.setNativeAddressValue, { stillCurrent });
       });
     }
@@ -1592,12 +1679,25 @@
       if (message.type === 'queryAddressForm') {
         if (_sender?.id !== chrome.runtime.id || window.top !== window
           || !shared.urlMatch.isHttpsAddressPage(location.href) || message.url !== location.href) return;
-        const groups = pageAutofillSettings.showAddresses ? shared.addressForm.collect(document) : [];
-        addressSnapshot = { challenge: message.challenge, url: location.href, groups, at: Date.now() };
+        // A person fill (message.person) also offers the registration forms a person can fill,
+        // first, and drops the address groups such a form already covers.
+        const people = pageAutofillSettings.showAddresses && message.person === true
+          ? shared.registrationForm.personSelections(document) : [];
+        const covered = new Set(people.flatMap((selection) => selection.controls.map((control) => control.node)));
+        const groups = (pageAutofillSettings.showAddresses ? shared.addressForm.collect(document) : [])
+          .filter((group) => !group.controls.every((control) => covered.has(control.node)));
+        addressSnapshot = { challenge: message.challenge, url: location.href, people, groups, at: Date.now() };
+        const personForms = people.map((selection, index) => ({
+          id: String(index), purpose: 'person', number: index + 1, label: 'person-' + (index + 1),
+          fields: selection.controls.length,
+          focused: selection.controls.some((control) => control.node === document.activeElement),
+        }));
+        const addressForms = shared.addressForm.describe(groups, document)
+          .map((form, index) => ({ ...form, id: String(people.length + index) }));
         // The background obtains documentId from Chrome's authenticated sender,
         // not from a value supplied by the page or the popup.
         chrome.runtime.sendMessage({ type: 'addressFormReport', challenge: message.challenge,
-          forms: shared.addressForm.describe(groups, document) }, () => { void chrome.runtime.lastError; });
+          forms: [...personForms, ...addressForms] }, () => { void chrome.runtime.lastError; });
         sendResponse({ type: 'ok' });
         return;
       }
@@ -1608,12 +1708,22 @@
         if (!pageAutofillSettings.showAddresses || !shared.urlMatch.isHttpsAddressPage(location.href)
           || window.top !== window || !snapshot || snapshot.challenge !== message.challenge
           || snapshot.url !== location.href || message.url !== location.href
-          || Date.now() - snapshot.at > 120000 || !message.address) {
+          || Date.now() - snapshot.at > 120000 || !(message.address || message.person)
+          || typeof message.groupId !== 'string' || String(Number(message.groupId)) !== message.groupId) {
           sendResponse({ type: 'error', code: 'address_form_changed' });
           return;
         }
-        sendResponse(shared.addressForm.apply(document, snapshot.groups, message.groupId,
-          message.address, shared.addressForm.setNativeAddressValue, () => snapshot.url === location.href));
+        const values = message.person
+          ? shared.registrationForm.personProfile(message.person, message.address) : message.address;
+        const index = Number(message.groupId);
+        if (index < snapshot.people.length) {
+          const filled = shared.registrationForm.fillSelection(document, snapshot.people[index], values,
+            shared.addressForm.setNativeAddressValue, { stillCurrent: () => snapshot.url === location.href });
+          sendResponse(filled ? { type: 'addressFilled', filled } : { type: 'error', code: 'address_no_values' });
+          return;
+        }
+        sendResponse(shared.addressForm.apply(document, snapshot.groups, String(index - snapshot.people.length),
+          values, shared.addressForm.setNativeAddressValue, () => snapshot.url === location.href));
         return;
       }
 
@@ -1846,7 +1956,7 @@
       detectOtpauthLink, detectOtpauthText, isBase32Secret, detectManualSetupKey,
       decodeQrFromImage, detectQrCandidate,
       detectTotpCandidateWithPriority, shouldShowTotpBanner,
-      classifyGetCredentialsResponse, chooseInlinePanel, chooseIdentityPanel, requestSavePrompt, requestTotpPrompt,
+      classifyGetCredentialsResponse, chooseInlinePanel, chooseIdentityPanel, personAddressChoices, requestSavePrompt, requestTotpPrompt,
       isTrustedActivation, hasLiveUserActivation, isUserSubmit, handleIconActivate, handleEntrySelect, trustedClickHandler,
       buildTotpCandidateQueryResponse, buildNewPasswordFieldQueryResponse, buildGeneratePasswordRow,
       classifyGeneratePasswordResponse, showGeneratePasswordMessage,

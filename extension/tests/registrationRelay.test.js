@@ -28,7 +28,9 @@ require('../background.js');
 function reset() {
   native = [];
   showAddresses = true;
-  nativeReply = (message) => message.type === 'listEntries'
+  nativeReply = (message) => message.type === 'listEntries' && message.category === 'people'
+    ? { type: 'credentialList', credentials: [] }
+    : message.type === 'listEntries'
     ? { type: 'credentialList', credentials: [
       { id: 'a1', title: 'Home', username: 'Ann Lee', password: 'never-sent' },
       { id: 'x'.repeat(65), title: 'Too long an id' },
@@ -47,11 +49,15 @@ function request(message, sender) {
 async function run() {
   reset();
   const list = await request({ type: 'getIdentitySuggestions', url: page }, content());
-  assert.deepEqual(list, { type: 'identityList', entries: [
-    { id: 'a1', title: 'Home', username: 'Ann Lee' },
-    { id: 'a2', title: 'Work', username: '' },
-  ] });
-  assert.deepEqual(native, [{ type: 'listEntries', category: 'addresses', pairing: 'paired' }]);
+  const rows = [
+    { id: 'a1', kind: 'address', title: 'Home', username: 'Ann Lee' },
+    { id: 'a2', kind: 'address', title: 'Work', username: '' },
+  ];
+  assert.deepEqual(list, { type: 'identityList', entries: rows, addresses: rows });
+  assert.deepEqual(native, [
+    { type: 'listEntries', category: 'people', pairing: 'paired' },
+    { type: 'listEntries', category: 'addresses', pairing: 'paired' },
+  ]);
 
   reset();
   const fill = await request({ type: 'fillIdentity', id: 'a1', url: page }, content());
@@ -108,7 +114,8 @@ async function run() {
   assert.equal(chooseIdentityPanel(undefined).panel, 'unavailable');
   assert.equal(chooseIdentityPanel({ type: 'identityList', entries: [] }).panel, 'identityEmpty');
   assert.deepEqual(chooseIdentityPanel({ type: 'identityList', entries: [{ id: 'a1', title: 'Home' }, { id: 3 }] }),
-    { panel: 'entries', entries: [{ id: 'a1', title: 'Home', username: '', hasTotp: false }] });
+    { panel: 'entries', entries: [{ id: 'a1', kind: 'address', title: 'Home', username: '', addressIds: [], hasTotp: false }],
+      addresses: [] });
 
   // The save prompt carries the captured fields, and only when there are some.
   const messages = [];

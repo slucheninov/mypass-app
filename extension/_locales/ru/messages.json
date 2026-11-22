@@ -191,7 +191,7 @@
     "message": "Карты"
   },
   "categoryAddresses": {
-    "message": "Адреса"
+    "message": "Люди и адреса"
   },
   "categoryNotes": {
     "message": "Заметки"
@@ -388,7 +388,7 @@
     "message": "Выберите запись, чтобы открыть её веб-сайт."
   },
   "noAddressesHint": {
-    "message": "Нет адресов. Добавьте адрес в MyPass через «Добавить» > «Адрес»."
+    "message": "Нет людей и адресов. Добавьте их в MyPass через «Добавить» > «Человек» или «Добавить» > «Адрес»."
   },
   "newLogin": {
     "message": "Новый логин"
@@ -629,10 +629,10 @@
     "message": "Добавлять сохранённые карты в меню в поле."
   },
   "showAddressesTitle": {
-    "message": "Показывать адреса"
+    "message": "Показывать людей и адреса"
   },
   "showAddressesHelper": {
-    "message": "Добавлять сохранённые адреса, когда вы заполняете форму из всплывающего окна."
+    "message": "Добавлять сохранённых людей и адреса, когда вы заполняете форму из всплывающего окна или поля формы регистрации."
   },
   "notificationsHelper": {
     "message": "Эти уведомления хранятся в этом браузере."
@@ -974,7 +974,7 @@
     "message": "Предлагать карты"
   },
   "promptShowAddresses": {
-    "message": "Предлагать адреса"
+    "message": "Предлагать людей и адреса"
   },
   "promptAutoSubmit": {
     "message": "Отправлять после заполнения логина"
@@ -1092,13 +1092,54 @@
     "message": "CVV"
   },
   "panelNoAddresses": {
-    "message": "В MyPass нет адресов"
+    "message": "В MyPass нет людей и адресов"
   },
   "promptFormFields": {
     "message": "Поля формы"
   },
   "promptFormFieldsCount": {
     "message": "$P1$, какие из них сохранить, вы выберете в MyPass",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "panelChooseAddress": {
+    "message": "Адрес…"
+  },
+  "panelChooseAddressFor": {
+    "message": "Выбрать адрес для $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "panelLinkedAddresses": {
+    "message": "Связанные адреса"
+  },
+  "panelOtherAddresses": {
+    "message": "Другие адреса"
+  },
+  "addressFormPerson": {
+    "message": "форма регистрации $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "personFillAria": {
+    "message": "Заполнить человека: $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "addressPickerHeader": {
+    "message": "Адрес для $P1$",
     "placeholders": {
       "p1": {
         "content": "$1"

@@ -12,6 +12,12 @@
 // password field hinted as the current, old or existing password (autocomplete or text) makes the
 // form a change-password or re-authentication form, which is never a registration form.
 //
+// A MyPass Person entry fills the person kinds too (middle name, a whole or split birthday) and,
+// with the person's names and email, the person's linked address: `personProfile` merges the two
+// into one fill profile. A birthday goes into a date input as an ISO date, into a text input in
+// the format its placeholder shows (DD.MM.YYYY, MM/DD/YYYY, TT.MM.JJJJ, the Cyrillic DD.MM.YYYY...) or else
+// ISO, and into a split day, month or year select by number or (months) by name in en/de/uk/ru.
+//
 // Field kinds: sensitive hints first (card, CVV, one-time, verification or authentication code,
 // PIN, captcha, token, bank and national ids, passport, security answer, search, coupon; four
 // languages), so no autocomplete token or positive hint can classify such a field; then the
@@ -55,6 +61,7 @@ var mypassRegistrationForm = (() => {
     organization: 'organization', 'street-address': 'addressLine1', 'address-line1': 'addressLine1',
     'address-line2': 'addressLine2', 'address-level2': 'city', 'address-level1': 'region',
     'postal-code': 'postalCode', country: 'country', 'country-name': 'country',
+    'additional-name': 'middleName', 'bday-day': 'bdayDay', 'bday-month': 'bdayMonth', 'bday-year': 'bdayYear',
   };
   // addressFieldHint tokens (exact, localized hints) as kinds.
   const ADDRESS_HINT_KINDS = {
@@ -69,6 +76,18 @@ var mypassRegistrationForm = (() => {
     organization: 'organization', addressLine1: 'address-line1', addressLine2: 'address-line2',
     city: 'address-level2', region: 'address-level1', postalCode: 'postal-code', country: 'country-name',
   };
+
+  // The kinds only a person fills, from the profile's `middleName` and `birthDate`.
+  const PERSON_KINDS = new Set(['middleName', 'birthday', 'bdayDay', 'bdayMonth', 'bdayYear']);
+  // The kinds of a person's own values: a form with one of these can take a person.
+  const PERSON_FORM_KINDS = new Set(['name', 'givenName', 'familyName', 'middleName', 'email', ...PERSON_KINDS]);
+  // Kinds the bridge's ExtraFieldKind does not know: a capture sends them as 'other' with their label.
+  const CAPTURE_AS_OTHER = new Set(['middleName', 'bdayDay', 'bdayMonth', 'bdayYear']);
+  const LOCALES = ['en', 'de', 'uk', 'ru'];
+
+  function isFillKind(kind) {
+    return Object.hasOwn(FILL_TOKENS, kind) || PERSON_KINDS.has(kind);
+  }
 
   function attr(node, name) {
     return node && typeof node.getAttribute === 'function' ? node.getAttribute(name) || '' : '';
@@ -333,9 +352,9 @@ var mypassRegistrationForm = (() => {
     return find(doc, options).find((form) => contains(form, node)) || null;
   }
 
-  // The fields of `form` an Address entry can fill (the inline identity icon goes on these).
+  // The fields of `form` an Address or Person entry can fill (the inline identity icon goes on these).
   function fillableFields(form) {
-    return form.fields.filter((field) => Object.hasOwn(FILL_TOKENS, field.kind));
+    return form.fields.filter((field) => isFillKind(field.kind));
   }
 
   function tokenFor(field) {
@@ -355,7 +374,151 @@ var mypassRegistrationForm = (() => {
     };
   }
 
-  // Fills the empty controls of `selection` from `address` (the bridge's ExtensionAddress) through
+  // The registration forms of `doc` a person can fill (one of the person's own kinds), each as a
+  // selection like `selectionFor` anchored at its first fillable field. Node references only.
+  function personSelections(doc, options) {
+    return find(doc, options)
+      .map((form) => fillableFields(form))
+      .filter((fields) => fields.some((field) => PERSON_FORM_KINDS.has(field.kind)))
+      .map((fields) => ({
+        anchor: fields[0].node,
+        formElement: fields[0].node.form || null,
+        controls: fields.map((field) => ({ node: field.node, kind: field.kind })),
+      }));
+  }
+
+  function text(value) {
+    return typeof value === 'string' ? value : '';
+  }
+
+  // One fill profile from a person (the bridge's ExtensionPerson) and its address (or null): the
+  // address values, with the person's names, email, middle name and birth date on top. A person
+  // with a given or family name replaces all three name values, so names never mix.
+  function personProfile(person, address) {
+    const base = address && typeof address === 'object' ? { ...address } : {};
+    if (!person || typeof person !== 'object') return base;
+    const given = text(person.givenName).trim();
+    const family = text(person.familyName).trim();
+    const named = !!(given || family);
+    return {
+      ...base,
+      fullName: named ? (text(person.fullName).trim() || [given, family].filter(Boolean).join(' ')) : text(base.fullName),
+      givenName: named ? given : text(base.givenName),
+      familyName: named ? family : text(base.familyName),
+      email: text(person.email).trim() ? text(person.email) : text(base.email),
+      middleName: text(person.middleName),
+      birthDate: text(person.birthDate),
+    };
+  }
+
+  // `{ year, month, day }` of a real ISO `YYYY-MM-DD` date, or null.
+  function parseIsoDate(value) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text(value));
+    if (!match) return null;
+    const [year, month, day] = match.slice(1).map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (year < 1 || date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+      return null;
+    }
+    return { year, month, day };
+  }
+
+  function foldName(value) {
+    return String(value || '').trim().toLowerCase().replace(/\.$/, '');
+  }
+
+  // The names of month `month` (1-12) in the four languages: long, short and the genitive form
+  // (the uk and ru month names after a day), lower-cased without a trailing dot.
+  const monthNameCache = new Map();
+  function monthNames(month) {
+    if (monthNameCache.has(month)) return monthNameCache.get(month);
+    const names = new Set();
+    const date = new Date(Date.UTC(2000, month - 1, 15));
+    for (const locale of LOCALES) {
+      try {
+        for (const style of ['long', 'short']) {
+          names.add(foldName(new Intl.DateTimeFormat(locale, { month: style, timeZone: 'UTC' }).format(date)));
+          const part = new Intl.DateTimeFormat(locale, { day: 'numeric', month: style, timeZone: 'UTC' })
+            .formatToParts(date).find((item) => item.type === 'month');
+          if (part) names.add(foldName(part.value));
+        }
+      } catch {
+        // A runtime without that locale: the numeric match still works.
+      }
+    }
+    names.delete('');
+    monthNameCache.set(month, names);
+    return names;
+  }
+
+  // The one enabled option of `node` that stands for `part` (a day, month or year number, or a
+  // month name); null when none or several do.
+  function partOption(node, kind, part) {
+    const number = (value) => (/^\d+$/.test(String(value).trim()) ? Number(String(value).trim()) : NaN);
+    const names = kind === 'bdayMonth' ? monthNames(part) : new Set();
+    const matches = Array.from(node.options || []).filter((option) => !option.disabled
+      && String(option.value || '').trim() !== ''
+      && (number(option.value) === part || number(option.textContent || '') === part
+        || names.has(foldName(option.textContent)) || names.has(foldName(option.value))));
+    return matches.length === 1 ? matches[0].value : null;
+  }
+
+  // The one enabled option whose value or text is `value` (case-insensitive), or null.
+  function textOption(node, value) {
+    const wanted = foldName(value);
+    const matches = Array.from(node.options || []).filter((option) => !option.disabled
+      && (foldName(option.value) === wanted || foldName(option.textContent) === wanted));
+    return matches.length === 1 ? matches[0].value : null;
+  }
+
+  // The date format a text input shows in its placeholder, title or label, as `{ order, separator,
+  // widths }`, or null. Letters: d/t (and Cyrillic de) day, m (and em) month,
+  // y/j (and Cyrillic ge, er) year.
+  function dateFormatOf(node) {
+    const labels = Array.from(node.labels || [], (label) => label.textContent || '');
+    for (const hint of [attr(node, 'placeholder'), attr(node, 'title'), attr(node, 'aria-label'), ...labels]) {
+      const found = /(?:^|[^\p{L}])(([dt\u0434m\u043cyj\u0433\u0440])\2*)([./ -])(([dt\u0434m\u043cyj\u0433\u0440])\5*)\3(([dt\u0434m\u043cyj\u0433\u0440])\7*)(?:$|[^\p{L}])/iu
+        .exec(String(hint || ''));
+      if (!found) continue;
+      const partOf = (letter) => ({ d: 'day', t: 'day', '\u0434': 'day', m: 'month', '\u043c': 'month' })[letter.toLowerCase()] || 'year';
+      const order = [found[2], found[5], found[7]].map(partOf);
+      if (new Set(order).size !== 3) continue;
+      return { order, separator: found[3], widths: [found[1], found[4], found[6]].map((group) => group.length) };
+    }
+    return null;
+  }
+
+  function birthdayText(node, date) {
+    const iso = [String(date.year).padStart(4, '0'), String(date.month).padStart(2, '0'), String(date.day).padStart(2, '0')].join('-');
+    if (typeOf(node) === 'date') return iso;
+    const format = dateFormatOf(node);
+    if (!format) return iso;
+    return format.order.map((part, index) => {
+      const width = format.widths[index];
+      if (part === 'year') return width === 2 ? String(date.year % 100).padStart(2, '0') : String(date.year);
+      const value = String(date[part]);
+      return width >= 2 ? value.padStart(2, '0') : value;
+    }).join(format.separator);
+  }
+
+  // The value of a person kind for `node` from `profile`, or null when there is none.
+  function personValueFor(node, kind, profile) {
+    if (kind === 'middleName') {
+      const value = text(profile.middleName).trim();
+      if (!value) return null;
+      return tagOf(node) === 'SELECT' ? textOption(node, value) : value;
+    }
+    const date = parseIsoDate(profile.birthDate);
+    if (!date) return null;
+    if (kind === 'birthday') return tagOf(node) === 'SELECT' ? null : birthdayText(node, date);
+    const part = kind === 'bdayDay' ? date.day : kind === 'bdayMonth' ? date.month : date.year;
+    if (tagOf(node) === 'SELECT') return partOption(node, kind, part);
+    if (typeOf(node) === 'number' || kind === 'bdayYear') return String(part);
+    return String(part).padStart(2, '0');
+  }
+
+  // Fills the empty controls of `selection` from `address` (the bridge's ExtensionAddress, or a
+  // person's `personProfile`) through
   // `setValue`, which dispatches input and change events. Every control is checked again right
   // before its write, because a page's handlers may move, replace, hide or retype controls while
   // the fill runs: it must still be connected, in the same form (or the same proximity group as
@@ -377,9 +540,11 @@ var mypassRegistrationForm = (() => {
       if (selection.anchor.isConnected === false) break;
       const current = formFor(doc, selection.anchor, findOptions);
       const field = current && current.fields.find((candidate) => candidate.node === node);
-      if (!field || field.kind !== control.kind || !Object.hasOwn(FILL_TOKENS, field.kind)) continue;
+      if (!field || field.kind !== control.kind || !isFillKind(field.kind)) continue;
       if (!addressForm.fillable(node)) continue;
-      const value = addressForm.valueFor({ node, token: tokenFor(field) }, profile);
+      const value = PERSON_KINDS.has(field.kind)
+        ? personValueFor(node, field.kind, profile)
+        : addressForm.valueFor({ node, token: tokenFor(field) }, profile);
       if (value === null || value === node.value) continue;
       setValue(node, value);
       filled += 1;
@@ -424,18 +589,19 @@ var mypassRegistrationForm = (() => {
       if (!cleanLine(field.value, MAX_VALUE)) continue;
       let label = cleanLine(field.label, MAX_LABEL) ? field.label : '';
       if (hasReservedPrefix(label)) label = '';
-      if (field.kind === 'other' && !label) continue;
+      if ((field.kind === 'other' || CAPTURE_AS_OTHER.has(field.kind)) && !label) continue;
       const key = field.kind === 'other' ? '' : field.kind + '\u0000' + folded(field.value);
       if (key && seen.has(key)) continue;
       if (key) seen.add(key);
-      fields.push({ kind: field.kind, label, value: field.value });
+      fields.push({ kind: CAPTURE_AS_OTHER.has(field.kind) ? 'other' : field.kind, label, value: field.value });
     }
     return { username, usernameIsEmail: !!login && login.kind === 'email', password, fields };
   }
 
   return {
     MAX_FIELDS, MAX_LABEL, MAX_VALUE,
-    classify, find, formFor, fillableFields, selectionFor, fillSelection, capture,
+    classify, find, formFor, fillableFields, selectionFor, personSelections, fillSelection, capture,
+    personProfile, parseIsoDate,
     isSubmitControl, isScriptSubmitControl, isNativeSubmitControl, readableLabel,
   };
 })();
