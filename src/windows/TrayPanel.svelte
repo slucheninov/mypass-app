@@ -1,11 +1,6 @@
 <script lang="ts">
-  // The tray panel window (340 x 520). It shares the stores and `api` with the main window.
-  // Locked, it shows the main window's unlock card; unlocked, a search field over the five most
-  // recent items (summaries only, no secret) or, while searching, the matching items, and a
-  // compact detail. Under both sits a native-style menu (Open MyPass, Lock, Settings, Quit).
-  // Showing and hiding the window (blur included) is the backend's; this component only reacts to
-  // the session and to a hide.
-  import { onMount } from "svelte";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { onMount, tick } from "svelte";
   import { api } from "../lib/api";
   import { events, type EntrySummary } from "../lib/bindings";
   import { t } from "../lib/i18n/index.svelte";
@@ -16,43 +11,45 @@
   import { session } from "../lib/stores/session.svelte";
   import { settings } from "../lib/stores/settings.svelte";
   import { toasts } from "../lib/stores/toasts.svelte";
-  import Icon from "../lib/ui/Icon.svelte";
-  import IconButton from "../lib/ui/IconButton.svelte";
   import ToastHost from "../lib/ui/ToastHost.svelte";
   import { quietly } from "../lib/unlisten";
   import UnlockCard from "../screens/UnlockCard.svelte";
-  import TrayDetail from "./TrayDetail.svelte";
+  import TrayActions from "./TrayActions.svelte";
   import TrayEntryRow from "./TrayEntryRow.svelte";
   import TrayMenuRow from "./TrayMenuRow.svelte";
   import TrayUpdateRow from "./TrayUpdateRow.svelte";
 
   const RECENT_LIMIT = 5;
-  const SEARCH_DELAY_MS = 120;
+  const recentKey = (id: string) => `recent:${id}`;
 
   let recents = $state<EntrySummary[]>([]);
-  let results = $state<EntrySummary[]>([]);
-  /** The (trimmed) text `results` answer; `null` while none does. Any other text, typed but not yet
-   *  searched or still in flight, shows no result and Enter opens nothing. */
-  let resultsFor = $state<string | null>(null);
-  let query = $state("");
-  let selectedId = $state<string | null>(null);
+  type Selection = { entry: EntrySummary; epoch: number };
+  let selected = $state.raw<Selection | null>(null);
+  let highlight = $state<string | null>(null);
   let card: UnlockCard | undefined = $state();
-  let searchInput: HTMLInputElement | undefined = $state();
+  let panel: HTMLElement;
+  let menu: HTMLElement | undefined = $state();
   let requests = 0;
-  let searches = 0;
-  let searchTimer: ReturnType<typeof setTimeout> | null = null;
 
   const unlocked = $derived(session.status.state === "unlocked");
+  const actions = $derived(selected?.epoch === session.lockEpoch && unlocked ? selected : null);
   const noVault = $derived(session.status.state === "noVault");
-  // One key per unlocked stretch and vault: a save-state change replaces `status` but not this.
   const vaultKey = $derived(unlocked ? (session.status.vaultPath ?? "") : null);
-  const searched = $derived(query.trim());
-  const searching = $derived(searched !== "");
-  /** The results are those of the current text, not of an earlier one. */
-  const answered = $derived(resultsFor === searched);
-  const shown = $derived(searching ? (answered ? results : []) : recents);
   const lockShortcut = $derived(formatShortcut(settings.value?.shortcutLock ?? "", platform.os));
   const showShortcut = $derived(formatShortcut(settings.value?.shortcutShow ?? "", platform.os));
+  const primaryModifier = $derived(platform.os === "macos" ? "metaKey" : "ctrlKey");
+  const settingsShortcut = $derived(primaryModifier === "metaKey" ? "⌘," : "Ctrl+,");
+  const quitShortcut = $derived(primaryModifier === "metaKey" ? "⌘Q" : "Ctrl+Q");
+
+  // Keep a selected recent among the recents if one disappears. A list refresh must not move
+  // a keyboard selection onto a different kind of action, such as Quit.
+  const activeKey = $derived.by(() => {
+    if (highlight?.startsWith("recent:") && !recents.some((item) => recentKey(item.id) === highlight)) {
+      const last = recents.at(-1);
+      return last ? recentKey(last.id) : null;
+    }
+    return highlight;
+  });
 
   async function loadRecents(): Promise<void> {
     const mine = ++requests;
@@ -65,104 +62,90 @@
     }
   }
 
-  function stopSearchTimer(): void {
-    if (searchTimer !== null) clearTimeout(searchTimer);
-    searchTimer = null;
-  }
-
-  /** Runs the search for the current text through `tray_search`: the main window's matching
-   *  (title, user name, websites, the other visible fields) over the live entries only, never the
-   *  recycle bin, at most 50 (the main window has the full list). */
-  async function runSearch(): Promise<void> {
-    stopSearchTimer();
-    const text = query.trim();
-    const mine = ++searches;
-    if (text === "" || !unlocked) {
-      results = [];
-      resultsFor = null;
-      return;
-    }
-    const unchanged = lockGuard();
-    try {
-      const list = await api.traySearch(text);
-      // A response is used only for the text it answers, while nothing newer was asked and the
-      // vault is the same one (`lockGuard` also catches a switch to another vault).
-      if (mine === searches && unchanged() && text === query.trim()) {
-        results = list;
-        resultsFor = text;
-      }
-    } catch (e) {
-      if (mine === searches && unchanged()) toasts.reportError(e);
-    }
-  }
-
-  /** A change of the text invalidates the results at once; the search for it runs after a pause. */
-  function onSearchInput(): void {
-    results = [];
-    resultsFor = null;
-    stopSearchTimer();
-    searchTimer = setTimeout(() => void runSearch(), SEARCH_DELAY_MS);
-  }
-
-  function resetSearch(): void {
-    stopSearchTimer();
-    searches++;
-    query = "";
-    results = [];
-    resultsFor = null;
-  }
-
-  // Everything of one unlocked stretch, of one vault, is dropped whenever that changes: on a lock,
-  // and on a switch to another vault while unlocked (`unlocked -> unlocked` with another path,
-  // which never passes through `locked`). Bumping `requests` and `searches` discards the answers
-  // still in flight for the old vault. The next stretch starts at the list of its own recents.
   $effect(() => {
     const key = vaultKey;
     requests++;
     recents = [];
-    selectedId = null;
-    resetSearch();
+    selected = null;
+    highlight = null;
     if (key !== null) void loadRecents();
   });
 
+  function clearOnHide(): void {
+    selected = null;
+    highlight = null;
+    card?.clear();
+  }
+
+  function hide(): void {
+    clearOnHide();
+    void toasts.guard(() => api.trayPanelHide());
+  }
+
   onMount(() => {
-    // The panel is a long-lived hidden window: refresh when the vault changes and when it is shown.
-    const clearOnHide = () => {
-      selectedId = null;
-      resetSearch();
-      // A half-typed master password does not wait in a hidden window.
-      card?.clear();
+    const root = document.documentElement;
+    root.dataset.material = "solid";
+    // WebView2 shares its preferred colour scheme across the app's webviews.
+    // The tray follows its own native window theme.
+    root.dataset.theme = "light";
+    let gone = false;
+    let offTheme: (() => void) | undefined;
+    void (async () => {
+      const win = getCurrentWindow();
+      let changed = false;
+      const unlisten = await win.onThemeChanged(({ payload }) => {
+        if (gone) return;
+        changed = true;
+        root.dataset.theme = payload;
+      });
+      if (gone) {
+        quietly(unlisten);
+        return;
+      }
+      offTheme = unlisten;
+      const theme = await win.theme();
+      if (!gone && !changed && theme) root.dataset.theme = theme;
+    })().catch(() => {});
+    let frame = 0;
+    const fit = () => {
+      if (frame !== 0) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        const height = Math.max(1, Math.ceil(panel.scrollHeight));
+        void api.trayPanelFit(height).then((material) => {
+          if (!gone) root.dataset.material = material;
+        }).catch(() => {});
+      });
     };
-    const offHidden = onWindowHidden(clearOnHide);
-    // The backend hides the panel on blur, but whether the webview then reports `hidden` is not
-    // guaranteed (WebView2), so a blur clears the secrets too; it costs nothing, the panel hides anyway.
-    window.addEventListener("blur", clearOnHide);
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(fit);
+    observer?.observe(panel);
+    fit();
+
     const refresh = () => {
-      if (!unlocked || document.visibilityState === "hidden") return;
-      void loadRecents();
-      if (searching) void runSearch();
+      if (unlocked && document.visibilityState !== "hidden") void loadRecents();
     };
-    // A shown panel puts the keyboard where the user starts: the search field or the password.
     const onFocus = () => {
       refresh();
-      if (unlocked && selectedId === null) searchInput?.focus();
-      else if (!unlocked) card?.focus();
+      fit();
+      if (!unlocked) card?.focus();
     };
+    const offHidden = onWindowHidden(clearOnHide);
+    // WebView2 does not always report visibility changes when the native host hides the window.
+    window.addEventListener("blur", clearOnHide);
     document.addEventListener("visibilitychange", refresh);
     window.addEventListener("focus", onFocus);
     let off: (() => void) | null = null;
-    let gone = false;
-    void events.vaultChanged
-      .listen(() => refresh())
-      .then((unlisten) => {
-        if (gone) quietly(unlisten);
-        else off = unlisten;
-      })
-      // Without the listener the lists refresh on focus and on unlock only.
-      .catch(() => {});
+    void events.vaultChanged.listen(refresh).then((unlisten) => {
+      if (gone) quietly(unlisten);
+      else off = unlisten;
+    }).catch(() => {});
     return () => {
       gone = true;
-      stopSearchTimer();
+      observer?.disconnect();
+      cancelAnimationFrame(frame);
+      delete root.dataset.material;
+      delete root.dataset.theme;
+      if (offTheme) quietly(offTheme);
       if (off) quietly(off);
       offHidden();
       window.removeEventListener("blur", clearOnHide);
@@ -171,184 +154,176 @@
     };
   });
 
-  function open(id: string) {
-    selectedId = id;
-    void toasts.guard(() => api.entryTouch(id));
+  async function focusHighlight(): Promise<void> {
+    await tick();
+    menuRows().find((row) => row.dataset.menuKey === activeKey)?.focus();
   }
 
-  function onSearchKey(event: KeyboardEvent): void {
-    if (event.key === "Escape" && query !== "") {
-      event.preventDefault();
-      resetSearch();
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      // Only results of the text as it is now: never those of an earlier text still on screen
-      // while the next search waits or runs.
-      if (searching && !answered) return;
-      const first = shown[0];
-      if (first) open(first.id);
-    }
+  function menuRows(): HTMLButtonElement[] {
+    return Array.from(menu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? []);
+  }
+
+  function open(id: string): void {
+    const entry = recents.find((item) => item.id === id);
+    if (!entry || !unlocked) return;
+    const selection = { entry, epoch: session.lockEpoch };
+    selected = selection;
+    highlight = "back";
+    void focusHighlight();
+    void api.entryTouch(id).catch((e) => {
+      if (actions === selection) toasts.reportError(e);
+    });
+  }
+
+  function back(): void {
+    const entry = actions?.entry;
+    selected = null;
+    highlight = entry ? recentKey(entry.id) : null;
+    void focusHighlight();
   }
 
   const showMain = () => void toasts.guard(() => api.appShowMain());
   const lock = () => void toasts.guard(() => session.lock());
   const openSettings = () => void toasts.guard(() => api.appOpenSettings());
   const quit = () => void toasts.guard(() => api.appQuit());
-  const newEntry = () => void toasts.guard(() => api.appNewEntry());
+
+  function onKey(event: KeyboardEvent): void {
+    if (event.defaultPrevented || event.isComposing) return;
+    if (event.key === "Escape" || (event.key === "ArrowLeft" && actions)) {
+      event.preventDefault();
+      if (actions) back();
+      else hide();
+      return;
+    }
+    if (event[primaryModifier] && !event.altKey && !event.shiftKey) {
+      if (event.key === "," || event.key.toLowerCase() === "q") {
+        event.preventDefault();
+        if (!event.repeat) (event.key === "," ? openSettings : quit)();
+      }
+      return;
+    }
+    if (event.target instanceof HTMLElement && event.target.closest("input, textarea, select, [contenteditable]")) return;
+    if (!menu || event.metaKey || event.ctrlKey || event.altKey) return;
+
+    const rows = menuRows();
+    if (rows.length === 0) return;
+    const index = rows.findIndex((row) => row.dataset.menuKey === activeKey);
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const next = event.key === "ArrowDown"
+        ? (index + 1) % rows.length
+        : (index <= 0 ? rows.length - 1 : index - 1);
+      const row = rows[next];
+      highlight = row?.dataset.menuKey ?? null;
+      row?.focus();
+    } else if (event.key === "Enter" || (event.key === "ArrowRight" && rows[index]?.hasAttribute("aria-haspopup"))) {
+      const row = rows[index];
+      if (row) {
+        event.preventDefault();
+        if (!event.repeat) row.click();
+      }
+    }
+  }
 </script>
 
-<main class="panel" data-testid="tray-panel">
+<svelte:window onkeydown={onKey} />
+
+<main class="panel" data-testid="tray-panel" bind:this={panel} onpointerleave={() => (highlight = null)}>
   {#if noVault}
-    <div class="content">
-      <p class="empty">{t("No vault is open")}</p>
-    </div>
+    <p class="empty">{t("No vault is open")}</p>
   {:else if !unlocked}
-    <div class="content">
-      <UnlockCard bind:this={card} compact />
-    </div>
-  {:else if selectedId !== null}
-    {#key selectedId}
-      <TrayDetail id={selectedId} onback={() => (selectedId = null)} />
-    {/key}
-  {:else}
-    <header class="head">
-      <h1>{t("Passwords")}</h1>
-      <div class="tools">
-        <IconButton icon="plus" label={t("New Login")} onclick={newEntry} />
-        <IconButton icon="window" label={t("Open main window")} onclick={showMain} />
-      </div>
-    </header>
-    <label class="search">
-      <span class="search-icon"><Icon name="search" size={14} /></span>
-      <input
-        bind:this={searchInput}
-        bind:value={query}
-        type="search"
-        placeholder={t("Search")}
-        aria-label={t("Search")}
-        autocomplete="off"
-        spellcheck="false"
-        oninput={onSearchInput}
-        onkeydown={onSearchKey}
-      />
-    </label>
-    <div class="content">
-      {#if searching && !answered}
-        <!-- The search for this text has not answered yet: nothing to show, nothing to open. -->
-      {:else if shown.length === 0}
-        <p class="empty">{searching ? t("No results") : t("Nothing here yet")}</p>
-      {:else}
-        <ul class="entries" aria-label={searching ? t("Search results") : t("Recent items")}>
-          {#each shown as item (item.id)}
-            <li><TrayEntryRow entry={item} onopen={open} /></li>
-          {/each}
-        </ul>
-      {/if}
-    </div>
+    <UnlockCard bind:this={card} compact />
   {/if}
-  {#if selectedId === null}
-    <TrayUpdateRow />
-    <nav class="menu" aria-label={t("MyPass")}>
+  <div role="menu" aria-label={actions?.entry.title ?? t("MyPass")} bind:this={menu}>
+    {#if actions}
+      {@const selection = actions}
+      {#key selection}
+        <TrayActions
+          entry={selection.entry}
+          highlight={activeKey}
+          onback={back}
+          ondone={hide}
+          onhover={(key) => (highlight = key)}
+          isCurrent={() => actions === selection}
+        />
+      {/key}
+    {:else}
       {#if unlocked}
-        <TrayMenuRow label={t("Open MyPass")} shortcut={showShortcut} onclick={showMain} />
-        <hr />
-        <TrayMenuRow label={t("Lock")} shortcut={lockShortcut} onclick={lock} />
-      {:else if noVault}
-        <TrayMenuRow label={t("Open MyPass")} shortcut={showShortcut} onclick={showMain} />
-        <hr />
+        <div class="heading" aria-hidden="true">{t("Recent")}</div>
+        {#if recents.length === 0}
+          <p class="empty">{t("Nothing here yet")}</p>
+        {:else}
+          <ul class="entries" role="group" aria-label={t("Recent")}>
+            {#each recents as item (item.id)}
+              {@const key = recentKey(item.id)}
+              <li role="none">
+                <TrayEntryRow entry={item} {key} active={activeKey === key} onopen={open} onhover={() => (highlight = key)} />
+              </li>
+            {/each}
+          </ul>
+        {/if}
       {/if}
-      <TrayMenuRow label={t("Settings")} onclick={openSettings} />
-      <TrayMenuRow label={t("Quit")} onclick={quit} />
-    </nav>
-  {/if}
+      <TrayUpdateRow active={activeKey === "update"} onhover={() => (highlight = "update")} />
+      <hr />
+      {#if unlocked || noVault}
+        <TrayMenuRow key="open" label={t("Open MyPass")} icon="window" shortcut={showShortcut} active={activeKey === "open"} onhover={() => (highlight = "open")} onclick={showMain} />
+      {/if}
+      {#if unlocked}
+        <TrayMenuRow key="lock" label={t("Lock")} icon="lock" shortcut={lockShortcut} active={activeKey === "lock"} onhover={() => (highlight = "lock")} onclick={lock} />
+      {/if}
+      <TrayMenuRow key="settings" label={t("Settings…")} icon="gear" shortcut={settingsShortcut} active={activeKey === "settings"} onhover={() => (highlight = "settings")} onclick={openSettings} />
+      <hr />
+      <TrayMenuRow key="quit" label={t("Quit")} icon="power" shortcut={quitShortcut} active={activeKey === "quit"} onhover={() => (highlight = "quit")} onclick={quit} />
+    {/if}
+  </div>
 </main>
 <ToastHost />
 
 <style>
-  .panel {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    height: 100vh;
-    padding: 10px;
-    box-sizing: border-box;
-    background: var(--bg);
-    color: var(--text);
-  }
-  .head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 2px 2px 0 6px;
-  }
-  h1 {
-    margin: 0;
-    font-size: var(--font-size-lg);
-    font-weight: 700;
-  }
-  .tools {
-    display: flex;
-    gap: 2px;
-  }
-  .search {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    height: 30px;
-    padding: 0 8px;
-    border: 1px solid var(--control-border);
-    border-radius: 8px;
-    background: var(--control-bg);
-    color: var(--text-2);
-  }
-  .search:focus-within {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
-  }
-  .search-icon {
-    display: inline-flex;
-  }
-  .search input {
-    flex: 1;
-    min-width: 0;
-    border: 0;
-    outline: none;
-    background: transparent;
-    color: var(--text);
-    font: inherit;
-    font-size: var(--font-size-md);
-  }
-  .content {
-    flex: 1;
-    min-height: 0;
+  :global(html[data-material]) {
     overflow-y: auto;
+    scrollbar-width: thin;
+  }
+  :global(html[data-material="native"] body) {
+    background: transparent;
+  }
+  :global(html[data-material="solid"] body) {
+    background: Canvas;
+  }
+  .panel {
+    --menu-accent: #0a64d6;
+    padding: 5px;
+    border-radius: 12px;
+    background: transparent;
+    color: CanvasText;
+    font: 13px system-ui, sans-serif;
+  }
+  @supports (color: Highlight) {
+    .panel { --menu-accent: Highlight; }
+  }
+  @supports (color: AccentColor) {
+    .panel { --menu-accent: AccentColor; }
+  }
+  .heading {
+    padding: 4px 9px 2px;
+    color: GrayText;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .empty {
+    margin: 0;
+    padding: 5px 9px;
+    color: GrayText;
   }
   .entries {
     list-style: none;
     margin: 0;
-    padding: 4px;
-    border: var(--sep);
-    border-radius: 10px;
-    background: var(--list-bg);
-  }
-  .entries li + li {
-    border-top: var(--sep);
-  }
-  .empty {
-    margin: 12px 6px;
-    color: var(--text-2);
-  }
-  .menu {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-    padding-top: 6px;
-    border-top: var(--sep);
+    padding: 0;
   }
   hr {
-    width: calc(100% - 20px);
-    margin: 4px auto;
+    height: 1px;
+    margin: 4px 9px;
     border: 0;
-    border-top: var(--sep);
+    background: color-mix(in srgb, CanvasText 12%, transparent);
   }
 </style>

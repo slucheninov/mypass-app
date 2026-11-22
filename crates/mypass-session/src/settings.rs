@@ -83,6 +83,15 @@ pub enum Theme {
 
 #[derive(Serialize, Deserialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "camelCase")]
+pub enum AppIcon {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+#[derive(Serialize, Deserialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "camelCase")]
 pub enum Language {
     #[default]
     System,
@@ -185,6 +194,7 @@ pub const MAX_RECENT_VAULTS: usize = 8;
 pub struct Settings {
     pub language: Language,
     pub theme: Theme,
+    pub app_icon: AppIcon,
     pub auto_lock_idle_timeout: IdleTimeout,
     pub lock_on_device_sleep: bool,
     pub lock_on_screen_lock: bool,
@@ -227,6 +237,7 @@ impl Default for Settings {
         Self {
             language: Language::System,
             theme: Theme::System,
+            app_icon: AppIcon::System,
             auto_lock_idle_timeout: IdleTimeout::ThirtyMinutes,
             lock_on_device_sleep: true,
             lock_on_screen_lock: true,
@@ -317,6 +328,8 @@ pub struct SettingsPatch {
     pub language: Option<Language>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<Theme>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_icon: Option<AppIcon>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_lock_idle_timeout: Option<IdleTimeout>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -618,6 +631,7 @@ fn apply_patch(s: &mut Settings, p: SettingsPatch) -> Result<(), SettingsError> 
     set!(
         language,
         theme,
+        app_icon,
         auto_lock_idle_timeout,
         lock_on_device_sleep,
         lock_on_screen_lock,
@@ -651,6 +665,42 @@ mod tests {
             .join("tests")
             .join("snapshots")
             .join("settings.default.json")
+    }
+
+    #[test]
+    fn app_icon_defaults_to_system() {
+        assert_eq!(Settings::default().app_icon, AppIcon::System);
+    }
+
+    #[test]
+    fn app_icon_patch_applies_and_a_bad_value_falls_back_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{"appIcon":"purple","theme":"dark"}"#).unwrap();
+        let store = SettingsStore::load(path);
+        assert_eq!(store.get().app_icon, AppIcon::System);
+        assert_eq!(store.get().theme, Theme::Dark);
+        let after = store
+            .update(SettingsPatch {
+                app_icon: Some(AppIcon::Dark),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(after.app_icon, AppIcon::Dark);
+    }
+
+    #[test]
+    fn app_icon_is_independent_of_theme() {
+        let mut settings = Settings::default();
+        apply_patch(
+            &mut settings,
+            SettingsPatch {
+                theme: Some(Theme::Dark),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(settings.app_icon, AppIcon::System);
     }
 
     #[test]
@@ -973,6 +1023,7 @@ mod tests {
         let patch = SettingsPatch {
             language: Some(Language::Ru),
             theme: Some(Theme::Light),
+            app_icon: Some(AppIcon::Dark),
             auto_lock_idle_timeout: Some(IdleTimeout::FourHours),
             lock_on_device_sleep: Some(false),
             lock_on_screen_lock: Some(false),

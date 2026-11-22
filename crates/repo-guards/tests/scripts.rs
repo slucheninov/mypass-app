@@ -163,6 +163,37 @@ fn tauri_conf_matches_signing_constants_and_resources() {
 }
 
 #[test]
+fn release_notes_header_lists_the_install_steps() {
+    let header =
+        std::fs::read_to_string(repo_root().join("scripts/package/RELEASE_NOTES_HEADER.md"))
+            .unwrap();
+    for instruction in [
+        "xattr -dr com.apple.quarantine ~/Downloads/MyPass-{{VERSION}}-macos-arm64.dmg",
+        "sudo xattr -dr com.apple.quarantine /Applications/MyPass.app",
+        "MyPass-chrome-extension-{{VERSION}}.zip",
+        "chrome://extensions",
+        "Load unpacked",
+        "Settings > Browser",
+        "shasum -a 256 -c SHA256SUMS.txt",
+    ] {
+        assert!(
+            header.contains(instruction),
+            "missing release instruction: {instruction}"
+        );
+    }
+    for step in 1..=4 {
+        let prefix = format!("{step}. ");
+        assert_eq!(
+            header
+                .lines()
+                .filter(|line| line.starts_with(&prefix))
+                .count(),
+            2
+        );
+    }
+}
+
+#[test]
 fn no_entitlements_file_and_install_notes_cover_release_boundaries() {
     for path in repo_guards::tracked_files().unwrap_or_default() {
         assert_ne!(

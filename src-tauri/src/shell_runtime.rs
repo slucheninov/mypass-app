@@ -19,10 +19,14 @@ use crate::lifecycle::{
     sync_login_item_report, ExitGate, ExitOutcome, ExitRequest, ExternalWatcher, QuitPort,
     QuitWorkerGuard, ShellTarget, TrayRefresher, EXTERNAL_POLL,
 };
-use crate::shell::{close_action, current_os, show_main, CloseAction, PanelRect};
+use crate::shell::{
+    close_action, current_os, fit_panel_height, refit_panel_y, show_main, themed_windows,
+    CloseAction, PanelAnchor, PanelRect,
+};
 use crate::state::{AppState, EditorDirty, ShellState};
 use crate::tray::{
-    action_for_id, separator_before, TrayAction, TrayMenuModel, PANEL_WINDOW, TRAY_ID,
+    action_for_id, choose_panel_material, separator_before, PanelMaterial, TrayAction,
+    TrayMenuModel, TrayOs, PANEL_WIDTH, PANEL_WINDOW, TRAY_ID,
 };
 use mypass_platform::Subscription;
 use mypass_session::settings::{Language, Settings, Theme};
@@ -30,7 +34,10 @@ use mypass_session::{AppCore, LockReason};
 use std::sync::{Arc, Mutex, PoisonError};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, PhysicalPosition, RunEvent, Runtime, Window, WindowEvent, Wry};
+use tauri::{
+    AppHandle, Manager, PhysicalPosition, PhysicalSize, RunEvent, Runtime, WebviewWindow, Window,
+    WindowEvent, Wry,
+};
 use tauri_plugin_dialog::{
     DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult,
 };
@@ -99,7 +106,7 @@ fn create_tray(app: &AppHandle, model: &TrayMenuModel) -> tauri::Result<()> {
                 toggle_panel(tray.app_handle(), rect, position);
             }
         });
-    // One upright key: a template on macOS (the menu bar tints it), a green key on Windows.
+    // One tilted key: a template on macOS (the menu bar tints it), a green key on Windows.
     let custom =
         crate::tray::tray_icon_png(crate::tray::TrayOs::current()).and_then(|(png, template)| {
             tauri::image::Image::from_bytes(png)
@@ -167,6 +174,101 @@ fn run_tray_action(app: &AppHandle, action: TrayAction) {
         // The one quit entry point, shared with the tray panel's `app_quit`.
         TrayAction::Quit => crate::commands::app::request_quit(app),
     }
+}
+
+/// The material is chosen before the window is shown and stays fixed for its lifetime.
+struct PanelState {
+    anchor: Mutex<PanelAnchor>,
+    material: PanelMaterial,
+}
+
+fn apply_panel_effect(panel: &WebviewWindow, effect: tauri::window::Effect) -> bool {
+    // Tauri's set_effects only reports whether it could post the work to the main thread.
+    // Setup is already on that thread, so use its underlying library to check the result.
+    use tauri::window::Effect;
+    match effect {
+        #[cfg(target_os = "macos")]
+        Effect::Menu => window_vibrancy::apply_vibrancy(
+            panel,
+            window_vibrancy::NSVisualEffectMaterial::Menu,
+            Some(window_vibrancy::NSVisualEffectState::Active),
+            Some(crate::tray::PANEL_RADIUS),
+        )
+        .is_ok(),
+        #[cfg(windows)]
+        Effect::Acrylic => window_vibrancy::apply_acrylic(panel, None).is_ok(),
+        #[cfg(windows)]
+        Effect::Mica => window_vibrancy::apply_mica(panel, None).is_ok(),
+        _ => false,
+    }
+}
+
+fn setup_panel(app: &AppHandle) {
+    let Some(panel) = app.get_webview_window(PANEL_WINDOW) else {
+        return;
+    };
+    let material = choose_panel_material(TrayOs::current(), |effect| {
+        apply_panel_effect(&panel, effect)
+    });
+    paint_panel_background(
+        material,
+        panel.theme().unwrap_or(tauri::Theme::Light),
+        |color| {
+            let _ = panel.set_background_color(Some(color));
+        },
+    );
+    app.manage(PanelState {
+        anchor: Mutex::new(PanelAnchor::Top),
+        material,
+    });
+}
+
+fn paint_panel_background(
+    material: PanelMaterial,
+    theme: tauri::Theme,
+    paint: impl FnOnce(tauri::window::Color),
+) {
+    if material == PanelMaterial::Solid {
+        let shade = if theme == tauri::Theme::Dark { 32 } else { 246 };
+        paint(tauri::window::Color(shade, shade, shade, 255));
+    }
+}
+
+fn record_panel_anchor(app: &AppHandle, anchor: PanelAnchor) {
+    if let Some(state) = app.try_state::<PanelState>() {
+        *state.anchor.lock().unwrap_or_else(PoisonError::into_inner) = anchor;
+    }
+}
+
+pub fn fit_panel(panel: &WebviewWindow, height: f64) -> tauri::Result<PanelMaterial> {
+    let state = panel.try_state::<PanelState>();
+    let (anchor, material) = state.map_or((PanelAnchor::Top, PanelMaterial::Solid), |state| {
+        let anchor = *state.anchor.lock().unwrap_or_else(PoisonError::into_inner);
+        (anchor, state.material)
+    });
+    let scale = panel.scale_factor()?;
+    let work_height = panel
+        .current_monitor()?
+        .map_or(crate::tray::MAX_PANEL_HEIGHT + 16.0, |monitor| {
+            f64::from(monitor.work_area().size.height) / scale
+        });
+    let size = PhysicalSize::new(
+        (PANEL_WIDTH * scale).round() as u32,
+        (fit_panel_height(height, work_height) * scale).round() as u32,
+    );
+    if size != panel.inner_size()? {
+        let old_height = f64::from(panel.outer_size()?.height);
+        let position = panel.outer_position()?;
+        panel.set_size(size)?;
+        let top = refit_panel_y(
+            f64::from(position.y),
+            old_height,
+            f64::from(size.height),
+            anchor,
+        );
+        panel.set_position(PhysicalPosition::new(position.x, top.round() as i32))?;
+    }
+    Ok(material)
 }
 
 /// Left click on the icon: toggle the panel, placed under the icon inside the monitor. `click` is
@@ -242,6 +344,7 @@ fn place_panel_windows(app: &AppHandle, panel: &tauri::WebviewWindow, tray: taur
             height,
             scale,
         );
+        record_panel_anchor(app, crate::shell::panel_anchor(y, at.y));
         let _ = panel.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
         let _ = panel.set_size(tauri::PhysicalSize::new(
             width.round() as u32,
@@ -329,6 +432,7 @@ fn place_panel(
         primary,
         (panel_size.width, panel_size.height),
     ) {
+        record_panel_anchor(app, PanelAnchor::Top);
         let _ = panel.set_position(LogicalPosition::new(x, y));
     }
 }
@@ -399,12 +503,41 @@ impl ShellTarget for TauriTarget {
     }
 
     fn apply_theme(&self, theme: Theme) {
-        self.on_main(move |app| app.set_theme(native_theme(theme)));
-        // Windows reports the new window themes later (`ThemeChanged`), which refreshes again.
+        self.on_main(move |app| apply_theme_to_windows(app, theme));
+    }
+
+    fn refresh_app_icon(&self) {
         refresh_app_icon(&self.app, false);
     }
 }
 
+fn apply_theme_to_windows(app: &AppHandle, theme: Theme) {
+    for window in themed_windows()
+        .into_iter()
+        .filter_map(|label| app.get_webview_window(label))
+    {
+        apply_window_theme(&window, theme);
+    }
+}
+
+pub(crate) fn apply_window_theme(window: &tauri::WebviewWindow, theme: Theme) {
+    #[cfg(target_os = "macos")]
+    if let Ok(handle) = window.ns_window() {
+        // Tao's instance-level setter changes NSApplication's appearance on macOS.
+        mypass_platform::set_window_dark(
+            handle,
+            match theme {
+                Theme::System => None,
+                Theme::Light => Some(false),
+                Theme::Dark => Some(true),
+            },
+        );
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = window.set_theme(native_theme(theme));
+}
+
+#[cfg(not(target_os = "macos"))]
 fn native_theme(theme: Theme) -> Option<tauri::Theme> {
     match theme {
         Theme::System => None,
@@ -416,7 +549,7 @@ fn native_theme(theme: Theme) -> Option<tauri::Theme> {
 // ---------------------------------------------------------------------------------------------
 // App icon
 
-/// Shows the app icon of the effective theme (`app_icon.rs`) on the main thread; `force` applies
+/// Shows the app icon for the selected icon appearance (`app_icon.rs`) on the main thread; `force` applies
 /// it even when unchanged (a new window, or the framework's own dev-mode Dock icon at `Ready`).
 /// Posted, never awaited.
 pub fn refresh_app_icon<R: Runtime>(app: &tauri::AppHandle<R>, force: bool) {
@@ -431,11 +564,11 @@ fn apply_app_icon<R: Runtime>(app: &tauri::AppHandle<R>, force: bool) {
     };
     let platform = core.0.platform();
     let window_dark = app
-        .get_webview_window(MAIN_WINDOW)
+        .get_webview_window(PANEL_WINDOW)
         .and_then(|window| window.theme().ok())
         .map(|theme| theme == tauri::Theme::Dark);
     let dark = app_icon::system_dark(platform.app_icon.system_dark().ok(), window_dark);
-    let variant = app_icon::app_icon_variant(core.0.settings.get().theme, dark);
+    let variant = app_icon::app_icon_variant(core.0.settings.get().app_icon, dark);
     if !shown.should_apply(variant, force) {
         return;
     }
@@ -530,7 +663,8 @@ pub fn start(app: &tauri::App) {
     start_external_poll(watcher.clone(), core.scheduler(), EXTERNAL_POLL);
     app.manage(watcher);
 
-    app.set_theme(native_theme(settings.theme));
+    setup_panel(&handle);
+    apply_theme_to_windows(&handle, settings.theme);
     // The icon itself is applied at `RunEvent::Ready`, after the framework's own dev-mode icon.
     app.manage(AppIconState::default());
     apply_startup_ui(&handle, &core, &settings);
@@ -579,6 +713,17 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
                 // Disk work: off the event-loop thread.
                 tauri::async_runtime::spawn_blocking(move || watcher.check());
             }
+        }
+        (PANEL_WINDOW, WindowEvent::ThemeChanged(theme)) => {
+            if let (Some(state), Some(panel)) = (
+                app.try_state::<PanelState>(),
+                app.get_webview_window(PANEL_WINDOW),
+            ) {
+                paint_panel_background(state.material, *theme, |color| {
+                    let _ = panel.set_background_color(Some(color));
+                });
+            }
+            refresh_app_icon(app, false);
         }
         // The OS appearance (or the forced app theme) changed: the icon may follow.
         (_, WindowEvent::ThemeChanged(_)) => refresh_app_icon(app, false),
@@ -805,6 +950,25 @@ mod tests {
     use std::time::{Duration, Instant};
     use tauri::test::{mock_builder, mock_context, noop_assets};
     use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+    #[test]
+    fn panel_theme_changes_repaint_only_the_solid_material() {
+        let mut paints = Vec::new();
+        for theme in [tauri::Theme::Light, tauri::Theme::Dark, tauri::Theme::Light] {
+            paint_panel_background(PanelMaterial::Solid, theme, |color| paints.push(color));
+            paint_panel_background(PanelMaterial::Native, theme, |_| {
+                panic!("native material must stay transparent")
+            });
+        }
+        assert_eq!(
+            paints,
+            [
+                tauri::window::Color(246, 246, 246, 255),
+                tauri::window::Color(32, 32, 32, 255),
+                tauri::window::Color(246, 246, 246, 255),
+            ]
+        );
+    }
 
     /// A quit port with a programmed answer; reports every call on a channel.
     struct FakePort {

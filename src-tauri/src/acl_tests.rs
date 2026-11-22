@@ -109,22 +109,18 @@ const SETTINGS: &[&str] = &[
 
 const TRAY_PANEL: &[&str] = &[
     "app_info",
-    "app_new_entry",
-    "app_open_entry",
     "app_open_settings",
     "app_quit",
     "app_record_activity",
     "app_show_main",
     "device_unlock_status",
     "entry_copy",
-    "entry_get",
     "entry_recent",
-    "entry_reveal",
-    "entry_totp",
     "entry_touch",
     "platform_keyboard_layout",
     "settings_get",
-    "tray_search",
+    "tray_panel_fit",
+    "tray_panel_hide",
     "update_open_release",
     "update_status",
     "vault_lock",
@@ -213,9 +209,15 @@ fn tray_panel_cannot_configure_device_move_vault_read_passkeys_or_take_proposals
             "allow-vault-location-change",
             "allow-entry-passkey-details",
             "allow-browser-proposal-take",
-            // The general list takes any query, the Deleted category included; the tray panel
-            // searches through `tray_search` only.
+            // The tray panel only queries recents.
+            "allow-app-new-entry",
+            "allow-app-open-entry",
+            "allow-entry-get",
+            "allow-entry-reveal",
+            "allow-entry-totp",
             "allow-entry-list",
+            "allow-tray-search",
+            "core:window:allow-hide",
         ] {
             assert_ne!(id, forbidden);
         }

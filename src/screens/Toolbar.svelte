@@ -119,7 +119,7 @@
     gap: var(--space-5);
     min-width: 0;
     height: 100%;
-    padding: 0 var(--space-6) 0 var(--space-3);
+    padding: 0 var(--space-6) 0 var(--space-5);
   }
   .spacer {
     flex: 1;

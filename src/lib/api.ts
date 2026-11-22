@@ -101,9 +101,7 @@ async function shortcutConflictsTake() {
 /** One typed, already unwrapped async function per command. */
 export const api = {
   appInfo: wrap(commands.appInfo),
-  appNewEntry: wrap(commands.appNewEntry),
   appTakeNewEntry: wrap(commands.appTakeNewEntry),
-  appOpenEntry: wrap(commands.appOpenEntry),
   appOpenSettings: wrap(commands.appOpenSettings),
   appQuit: wrap(commands.appQuit),
   appRecordActivity: wrap(commands.appRecordActivity),
@@ -170,7 +168,6 @@ export const api = {
   syncDisplacedStatus: wrap(commands.syncDisplacedStatus),
   syncNow: wrap(commands.syncNow),
   syncStatus: wrap(commands.syncStatus),
-  traySearch: wrap(commands.traySearch),
   vaultCreate: wrap(commands.vaultCreate),
   vaultFindFiles: wrap(commands.vaultFindFiles),
   vaultForget: wrap(commands.vaultForget),
@@ -187,6 +184,8 @@ export const api = {
   deviceUnlockConfigure: wrap(commands.deviceUnlockConfigure),
   deviceUnlockConsumeExtensionRequest: commands.deviceUnlockConsumeExtensionRequest,
   vaultUnlockDevice: wrap(commands.vaultUnlockDevice),
+  trayPanelFit: wrap(commands.trayPanelFit),
+  trayPanelHide: wrap(commands.trayPanelHide),
   updateStatus: commands.updateStatus,
   updateCheckNow: wrap(commands.updateCheckNow),
   updateDismiss: wrap(commands.updateDismiss),

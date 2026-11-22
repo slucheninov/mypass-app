@@ -1,18 +1,18 @@
-//! The theme-following app icon. The running app shows the light or the dark variant of its key
+//! The configurable app icon. The running app shows the light or the dark variant of its key
 //! (`icons/app-light.png`, `icons/app-dark.png`, made by `scripts/make-app-icons.mjs`) for the
-//! effective theme: the Dock tile on macOS (`mypass_platform::AppIcon`), the window and taskbar
+//! chosen icon appearance: the Dock tile on macOS (`mypass_platform::AppIcon`), the window and taskbar
 //! icons on Windows. Finder, Explorer, pinned shortcuts and installers keep the bundle icon, which
 //! is the light variant.
 //!
 //! The decisions are here, as plain functions; `shell_runtime.rs` reads the inputs and applies the
 //! result on the main thread.
 
-use mypass_session::settings::Theme;
+use mypass_session::settings::AppIcon;
 use std::sync::{Mutex, PoisonError};
 
-/// The light variant (light tile, dark key), also the bundle icon.
+/// The light variant (light tile, green key), also the bundle icon.
 pub const LIGHT_PNG: &[u8] = include_bytes!("../icons/app-light.png");
-/// The dark variant (dark tile, light key).
+/// The dark variant (dark tile, green key).
 pub const DARK_PNG: &[u8] = include_bytes!("../icons/app-dark.png");
 
 /// Which of the two icons the app shows.
@@ -32,14 +32,14 @@ impl AppIconVariant {
     }
 }
 
-/// The icon for the theme setting: `Light` and `Dark` decide alone, `System` follows the OS
+/// The icon for the appearance setting: `Light` and `Dark` decide alone, `System` follows the OS
 /// appearance (`system_dark`).
-pub fn app_icon_variant(theme: Theme, system_dark: bool) -> AppIconVariant {
-    match theme {
-        Theme::Light => AppIconVariant::Light,
-        Theme::Dark => AppIconVariant::Dark,
-        Theme::System if system_dark => AppIconVariant::Dark,
-        Theme::System => AppIconVariant::Light,
+pub fn app_icon_variant(setting: AppIcon, system_dark: bool) -> AppIconVariant {
+    match setting {
+        AppIcon::Light => AppIconVariant::Light,
+        AppIcon::Dark => AppIconVariant::Dark,
+        AppIcon::System if system_dark => AppIconVariant::Dark,
+        AppIcon::System => AppIconVariant::Light,
     }
 }
 
@@ -69,20 +69,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn explicit_themes_decide_alone_and_system_follows_the_os() {
+    fn explicit_app_icons_decide_alone_and_system_follows_the_os() {
         for system_dark in [false, true] {
             assert_eq!(
-                app_icon_variant(Theme::Light, system_dark),
+                app_icon_variant(AppIcon::Light, system_dark),
                 AppIconVariant::Light
             );
             assert_eq!(
-                app_icon_variant(Theme::Dark, system_dark),
+                app_icon_variant(AppIcon::Dark, system_dark),
                 AppIconVariant::Dark
             );
         }
-        assert_eq!(app_icon_variant(Theme::System, true), AppIconVariant::Dark);
         assert_eq!(
-            app_icon_variant(Theme::System, false),
+            app_icon_variant(AppIcon::System, true),
+            AppIconVariant::Dark
+        );
+        assert_eq!(
+            app_icon_variant(AppIcon::System, false),
             AppIconVariant::Light
         );
     }

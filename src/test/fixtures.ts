@@ -128,6 +128,8 @@ export function makeEntry(spec: EntrySpec): FixtureEntry {
   const entryType = spec.entryType ?? "login";
   const groupId = spec.groupId ?? PERSONAL_GROUP_ID;
   const favorite = spec.favorite ?? false;
+  const username = spec.username ?? spec.subtitle ?? "";
+  const password = spec.password ?? "";
   const entry: FixtureEntry = {
     modified: spec.modified,
     created: spec.created ?? spec.modified,
@@ -141,6 +143,8 @@ export function makeEntry(spec: EntrySpec): FixtureEntry {
       subtitle: spec.subtitle ?? "",
       entryType,
       favorite,
+      hasUsername: username !== "",
+      hasPassword: password !== "",
       hasTotp: spec.hasTotp ?? false,
       // Like the one predicate: a damaged passkey (`usable: false`) carries no badge.
       hasPasskey: (spec.hasPasskey ?? false) || spec.passkey?.usable === true,
@@ -156,8 +160,8 @@ export function makeEntry(spec: EntrySpec): FixtureEntry {
       groupId,
       title: spec.title,
       favorite,
-      username: spec.username ?? spec.subtitle ?? "",
-      password: spec.password ?? "",
+      username,
+      password,
       urls: spec.urls ?? [],
       uriMatchMode: "registrable-domain",
       totp: "",
@@ -439,6 +443,7 @@ export function defaultSettings(): Settings_Serialize {
   return {
     language: "system",
     theme: "system",
+    appIcon: "system",
     autoLockIdleTimeout: "thirtyMinutes",
     lockOnDeviceSleep: true,
     lockOnScreenLock: true,

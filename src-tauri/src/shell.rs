@@ -9,7 +9,7 @@
 
 use std::sync::Mutex;
 
-use crate::commands::app::MAIN_WINDOW;
+use crate::commands::app::{MAIN_WINDOW, SETTINGS_WINDOW};
 use mypass_platform::{LaunchAtLogin, LoginItemStatus, PlatformError};
 use mypass_session::session::SessionError;
 use mypass_session::settings::{Language, Settings, Theme};
@@ -27,6 +27,8 @@ pub enum Effect {
     RegisterHotkeys,
     /// Apply the colour theme to the native windows.
     ApplyTheme(Theme),
+    /// Refresh the Dock or taskbar icon from its own appearance setting.
+    RefreshAppIcon,
     /// Apply the language. Always followed by [`Effect::RebuildTrayMenu`] so the tray is never
     /// stale. The language may still be `System`; the caller resolves it.
     ApplyLanguage(Language),
@@ -37,7 +39,7 @@ pub enum Effect {
 }
 
 /// The effects needed to move from `old` to `new` settings: only what changed, in a fixed order
-/// (autostart, theme, language, tray visibility, hotkeys, auto-lock timeout).
+/// (autostart, theme, app icon, language, tray visibility, hotkeys, auto-lock timeout).
 pub fn settings_effects(old: &Settings, new: &Settings) -> Vec<Effect> {
     let mut effects = Vec::new();
     if old.launch_at_login != new.launch_at_login {
@@ -45,6 +47,9 @@ pub fn settings_effects(old: &Settings, new: &Settings) -> Vec<Effect> {
     }
     if old.theme != new.theme {
         effects.push(Effect::ApplyTheme(new.theme));
+    }
+    if old.app_icon != new.app_icon {
+        effects.push(Effect::RefreshAppIcon);
     }
     if old.language != new.language {
         effects.push(Effect::ApplyLanguage(new.language));
@@ -60,6 +65,11 @@ pub fn settings_effects(old: &Settings, new: &Settings) -> Vec<Effect> {
         effects.push(Effect::RearmAutoLock);
     }
     effects
+}
+
+/// The native windows that follow the app theme.
+pub fn themed_windows() -> [&'static str; 2] {
+    [MAIN_WINDOW, SETTINGS_WINDOW]
 }
 
 /// The OS name every OS-dependent shell rule is fed with (`close_action`, the hotkey rendering).
@@ -321,6 +331,38 @@ pub struct PanelRect {
 /// Gap kept between the panel and the monitor edge or the tray icon.
 const PANEL_MARGIN: f64 = 8.0;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelAnchor {
+    Top,
+    Bottom,
+}
+
+#[cfg(any(windows, test))]
+pub fn panel_anchor(panel_top: f64, tray_top: f64) -> PanelAnchor {
+    if panel_top < tray_top {
+        PanelAnchor::Bottom
+    } else {
+        PanelAnchor::Top
+    }
+}
+
+pub fn fit_panel_height(requested: f64, work_height: f64) -> f64 {
+    use crate::tray::{MAX_PANEL_HEIGHT, MIN_PANEL_HEIGHT};
+
+    if !requested.is_finite() {
+        return MIN_PANEL_HEIGHT;
+    }
+    let max = (work_height - 2.0 * PANEL_MARGIN).clamp(MIN_PANEL_HEIGHT, MAX_PANEL_HEIGHT);
+    requested.clamp(MIN_PANEL_HEIGHT, max)
+}
+
+pub fn refit_panel_y(top: f64, old_h: f64, new_h: f64, anchor: PanelAnchor) -> f64 {
+    match anchor {
+        PanelAnchor::Top => top,
+        PanelAnchor::Bottom => top + old_h - new_h,
+    }
+}
+
 /// Clamp without the panic of `f64::clamp` on an inverted range (a panel larger than the
 /// monitor pins to the lower bound).
 fn clamp_to(value: f64, low: f64, high: f64) -> f64 {
@@ -500,9 +542,58 @@ mod tests {
     use mypass_session::settings::{IdleTimeout, Language, Settings, Theme};
 
     #[test]
+    fn fit_clamps_to_min_max_and_the_work_area() {
+        assert_eq!(fit_panel_height(10.0, 900.0), 80.0);
+        assert_eq!(fit_panel_height(300.0, 900.0), 300.0);
+        assert_eq!(fit_panel_height(900.0, 900.0), 640.0);
+        assert_eq!(fit_panel_height(500.0, 400.0), 384.0);
+        assert_eq!(fit_panel_height(f64::NAN, 900.0), 80.0);
+        assert_eq!(fit_panel_height(100.0, 50.0), 80.0);
+    }
+
+    #[test]
+    fn refit_keeps_the_anchored_edge() {
+        assert_eq!(refit_panel_y(100.0, 200.0, 300.0, PanelAnchor::Top), 100.0);
+        assert_eq!(
+            refit_panel_y(500.0, 200.0, 300.0, PanelAnchor::Bottom),
+            400.0
+        );
+    }
+
+    #[test]
+    fn panel_anchor_is_bottom_above_the_icon() {
+        assert_eq!(panel_anchor(400.0, 1040.0), PanelAnchor::Bottom);
+        assert_eq!(panel_anchor(30.0, 0.0), PanelAnchor::Top);
+    }
+
+    #[test]
     fn effects_empty_when_nothing_changed() {
         let s = Settings::default();
         assert_eq!(settings_effects(&s, &s.clone()), Vec::<Effect>::new());
+    }
+
+    #[test]
+    fn app_icon_change_refreshes_the_icon_only() {
+        let old = Settings::default();
+        let icon = Settings {
+            app_icon: mypass_session::settings::AppIcon::Dark,
+            ..old.clone()
+        };
+        let theme = Settings {
+            theme: Theme::Dark,
+            ..old.clone()
+        };
+        assert_eq!(settings_effects(&old, &icon), [Effect::RefreshAppIcon]);
+        assert_eq!(
+            settings_effects(&old, &theme),
+            [Effect::ApplyTheme(Theme::Dark)]
+        );
+    }
+
+    #[test]
+    fn themed_windows_never_include_the_tray_panel() {
+        assert_eq!(themed_windows(), ["main", "settings"]);
+        assert!(!themed_windows().contains(&crate::tray::PANEL_WINDOW));
     }
 
     #[test]

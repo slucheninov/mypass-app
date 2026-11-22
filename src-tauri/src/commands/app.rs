@@ -1,6 +1,6 @@
 //! `app_*`: app-level commands (version, activity, windows, reveal in the file manager).
 
-use crate::events::{NewEntryEvent, OpenEntryEvent, SettingsPaneEvent};
+use crate::events::{OpenEntryEvent, SettingsPaneEvent};
 use crate::shell::WindowOps;
 use crate::state::{AppState, EditorDirty, ShellState};
 use mypass_session::dto::AppInfo;
@@ -43,39 +43,6 @@ pub fn open_entry(
     Ok(Some(request.into()))
 }
 
-/// Asks the main window for a new login: while unlocked, records the request
-/// (`AppCore::new_entry_requests`), shows and focuses the main window and returns the nudge to
-/// emit to it. `None` (locked, no vault) records nothing and leaves every window alone.
-pub fn new_entry(
-    core: &AppCore,
-    windows: &dyn WindowOps,
-) -> Result<Option<NewEntryEvent>, ApiError> {
-    if core.vault_status()?.state != SessionState::Unlocked {
-        return Ok(None);
-    }
-    core.new_entry_requests.request(EntryTypeDto::Login);
-    for result in [windows.show(MAIN_WINDOW), windows.focus(MAIN_WINDOW)] {
-        result.map_err(super::internal)?;
-    }
-    Ok(Some(NewEntryEvent))
-}
-
-/// The tray panel's "+": the main window opens the editor for a new login.
-#[tauri::command]
-#[specta::specta]
-pub fn app_new_entry(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    shell: State<'_, ShellState>,
-) -> Result<(), ApiError> {
-    if let Some(event) = new_entry(&state.0, shell.windows.as_ref())? {
-        // A window that is gone is not an error of the request; it takes the request once it
-        // listens again.
-        let _ = event.emit_to(&app, MAIN_WINDOW);
-    }
-    Ok(())
-}
-
 /// Takes the pending new-entry request for the main window (`label`): the entry type, at most
 /// once, and only while unlocked (locked, the request keeps waiting for the unlock within its
 /// TTL). Any other window gets `None` and leaves the request alone.
@@ -108,22 +75,6 @@ pub fn app_info(state: State<'_, AppState>) -> Result<AppInfo, ApiError> {
 #[specta::specta]
 pub fn app_record_activity(state: State<'_, AppState>) -> Result<(), ApiError> {
     state.0.app_record_activity()
-}
-
-#[tauri::command]
-#[specta::specta]
-pub fn app_open_entry(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    shell: State<'_, ShellState>,
-    id: String,
-    edit: bool,
-) -> Result<(), ApiError> {
-    if let Some(event) = open_entry(&state.0, shell.windows.as_ref(), &id, edit)? {
-        // A window that is gone is not an error of the request.
-        let _ = event.emit(&app);
-    }
-    Ok(())
 }
 
 /// Shows and focuses the main window (the tray panel's Open MyPass). The same path as the tray
@@ -225,7 +176,14 @@ pub fn open_settings(app: &AppHandle, pane: Option<&str>) -> Result<(), ApiError
                 .visible(false)
                 .build()
                 .map_err(|e| super::internal(e.to_string()))?;
-            // A new window starts with the bundle icon; Windows shows the theme's one.
+            let handle = app.clone();
+            let themed = window.clone();
+            let _ = app.run_on_main_thread(move || {
+                if let Some(state) = handle.try_state::<AppState>() {
+                    crate::shell_runtime::apply_window_theme(&themed, state.0.settings.get().theme);
+                }
+            });
+            // Apply the selected app icon to the newly created Windows window.
             crate::shell_runtime::refresh_app_icon(app, true);
             window
         }
@@ -308,42 +266,9 @@ mod tests {
     }
 
     #[test]
-    fn new_entry_shows_and_focuses_main_only_while_unlocked() {
+    fn the_main_window_takes_a_request_once() {
         let w = open_world();
-        let windows = FakeWindowOps::default();
-        assert_eq!(new_entry(&w.core, &windows).unwrap(), Some(NewEntryEvent));
-        assert!(w.core.new_entry_requests.is_pending());
-        let calls: Vec<_> = windows
-            .calls()
-            .into_iter()
-            .map(|(op, label, _)| (op, label))
-            .collect();
-        assert_eq!(
-            calls,
-            vec![
-                ("show".to_owned(), "main".to_owned()),
-                ("focus".to_owned(), "main".to_owned())
-            ]
-        );
-
-        let closed = world();
-        let untouched = FakeWindowOps::default();
-        assert_eq!(new_entry(&closed.core, &untouched).unwrap(), None);
-        assert!(untouched.calls().is_empty());
-    }
-
-    #[test]
-    fn a_locked_tray_request_records_nothing() {
-        let w = open_world();
-        w.core.vault_lock().unwrap();
-        assert_eq!(new_entry(&w.core, &FakeWindowOps::default()).unwrap(), None);
-        assert!(!w.core.new_entry_requests.is_pending());
-    }
-
-    #[test]
-    fn the_main_window_takes_the_tray_request_once() {
-        let w = open_world();
-        new_entry(&w.core, &FakeWindowOps::default()).unwrap();
+        w.core.new_entry_requests.request(EntryTypeDto::Login);
         assert_eq!(
             take_new_entry(&w.core, MAIN_WINDOW).unwrap(),
             Some(EntryTypeDto::Login)

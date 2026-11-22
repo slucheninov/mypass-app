@@ -438,6 +438,7 @@ pub trait ShellTarget: Send + Sync {
     fn rebuild_tray_menu(&self);
     fn register_hotkeys(&self);
     fn apply_theme(&self, theme: Theme);
+    fn refresh_app_icon(&self);
 }
 
 /// The real [`EffectRunner`]: maps each effect onto the core or the runtime target.
@@ -467,6 +468,7 @@ impl EffectRunner for ShellEffects {
                 Effect::SetTrayVisible(visible) => self.target.set_tray_visible(visible),
                 Effect::RegisterHotkeys => self.target.register_hotkeys(),
                 Effect::ApplyTheme(theme) => self.target.apply_theme(theme),
+                Effect::RefreshAppIcon => self.target.refresh_app_icon(),
                 // The language lives in the settings, which the tray model reads: the
                 // `RebuildTrayMenu` that always follows is what makes it visible.
                 Effect::ApplyLanguage(_) => {}
@@ -1018,6 +1020,10 @@ mod tests {
         fn apply_theme(&self, theme: Theme) {
             self.calls.lock().unwrap().push(format!("theme {theme:?}"));
         }
+
+        fn refresh_app_icon(&self) {
+            self.calls.lock().unwrap().push("refresh_app_icon".into());
+        }
     }
 
     #[test]
@@ -1060,13 +1066,19 @@ mod tests {
         let effects = ShellEffects::new(Arc::new(w.core.clone()), target.clone());
         effects.run(vec![
             Effect::ApplyTheme(Theme::Dark),
+            Effect::RefreshAppIcon,
             Effect::SetTrayVisible(false),
             Effect::RegisterHotkeys,
             Effect::ApplyLanguage(Language::Ru),
         ]);
         assert_eq!(
             *target.calls.lock().unwrap(),
-            ["theme Dark", "tray_visible false", "register_hotkeys"]
+            [
+                "theme Dark",
+                "refresh_app_icon",
+                "tray_visible false",
+                "register_hotkeys"
+            ]
         );
     }
 

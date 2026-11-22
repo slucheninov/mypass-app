@@ -340,6 +340,8 @@ fn summary(item: &Item<'_>, audit: &Audit) -> EntrySummary {
         subtitle: subtitle(e),
         entry_type: e.entry_type().into(),
         favorite: e.is_favorite(),
+        has_username: e.field("UserName").is_some_and(|value| !value.is_empty()),
+        has_password: e.field("Password").is_some_and(|value| !value.is_empty()),
         has_totp: e.otp_source().is_some(),
         has_passkey: e.has_passkey(),
         attachment_count: count_u32(e.attachments.len()),
@@ -1708,6 +1710,31 @@ mod tests {
             .unwrap()
             .set_custom(crate::fields::GROUP_EMOJI, "\u{1F3E0}");
         assert_eq!(sidebar(&db).groups[0].emoji.as_deref(), Some("\u{1F3E0}"));
+    }
+
+    #[test]
+    fn recent_entries_report_copyable_credentials_independently_of_the_subtitle() {
+        let mut db = fast_database("r");
+        let root = db.root_id();
+        db.add_entry(
+            root,
+            login("password only", "", "synthetic", "https://example.com"),
+            NOW,
+        )
+        .unwrap();
+        db.add_entry(root, login("user only", "octo", "", ""), NOW)
+            .unwrap();
+        db.add_entry(root, entry("neither"), NOW).unwrap();
+        let recent = recent_entries(&db, 5);
+        let by_title = |title| recent.iter().find(|entry| entry.title == title).unwrap();
+
+        assert_eq!(by_title("password only").subtitle, "example.com");
+        assert!(!by_title("password only").has_username);
+        assert!(by_title("password only").has_password);
+        assert!(by_title("user only").has_username);
+        assert!(!by_title("user only").has_password);
+        assert!(!by_title("neither").has_username);
+        assert!(!by_title("neither").has_password);
     }
 
     #[test]

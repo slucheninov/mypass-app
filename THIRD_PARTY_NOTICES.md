@@ -10,6 +10,10 @@ dependency, or re-vendors a file (see `CONTRIBUTING.md`). The Cargo tables are g
 RustCrypto `sha2` and `hmac` enable their upstream `zeroize` features to erase
 intermediate hash state. Versions and licences are unchanged.
 The macOS native host also uses the listed `plist` crate to read app bundle identifiers.
+The macOS platform crate enables `objc2-app-kit`’s `NSAppearance` feature to set individual window appearances.
+
+The desktop tray panel enables Tauri's `macos-private-api` feature for transparency and calls
+the listed `window-vibrancy` crate directly to check whether each window material was applied.
 
 7-Zip is a build tool, not shipped. Windows ZIP packaging and verification currently use
 Python standard-library zipfile/hashlib; no 7-Zip binary or runtime dependency is bundled.

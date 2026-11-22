@@ -1,65 +1,45 @@
 //! `tray_*`: what the tray panel may read, and the rule that keeps it out of the recycle bin.
 //!
-//! The tray panel is a compact, always-at-hand window: it lists the recent items and searches the
-//! live ones, then shows a user name, a password, a one-time code and a website. It has no
-//! business with deleted entries or with any other field, so:
-//!
-//! - it searches through [`tray_search`] (a fixed scope: never the recycle bin, at most
-//!   [`TRAY_SEARCH_LIMIT`] results), never through the general `entry_list`, which takes any
-//!   query including the Deleted category;
-//! - `entry_get`, `entry_reveal`, `entry_copy` and `entry_totp` call [`tray_access`] with the
-//!   label of the calling webview (set by the runtime, not by the page), which refuses an entry in
-//!   the recycle bin and a field the panel never shows when that caller is the tray panel.
+//! The tray panel lists recents and copies fields through `entry_copy`. The clipboard path
+//! restricts the tray to live entries and the three fields its menu offers.
 
-use crate::state::AppState;
-use crate::tray::PANEL_WINDOW;
-use mypass_session::dto::{
-    Category, EntryQuery, EntrySummary, FieldRef, Scope, SortKey, SortOrder,
-};
+use crate::tray::{PanelMaterial, PANEL_WINDOW};
+use mypass_session::dto::FieldRef;
 use mypass_session::{ApiError, AppCore, ErrorCode};
-use tauri::State;
 
-/// A tray search lists at most this many matches; the main window has the full list.
-pub const TRAY_SEARCH_LIMIT: usize = 50;
-
-/// The tray panel's search: the main window's matching (title, user name, websites and the other
-/// visible fields) over every live entry, sorted by title, never the recycle bin. An empty (or
-/// blank) text lists nothing.
-pub fn search(core: &AppCore, text: &str) -> Result<Vec<EntrySummary>, ApiError> {
-    let text = text.trim();
-    if text.is_empty() {
-        // Still refuse a locked session like every other read.
-        core.entry_recent(0)?;
-        return Ok(Vec::new());
+fn panel_caller(label: &str) -> Result<(), ApiError> {
+    if label == PANEL_WINDOW {
+        Ok(())
+    } else {
+        Err(ApiError {
+            code: ErrorCode::InvalidInput,
+            message: "this command is only available to the tray panel".into(),
+        })
     }
-    let mut list = core.entry_list(EntryQuery {
-        scope: Scope::Category {
-            category: Category::All,
-        },
-        search: text.to_owned(),
-        sort: SortKey::Title,
-        order: SortOrder::Ascending,
-    })?;
-    list.retain(|item| !item.in_recycle_bin);
-    list.truncate(TRAY_SEARCH_LIMIT);
-    Ok(list)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn tray_search(
-    state: State<'_, AppState>,
-    query: String,
-) -> Result<Vec<EntrySummary>, ApiError> {
-    search(&state.0, &query)
+pub fn tray_panel_fit(
+    window: tauri::WebviewWindow,
+    height: f64,
+) -> Result<PanelMaterial, ApiError> {
+    panel_caller(window.label())?;
+    crate::shell_runtime::fit_panel(&window, height).map_err(|e| super::internal(e.to_string()))
 }
 
-/// The fields the tray panel shows and copies: the user name, the password, the first website and
-/// the one-time code.
+#[tauri::command]
+#[specta::specta]
+pub fn tray_panel_hide(window: tauri::WebviewWindow) -> Result<(), ApiError> {
+    panel_caller(window.label())?;
+    window.hide().map_err(|e| super::internal(e.to_string()))
+}
+
+/// The fields the tray panel can copy: the user name, password and one-time code.
 pub fn tray_field(field: &FieldRef) -> bool {
     matches!(
         field,
-        FieldRef::Username | FieldRef::Password | FieldRef::Url | FieldRef::Totp
+        FieldRef::Username | FieldRef::Password | FieldRef::Totp
     )
 }
 
@@ -99,53 +79,17 @@ pub fn not_found() -> ApiError {
 mod tests {
     use super::*;
     use crate::commands::app::{MAIN_WINDOW, SETTINGS_WINDOW};
-    use crate::testing::{open_world, world};
+    use crate::testing::open_world;
 
     #[test]
-    fn search_lists_live_matches_by_title_and_never_the_recycle_bin() {
-        let w = open_world();
-        let b = w.login("Bravo mail");
-        let a = w.login("Alpha mail");
-        let deleted = w.login("Charlie mail");
-        w.login("Other");
-        w.core.entry_delete(&deleted).unwrap();
-        assert!(w.core.entry_get(&deleted).unwrap().in_recycle_bin);
-
-        let ids: Vec<_> = search(&w.core, "  mail ")
-            .unwrap()
-            .into_iter()
-            .map(|e| e.id)
-            .collect();
-        assert_eq!(ids, [a, b]);
-        assert!(search(&w.core, "Charlie").unwrap().is_empty());
-    }
-
-    #[test]
-    fn search_of_an_empty_text_lists_nothing() {
-        let w = open_world();
-        w.login("Alpha");
-        assert!(search(&w.core, "").unwrap().is_empty());
-        assert!(search(&w.core, "   ").unwrap().is_empty());
-    }
-
-    #[test]
-    fn search_is_capped() {
-        let w = open_world();
-        for i in 0..(TRAY_SEARCH_LIMIT + 3) {
-            w.login(&format!("Item {i:03}"));
+    fn panel_commands_refuse_other_windows() {
+        assert!(panel_caller(PANEL_WINDOW).is_ok());
+        for label in [MAIN_WINDOW, SETTINGS_WINDOW, "unknown"] {
+            assert_eq!(
+                panel_caller(label).unwrap_err().code,
+                ErrorCode::InvalidInput
+            );
         }
-        let list = search(&w.core, "Item").unwrap();
-        assert_eq!(list.len(), TRAY_SEARCH_LIMIT);
-        assert_eq!(list[0].title, "Item 000");
-    }
-
-    #[test]
-    fn search_refuses_a_locked_or_closed_session() {
-        let w = open_world();
-        w.core.vault_lock().unwrap();
-        assert_eq!(search(&w.core, "x").unwrap_err().code, ErrorCode::Locked);
-        assert_eq!(search(&w.core, "").unwrap_err().code, ErrorCode::Locked);
-        assert!(search(&world().core, "x").is_err());
     }
 
     #[test]
@@ -169,15 +113,11 @@ mod tests {
     fn the_tray_panel_reads_only_the_fields_it_shows() {
         let w = open_world();
         let id = w.login("Live");
-        for field in [
-            FieldRef::Username,
-            FieldRef::Password,
-            FieldRef::Url,
-            FieldRef::Totp,
-        ] {
+        for field in [FieldRef::Username, FieldRef::Password, FieldRef::Totp] {
             tray_access(&w.core, PANEL_WINDOW, &id, Some(&field)).unwrap();
         }
         for field in [
+            FieldRef::Url,
             FieldRef::UrlAt { index: 1 },
             FieldRef::NotesBody,
             FieldRef::CardNumber,

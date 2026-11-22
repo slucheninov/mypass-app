@@ -6,9 +6,6 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 /** Commands */
 export const commands = {
 	appInfo: () => typedError<AppInfo, ApiError>(__TAURI_INVOKE("app_info")),
-	/**  The tray panel's "+": the main window opens the editor for a new login. */
-	appNewEntry: () => typedError<null, ApiError>(__TAURI_INVOKE("app_new_entry")),
-	appOpenEntry: (id: string, edit: boolean) => typedError<null, ApiError>(__TAURI_INVOKE("app_open_entry", { id, edit })),
 	/**  Shows the settings window (General pane). */
 	appOpenSettings: () => typedError<null, ApiError>(__TAURI_INVOKE("app_open_settings")),
 	appQuit: () => typedError<null, ApiError>(__TAURI_INVOKE("app_quit")),
@@ -47,6 +44,8 @@ export const commands = {
 	deviceUnlockConfigure: (password: string | null, touchId: boolean, macPassword: boolean) => typedError<DeviceUnlockStatus_Serialize, ApiError>(__TAURI_INVOKE("device_unlock_configure", { password, touchId, macPassword })),
 	deviceUnlockConsumeExtensionRequest: () => __TAURI_INVOKE<boolean>("device_unlock_consume_extension_request"),
 	updateStatus: () => __TAURI_INVOKE<UpdateStatus_Serialize>("update_status"),
+	trayPanelFit: (height: number | null) => typedError<PanelMaterial, ApiError>(__TAURI_INVOKE("tray_panel_fit", { height })),
+	trayPanelHide: () => typedError<null, ApiError>(__TAURI_INVOKE("tray_panel_hide")),
 	updateCheckNow: () => typedError<UpdateStatus_Serialize, ApiError>(__TAURI_INVOKE("update_check_now")),
 	updateDismiss: () => typedError<null, ApiError>(__TAURI_INVOKE("update_dismiss")),
 	updateOpenRelease: () => typedError<null, ApiError>(__TAURI_INVOKE("update_open_release")),
@@ -129,7 +128,6 @@ export const commands = {
 	syncDisplacedStatus: () => typedError<DisplacedCopies_Serialize, ApiError>(__TAURI_INVOKE("sync_displaced_status")),
 	syncNow: () => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_now")),
 	syncStatus: () => typedError<SecondaryStatus_Serialize, ApiError>(__TAURI_INVOKE("sync_status")),
-	traySearch: (query: string) => typedError<EntrySummary[], ApiError>(__TAURI_INVOKE("tray_search", { query })),
 	vaultCreate: (path: string, password: string, name: string) => typedError<SessionStatus_Serialize, ApiError>(__TAURI_INVOKE("vault_create", { path, password, name })),
 	vaultFindFiles: () => typedError<FoundVaultFileDto[], ApiError>(__TAURI_INVOKE("vault_find_files")),
 	vaultForget: (path: string) => typedError<null, ApiError>(__TAURI_INVOKE("vault_forget", { path })),
@@ -196,6 +194,8 @@ export type ApiError = {
 	code: ErrorCode,
 	message: string,
 };
+
+export type AppIcon = "system" | "light" | "dark";
 
 /**  What the About pane and the unlock screen need to know about the running app. */
 export type AppInfo = {
@@ -740,6 +740,8 @@ export type EntrySummary = {
 	subtitle: string,
 	entryType: EntryTypeDto,
 	favorite: boolean,
+	hasUsername: boolean,
+	hasPassword: boolean,
 	hasTotp: boolean,
 	hasPasskey: boolean,
 	attachmentCount: number,
@@ -1043,6 +1045,9 @@ export type PairingChallengeEvent_Deserialize = PairingChallengeDto | null;
  *  the code the user types into the extension).
  */
 export type PairingChallengeEvent_Serialize = PairingChallengeDto | null;
+
+/**  Whether the panel can leave the webview background transparent. */
+export type PanelMaterial = "native" | "solid";
 
 /**
  *  The passkey of an entry as shown after an explicit click: [`PasskeyMeta`] plus the credential
@@ -1420,6 +1425,7 @@ export type SettingsPatch = SettingsPatch_Serialize | SettingsPatch_Deserialize;
 export type SettingsPatch_Deserialize = {
 	language?: Language | null,
 	theme?: Theme | null,
+	appIcon?: AppIcon | null,
 	autoLockIdleTimeout?: IdleTimeout | null,
 	lockOnDeviceSleep?: boolean | null,
 	lockOnScreenLock?: boolean | null,
@@ -1451,6 +1457,7 @@ export type SettingsPatch_Deserialize = {
 export type SettingsPatch_Serialize = {
 	language?: Language,
 	theme?: Theme,
+	appIcon?: AppIcon,
 	autoLockIdleTimeout?: IdleTimeout,
 	lockOnDeviceSleep?: boolean,
 	lockOnScreenLock?: boolean,
@@ -1473,6 +1480,7 @@ export type SettingsPatch_Serialize = {
 export type Settings_Deserialize = {
 	language?: Language,
 	theme?: Theme,
+	appIcon?: AppIcon,
 	autoLockIdleTimeout?: IdleTimeout,
 	lockOnDeviceSleep?: boolean,
 	lockOnScreenLock?: boolean,
@@ -1504,6 +1512,7 @@ export type Settings_Deserialize = {
 export type Settings_Serialize = {
 	language: Language,
 	theme: Theme,
+	appIcon: AppIcon,
 	autoLockIdleTimeout: IdleTimeout,
 	lockOnDeviceSleep: boolean,
 	lockOnScreenLock: boolean,

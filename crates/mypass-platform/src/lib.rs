@@ -39,6 +39,8 @@ mod launch_at_login;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
+pub use macos::set_window_dark;
+#[cfg(target_os = "macos")]
 mod macos_device_unlock;
 #[cfg(unix)]
 mod macos_host_install;

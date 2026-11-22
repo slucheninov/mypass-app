@@ -11,6 +11,19 @@ afterEach(() => {
 });
 
 describe("settings store", () => {
+  it("the_tray_panel_ignores_the_theme_setting", async () => {
+    const fake = createFakeBackend();
+    fake.state.settings.theme = "dark";
+    fake.state.settings.language = "uk";
+    fake.install();
+    await settings.start({ followTheme: false });
+    expect(document.documentElement.dataset.theme).toBeUndefined();
+    expect(i18n.lang).toBe("uk");
+    await fake.emit("settingsChanged", { ...fake.state.settings, theme: "light" });
+    await vi.waitFor(() => expect(settings.value?.theme).toBe("light"));
+    expect(document.documentElement.dataset.theme).toBeUndefined();
+  });
+
   it("start_loads_the_settings_and_applies_them", async () => {
     const fake = createFakeBackend();
     fake.state.settings.theme = "dark";

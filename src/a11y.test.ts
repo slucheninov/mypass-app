@@ -80,7 +80,7 @@ describe("axe on the real windows", () => {
     }
   });
 
-  it("the_tray_panel_passes_axe_locked_unlocked_and_in_detail", async () => {
+  it("the_tray_panel_passes_axe_locked_unlocked_and_in_actions", async () => {
     const locked = await renderTrayPanel({ session: "locked" });
     await screen.findByLabelText("Master password");
     await expectNoAxeViolations(locked.container);
@@ -88,8 +88,8 @@ describe("axe on the real windows", () => {
     const app = await renderTrayPanel({ session: "unlocked" });
     const user = userEvent.setup();
     await expectNoAxeViolations(app.container);
-    await user.click(await screen.findByRole("button", { name: "GitHub" }));
-    await screen.findByRole("region", { name: "GitHub" });
+    await user.click(await screen.findByRole("menuitem", { name: "GitHub" }));
+    await screen.findByRole("menu", { name: "GitHub" });
     await expectNoAxeViolations(app.container);
   });
 });

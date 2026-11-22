@@ -1,54 +1,97 @@
 <script lang="ts">
-  // One row of the tray panel's menu, drawn like a native menu item: plain text, the same size on
-  // every row, a full-width accent highlight under the pointer or the keyboard focus, and the
-  // row's global shortcut (when one is set) on the right. The shortcut is decoration only: the
-  // accessible name stays the label.
-  let { label, shortcut = "", onclick }: { label: string; shortcut?: string; onclick: () => void } = $props();
+  import Avatar from "../lib/ui/Avatar.svelte";
+  import Icon from "../lib/ui/Icon.svelte";
+  import type { IconName } from "../lib/ui/icons";
+
+  let {
+    key, label, subtitle = "", shortcut = "", icon, avatar = false,
+    chevron = false, active, onclick, onhover,
+  }: {
+    key: string;
+    label: string;
+    subtitle?: string;
+    shortcut?: string;
+    icon?: IconName;
+    avatar?: boolean;
+    chevron?: boolean;
+    active: boolean;
+    onclick: () => void;
+    onhover: () => void;
+  } = $props();
+  const subtitleId = $props.id();
 </script>
 
-<button type="button" class="row" {onclick}>
-  <span class="label">{label}</span>
-  {#if shortcut !== ""}<span class="shortcut" aria-hidden="true">{shortcut}</span>{/if}
+<button
+  type="button"
+  role="menuitem"
+  class="row"
+  aria-label={label}
+  aria-describedby={subtitle ? subtitleId : undefined}
+  aria-haspopup={chevron ? "menu" : undefined}
+  data-menu-key={key}
+  data-active={active ? "" : undefined}
+  {onclick}
+  onfocus={onhover}
+  onpointerenter={onhover}
+>
+  {#if icon}<span class="icon"><Icon name={icon} /></span>{/if}
+  {#if avatar}<Avatar text={label} size={16} />{/if}
+  <span class="labels">
+    <span class="label">{label}</span>
+    {#if subtitle}<span class="subtitle" id={subtitleId}>{subtitle}</span>{/if}
+  </span>
+  {#if shortcut}<span class="shortcut" aria-hidden="true">{shortcut}</span>{/if}
+  {#if chevron}<span class="icon"><Icon name="chevron" size={14} /></span>{/if}
 </button>
 
 <style>
   .row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 12px;
+    gap: 7px;
     width: 100%;
-    min-height: 26px;
-    padding: 3px 10px;
+    height: 24px;
+    padding: 0 9px;
     border: 0;
-    border-radius: var(--radius);
+    border-radius: 4px;
     background: transparent;
-    color: var(--text);
     font: inherit;
-    font-size: var(--font-size-md);
     text-align: left;
     cursor: default;
   }
-  .row:hover,
-  .row:focus-visible {
-    background: var(--accent);
-    color: var(--accent-text);
+  .row[data-active] {
+    background: var(--menu-accent);
+    color: #fff;
     outline: none;
   }
-  .label {
+  .labels {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    gap: 8px;
     min-width: 0;
+  }
+  .label,
+  .subtitle {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .shortcut {
-    flex: none;
-    color: var(--text-2);
-    letter-spacing: 0.04em;
+  .shortcut,
+  .subtitle {
+    color: GrayText;
   }
-  .row:hover .shortcut,
-  .row:focus-visible .shortcut {
+  .subtitle {
+    font-size: 11px;
+  }
+  .shortcut,
+  .icon {
+    flex: none;
+  }
+  .icon {
+    display: inline-flex;
+  }
+  .row[data-active] :is(.shortcut, .subtitle) {
     color: inherit;
-    opacity: 0.85;
   }
 </style>

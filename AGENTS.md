@@ -54,8 +54,8 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `scripts/build-windows.sh`, `scripts/package-windows.sh` | Production x64 MSVC app/sidecar build, deterministic unsigned ZIP and sibling checksum |
 | `scripts/test-extension.sh` | Runs every `extension/tests/*.test.js` suite in its own node process (`--list` prints them); part of the `js` part |
 | `scripts/make-locked-icons.mjs` | Generates the four locked toolbar PNGs from the shipped key icons. A Node test compares the committed pixels with the generator |
-| `scripts/make-app-icons.mjs` | Draws the light and dark app icon (the key only) into `src-tauri/icons/`; `pnpm tauri icon src-tauri/icons/source.png` then makes the bundle icons. A Node test compares the committed pixels with the generator |
-| `scripts/make-tray-icons.mjs` | Generates the tray icons (one upright key): the macOS 18 pt @2x template `src-tauri/icons/tray-template.png` and the green Windows `tray-windows.png`. A Node test compares the committed pixels with the generator |
+| `scripts/make-app-icons.mjs` | Draws the green key from `scripts/key-shape.mjs` on light and dark app tiles into `src-tauri/icons/`; `pnpm tauri icon src-tauri/icons/source.png` then makes the bundle icons. A Node test compares the committed pixels with the generator |
+| `scripts/make-tray-icons.mjs` | Generates the tray icons from `scripts/key-shape.mjs`: the macOS 18 pt @2x template `src-tauri/icons/tray-template.png` and the green Windows `tray-windows.png`. A Node test compares the committed pixels with the generator |
 | `scripts/convert-xcstrings.mjs` | One-time converter of the old app's String Catalogs; its output (`src/lib/i18n/locales/{en,uk,ru}.json`, `src-tauri/resources/macos/{en,uk,ru}.lproj/InfoPlist.strings`) is then the hand-edited source of truth; `de.json` and `de.lproj` were written by hand and never went through it |
 | `.github/` | Workflows (`ci.yml`, `codeql.yml`), Dependabot config, issue forms, pull request template |
 | `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts), the Stage 2b UI walk-through and the Stage 3 browser bridge checklist (M1 to M14) and the Stage 4 passkey checklist (P1 to P13), Stage 5 checks (S1 to S21), cutover (C1 to C10) Stage 6 Windows checks (W1 to W17) and the extension popup and page checks (E1 to E11) |
@@ -321,10 +321,11 @@ change is done.
   and quit rules, login-item reconcile, `WindowOps`), `tray.rs` (menu model and ids), `hotkeys.rs`
   (plan, `HotkeyRegistry` seam), `lifecycle.rs` (platform events into auto-lock, the quit flow,
   the external-change watcher, `ShellEffects`, tray refresh) and `bridge.rs` (the browser bridge: pairing window and unlock-focus rules, start and quit, over the `BridgeEvents` seam; `commands/browser.rs` holds the `browser_*` commands) and `i18n.rs` (the shared catalogs, `{0}`
-  substitution, English fallback) and `navigation.rs` (a webview may navigate only to the app's own origin) and `app_icon.rs` (the light or dark app icon for the theme setting and the OS appearance: the Dock tile through `Platform::app_icon` on macOS, the window icons on Windows (the small one through Tauri, the big taskbar and Alt+Tab one through `mypass_platform::windows::TaskbarIcon`); Finder, Explorer and pinned shortcuts keep the light bundle icon); only `shell_runtime.rs` touches the runtime. Webviews hold
+  substitution, English fallback) and `navigation.rs` (a webview may navigate only to the app's own origin) and `app_icon.rs` (the light or dark app icon selected by `appIcon`, with System following the OS appearance: the Dock tile through `Platform::app_icon` on macOS, the window icons on Windows (the small one through Tauri, the big taskbar and Alt+Tab one through `mypass_platform::windows::TaskbarIcon`); Finder, Explorer and pinned shortcuts keep the light bundle icon); only `shell_runtime.rs` touches the runtime. Webviews hold
   `core:event:default`, so no Rust listener acts on a webview-emittable event: every trigger is
   a Rust call (session observer, platform sink, menu, tray, window or run-event callback). Tray
-  icon and menus are built in Rust only (no `core:tray`/`core:menu` permission). Work for the main
+  icon and its native menu are built in Rust (no `core:tray`/`core:menu` permission). The left-click
+  tray panel follows the OS appearance and uses tray-only commands to resize and hide. Work for the main
   thread is posted with `run_on_main_thread` and never awaited; callbacks that would lock hand the
   lock to the scheduler (`lock_via_scheduler`). The quit flow (first, when the main window reported a dirty
   editor through `app_set_editor_dirty`, the Quit / Cancel prompt `confirm_discard_edits`, where

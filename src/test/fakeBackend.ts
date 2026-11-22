@@ -436,23 +436,6 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       os,
       deviceUnlockAvailable,
     }),
-    // Like Rust: a locked session or a missing entry does nothing; otherwise the main window shows
-    // and `OpenEntryEvent` goes out (the window calls are not modelled).
-    appOpenEntry: ({ id, edit }) => {
-      if (state.session.state !== "unlocked") return null;
-      if (!state.entries.some((e) => e.summary.id === id)) return null;
-      publish("openEntryEvent", { id, edit });
-      return null;
-    },
-    // Like Rust: only an unlocked session records a request for a new login, then nudges the main
-    // window (a payload-free event) to take it.
-    appNewEntry: () => {
-      if (state.session.state === "unlocked") {
-        state.newEntryRequest = "login";
-        publish("newEntryEvent", null);
-      }
-      return null;
-    },
     // Like Rust: taken at most once, and only while unlocked (locked, the request keeps waiting).
     appTakeNewEntry: () => {
       if (state.session.state !== "unlocked") return null;
@@ -614,6 +597,8 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       };
       found.summary.title = found.model.title;
       found.summary.subtitle = found.model.username;
+      found.summary.hasUsername = found.model.username !== "";
+      found.summary.hasPassword = found.model.password !== "";
       found.summary.hasTotp = found.model.totp !== "";
       found.summary.attachmentCount = found.model.attachments.length;
       found.modified += 1;
@@ -796,6 +781,8 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         found.summary.title = title;
         found.summary.favorite = model.favorite;
         found.summary.subtitle = model.username;
+        found.summary.hasUsername = model.username !== "";
+        found.summary.hasPassword = model.password !== "";
         found.summary.groupId = model.groupId;
         // Like `save_entry`: a save into another group moves the entry, out of the bin too.
         found.summary.inRecycleBin = locate(model.groupId)?.node.isRecycleBin ?? false;
@@ -812,6 +799,8 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         entryType: model.entryType,
         groupId: model.groupId,
         favorite: model.favorite,
+        username: model.username,
+        password: model.password,
         hasTotp: model.totp !== "",
         modified: Date.now(),
       });
@@ -1073,22 +1062,13 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       setSession({ ...state.session, state: "unlocked", lockReason: null });
       return structuredClone(state.session);
     },
+    trayPanelFit: () => "native",
+    trayPanelHide: () => null,
     updateStatus: () => structuredClone(state.update),
     updateCheckNow: () => { state.update.status = { state: "upToDate", checkedAt: 1_700_000_000_000 }; publish("updateChanged", structuredClone(state.update)); return structuredClone(state.update); },
     updateDismiss: () => { state.update.banner = null; publish("updateChanged", structuredClone(state.update)); return null; },
     updateOpenRelease: () => null,
     syncStatus: () => structuredClone(state.sync),
-    // The backend's `tray_search`: every live entry, title order, never the recycle bin, at most 50.
-    traySearch: ({ query }) => {
-      requireUnlocked();
-      if (query.trim() === "") return [];
-      const all = listEntries(
-        state.entries,
-        { scope: { kind: "category", category: "all" }, search: query.trim(), sort: "title", order: "ascending" },
-        state.groups,
-      );
-      return all.filter((e) => !e.inRecycleBin).slice(0, 50);
-    },
     syncDisplacedStatus: () => structuredClone(state.displaced),
     syncDisplacedDelete: ({ id }) => {
       if (state.session.state !== "unlocked") throw apiError("locked");

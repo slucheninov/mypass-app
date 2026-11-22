@@ -41,8 +41,6 @@ pub fn commands() -> Commands<tauri::Wry> {
     use commands::{device, platform, settings, sidebar, sync, tray, update, vault};
     collect_commands![
         app::app_info,
-        app::app_new_entry,
-        app::app_open_entry,
         app::app_open_settings,
         app::app_quit,
         app::app_record_activity,
@@ -66,6 +64,8 @@ pub fn commands() -> Commands<tauri::Wry> {
         device::device_unlock_configure,
         device::device_unlock_consume_extension_request,
         update::update_status,
+        tray::tray_panel_fit,
+        tray::tray_panel_hide,
         update::update_check_now,
         update::update_dismiss,
         update::update_open_release,
@@ -119,7 +119,6 @@ pub fn commands() -> Commands<tauri::Wry> {
         sync::sync_displaced_status,
         sync::sync_now,
         sync::sync_status,
-        tray::tray_search,
         vault::vault_create,
         vault::vault_find_files,
         vault::vault_forget,
@@ -297,8 +296,10 @@ mod tests {
         assert_eq!(panel["visible"], false);
         assert_eq!(panel["alwaysOnTop"], true);
         assert_eq!(panel["skipTaskbar"], true);
-        assert_eq!(panel["width"], 340);
-        assert_eq!(panel["height"], 520);
+        assert_eq!(panel["width"], 300);
+        assert_eq!(panel["transparent"], true);
+        assert_eq!(panel["shadow"], true);
+        assert_eq!(conf["app"]["macOSPrivateApi"], true);
     }
 
     pub(super) fn command_names() -> Vec<String> {
@@ -381,7 +382,6 @@ mod tests {
         let snapshot = fs::read_to_string(committed_snapshot()).unwrap();
         for required in [
             "platform_keyboard_layout",
-            "app_open_entry",
             "app_reveal_backups",
             "app_show_main",
             "app_quit",
@@ -556,7 +556,10 @@ mod tests {
                 "opener:allow-open-url",
             ]
         );
-        assert_eq!(sorted("tray-panel"), ["core:event:default"]);
+        assert_eq!(
+            sorted("tray-panel"),
+            ["core:event:default", "core:window:allow-theme"]
+        );
         assert_eq!(
             sorted("settings"),
             [

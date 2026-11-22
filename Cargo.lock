@@ -2740,6 +2740,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "uuid",
+ "window-vibrancy",
  "zeroize",
 ]
 

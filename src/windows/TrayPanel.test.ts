@@ -1,37 +1,38 @@
-import { screen, waitFor, within } from "@testing-library/svelte";
+import { emit, TauriEvent } from "@tauri-apps/api/event";
+import { mockWindows } from "@tauri-apps/api/mocks";
+import { act, screen, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { formatDate } from "../lib/i18n/format";
 import { formatShortcut } from "../lib/shortcuts";
 import { toasts } from "../lib/stores/toasts.svelte";
 import { expectNoAxeViolations } from "../test/axe";
 import { FIXTURE_LOGIN_PASSWORD, FIXTURE_MASTER_PASSWORD, makeEntry } from "../test/fixtures";
 import { calls } from "../test/mainApp";
+import { sourceFiles } from "../test/sourceScan";
 import { renderTrayPanel } from "../test/trayApp";
-import type { FakeBackend } from "../test/fakeBackend";
-import type { EntrySummary } from "../lib/bindings";
-
-const GITHUB_MODIFIED = 1_700_000_300_000;
+import { apiError, type FakeBackend } from "../test/fakeBackend";
 
 async function unlockedTray(prepare?: (fake: FakeBackend) => void) {
   const app = await renderTrayPanel({}, prepare);
-  await screen.findByRole("list", { name: "Recent items" });
+  await screen.findByRole("group", { name: "Recent" });
   return { ...app, user: userEvent.setup() };
 }
 
-/** The names of the menu rows, in order, with `-` for a separator. */
-function menuLayout(): string[] {
-  const menu = screen.getByRole("navigation", { name: "MyPass" });
-  return Array.from(menu.querySelectorAll("button, hr")).map((el) =>
-    el.tagName === "HR" ? "-" : (el.querySelector(".label")?.textContent ?? ""),
-  );
+async function fiveRecents() {
+  return unlockedTray((fake) => {
+    fake.state.entries = fake.state.entries.filter((entry) => entry.summary.title.startsWith("Git"));
+    for (const n of [1, 2, 3, 4]) {
+      fake.state.entries.push(makeEntry({ id: `extra-${n}`, title: `Extra ${n}`, modified: 1_600_000_000_000 + n }));
+    }
+  });
 }
 
-async function openGithub(prepare?: (fake: FakeBackend) => void) {
-  const app = await unlockedTray(prepare);
-  await app.user.click(await screen.findByRole("button", { name: "GitHub" }));
-  const detail = await screen.findByRole("region", { name: "GitHub" });
-  return { ...app, detail };
+const panelSource = sourceFiles(["svelte"]).find((file) => file.path.endsWith("/TrayPanel.svelte"))?.text ?? "";
+
+async function openActions(entry = "GitHub") {
+  const app = await unlockedTray();
+  await app.user.click(await screen.findByRole("menuitem", { name: entry }));
+  return app;
 }
 
 describe("tray panel, locked", () => {
@@ -42,7 +43,7 @@ describe("tray panel, locked", () => {
     await user.click(screen.getByRole("button", { name: "Unlock" }));
     await waitFor(() => expect(calls(fake, "vaultUnlock")).toHaveLength(1));
     expect(calls(fake, "vaultUnlock")[0]?.args).toEqual({ password: FIXTURE_MASTER_PASSWORD });
-    expect(await screen.findByRole("list", { name: "Recent items" })).toBeTruthy();
+    expect(await screen.findByRole("group", { name: "Recent" })).toBeTruthy();
   });
 
   it("a_wrong_password_shows_the_localised_error_and_stays_locked", async () => {
@@ -51,7 +52,7 @@ describe("tray panel, locked", () => {
     await user.type(await screen.findByLabelText("Master password"), "nope");
     await user.click(screen.getByRole("button", { name: "Unlock" }));
     expect((await screen.findByRole("alert")).textContent).toBe("Wrong master password");
-    expect(screen.queryByRole("list", { name: "Recent items" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Recent" })).toBeNull();
   });
 
   it("the_locked_panel_shows_the_main_unlock_card_and_only_settings_and_quit", async () => {
@@ -61,11 +62,11 @@ describe("tray panel, locked", () => {
     expect(screen.getByRole("heading", { name: vault.split("/").pop() })).toBeTruthy();
     expect(screen.getByTestId("vault-status").dataset.status).toBe("connected");
     expect(screen.getByRole("button", { name: "Show password" })).toBeTruthy();
-    expect(menuLayout()).toEqual(["Settings", "Quit"]);
-    expect(screen.queryByRole("button", { name: "Lock" })).toBeNull();
+    expect(screen.getAllByRole("menuitem").map((item) => item.getAttribute("aria-label"))).toEqual(["Settings…", "Quit"]);
+    expect(screen.queryByRole("menuitem", { name: "Lock" })).toBeNull();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Settings" }));
-    await user.click(screen.getByRole("button", { name: "Quit" }));
+    await user.click(screen.getByRole("menuitem", { name: "Settings…" }));
+    await user.click(screen.getByRole("menuitem", { name: "Quit" }));
     await waitFor(() => expect(calls(fake, "appOpenSettings")).toHaveLength(1));
     expect(calls(fake, "appQuit")).toHaveLength(1);
   });
@@ -75,8 +76,8 @@ describe("tray panel, locked", () => {
     expect(await screen.findByText("No vault is open")).toBeTruthy();
     expect(screen.queryByLabelText("Master password")).toBeNull();
     expect(screen.queryByRole("button", { name: "Unlock" })).toBeNull();
-    expect(menuLayout()).toEqual(["Open MyPass", "-", "Settings", "Quit"]);
-    await userEvent.setup().click(screen.getByRole("button", { name: "Open MyPass" }));
+    expect(screen.getAllByRole("menuitem").map((item) => item.getAttribute("aria-label"))).toEqual(["Open MyPass", "Settings…", "Quit"]);
+    await userEvent.setup().click(screen.getByRole("menuitem", { name: "Open MyPass" }));
     await waitFor(() => expect(calls(fake, "appShowMain")).toHaveLength(1));
   });
 
@@ -110,23 +111,27 @@ describe("tray panel, unlocked list", () => {
         f.state.entries.push(makeEntry({ id: `extra-${n}`, title: `Extra ${n}`, modified: 1_600_000_000_000 + n }));
       }
     });
-    const list = screen.getByRole("list", { name: "Recent items" });
-    expect(within(list).getAllByRole("button")).toHaveLength(5);
+    const list = screen.getByRole("group", { name: "Recent" });
+    expect(within(list).getAllByRole("menuitem")).toHaveLength(5);
     expect(calls(fake, "entryRecent")[0]?.args).toEqual({ limit: 5 });
     // Titles only: no username line, no secret.
     expect(list.textContent).not.toContain(FIXTURE_LOGIN_PASSWORD);
   });
 
+  it("the_panel_has_no_search_field", async () => {
+    await unlockedTray();
+    expect(screen.queryByRole("searchbox")).toBeNull();
+  });
+
   it("the_panel_never_fetches_the_general_entry_list", async () => {
     const { fake } = await unlockedTray();
     expect(calls(fake, "entryList")).toHaveLength(0);
-    expect(calls(fake, "traySearch")).toHaveLength(0);
     expect(calls(fake, "sidebarGet")).toHaveLength(0);
   });
 
   it("each_recent_row_shows_the_letter_avatar_title_and_user_name", async () => {
     await unlockedTray();
-    const row = screen.getByRole("button", { name: "GitHub" });
+    const row = screen.getByRole("menuitem", { name: "GitHub" });
     expect(row.querySelector(".avatar")?.textContent).toBe("G");
     expect(row.textContent).toContain("octo");
     expect(row.getAttribute("aria-describedby")).toBeTruthy();
@@ -141,14 +146,94 @@ describe("tray panel, unlocked list", () => {
 
   it("tray_lock_button_calls_vault_lock", async () => {
     const { fake, user } = await unlockedTray();
-    await user.click(screen.getByRole("button", { name: "Lock" }));
+    await user.click(screen.getByRole("menuitem", { name: "Lock" }));
     await waitFor(() => expect(calls(fake, "vaultLock")).toHaveLength(1));
     expect(await screen.findByLabelText("Master password")).toBeTruthy();
   });
 
-  it("the_unlocked_menu_is_open_then_lock_settings_quit", async () => {
-    await unlockedTray();
-    expect(menuLayout()).toEqual(["Open MyPass", "-", "Lock", "Settings", "Quit"]);
+  it("the_unlocked_panel_lists_recents_then_open_lock_settings_quit", async () => {
+    await fiveRecents();
+    const menu = screen.getByRole("menu", { name: "MyPass" });
+    const names = within(menu).getAllByRole("menuitem").map((el) =>
+      el.getAttribute("aria-label"),
+    );
+    expect(names.slice(0, 5)).toEqual(["GitHub", "GitLab", "Extra 4", "Extra 3", "Extra 2"]);
+    expect(names.slice(5)).toEqual(["Open MyPass", "Lock", "Settings…", "Quit"]);
+    expect(screen.getByText("Recent")).toBeTruthy();
+  });
+
+  it.each([
+    ["macos", "⌘,", "⌘Q"],
+    ["windows", "Ctrl+,", "Ctrl+Q"],
+  ])("only real shortcuts are shown on %s", async (os, settingsKey, quitKey) => {
+    await renderTrayPanel({ os }, (fake) => { fake.state.settings.shortcutLock = ""; });
+    expect(screen.getByRole("menuitem", { name: "Lock" }).querySelector(".shortcut")).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Settings…" }).textContent).toContain(settingsKey);
+    expect(screen.getByRole("menuitem", { name: "Quit" }).textContent).toContain(quitKey);
+  });
+
+  it("arrow keys wrap and Enter activates the highlighted row", async () => {
+    const { user, fake } = await fiveRecents();
+    await user.keyboard("{ArrowDown}{ArrowUp}");
+    expect(screen.getByRole("menuitem", { name: "Quit" }).hasAttribute("data-active")).toBe(true);
+    await user.keyboard("{ArrowDown>6/}");
+    expect(screen.getByRole("menuitem", { name: "Open MyPass" }).hasAttribute("data-active")).toBe(true);
+    await user.keyboard("{Enter}");
+    expect(calls(fake, "appShowMain")).toHaveLength(1);
+  });
+
+  it("the highlight clamps within recents when the list shrinks", async () => {
+    const { user, fake } = await fiveRecents();
+    await user.keyboard("{ArrowDown>5/}");
+    fake.state.entries = fake.state.entries.filter((entry) => !entry.summary.id.startsWith("extra-"));
+    await fake.emit("vaultChanged", null);
+    await waitFor(() => expect(screen.queryByRole("menuitem", { name: "Extra 2" })).toBeNull());
+    expect(screen.getByRole("menuitem", { name: "GitLab" }).hasAttribute("data-active")).toBe(true);
+    await user.keyboard("{Enter}");
+    expect(calls(fake, "entryTouch")[0]?.args).toEqual({
+      id: fake.state.entries.find((entry) => entry.summary.title === "GitLab")?.summary.id,
+    });
+  });
+
+  it("Cmd+, opens settings, Cmd+Q quits and Escape hides", async () => {
+    const { user, fake } = await unlockedTray();
+    await user.keyboard("{Meta>},{/Meta}{Meta>}q{/Meta}{Escape}");
+    expect(calls(fake, "appOpenSettings")).toHaveLength(1);
+    expect(calls(fake, "appQuit")).toHaveLength(1);
+    expect(calls(fake, "trayPanelHide")).toHaveLength(1);
+  });
+
+  it("the panel fits its height and applies the returned material", async () => {
+    const { fake } = await unlockedTray((f) => { f.handlers.trayPanelFit = () => "solid"; });
+    await waitFor(() => {
+      expect(calls(fake, "trayPanelFit")[0]?.args.height).toBeGreaterThan(0);
+      expect(document.documentElement.dataset.material).toBe("solid");
+    });
+  });
+
+  it("the panel uses its native window theme and follows native theme changes", async () => {
+    mockWindows("tray-panel");
+    const { fake, unmount } = await renderTrayPanel({
+      plugins: { "plugin:window|theme": () => "dark" },
+    }, (f) => { f.state.settings.theme = "light"; });
+    const root = document.documentElement;
+    try {
+      await waitFor(() => expect(root.dataset.theme).toBe("dark"));
+      await act(() => emit(TauriEvent.WINDOW_THEME_CHANGED, "light"));
+      expect(root.dataset.theme).toBe("light");
+      await act(() => fake.emit("settingsChanged", { ...fake.state.settings, theme: "dark" }));
+      expect(root.dataset.theme).toBe("light");
+    } finally {
+      unmount();
+    }
+    expect(root.dataset.theme).toBeUndefined();
+  });
+
+  it("the panel uses an opaque solid fallback, system font and system accent", () => {
+    expect(panelSource).toMatch(/html\[data-material="solid"\][^{]+\{[^}]*background: Canvas;/);
+    expect(panelSource).toContain("font: 13px system-ui");
+    expect(panelSource).toContain("AccentColor");
+    expect(panelSource).toContain("#0a64d6");
   });
 
   it("the_menu_shows_the_configured_global_shortcuts_beside_open_and_lock", async () => {
@@ -156,45 +241,43 @@ describe("tray panel, unlocked list", () => {
       f.state.settings.shortcutLock = "CommandOrControl+Shift+L";
       f.state.settings.shortcutShow = "";
     });
-    const lock = screen.getByRole("button", { name: "Lock" });
+    const lock = screen.getByRole("menuitem", { name: "Lock" });
     expect(lock.querySelector(".shortcut")?.textContent).toBe(formatShortcut("CommandOrControl+Shift+L", "macos"));
-    expect(screen.getByRole("button", { name: "Open MyPass" }).querySelector(".shortcut")).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Open MyPass" }).querySelector(".shortcut")).toBeNull();
   });
 
   it("tray_settings_and_quit_call_their_commands", async () => {
     const { fake, user } = await unlockedTray();
-    await user.click(screen.getByRole("button", { name: "Settings" }));
-    await user.click(screen.getByRole("button", { name: "Quit" }));
+    await user.click(screen.getByRole("menuitem", { name: "Settings…" }));
+    await user.click(screen.getByRole("menuitem", { name: "Quit" }));
     await waitFor(() => expect(calls(fake, "appOpenSettings")).toHaveLength(1));
     expect(calls(fake, "appQuit")).toHaveLength(1);
   });
 
   it("tray_open_mypass_calls_app_show_main_when_unlocked", async () => {
     const { fake, user } = await unlockedTray();
-    await user.click(screen.getByRole("button", { name: "Open MyPass" }));
+    await user.click(screen.getByRole("menuitem", { name: "Open MyPass" }));
     await waitFor(() => expect(calls(fake, "appShowMain")).toHaveLength(1));
   });
 
-  it("the_header_buttons_open_a_new_login_and_the_main_window", async () => {
+  it("the_update_row_appears_above_open_mypass_and_opens_the_release", async () => {
     const { fake, user } = await unlockedTray();
-    expect(screen.getByRole("heading", { name: "Passwords" })).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "New Login" }));
-    await waitFor(() => expect(calls(fake, "appNewEntry")).toHaveLength(1));
-    await user.click(screen.getByRole("button", { name: "Open main window" }));
-    await waitFor(() => expect(calls(fake, "appShowMain")).toHaveLength(1));
-  });
-
-  it("tray_update_row_slot_mounted_above_footer", async () => {
-    await unlockedTray();
     const slot = screen.getByTestId("tray-update-row");
     expect(slot.textContent).toBe("");
     expect(slot.children).toHaveLength(0);
-    const footerButton = screen.getByRole("button", { name: "Open MyPass" });
+    await fake.emit("updateChanged", {
+      status: { state: "idle" },
+      banner: { version: "10.0.0", url: "https://github.com/release" },
+    });
+    const row = await within(slot).findByRole("menuitem", { name: "MyPass 10.0.0 available…" });
+    await user.click(row);
+    expect(calls(fake, "updateOpenRelease")).toHaveLength(1);
+    const footerButton = screen.getByRole("menuitem", { name: "Open MyPass" });
     expect(slot.compareDocumentPosition(footerButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
 
-describe("tray panel, compact detail", () => {
+describe("tray panel, entry actions", () => {
   it("a_save_state_change_does_not_refetch_the_recents", async () => {
     const { fake } = await unlockedTray();
     expect(calls(fake, "entryRecent")).toHaveLength(1);
@@ -204,204 +287,112 @@ describe("tray panel, compact detail", () => {
     expect(calls(fake, "entryRecent")).toHaveLength(1);
   });
 
-  it("an_open_detail_refreshes_on_vault_changed_and_says_when_the_entry_is_gone", async () => {
-    const { fake, detail } = await openGithub();
-    await within(detail).findByText("octo");
-    const entry = fake.state.entries.find((e) => e.summary.id === "e-github")!;
-    entry.model.username = "renamed";
-    await fake.emit("vaultChanged", null);
-    expect(await within(detail).findByText("renamed")).toBeTruthy();
-    fake.state.entries.splice(fake.state.entries.indexOf(entry), 1);
-    await fake.emit("vaultChanged", null);
-    expect(await screen.findByText("Item not found")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Copy" })).toBeNull();
+  it("clicking_an_entry_replaces_the_list_with_its_actions", async () => {
+    const { fake } = await openActions();
+    const menu = await screen.findByRole("menu", { name: "GitHub" });
+    expect(within(menu).getAllByRole("menuitem").map((row) => row.getAttribute("aria-label")))
+      .toEqual(["Back", "Copy user name", "Copy password", "Copy code"]);
+    expect(screen.queryByText("Recent")).toBeNull();
+    expect(calls(fake, "entryTouch").map((call) => call.args)).toEqual([{ id: "e-github" }]);
   });
 
-  it("tray_click_entry_shows_compact_detail_and_touches_access", async () => {
-    const { fake, detail } = await openGithub();
-    expect(calls(fake, "entryTouch")).toHaveLength(1);
-    expect(calls(fake, "entryTouch")[0]?.args).toEqual({ id: "e-github" });
-    expect(await within(detail).findByText("octo")).toBeTruthy();
+  it("copy_code_shows_only_for_totp_entries", async () => {
+    await openActions("GitLab");
+    await screen.findByRole("menuitem", { name: "Copy password" });
+    expect(screen.queryByRole("menuitem", { name: "Copy code" })).toBeNull();
   });
 
-  it("tray_detail_shows_username_masked_password_website_and_modified", async () => {
-    const { fake, detail } = await openGithub();
-    await within(detail).findByText("octo");
-    const password = within(detail).getByRole("group", { name: "Password" });
-    expect(password.textContent).toContain("••••••••");
-    expect(detail.textContent).not.toContain(FIXTURE_LOGIN_PASSWORD);
-    expect(calls(fake, "entryReveal")).toHaveLength(0);
-    expect(within(detail).getByRole("group", { name: "Website" }).textContent).toContain("https://github.com");
-    expect(within(detail).getByText(`Last modified: ${formatDate(GITHUB_MODIFIED)}`)).toBeTruthy();
-    expect(within(detail).getByRole("heading", { name: "GitHub" })).toBeTruthy();
-    expect(detail.querySelector(".avatar")?.textContent).toBe("G");
-    expect(within(detail).getByRole("button", { name: "Edit" })).toBeTruthy();
-  });
-
-  it("tray_detail_reveal_password_then_back_clears_value", async () => {
-    const { fake, detail, user } = await openGithub();
-    await within(detail).findByText("octo");
-    await user.click(within(within(detail).getByRole("group", { name: "Password" })).getByRole("button", { name: "Reveal" }));
-    expect(await within(detail).findByText(FIXTURE_LOGIN_PASSWORD)).toBeTruthy();
-    expect(calls(fake, "entryReveal")).toHaveLength(1);
-    await user.click(screen.getByRole("button", { name: "Back" }));
-    expect(await screen.findByRole("list", { name: "Recent items" })).toBeTruthy();
-    expect(document.body.textContent).not.toContain(FIXTURE_LOGIN_PASSWORD);
-    // Back to the same entry: masked again.
-    await user.click(screen.getByRole("button", { name: "GitHub" }));
-    const again = await screen.findByRole("region", { name: "GitHub" });
-    await within(again).findByText("octo");
-    expect(again.textContent).not.toContain(FIXTURE_LOGIN_PASSWORD);
-  });
-
-  it("tray_copy_password_calls_entry_copy_and_never_reveal", async () => {
-    const { fake, detail, user } = await openGithub();
-    await within(detail).findByText("octo");
-    await user.click(within(within(detail).getByRole("group", { name: "Password" })).getByRole("button", { name: "Copy" }));
-    await waitFor(() => expect(calls(fake, "entryCopy")).toHaveLength(1));
-    expect(calls(fake, "entryCopy")[0]?.args).toEqual({ id: "e-github", field: { kind: "password" } });
-    expect(calls(fake, "entryReveal")).toHaveLength(0);
-    expect(toasts.items.map((x) => x.kind)).toEqual(["success"]);
-  });
-
-  it("tray_copy_username_calls_entry_copy", async () => {
-    const { fake, detail, user } = await openGithub();
-    await within(detail).findByText("octo");
-    await user.click(within(within(detail).getByRole("group", { name: "Username" })).getByRole("button", { name: "Copy" }));
-    await waitFor(() => expect(calls(fake, "entryCopy")[0]?.args).toEqual({ id: "e-github", field: { kind: "username" } }));
-  });
-
-  it("tray_detail_shows_totp_code_and_ring_only_for_totp_entries", async () => {
-    const { detail, user } = await openGithub();
-    const totp = await within(detail).findByRole("group", { name: "One-time code" });
-    expect(await within(totp).findByText("123 456")).toBeTruthy();
-    expect(within(totp).getByRole("img")).toBeTruthy();
-    expect(within(totp).getByRole("button", { name: "Copy" })).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "Back" }));
-    await user.click(await screen.findByRole("button", { name: "GitLab" }));
-    const gitlab = await screen.findByRole("region", { name: "GitLab" });
-    await within(gitlab).findByText("octo-lab");
-    expect(within(gitlab).queryByRole("group", { name: "One-time code" })).toBeNull();
-    expect(within(gitlab).queryByRole("img")).toBeNull();
-  });
-
-  it("tray_website_is_text_with_copy_never_a_link", async () => {
-    const { fake, detail, user } = await openGithub();
-    await within(detail).findByText("octo");
-    expect(within(detail).queryByRole("link")).toBeNull();
-    await user.click(within(within(detail).getByRole("group", { name: "Website" })).getByRole("button", { name: "Copy" }));
-    await waitFor(() => expect(calls(fake, "entryCopy")[0]?.args).toEqual({ id: "e-github", field: { kind: "url" } }));
-  });
-
-  it.each(["http://example.com", "javascript:alert(1)"])("a_%s_website_is_plain_text_too", async (url) => {
-    const { user } = await unlockedTray((f) => {
-      f.state.entries.push(makeEntry({ id: "odd", title: "Odd", urls: [url], modified: 1_800_000_000_000 }));
+  it.each([
+    { username: "", password: "test-password", action: "Copy password" },
+    { username: "octo", password: "", action: "Copy user name" },
+  ])("shows only $action when the other field is empty", async ({ username, password, action }) => {
+    const { user } = await unlockedTray((fake) => {
+      fake.state.entries = [makeEntry({
+        id: "partial", title: "Partial login", subtitle: "example.com", username, password, modified: 1,
+      })];
     });
-    await user.click(await screen.findByRole("button", { name: "Odd" }));
-    const detail = await screen.findByRole("region", { name: "Odd" });
-    expect(await within(detail).findByText(url)).toBeTruthy();
-    expect(detail.querySelector("a")).toBeNull();
+    await user.click(await screen.findByRole("menuitem", { name: "Partial login" }));
+    const menu = await screen.findByRole("menu", { name: "Partial login" });
+    expect(within(menu).getAllByRole("menuitem").map((row) => row.getAttribute("aria-label")))
+      .toEqual(["Back", action]);
   });
 
-  it("the_detail_renders_only_the_fields_present", async () => {
-    const { user } = await unlockedTray((f) => {
-      f.state.entries.push(makeEntry({ id: "bare", title: "Bare", username: "", password: "", modified: 1_800_000_000_000 }));
-    });
-    await user.click(await screen.findByRole("button", { name: "Bare" }));
-    const detail = await screen.findByRole("region", { name: "Bare" });
-    await within(detail).findByText(/^Last modified:/);
-    for (const name of ["Username", "Password", "Website", "One-time code", "Passkey"]) {
-      expect(within(detail).queryByRole("group", { name })).toBeNull();
+  it.each([
+    ["Copy user name", "username"],
+    ["Copy password", "password"],
+    ["Copy code", "totp"],
+  ])("%s copies through Rust and hides the panel", async (name, kind) => {
+    const { fake, user } = await openActions();
+    await user.click(await screen.findByRole("menuitem", { name }));
+    expect(calls(fake, "entryCopy").map((call) => call.args)).toEqual([{ id: "e-github", field: { kind } }]);
+    await screen.findByRole("group", { name: "Recent" });
+    expect(calls(fake, "trayPanelHide")).toHaveLength(1);
+    for (const command of ["entryGet", "entryReveal", "entryTotp"] as const) {
+      expect(calls(fake, command)).toHaveLength(0);
     }
   });
 
-  it("tray_edit_button_calls_app_open_entry_with_edit_true", async () => {
-    const { fake, detail, user } = await openGithub();
-    await within(detail).findByText("octo");
-    await user.click(within(detail).getByRole("button", { name: "Edit" }));
-    await waitFor(() => expect(calls(fake, "appOpenEntry")).toHaveLength(1));
-    expect(calls(fake, "appOpenEntry")[0]?.args).toEqual({ id: "e-github", edit: true });
-  });
-
-  it("a_passkey_shows_its_creation_date_and_nothing_to_copy", async () => {
-    const created = 1_750_000_000_000;
-    const { user } = await unlockedTray((f) => {
-      f.state.entries.push(
-        makeEntry({
-          id: "pk",
-          title: "Shopify",
-          username: "ann",
-          modified: 1_800_000_000_000,
-          passkey: { relyingParty: "shopify.com", username: "ann", created, usable: true },
-        }),
-      );
+  it("a_copy_finishing_after_blur_does_not_hide_the_reopened_action_view", async () => {
+    const { fake, user } = await openActions();
+    let finish = () => {};
+    const pending = new Promise<null>((resolve) => {
+      finish = () => resolve(null);
     });
-    await user.click(await screen.findByRole("button", { name: "Shopify" }));
-    const detail = await screen.findByRole("region", { name: "Shopify" });
-    const passkey = await within(detail).findByRole("group", { name: "Passkey" });
-    expect(passkey.textContent).toContain(`Created ${formatDate(created)}`);
-    expect(within(passkey).queryByRole("button")).toBeNull();
+    fake.handlers.entryCopy = () => pending;
+    await user.click(await screen.findByRole("menuitem", { name: "Copy password" }));
+    expect(calls(fake, "entryCopy")).toHaveLength(1);
+
+    window.dispatchEvent(new Event("blur"));
+    await user.click(await screen.findByRole("menuitem", { name: "GitHub" }));
+    await screen.findByRole("menu", { name: "GitHub" });
+    await act(async () => {
+      finish();
+      await pending;
+    });
+    expect(screen.getByRole("menu", { name: "GitHub" })).toBeTruthy();
+    expect(calls(fake, "trayPanelHide")).toHaveLength(0);
   });
 
-  it("the_detail_hides_the_menu_and_open_main_window_shows_the_entry", async () => {
-    const { fake, detail, user } = await openGithub();
-    await within(detail).findByText("octo");
-    expect(screen.queryByRole("navigation", { name: "MyPass" })).toBeNull();
-    await user.click(within(detail).getByRole("button", { name: "Open main window" }));
-    await waitFor(() => expect(calls(fake, "appOpenEntry")[0]?.args).toEqual({ id: "e-github", edit: false }));
+  it("a_copy_failure_reports_the_error_and_keeps_the_actions_open", async () => {
+    const { fake, user } = await openActions();
+    fake.handlers.entryCopy = () => { throw apiError("notFound"); };
+    await user.click(await screen.findByRole("menuitem", { name: "Copy password" }));
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.getByRole("menu", { name: "GitHub" })).toBeTruthy();
+    expect(calls(fake, "trayPanelHide")).toHaveLength(0);
   });
 
-  it("tray_back_returns_to_list", async () => {
-    const { user } = await openGithub();
-    await user.click(screen.getByRole("button", { name: "Back" }));
-    expect(await screen.findByRole("list", { name: "Recent items" })).toBeTruthy();
-    expect(screen.queryByRole("region", { name: "GitHub" })).toBeNull();
+  it("right_arrow_opens_and_left_or_escape_goes_back", async () => {
+    const { fake, user } = await unlockedTray();
+    await user.keyboard("{ArrowDown}{ArrowRight}");
+    await screen.findByRole("menu", { name: "GitHub" });
+    await user.keyboard("{ArrowLeft}");
+    await screen.findByRole("group", { name: "Recent" });
+    await user.keyboard("{ArrowRight}");
+    await screen.findByRole("menu", { name: "GitHub" });
+    await user.keyboard("{Escape}");
+    await screen.findByRole("group", { name: "Recent" });
+    expect(calls(fake, "trayPanelHide")).toHaveLength(0);
   });
 
-  it("tray_panel_clears_detail_on_lock_event", async () => {
-    const { fake, detail, user } = await openGithub();
-    await within(detail).findByText("octo");
-    await user.click(within(within(detail).getByRole("group", { name: "Password" })).getByRole("button", { name: "Reveal" }));
-    await within(detail).findByText(FIXTURE_LOGIN_PASSWORD);
+  it("a_lock_closes_the_action_view", async () => {
+    const { fake } = await openActions();
+    await screen.findByRole("menuitem", { name: "Copy password" });
     fake.handlers.vaultLock({});
-    expect(await screen.findByLabelText("Master password")).toBeTruthy();
-    expect(document.body.textContent).not.toContain(FIXTURE_LOGIN_PASSWORD);
-    expect(screen.queryByRole("region", { name: "GitHub" })).toBeNull();
-    // The next unlock starts from the list, not from the old detail.
-    fake.handlers.vaultUnlock({ password: FIXTURE_MASTER_PASSWORD });
-    expect(await screen.findByRole("list", { name: "Recent items" })).toBeTruthy();
+    await screen.findByLabelText("Master password");
+    expect(screen.queryByRole("menuitem", { name: "Copy password" })).toBeNull();
   });
 
-  it("hiding_the_window_hides_the_revealed_password_and_returns_to_the_list", async () => {
-    const { detail, user } = await openGithub();
-    await within(detail).findByText("octo");
-    await user.click(within(within(detail).getByRole("group", { name: "Password" })).getByRole("button", { name: "Reveal" }));
-    await within(detail).findByText(FIXTURE_LOGIN_PASSWORD);
-    Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
-    document.dispatchEvent(new Event("visibilitychange"));
-    try {
-      expect(await screen.findByRole("list", { name: "Recent items" })).toBeTruthy();
-      expect(document.body.textContent).not.toContain(FIXTURE_LOGIN_PASSWORD);
-    } finally {
-      Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
-    }
+  it("a_window_blur_closes_the_action_view", async () => {
+    await openActions();
+    await screen.findByRole("menuitem", { name: "Copy password" });
+    window.dispatchEvent(new Event("blur"));
+    await screen.findByRole("group", { name: "Recent" });
+    expect(screen.queryByRole("menuitem", { name: "Copy password" })).toBeNull();
   });
 });
 
 describe("tray panel, hide without visibilitychange", () => {
-  // The panel is hidden from Rust on blur; WebView2 may not report `hidden` after a plain hide, so
-  // the window `blur` clears the secrets as well.
-  it("a_window_blur_hides_the_revealed_password_and_returns_to_the_list", async () => {
-    const { detail, user } = await openGithub();
-    await within(detail).findByText("octo");
-    await user.click(within(within(detail).getByRole("group", { name: "Password" })).getByRole("button", { name: "Reveal" }));
-    await within(detail).findByText(FIXTURE_LOGIN_PASSWORD);
-    window.dispatchEvent(new Event("blur"));
-    expect(await screen.findByRole("list", { name: "Recent items" })).toBeTruthy();
-    expect(document.body.textContent).not.toContain(FIXTURE_LOGIN_PASSWORD);
-  });
-
   it("a_window_blur_empties_a_half_typed_master_password", async () => {
     const user = userEvent.setup();
     await renderTrayPanel({ session: "locked" });
@@ -412,195 +403,24 @@ describe("tray panel, hide without visibilitychange", () => {
   });
 });
 
-describe("tray panel, search", () => {
-  const results = () => screen.findByRole("list", { name: "Search results" });
-
-  it("typing_filters_by_title_user_name_and_website_through_tray_search", async () => {
-    const { fake, user } = await unlockedTray();
-    const search = screen.getByRole("searchbox", { name: "Search" });
-    await user.type(search, "lab");
-    let list = await results();
-    await waitFor(() => expect(within(list).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["GitLab"]));
-    expect(calls(fake, "traySearch").at(-1)?.args).toEqual({ query: "lab" });
-    expect(calls(fake, "entryList")).toHaveLength(0);
-    await user.clear(search);
-    await user.type(search, "octo");
-    list = await results();
-    await waitFor(() => expect(within(list).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["GitHub", "GitLab"]));
-    await user.clear(search);
-    await user.type(search, "github.com");
-    list = await results();
-    await waitFor(() => expect(within(list).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["GitHub"]));
-  });
-
-  it("no_match_says_no_results_and_escape_returns_to_the_recents", async () => {
-    const { user } = await unlockedTray();
-    const search = screen.getByRole("searchbox", { name: "Search" }) as HTMLInputElement;
-    await user.type(search, "zzz-nothing");
-    expect(await screen.findByText("No results")).toBeTruthy();
-    await user.keyboard("{Escape}");
-    expect(search.value).toBe("");
-    expect(await screen.findByRole("list", { name: "Recent items" })).toBeTruthy();
-  });
-
-  it("enter_opens_the_first_match_and_back_keeps_the_search", async () => {
-    const { user } = await unlockedTray();
-    const search = screen.getByRole("searchbox", { name: "Search" });
-    await user.type(search, "lab");
-    await waitFor(async () => expect(within(await results()).getAllByRole("button")).toHaveLength(1));
-    await user.keyboard("{Enter}");
-    const detail = await screen.findByRole("region", { name: "GitLab" });
-    await within(detail).findByText("octo-lab");
-    await user.click(screen.getByRole("button", { name: "Back" }));
-    expect(((await screen.findByRole("searchbox", { name: "Search" })) as HTMLInputElement).value).toBe("lab");
-  });
-
-  it("hiding_the_window_clears_the_search", async () => {
-    const { user } = await unlockedTray();
-    await user.type(screen.getByRole("searchbox", { name: "Search" }), "lab");
-    await results();
-    window.dispatchEvent(new Event("blur"));
-    expect(await screen.findByRole("list", { name: "Recent items" })).toBeTruthy();
-    expect((screen.getByRole("searchbox", { name: "Search" }) as HTMLInputElement).value).toBe("");
-  });
-
-  it("a_lock_drops_the_search", async () => {
-    const { fake, user } = await unlockedTray();
-    await user.type(screen.getByRole("searchbox", { name: "Search" }), "lab");
-    await results();
-    fake.handlers.vaultLock({});
-    expect(await screen.findByLabelText("Master password")).toBeTruthy();
-    fake.handlers.vaultUnlock({ password: FIXTURE_MASTER_PASSWORD });
-    expect(await screen.findByRole("list", { name: "Recent items" })).toBeTruthy();
-    expect((screen.getByRole("searchbox", { name: "Search" }) as HTMLInputElement).value).toBe("");
-  });
-});
-
-/** Holds every `tray_search` answer until the test releases it, in any order. */
-function holdSearches(fake: FakeBackend) {
-  const real = fake.handlers.traySearch;
-  const held: { query: string; release: (list?: EntrySummary[]) => void }[] = [];
-  fake.handlers.traySearch = (args) =>
-    new Promise<EntrySummary[]>((resolve) => {
-      const query = (args as { query: string }).query;
-      held.push({ query, release: (list) => resolve(list ?? (real(args) as EntrySummary[])) });
-    });
-  return held;
-}
-
-/** The backend switches to another vault without passing through `locked`. */
-async function switchVault(fake: FakeBackend, name = "Other"): Promise<void> {
-  fake.state.session = { ...fake.state.session, vaultPath: `/vaults/${name}.kdbx`, vaultName: name };
-  await fake.emit("sessionChanged", fake.state.session);
-}
-
-const resultNames = (list: HTMLElement) => within(list).getAllByRole("button").map((b) => b.getAttribute("aria-label"));
-
 describe("tray panel, vault switch while unlocked", () => {
-  it("a_switch_closes_the_open_detail_and_drops_the_search", async () => {
-    const { fake, user, detail } = await openGithub();
-    await within(detail).findByText("octo");
-    await switchVault(fake);
-    expect(await screen.findByRole("list", { name: "Recent items" })).toBeTruthy();
-    expect(screen.queryByRole("region", { name: "GitHub" })).toBeNull();
-    const search = screen.getByRole("searchbox", { name: "Search" }) as HTMLInputElement;
-    await user.type(search, "lab");
-    await screen.findByRole("list", { name: "Search results" });
-    await switchVault(fake, "Third");
-    await waitFor(() => expect(search.value).toBe(""));
-    expect(await screen.findByRole("list", { name: "Recent items" })).toBeTruthy();
-    // The new vault's own recents were loaded.
-    expect(calls(fake, "entryRecent").length).toBeGreaterThanOrEqual(3);
-  });
-
-  it("a_search_answer_of_the_old_vault_is_discarded", async () => {
-    const { fake, user } = await unlockedTray();
-    const held = holdSearches(fake);
-    const search = screen.getByRole("searchbox", { name: "Search" });
-    await user.type(search, "git");
-    await waitFor(() => expect(held).toHaveLength(1));
-    await switchVault(fake);
-    await waitFor(() => expect((search as HTMLInputElement).value).toBe(""));
-    await user.type(search, "git");
-    await waitFor(() => expect(held).toHaveLength(2));
-    // The old vault answers late, with its own items: they never appear in the new vault's panel.
-    held[0]!.release([makeEntry({ id: "old-vault", title: "Old vault item", modified: 1_600_000_000_000 }).summary]);
-    await new Promise((r) => setTimeout(r, 20));
-    expect(screen.queryByRole("button", { name: "Old vault item" })).toBeNull();
-    await user.keyboard("{Enter}");
-    expect(screen.queryByRole("region", { name: "Old vault item" })).toBeNull();
-    expect(screen.queryByRole("region", { name: "GitHub" })).toBeNull();
-    held[1]!.release();
-    const list = await screen.findByRole("list", { name: "Search results" });
-    expect(resultNames(list)).toEqual(["GitHub", "GitLab"]);
-  });
-});
-
-describe("tray panel, results belong to the current text", () => {
-  it("enter_during_the_pause_opens_nothing_from_the_previous_text", async () => {
-    const { fake, user } = await unlockedTray();
-    const search = screen.getByRole("searchbox", { name: "Search" });
-    await user.type(search, "git");
-    await waitFor(async () => expect(resultNames(await screen.findByRole("list", { name: "Search results" }))).toEqual(["GitHub", "GitLab"]));
-    const held = holdSearches(fake);
-    await user.clear(search);
-    await user.type(search, "lab");
-    // The earlier results are gone at once, and Enter does not open GitHub (the old first match).
-    expect(screen.queryByRole("list", { name: "Search results" })).toBeNull();
-    await user.keyboard("{Enter}");
-    expect(screen.queryByRole("region", { name: "GitHub" })).toBeNull();
-    expect(calls(fake, "entryTouch")).toHaveLength(0);
-    await waitFor(() => expect(held.length).toBeGreaterThan(0));
-    for (const h of held) h.release();
-    const list = await screen.findByRole("list", { name: "Search results" });
-    expect(resultNames(list)).toEqual(["GitLab"]);
-    await user.keyboard("{Enter}");
-    expect(await screen.findByRole("region", { name: "GitLab" })).toBeTruthy();
-  });
-
-  it("an_earlier_search_answering_last_does_not_replace_the_current_results", async () => {
-    const { fake, user } = await unlockedTray();
-    const held = holdSearches(fake);
-    const search = screen.getByRole("searchbox", { name: "Search" });
-    await user.type(search, "gi");
-    await waitFor(() => expect(held).toHaveLength(1));
-    await user.type(search, "tl");
-    await waitFor(() => expect(held).toHaveLength(2));
-    expect(held.map((h) => h.query)).toEqual(["gi", "gitl"]);
-    held[1]!.release();
-    const list = await screen.findByRole("list", { name: "Search results" });
-    expect(resultNames(list)).toEqual(["GitLab"]);
-    held[0]!.release();
-    await new Promise((r) => setTimeout(r, 20));
-    expect(resultNames(screen.getByRole("list", { name: "Search results" }))).toEqual(["GitLab"]);
-    await user.keyboard("{Enter}");
-    expect(await screen.findByRole("region", { name: "GitLab" })).toBeTruthy();
-  });
-
-  it("a_held_answer_for_an_older_text_is_dropped_even_before_a_newer_search_starts", async () => {
-    const { fake, user } = await unlockedTray();
-    const held = holdSearches(fake);
-    const search = screen.getByRole("searchbox", { name: "Search" });
-    await user.type(search, "git");
-    await waitFor(() => expect(held).toHaveLength(1));
-    // Typing again invalidates; the old answer arrives inside the pause, before the next search.
-    await user.type(search, "l");
-    held[0]!.release();
-    await new Promise((r) => setTimeout(r, 0));
-    expect(screen.queryByRole("list", { name: "Search results" })).toBeNull();
-    await user.keyboard("{Enter}");
-    expect(screen.queryByRole("region", { name: "GitHub" })).toBeNull();
-    expect(calls(fake, "entryTouch")).toHaveLength(0);
+  it("a_switch_closes_the_action_view_and_loads_the_new_recents", async () => {
+    const { fake } = await openActions();
+    await screen.findByRole("menuitem", { name: "Copy password" });
+    fake.state.session = { ...fake.state.session, vaultPath: "/vaults/Other.kdbx", vaultName: "Other" };
+    await fake.emit("sessionChanged", fake.state.session);
+    expect(await screen.findByRole("group", { name: "Recent" })).toBeTruthy();
+    expect(screen.queryByRole("menu", { name: "GitHub" })).toBeNull();
+    expect(calls(fake, "entryRecent").length).toBeGreaterThanOrEqual(2);
   });
 });
 
 describe("tray panel, accessibility and toasts", () => {
-  it("tray_and_import_pass_axe_locked_list_and_detail", async () => {
+  it("tray_list_and_entry_actions_pass_axe", async () => {
     const { container, user } = await unlockedTray();
     await expectNoAxeViolations(container);
-    await user.click(screen.getByRole("button", { name: "GitHub" }));
-    const detail = await screen.findByRole("region", { name: "GitHub" });
-    await within(detail).findByText("123 456");
+    await user.click(screen.getByRole("menuitem", { name: "GitHub" }));
+    await screen.findByRole("menu", { name: "GitHub" });
     await expectNoAxeViolations(container);
   });
 
