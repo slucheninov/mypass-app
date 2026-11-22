@@ -175,7 +175,7 @@ pub fn is_valid_birth_date(text: &str) -> bool {
     else {
         return false;
     };
-    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let leap = (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400);
     let days = match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
@@ -261,7 +261,13 @@ mod tests {
 
     #[test]
     fn birth_dates_must_be_real_iso_dates() {
-        for ok in ["2000-02-29", "1999-12-31", "0001-01-01", "1814-03-09"] {
+        for ok in [
+            "2000-02-29",
+            "2024-02-29",
+            "1999-12-31",
+            "0001-01-01",
+            "1814-03-09",
+        ] {
             assert!(is_valid_birth_date(ok), "{ok}");
         }
         for bad in [
