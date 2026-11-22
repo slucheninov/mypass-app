@@ -935,18 +935,20 @@
     };
   }
 
-  // Whether something of the page covers the spot where `input`'s icon goes: a sticky header the
+  // Whether something of the page covers the spot where `input`'s icon sits: a sticky header the
   // field scrolled under, a cookie bar, a modal backdrop. The icon host is fixed and sits above
   // every z-index, so without this check it is drawn over the header in place of the field
   // (goldcar.es, after scrolling the driver details under the step bar). `hitTest(x, y)` lists the
   // elements at a viewport point, topmost first (elementsFromPoint of the field's own root, so a
   // field in a shadow root is hit-tested there); `isOwn(node)` says which are this script's hosts,
-  // skipped. The spot is clear when the topmost other element is the field, inside it, around it
-  // (its wrapper or the page itself) or inside its visual box. No hit test, no verdict: not covered.
-  function isFieldSpotCovered(input, rect, hitTest, isOwn, fieldBoxElement) {
-    if (typeof hitTest !== 'function' || !rect || rect.width <= 0 || rect.height <= 0) return false;
-    const x = Math.max(rect.left + 1, rect.right - 16);
-    const y = rect.top + rect.height / 2;
+  // skipped. `iconRect` is the placed icon's own box (its host's getBoundingClientRect, after
+  // placement), and its centre is the point tested. The spot is clear when the topmost other
+  // element is the field, inside it, around it (its wrapper or the page itself) or inside its
+  // visual box. No hit test, no verdict: not covered.
+  function isFieldSpotCovered(input, iconRect, hitTest, isOwn, fieldBoxElement) {
+    if (typeof hitTest !== 'function' || !iconRect || iconRect.width <= 0 || iconRect.height <= 0) return false;
+    const x = iconRect.left + iconRect.width / 2;
+    const y = iconRect.top + iconRect.height / 2;
     let hits;
     try {
       hits = hitTest(x, y);
@@ -1534,16 +1536,20 @@
       attachedIcons.forEach((record, input) => {
         const rect = input.getBoundingClientRect();
         const offscreen = rect.bottom < 0 || rect.top > window.innerHeight || rect.width === 0;
-        // A field scrolled under a sticky header is on screen but not visible: its icon would be
-        // drawn over the header (isFieldSpotCovered).
-        const found = offscreen ? null : findFieldBox(input);
-        const covered = !offscreen && isFieldSpotCovered(
-          input, rect, hitTesterFor(input), isOwnHost, found ? found.element : null
-        );
         // important for the same reason as buildIconHost/positionHostToField: a plain
         // assignment here would silently drop the !important flag those set initially.
-        record.host.style.setProperty('display', offscreen || covered ? 'none' : 'block', 'important');
-        if (!offscreen && !covered) placeIconHost(record, input, rect);
+        record.host.style.setProperty('display', offscreen ? 'none' : 'block', 'important');
+        if (offscreen) return;
+        placeIconHost(record, input, rect);
+        if (record.host.style.getPropertyValue('display') === 'none') return; // did not fit
+        // A field scrolled under a sticky header is on screen but not visible: its icon would be
+        // drawn over the header. Hit-test where the icon was really placed (isFieldSpotCovered);
+        // all of this runs in one frame, so a covered icon is never painted.
+        const found = findFieldBox(input);
+        const covered = isFieldSpotCovered(
+          input, record.host.getBoundingClientRect(), hitTesterFor(input), isOwnHost, found ? found.element : null
+        );
+        if (covered) record.host.style.setProperty('display', 'none', 'important');
       });
       positionOpenPanel();
     }

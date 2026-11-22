@@ -139,4 +139,10 @@ test('the inline icon hides while its field is scrolled under a sticky header', 
   // No hit test available, or nothing reported: never hide on a guess.
   assert.equal(isFieldSpotCovered(email, rect, null, isOwn, null), false);
   assert.equal(isFieldSpotCovered(email, rect, () => [], isOwn, null), false);
+  // The point tested is the centre of the icon where it was really placed, not a guess from the
+  // field's box: a header may cover only the icon's end of a wide field.
+  const icon = { left: 900, top: 195, width: 20, height: 20, right: 920, bottom: 215 };
+  const points = [];
+  assert.equal(isFieldSpotCovered(email, icon, (x, y) => { points.push([x, y]); return [header]; }, isOwn, null), true);
+  assert.deepEqual(points, [[910, 205]]);
 });
