@@ -458,6 +458,15 @@ const CURRENT_PASSWORD_HINT = WORD([
   'текущий(?: пароль)?', 'старый(?: пароль)?', 'действующий(?: пароль)?', 'прежний(?: пароль)?',
 ].join('|'));
 
+// A password field that repeats the new password ("confirm password", "repeat password",
+// "password again", a name such as password_confirmation or password2), in the four languages.
+const CONFIRM_PASSWORD_HINT = WORD([
+  'confirm(?:ed|ation)?', 're ?type', 're ?enter', 'repeat(?:ed)?', 'again', 'verify', '(?:password|pass|pwd) ?2',
+  'bestätigen', 'bestätigung', 'wiederholen', 'wiederholung', 'erneut', 'nochmal', 'noch einmal',
+  'повтор(?:іть|ити|но|ення)?', 'підтвердіть', 'підтвердити', 'підтвердження', 'ще раз',
+  'повтор(?:ите|ить|но|ение)?', 'подтвердите', 'подтвердить', 'подтверждение', 'ещё раз', 'еще раз',
+].join('|'));
+
 // Birthday words, used alone (a whole birthday) and as the context of a split day, month or year.
 const BIRTHDAY_WORDS = [
   'birthday', 'birth ?date', 'date of birth', 'dob', 'bday',
@@ -568,6 +577,10 @@ function isCurrentPasswordHint(control) {
   return controlHints(control).some((hint) => CURRENT_PASSWORD_HINT.test(hint));
 }
 
+function isConfirmPasswordHint(control) {
+  return controlHints(control).some((hint) => CONFIRM_PASSWORD_HINT.test(hint));
+}
+
 // Whether a control is really on screen, the way the address autofill decides it
 // (address-form.js `editable`): connected, not under [hidden], [inert] or aria-hidden="true",
 // no ancestor with display:none or opacity 0, visibility "visible", and a box of some size. No
@@ -652,6 +665,7 @@ var mypassFormDetection = {
   isSensitiveFieldHint,
   isSensitivePasswordHint,
   isCurrentPasswordHint,
+  isConfirmPasswordHint,
   isControlShown,
   isEffectivelyDisabled,
   isRegistrationActionText,

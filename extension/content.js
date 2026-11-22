@@ -541,6 +541,25 @@
     input.dispatchEvent(new EventCtor('change', { bubbles: true }));
   }
 
+  // Every password field this script has seen, so a field a show-password toggle turned into
+  // type=text still counts as a password (for the confirm fill and for the save on submit).
+  const seenPasswordFields = new WeakSet();
+  const passwordMemory = { wasPassword: (node) => seenPasswordFields.has(node) };
+
+  function rememberPasswordFields(root) {
+    if (!root || typeof root.querySelectorAll !== 'function') return;
+    for (const node of root.querySelectorAll('input[type="password"]')) seenPasswordFields.add(node);
+  }
+
+  // A generated password goes into the field it was generated for and into the confirm or repeat
+  // field of the same form (registration-form.js `newPasswordTargets`), so the two always match.
+  // Returns the fields written.
+  function fillGeneratedPassword(doc, input, password, setValue, options) {
+    const targets = shared.registrationForm.newPasswordTargets(doc, input, options || passwordMemory);
+    for (const node of targets) setValue(node, password);
+    return targets;
+  }
+
   // Built from DOM nodes rather than an innerHTML string: sites that enforce the
   // require-trusted-types-for 'script' CSP directive throw on any innerHTML assignment,
   // and those are exactly the sites this feature most needs to work on.
@@ -1367,6 +1386,7 @@
     }
 
     function attachIcons() {
+      rememberPasswordFields(document);
       if (!autofillSettingsReady) return;
       pruneDetachedIcons();
       if (!pageAutofillSettings.showFieldIcon) {
@@ -1669,7 +1689,7 @@
               if (requestId !== panelRequestId) return;
               const outcome = classifyGeneratePasswordResponse(genResponse);
               if (outcome.action === 'fill') {
-                setNativeValue(input, outcome.password);
+                fillGeneratedPassword(document, input, outcome.password, setNativeValue);
                 closePanel();
                 return;
               }
@@ -1847,7 +1867,12 @@
         }
         let wrotePassword = false;
         if (passwordInput && message.password) {
-          setNativeValue(passwordInput, message.password);
+          // A generated password also goes into the form's confirm field.
+          if (message.fillTarget === 'newPassword') {
+            fillGeneratedPassword(document, passwordInput, message.password, setNativeValue);
+          } else {
+            setNativeValue(passwordInput, message.password);
+          }
           wrotePassword = true;
         }
         if (message.totp && otpInput) {
@@ -2059,7 +2084,7 @@
     module.exports = {
       scoreUsernameLikeness, findBestUsernameInput, hostnameMatches, fillTargetMatches, scoreOtpLikeness, findOtpField,
       isFieldVisible, findFillableFields, findLoginForm, resolveFillTargets, resolveApplyFillTargets,
-      isNewPasswordCandidate,
+      isNewPasswordCandidate, fillGeneratedPassword,
       isFillTargetUsable,
       detectOtpauthLink, detectOtpauthText, isBase32Secret, detectManualSetupKey,
       decodeQrFromImage, detectQrCandidate,

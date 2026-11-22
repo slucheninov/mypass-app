@@ -136,8 +136,20 @@ var mypassRegistrationForm = (() => {
     return editable(node, isVisible);
   }
 
-  function usablePassword(node, isVisible) {
-    return tagOf(node) === 'INPUT' && typeOf(node) === 'password' && editable(node, isVisible)
+  // A field that takes a password: type=password, a text field marked autocomplete=new-password,
+  // or one the caller remembers as a password (`options.wasPassword`: content.js keeps every field
+  // it saw as type=password, so a field a show-password toggle turned into text still counts).
+  function isPasswordLike(node, options) {
+    if (tagOf(node) !== 'INPUT') return false;
+    const type = typeOf(node);
+    if (type === 'password') return true;
+    if (type !== 'text' && type !== '') return false;
+    if (autocompleteToken(node) === 'new-password') return true;
+    return !!(options && typeof options.wasPassword === 'function' && options.wasPassword(node));
+  }
+
+  function usablePassword(node, isVisible, options) {
+    return isPasswordLike(node, options) && editable(node, isVisible)
       && autocompleteToken(node) !== SENSITIVE && !formDetection.isSensitivePasswordHint(node);
   }
 
@@ -343,6 +355,31 @@ var mypassRegistrationForm = (() => {
     if (passwords.length !== 1) return null;
     // One unhinted password is a login unless the control that submits says "Sign up".
     return signUpAction ? passwords[0] : null;
+  }
+
+  // The fields a password generated for `input` goes into: `input` and the other new-password
+  // fields of its form (its "confirm" or "repeat" field), so the two always match. Grouped like
+  // `find` (the same <form>, or form-less fields under one boundary close together), so another
+  // form on the page is never touched, and a field for the current password never is either: a
+  // current-password `input` gets the value alone. A field is a new-password one when it says so
+  // (autocomplete=new-password, confirm wording) or by its place (form-detection.js
+  // `isNewPasswordCandidate`: both of two unhinted fields, all but the first of three or more).
+  // `options` takes `isVisible` and `wasPassword` as in `find`. Node references only.
+  function newPasswordTargets(doc, input, options) {
+    if (!input) return [];
+    const isVisible = (options && options.isVisible) || formDetection.isControlShown;
+    const entries = [];
+    for (const node of doc.querySelectorAll('input')) {
+      if (node === input || usablePassword(node, isVisible, options)) entries.push({ node, role: 'password' });
+    }
+    if (!entries.some((entry) => entry.node === input)) return [input];
+    assignOwners(entries);
+    const owner = entries.find((entry) => entry.node === input).owner;
+    const group = entries.filter((entry) => entry.owner === owner).map((entry) => entry.node);
+    if (isCurrentPassword(input)) return [input];
+    return group.filter((node) => node === input || (!isCurrentPassword(node)
+      && (autocompleteToken(node) === 'new-password' || formDetection.isConfirmPasswordHint(node)
+        || formDetection.isNewPasswordCandidate(node, group))));
   }
 
   function contains(form, node) {
@@ -660,6 +697,7 @@ var mypassRegistrationForm = (() => {
   return {
     MAX_FIELDS, MAX_LABEL, MAX_VALUE,
     classify, find, formFor, fillableFields, selectionFor, personSelections, fillSelection, capture,
+    newPasswordTargets,
     personProfile, parseIsoDate,
     isSubmitControl, isScriptSubmitControl, isNativeSubmitControl, readableLabel,
   };
