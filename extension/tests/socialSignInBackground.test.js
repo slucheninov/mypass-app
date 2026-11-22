@@ -12,7 +12,8 @@ global.chrome = { runtime: { id: "test", getURL: extensionUrl, onMessage: { addL
 
 const background = require("../background.js");
 const {
-  handleRuntimeMessage, flushSocialSignInQueue, resetActionIconStateForTests,
+  handleRuntimeMessage, flushSocialSignInQueue, queueSocialSignIn, resetActionIconStateForTests,
+  resetSocialSignInStateForTests,
   SOCIAL_SIGN_IN_PENDING_KEY, SOCIAL_SIGN_IN_ENABLED_KEY,
 } = background;
 
@@ -39,6 +40,7 @@ beforeEach(() => {
   chrome.action = { setIcon: async () => {} };
   chrome.storage = { local: area(local), session: area(session) };
   resetActionIconStateForTests();
+  resetSocialSignInStateForTests();
 });
 
 function request(message, sender) {
@@ -148,4 +150,87 @@ test("a page learns only a method recorded on its own exact host", async () => {
   replies = [{ type: "socialSignIn", enabled: true, provider: "google", host: "accounts.shop.example" }];
   const reply = await request({ type: "getSocialSignIn", url: sender.url }, popup);
   assert.equal(reply.provider, "google");
+});
+
+// ---- the pending queue: one promise chain, exact removal, lock transitions -----------------
+// Storage whose callbacks land on a later turn, like chrome.storage: an unserialized
+// read-modify-write would lose records here.
+function asyncArea(store) {
+  const later = (fn) => setTimeout(fn, 0);
+  return {
+    get: (keys, callback) => {
+      const list = Array.isArray(keys) ? keys : [keys];
+      const snapshot = structuredClone(Object.fromEntries(list.filter((k) => k in store).map((k) => [k, store[k]])));
+      later(() => callback(snapshot));
+    },
+    set: (value, callback) => later(() => { Object.assign(store, structuredClone(value)); callback && callback(); }),
+    remove: (keys, callback) => later(() => { for (const k of [].concat(keys)) delete store[k]; callback && callback(); }),
+  };
+}
+
+test("concurrent clicks while locked are all queued", async () => {
+  chrome.storage.session = asyncArea(session);
+  replies = Array.from({ length: 6 }, () => ({ type: "locked" }));
+  const replied = await Promise.all([1, 2, 3, 4, 5, 6].map((tab) => {
+    const sender = page(`https://site${tab}.example/login`, { tab: { id: tab } });
+    return request({ type: "recordSocialSignIn", pageUrl: sender.url, provider: "github", source: "click" }, sender);
+  }));
+  assert.deepEqual(replied.map((r) => r.type), Array(6).fill("queued"));
+  assert.deepEqual(Object.keys(session[SOCIAL_SIGN_IN_PENDING_KEY]).sort(),
+    [1, 2, 3, 4, 5, 6].map((tab) => `${tab}|https://site${tab}.example`));
+});
+
+test("a flush removes only the records it delivered", async () => {
+  chrome.storage.session = asyncArea(session);
+  const now = Date.now();
+  session[SOCIAL_SIGN_IN_PENDING_KEY] = {
+    "1|https://a.example": { pageUrl: "https://a.example/", provider: "google", at: now - 1000, source: "click" },
+    "2|https://b.example": { pageUrl: "https://b.example/", provider: "apple", at: now - 1000, source: "click" },
+  };
+  // The app answers slowly; meanwhile tab 1 clicks again (another provider) and tab 3 clicks.
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  chrome.runtime.sendNativeMessage = (_, message, callback) => {
+    nativeCalls.push(message);
+    gate.then(() => callback(message.pageUrl === "https://b.example/" ? { type: "error", message: "x" } : { type: "socialSignIn", enabled: true }));
+  };
+  const flushing = flushSocialSignInQueue();
+  await settle(); await settle(); await settle();
+  await queueSocialSignIn(1, "https://a.example/again", "github", "click");
+  await queueSocialSignIn(3, "https://c.example/", "facebook", "frame");
+  release();
+  await flushing;
+  const left = session[SOCIAL_SIGN_IN_PENDING_KEY];
+  assert.deepEqual(Object.keys(left).sort(), ["1|https://a.example", "2|https://b.example", "3|https://c.example"]);
+  assert.equal(left["1|https://a.example"].provider, "github", "the newer click of tab 1 survives the flush of the older one");
+  assert.equal(left["2|https://b.example"].provider, "apple", "the record the app did not take stays");
+  assert.deepEqual(nativeCalls.map((m) => m.pageUrl).sort(), ["https://a.example/", "https://b.example/"]);
+});
+
+test("a lock after an unlock clears the queue; a first locked answer keeps it", async () => {
+  const now = Date.now();
+  const kept = { "1|https://a.example": { pageUrl: "https://a.example/", provider: "google", at: now - 1000, source: "click" } };
+  session[SOCIAL_SIGN_IN_PENDING_KEY] = structuredClone(kept);
+  // The service worker restarted while the vault was locked: the queue survives.
+  replies = [{ type: "locked" }];
+  await request({ type: "getSocialSignIn", url: "https://a.example/" }, popup);
+  await settle();
+  assert.deepEqual(session[SOCIAL_SIGN_IN_PENDING_KEY], kept);
+
+  // Unlocked, then locked again without a flush getting through: the queue is dropped, so a
+  // later unlock (possibly of another vault) never replays it.
+  replies = [{ type: "unlocked" }, { type: "locked" }];
+  await request({ type: "unlockWithPassword", password: "x" }, popup);
+  await settle(); await settle();
+  assert.equal(SOCIAL_SIGN_IN_PENDING_KEY in session, false);
+});
+
+test("queue actions per lock change", () => {
+  const { queueActionForLockChange } = require("../shared/social-sign-in.js");
+  assert.equal(queueActionForLockChange(null, "unlocked"), "flush");
+  assert.equal(queueActionForLockChange("locked", "unlocked"), "flush");
+  assert.equal(queueActionForLockChange("unlocked", "unlocked"), "keep");
+  assert.equal(queueActionForLockChange(null, "locked"), "keep");
+  assert.equal(queueActionForLockChange("locked", "locked"), "keep");
+  assert.equal(queueActionForLockChange("unlocked", "locked"), "clear");
 });

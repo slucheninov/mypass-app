@@ -378,6 +378,21 @@ var mypassSocialSignIn = (function () {
     return next;
   }
 
+  // Whether two pending records are the same click (a newer click of the tab and site is not).
+  function samePending(a, b) {
+    return !!a && !!b && a.pageUrl === b.pageUrl && a.provider === b.provider && a.at === b.at
+      && a.source === b.source;
+  }
+
+  // What a lock state change (`locked` / `unlocked`, `null` before the first answer since the
+  // service worker started) does to the pending queue: an unlock flushes it, a lock clears it,
+  // anything else keeps it. The bridge exposes no vault identity, so a lock ends the queue's life.
+  function queueActionForLockChange(previous, next) {
+    if (next === 'unlocked' && previous !== 'unlocked') return 'flush';
+    if (next === 'locked' && previous === 'unlocked') return 'clear';
+    return 'keep';
+  }
+
   return {
     PROVIDERS: PROVIDERS,
     PROVIDER_NAMES: PROVIDER_NAMES,
@@ -404,7 +419,9 @@ var mypassSocialSignIn = (function () {
     placeHighlight: placeHighlight,
     pendingKey: pendingKey,
     prunePending: prunePending,
-    addPending: addPending
+    addPending: addPending,
+    samePending: samePending,
+    queueActionForLockChange: queueActionForLockChange
   };
 })();
 

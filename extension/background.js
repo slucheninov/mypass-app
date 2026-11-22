@@ -149,8 +149,9 @@ function sendNativeMessage(message) {
       }
       const state = message.type === "lockVault" && response.type === "ok"
         ? "locked" : iconStateForResponse(response);
-      // The vault became reachable: send the social sign-in clicks kept while it was locked.
-      if (state === "unlocked" && lastActionIcon !== "unlocked") void flushSocialSignInQueue();
+      // Locked to unlocked sends the social sign-in clicks kept while locked; unlocked to locked
+      // drops them (see noteSocialSignInLockState).
+      noteSocialSignInLockState(state);
       void applyActionIcon(state);
       resolve(response);
     });
@@ -1313,9 +1314,22 @@ function sessionRemoveKey(key) {
 // storage (one record per tab and site, dropped after ten minutes) and sent once a response shows
 // the vault unlocked. Every socialSignIn reply mirrors the app's "Remember social sign-in" setting
 // into storage.local, where content scripts read it before they record or draw anything.
+//
+// Every read and write of the queue runs on one promise chain, so concurrent clicks, a flush and a
+// clear never lose or clobber each other's records; a flush sends outside the chain and then
+// removes exactly the records it delivered (same key, same click time), keeping any that arrived
+// or changed meanwhile and any the app did not take.
+//
+// Which vault a queued click lands in: the bridge exposes no vault identity and reports no vault
+// switch, so the queue lives only across one locked spell. Locked to unlocked (or a first unlocked
+// answer after a service worker restart) flushes it; unlocked to locked clears it, so a click kept
+// before a lock is never replayed into whatever is unlocked next. Residual: a vault switched
+// inside one locked spell (lock A, open and unlock B) receives the clicks made while locked.
 const SOCIAL_SIGN_IN_PENDING_KEY = "socialSignInPending";
 const SOCIAL_SIGN_IN_ENABLED_KEY = "socialSignInEnabled";
 let socialSignInFlush = null;
+let socialSignInQueueChain = Promise.resolve();
+let socialSignInLockState = null;
 
 function noteSocialSignInSetting(response) {
   if (!response || response.type !== "socialSignIn" || typeof response.enabled !== "boolean") return Promise.resolve();
@@ -1325,34 +1339,72 @@ function noteSocialSignInSetting(response) {
   });
 }
 
-async function queueSocialSignIn(tabId, pageUrl, provider, source) {
-  const records = await sessionGetValue(SOCIAL_SIGN_IN_PENDING_KEY);
-  await sessionSetValue(SOCIAL_SIGN_IN_PENDING_KEY, socialSignIn.addPending(records, tabId, pageUrl, provider, Date.now(), source));
+// Runs `step` after every queue step queued before it; a failed step never stalls the chain.
+function withSocialSignInQueue(step) {
+  const run = socialSignInQueueChain.then(step);
+  socialSignInQueueChain = run.catch(() => {});
+  return run;
+}
+
+function writeSocialSignInQueue(records) {
+  return Object.keys(records).length
+    ? sessionSetValue(SOCIAL_SIGN_IN_PENDING_KEY, records)
+    : sessionRemoveKey(SOCIAL_SIGN_IN_PENDING_KEY);
+}
+
+function queueSocialSignIn(tabId, pageUrl, provider, source) {
+  return withSocialSignInQueue(async () => {
+    const records = await sessionGetValue(SOCIAL_SIGN_IN_PENDING_KEY);
+    await writeSocialSignInQueue(socialSignIn.addPending(records, tabId, pageUrl, provider, Date.now(), source));
+  });
+}
+
+function clearSocialSignInQueue() {
+  return withSocialSignInQueue(() => sessionRemoveKey(SOCIAL_SIGN_IN_PENDING_KEY));
+}
+
+function noteSocialSignInLockState(state) {
+  if (state !== "locked" && state !== "unlocked") return;
+  const action = socialSignIn.queueActionForLockChange(socialSignInLockState, state);
+  socialSignInLockState = state;
+  if (action === "flush") void flushSocialSignInQueue();
+  else if (action === "clear") void clearSocialSignInQueue();
 }
 
 function flushSocialSignInQueue() {
   if (socialSignInFlush) return socialSignInFlush;
   socialSignInFlush = (async () => {
-    const live = socialSignIn.prunePending(await sessionGetValue(SOCIAL_SIGN_IN_PENDING_KEY), Date.now());
-    const keys = Object.keys(live);
-    if (keys.length === 0) {
-      await sessionRemoveKey(SOCIAL_SIGN_IN_PENDING_KEY);
-      return;
-    }
-    const kept = {};
-    for (const key of keys) {
+    const live = await withSocialSignInQueue(async () => {
+      const pruned = socialSignIn.prunePending(await sessionGetValue(SOCIAL_SIGN_IN_PENDING_KEY), Date.now());
+      await writeSocialSignInQueue(pruned);
+      return pruned;
+    });
+    const delivered = {};
+    for (const key of Object.keys(live)) {
       const record = live[key];
       const response = await sendNativeMessageWithPairing({
         type: "recordSocialSignIn", pageUrl: record.pageUrl, provider: record.provider, source: record.source
       });
       await noteSocialSignInSetting(response);
-      // Locked again (or the app went away mid-flush): keep it for the next unlock.
-      if (response && (response.type === "locked" || response.type === "error")) kept[key] = record;
+      // Locked again or the app went away mid-flush: the record stays queued.
+      if (response && response.type !== "locked" && response.type !== "error") delivered[key] = record;
     }
-    if (Object.keys(kept).length) await sessionSetValue(SOCIAL_SIGN_IN_PENDING_KEY, kept);
-    else await sessionRemoveKey(SOCIAL_SIGN_IN_PENDING_KEY);
+    if (Object.keys(delivered).length === 0) return;
+    await withSocialSignInQueue(async () => {
+      const current = socialSignIn.prunePending(await sessionGetValue(SOCIAL_SIGN_IN_PENDING_KEY), Date.now());
+      for (const key of Object.keys(delivered)) {
+        if (socialSignIn.samePending(current[key], delivered[key])) delete current[key];
+      }
+      await writeSocialSignInQueue(current);
+    });
   })().catch(() => {}).finally(() => { socialSignInFlush = null; });
   return socialSignInFlush;
+}
+
+function resetSocialSignInStateForTests() {
+  socialSignInFlush = null;
+  socialSignInQueueChain = Promise.resolve();
+  socialSignInLockState = null;
 }
 
 // The page a content script speaks for: its own top frame, https, and the url it names is that
@@ -2363,6 +2415,8 @@ if (typeof module !== "undefined") {
     handleRuntimeMessage,
     noteFilledCredential,
     flushSocialSignInQueue,
+    queueSocialSignIn,
+    resetSocialSignInStateForTests,
     SOCIAL_SIGN_IN_PENDING_KEY,
     SOCIAL_SIGN_IN_ENABLED_KEY,
     hostnameMatches: urlMatch.hostnameMatches,

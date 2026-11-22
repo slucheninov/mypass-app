@@ -404,7 +404,10 @@ change is done.
   or overrides that limit. With `rememberSocialSignIn` off both answer
   `enabled: false` and nothing is written. The extension (`shared/social-sign-in.js`) records only
   trusted clicks in the https top frame, keeps clicks made while locked in `chrome.storage.session`
-  for ten minutes and sends them after unlock, and draws the remembered button's ring in a closed
+  for ten minutes and sends them after unlock (every queue read and write runs on one promise
+  chain; a flush removes only what it delivered; the bridge exposes no vault identity, so an
+  unlocked-to-locked change clears the queue and only a vault switched within one locked spell
+  can receive its clicks), and draws the remembered button's ring in a closed
   shadow root under `<html>`, only on exactly the recorded host (the service worker strips any
   other method from a page's lookup; the popup still shows it).
   - **Residual risk (owner-accepted).** The page owns the DOM, so the ring is observable: the same
