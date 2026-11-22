@@ -560,9 +560,30 @@
     return targets;
   }
 
-  // Turns the page's events into "the user submitted a sign-up form" and calls
-  // `propose(node, submitter)` for it; the caller then captures the form (the password is read
-  // and sent only from there, so never on a fill or a keystroke). Three ways in, each a trusted
+  // What a sign-up submit would save, read at the moment of the submit: `{ captured, watch }`,
+  // where `captured` is registration-form.js `capture` (the login and the form's other values)
+  // and `watch` the nodes whose disappearance shows the submit worked (the password fields and
+  // the <form> element, if any). Null when `node` is in no sign-up form with a new password.
+  // `options` are `formFor`'s (wasPassword, isVisible).
+  function snapshotRegistration(doc, node, submitter, options) {
+    const formOptions = { ...(options || {}) };
+    if (submitter) formOptions.submitter = submitter;
+    const form = shared.registrationForm.formFor(doc, node, formOptions);
+    if (!form || !form.newPassword) return null;
+    const captured = shared.registrationForm.capture(form);
+    if (!captured) return null;
+    const watch = (form.passwords && form.passwords.length ? form.passwords : [form.newPassword]).slice();
+    if (form.owner && form.owner.nodeType === 1) watch.push(form.owner);
+    return { captured, watch };
+  }
+
+  // How long a submit waits for the page to show it worked, and how often it looks.
+  const SUBMIT_EVIDENCE_MS = 5000;
+  const SUBMIT_POLL_MS = 250;
+
+  // Turns the page's events into "the user submitted a sign-up form, and it worked" and calls
+  // `propose(captured, url)` for it (the password is read only on a trusted submit, and sent only
+  // from `propose`, so never on a fill or a keystroke). The submit-like actions, each a trusted
   // user action (`isUserSubmit`):
   //   - the `submit` event of a <form> (fires only after the browser's validation passed);
   //   - a click on a script-driven "Sign up" control (no form, or not a submit control), and a
@@ -572,15 +593,64 @@
   //     event, which is the one that counts;
   //   - Enter in a field: a form-less group never submits natively, so Enter is its submit; in a
   //     <form> it counts only when no `submit` followed and the page took the key itself.
-  // A click or Enter that the browser's validation stopped (nothing submitted, nothing
-  // cancelled) asks nothing. Duplicates are harmless: requestSavePrompt drops a repeat.
-  function createRegistrationSubmitWatcher({ isUserSubmit: isUser, defer, propose }) {
-    let submits = 0;
+  // Each takes a `snapshot` at once (the values as submitted: a success view may clear them), but
+  // a snapshot is proposed only on evidence that the page acted on the submit within
+  // SUBMIT_EVIDENCE_MS: the URL changed (a navigation, pushState/replaceState, popstate or
+  // hashchange; a content script cannot hook the page's history calls, so `getUrl` is compared on
+  // every poll and `onUrlChange` checks at once), the page is being left (`onPageHide`), or a
+  // watched node (a password field, the <form>) was detached or hidden (`isShown`). A form that
+  // stays as it was at an unchanged URL only showed validation errors: the snapshot is dropped.
+  // A native submit the page does not cancel navigates, so it is proposed right away, before the
+  // page unloads. A click or Enter that the browser's validation stopped asks nothing. A newer
+  // snapshot of the same form replaces the pending one.
+  function createRegistrationSubmitWatcher(deps) {
+    const { isUserSubmit: isUser, defer, snapshot, propose, getUrl, isShown, setTimer, clearTimer } = deps;
     const NOT_TEXT = new Set(['button', 'submit', 'image', 'reset', 'checkbox', 'radio', 'file', 'range', 'color']);
+    const pending = new Set();
+    let submits = 0;
+
+    function settle(entry, accept) {
+      if (!pending.delete(entry)) return;
+      if (entry.timer !== null) clearTimer(entry.timer);
+      entry.timer = null;
+      if (accept) propose(entry.taken.captured, entry.url);
+    }
+    function worked(entry) {
+      if (getUrl() !== entry.url) return true;
+      return entry.taken.watch.some((node) => !node || node.isConnected === false || !isShown(node));
+    }
+    function poll(entry) {
+      entry.timer = null;
+      if (!pending.has(entry)) return;
+      if (worked(entry)) {
+        settle(entry, true);
+        return;
+      }
+      entry.waited += SUBMIT_POLL_MS;
+      if (entry.waited >= SUBMIT_EVIDENCE_MS) {
+        settle(entry, false);
+        return;
+      }
+      entry.timer = setTimer(() => poll(entry), SUBMIT_POLL_MS);
+    }
+    function hold(taken) {
+      if (!taken) return null;
+      for (const other of Array.from(pending)) {
+        if (other.taken.watch[0] === taken.watch[0]) settle(other, false);
+      }
+      const entry = { taken, url: getUrl(), waited: 0, timer: null };
+      pending.add(entry);
+      entry.timer = setTimer(() => poll(entry), SUBMIT_POLL_MS);
+      return entry;
+    }
     function onSubmit(event) {
       submits += 1;
       if (!isUser(event)) return;
-      propose(event.target, event.submitter || null);
+      const entry = hold(snapshot(event.target, event.submitter || null));
+      if (!entry) return;
+      defer(() => {
+        if (!event.defaultPrevented) settle(entry, true);
+      });
     }
     function onClick(event) {
       if (!isUser(event)) return;
@@ -588,13 +658,15 @@
         ? event.target.closest('button, input[type="submit"], input[type="button"], input[type="image"], [role="button"]') : null;
       if (!control) return;
       if (shared.registrationForm.isScriptSubmitControl(control)) {
-        propose(control, control);
+        hold(snapshot(control, control));
         return;
       }
       if (!shared.registrationForm.isNativeSubmitControl(control)) return;
       const before = submits;
+      const taken = snapshot(control, control);
+      if (!taken) return;
       defer(() => {
-        if (submits === before && event.defaultPrevented) propose(control, control);
+        if (submits === before && event.defaultPrevented) hold(taken);
       });
     }
     function onKeydown(event) {
@@ -603,13 +675,23 @@
       if (!field || field.tagName !== 'INPUT') return;
       if (NOT_TEXT.has(String(field.getAttribute('type') || '').toLowerCase())) return;
       const before = submits;
+      const taken = snapshot(field, null);
+      if (!taken) return;
       defer(() => {
         if (submits !== before) return;
         if (field.form && !event.defaultPrevented) return;
-        propose(field, null);
+        hold(taken);
       });
     }
-    return { onSubmit, onClick, onKeydown };
+    function onUrlChange() {
+      for (const entry of Array.from(pending)) {
+        if (worked(entry)) settle(entry, true);
+      }
+    }
+    function onPageHide() {
+      for (const entry of Array.from(pending)) settle(entry, true);
+    }
+    return { onSubmit, onClick, onKeydown, onUrlChange, onPageHide };
   }
 
   // A short note after a generated password went into a sign-up form: MyPass will offer to save
@@ -1843,26 +1925,34 @@
     }
 
     // A user's submit of a registration form asks to save the new login with the form's other
-    // values. A <form> counts on its native `submit` event, which the browser fires only after its
-    // constraint validation passed; a click on a script-driven "Sign up" control (not a native
-    // submit button of a form) is the fallback for forms that never submit natively. Capture
-    // phase, so a page that stops the event or swaps the form on submit is still seen. A locked
+    // values, once the page showed the submit worked (createRegistrationSubmitWatcher). Capture
+    // phase, so a page that stops the event or swaps the form on submit is still seen. The login
+    // is saved for the page the form was submitted on, not the one the app moved to. A locked
     // vault is not a reason to stay quiet: the prompt itself asks to unlock before it saves.
-    function onRegistrationSubmit(node, submitter) {
-      const form = registrationSaveTarget(node, submitter);
-      const captured = form && shared.registrationForm.capture(form);
-      if (!captured) return;
-      requestSavePrompt(location.href, captured.username, captured.password, state, sendRuntimeMessage,
+    function registrationSnapshot(node, submitter) {
+      if (!registrationSaveTarget(node, submitter)) return null;
+      return snapshotRegistration(document, node, submitter, { wasPassword: passwordMemory.wasPassword });
+    }
+    function onRegistrationSubmit(captured, url) {
+      requestSavePrompt(url, captured.username, captured.password, state, sendRuntimeMessage,
         undefined, captured.fields, captured.usernameIsEmail);
     }
     const submitWatcher = createRegistrationSubmitWatcher({
       isUserSubmit: (event) => isUserSubmit(event),
       defer: (fn) => setTimeout(fn, 0),
+      snapshot: registrationSnapshot,
       propose: onRegistrationSubmit,
+      getUrl: () => location.href,
+      isShown: (node) => shared.formDetection.isControlShown(node),
+      setTimer: (fn, ms) => setTimeout(fn, ms),
+      clearTimer: (timer) => clearTimeout(timer),
     });
     document.addEventListener('submit', submitWatcher.onSubmit, true);
     document.addEventListener('click', submitWatcher.onClick, true);
     document.addEventListener('keydown', submitWatcher.onKeydown, true);
+    window.addEventListener('pagehide', submitWatcher.onPageHide, true);
+    window.addEventListener('popstate', submitWatcher.onUrlChange, true);
+    window.addEventListener('hashchange', submitWatcher.onUrlChange, true);
 
     let addressSnapshot = null;
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -2188,7 +2278,7 @@
     module.exports = {
       scoreUsernameLikeness, findBestUsernameInput, hostnameMatches, fillTargetMatches, scoreOtpLikeness, findOtpField,
       isFieldVisible, findFillableFields, findLoginForm, resolveFillTargets, resolveApplyFillTargets,
-      isNewPasswordCandidate, fillGeneratedPassword, createRegistrationSubmitWatcher, showSaveHintToast,
+      isNewPasswordCandidate, fillGeneratedPassword, snapshotRegistration, createRegistrationSubmitWatcher, showSaveHintToast,
       isFillTargetUsable,
       detectOtpauthLink, detectOtpauthText, isBase32Secret, detectManualSetupKey,
       decodeQrFromImage, detectQrCandidate,
