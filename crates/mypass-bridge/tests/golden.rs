@@ -875,9 +875,20 @@ fn response_cases() -> Vec<(Response, Value)> {
                 paired: true,
                 attach_allowed: false,
                 enabled: false,
-                remember_social_sign_in: true,
+                remember_social_sign_in: Some(true),
             },
             json!({"type":"passkeyProxyStatus","unlocked":true,"paired":true,"attachAllowed":false,"enabled":false,"rememberSocialSignIn":true}),
+        ),
+        (
+            // Locked: the social sign-in preference is withheld, the key is absent.
+            Response::PasskeyProxyStatus {
+                unlocked: false,
+                paired: true,
+                attach_allowed: false,
+                enabled: true,
+                remember_social_sign_in: None,
+            },
+            json!({"type":"passkeyProxyStatus","unlocked":false,"paired":true,"attachAllowed":false,"enabled":true}),
         ),
         (
             Response::PasskeyProxyEnabled { enabled: true },
@@ -1042,7 +1053,7 @@ fn passkey_proxy_status_decodes_without_enabled() {
             paired: false,
             attach_allowed: true,
             enabled: false,
-            remember_social_sign_in: false,
+            remember_social_sign_in: None,
         }
     );
 }

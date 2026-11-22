@@ -699,7 +699,7 @@
     "message": "Could not open MyPass. Open the app and try again."
   },
   "passkeyChangeLocked": {
-    "message": "Unlock MyPass, then change passkeys."
+    "message": "Unlock MyPass to change this setting."
   },
   "passkeyChangeFailed": {
     "message": "Could not change passkeys. Open MyPass and try again."

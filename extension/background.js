@@ -1352,6 +1352,7 @@ function socialSignInSettingOf(response) {
 // change.
 function noteSocialSignInSetting(response) {
   const value = socialSignInSettingOf(response);
+  // A locked status omits the preference. Keep the last value and its age.
   if (value === null) return Promise.resolve();
   socialSignInCheckedAt = Date.now();
   if (value === socialSignInEnabledKnown) return Promise.resolve();

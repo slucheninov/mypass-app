@@ -100,6 +100,18 @@
       if (status && status.type === 'passkeyProxyStatus' && typeof status.enabled === 'boolean') {
         toggle.checked = status.enabled;
       }
+      // While MyPass is locked the app refuses the change, so the switch is shown as unavailable
+      // with a hint, instead of letting it flip back after a refused click.
+      const locked = !!(status && status.type === 'passkeyProxyStatus' && status.paired && status.unlocked === false);
+      const hint = document.getElementById('autofill-passkey-error');
+      toggle.disabled = locked;
+      if (locked) {
+        hint.hidden = false;
+        hint.textContent = i18n.t('passkeyChangeLocked');
+      } else if (hint.textContent === i18n.t('passkeyChangeLocked')) {
+        hint.hidden = true;
+        hint.textContent = '';
+      }
     });
   }
 
@@ -140,6 +152,7 @@
     [offerSaveLogin, offerSaveTotp, showFieldIcon, showLogins, showCards, showAddresses, autoSubmit].forEach((toggle) => {
       toggle.addEventListener('change', persistAutofill);
     });
+    window.addEventListener('focus', refreshAutofillPasskeyToggle);
     passkeyToggle.addEventListener('change', () => {
       const revision = ++autofillPasskeyRevision;
       const next = !!passkeyToggle.checked;
@@ -152,8 +165,10 @@
           return;
         }
         passkeyToggle.checked = !next;
+        const locked = result && result.type === 'locked';
+        passkeyToggle.disabled = !!locked;
         passkeyError.hidden = false;
-        passkeyError.textContent = result && result.type === 'locked'
+        passkeyError.textContent = locked
           ? i18n.t('passkeyChangeLocked')
           : result && result.type === 'pairingRequired'
             ? i18n.t('connectBrowserFirst')

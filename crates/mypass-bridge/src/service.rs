@@ -767,7 +767,7 @@ mod tests {
                 paired: true,
                 attach_allowed: false,
                 enabled: true,
-                remember_social_sign_in: true,
+                remember_social_sign_in: None,
             }
         );
     }

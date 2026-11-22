@@ -599,7 +599,7 @@ mod tests {
                 paired: true,
                 attach_allowed: true,
                 enabled: true,
-                remember_social_sign_in: true,
+                remember_social_sign_in: Some(true),
             },
             Response::PasskeyProxyEnabled { enabled: true },
             Response::PasskeyCreatePending {

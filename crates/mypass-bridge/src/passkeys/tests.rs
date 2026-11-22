@@ -42,8 +42,11 @@ fn fill(svc: &PasskeyService, ids: &[i64]) {
     }
 }
 
+/// While locked the status carries only what the extension needs to keep the WebAuthn proxy as
+/// it is (the opt-in flag); the social sign-in preference is withheld until unlocked, and the
+/// JSON then has no `rememberSocialSignIn` key at all (the extension keeps its cached mirror).
 #[test]
-fn status_reports_the_social_sign_in_setting_locked_or_not() {
+fn status_reports_the_social_sign_in_setting_only_while_unlocked() {
     let (f, svc) = passkey_fx();
     let status = named("getPasskeyProxyStatus", Some(&f.secret));
     for on in [false, true] {
@@ -61,9 +64,18 @@ fn status_reports_the_social_sign_in_setting_locked_or_not() {
             else {
                 panic!("expected a status");
             };
-            assert_eq!(remember_social_sign_in, on, "unlocked {unlocked}");
+            let expected = unlocked.then_some(on);
+            assert_eq!(remember_social_sign_in, expected, "unlocked {unlocked}");
         }
     }
+    let locked = svc.handle(&ctx(&f, &f.settings, false), &status);
+    let json = serde_json::to_value(&locked).unwrap();
+    let mut keys: Vec<_> = json.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        ["attachAllowed", "enabled", "paired", "type", "unlocked"]
+    );
 }
 
 #[test]
@@ -84,7 +96,7 @@ fn status_reports_enabled_and_attach_allowed_from_lock_state_and_toggle() {
                 paired: true,
                 attach_allowed: attach,
                 enabled: on,
-                remember_social_sign_in: true,
+                remember_social_sign_in: unlocked.then_some(true),
             },
             "unlocked {unlocked}, enabled {on}"
         );
@@ -100,7 +112,7 @@ fn status_reports_enabled_and_attach_allowed_from_lock_state_and_toggle() {
             paired: true,
             attach_allowed: false,
             enabled: true,
-            remember_social_sign_in: true,
+            remember_social_sign_in: None,
         }
     );
 }
@@ -116,7 +128,7 @@ fn status_is_enabled_when_toggle_never_touched() {
             paired: true,
             attach_allowed: true,
             enabled: true,
-            remember_social_sign_in: true,
+            remember_social_sign_in: Some(true),
         }
     );
 }
@@ -323,7 +335,7 @@ fn status_polling_never_resets_idle_timer_or_unlocks() {
                 paired: true,
                 attach_allowed: false,
                 enabled: true,
-                remember_social_sign_in: true,
+                remember_social_sign_in: None,
             }
         );
         f.sched.advance(Duration::from_secs(30));

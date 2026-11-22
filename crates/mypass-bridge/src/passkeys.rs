@@ -154,7 +154,9 @@ impl PasskeyService {
     /// indefinitely (there is no push channel to tell it otherwise). `enabled` is reported
     /// separately, even while locked, so the extension learns the app-side opt-in on its own
     /// and resyncs its cache and attachment without waiting for a service worker restart: the
-    /// app is authoritative, the extension's flag is only a cache.
+    /// app is authoritative, the extension's flag is only a cache. It is the one setting served
+    /// while locked, because the proxy's attachment depends on it; every other preference (the
+    /// social sign-in one) is withheld until the vault is unlocked.
     fn status(ctx: &PasskeyContext<'_>) -> Response {
         let settings = ctx.settings.get();
         let enabled = settings.passkey_proxy_enabled;
@@ -163,7 +165,7 @@ impl PasskeyService {
             paired: true,
             attach_allowed: ctx.unlocked && enabled,
             enabled,
-            remember_social_sign_in: settings.remember_social_sign_in,
+            remember_social_sign_in: ctx.unlocked.then_some(settings.remember_social_sign_in),
         }
     }
 
