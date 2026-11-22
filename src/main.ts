@@ -37,5 +37,6 @@ if (target) {
     entries: label !== "settings" && label !== "tray-panel",
     saveToast: label !== "settings" && label !== "tray-panel",
     sync: label !== "tray-panel",
+    theme: label !== "tray-panel",
   }).catch(() => {});
 }

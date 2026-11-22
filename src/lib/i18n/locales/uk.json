@@ -417,6 +417,7 @@
   "The vault changed on disk": "Сховище змінилося на диску",
   "The vault could not be saved (%@). If you quit anyway, MyPass tries to keep your unsaved changes as a recovery copy in the backups folder.": "Не вдалося зберегти сховище ({0}). Якщо вийти зараз, MyPass спробує зберегти незбережені зміни як копію для відновлення в теці резервних копій.",
   "The vault file looks damaged": "Файл сховища схоже пошкоджено",
+  "App icon": "Іконка застосунку",
   "Theme": "Тема",
   "Then retry the website’s passkey action. Confirm in MyPass and wait for the website to finish. A saved key in MyPass alone does not confirm that the website completed registration.": "Потім повторіть дію з ключем доступу на вебсайті. Підтвердьте її в MyPass і дочекайтеся, поки вебсайт завершить операцію. Сам лише збережений у MyPass ключ не підтверджує, що вебсайт завершив реєстрацію.",
   "These controls do not remove saved credentials or guarantee that every autofill and passkey option is off. Review any remaining provider choices when signing in.": "Ці елементи керування не видаляють збережені облікові дані й не гарантують, що всі варіанти автозаповнення та ключів доступу вимкнено. Під час входу перегляньте решту варіантів постачальників.",

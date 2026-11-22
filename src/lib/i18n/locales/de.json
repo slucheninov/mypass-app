@@ -417,6 +417,7 @@
   "The vault changed on disk": "Der Tresor wurde auf dem Datenträger geändert",
   "The vault could not be saved (%@). If you quit anyway, MyPass tries to keep your unsaved changes as a recovery copy in the backups folder.": "Der Tresor konnte nicht gespeichert werden ({0}). Wenn du trotzdem beendest, versucht MyPass, deine ungesicherten Änderungen als Wiederherstellungskopie im Sicherungsordner zu behalten.",
   "The vault file looks damaged": "Die Tresordatei scheint beschädigt zu sein",
+  "App icon": "App-Symbol",
   "Theme": "Design",
   "Then retry the website’s passkey action. Confirm in MyPass and wait for the website to finish. A saved key in MyPass alone does not confirm that the website completed registration.": "Wiederhole danach die Passkey-Aktion der Website. Bestätige in MyPass und warte, bis die Website fertig ist. Ein in MyPass gespeicherter Schlüssel allein bestätigt nicht, dass die Website die Registrierung abgeschlossen hat.",
   "These controls do not remove saved credentials or guarantee that every autofill and passkey option is off. Review any remaining provider choices when signing in.": "Diese Einstellungen entfernen keine gespeicherten Zugangsdaten und garantieren nicht, dass jede Autofill- und Passkey-Option ausgeschaltet ist. Prüfe beim Anmelden die verbleibenden Anbieteroptionen.",

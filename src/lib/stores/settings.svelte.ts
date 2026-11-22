@@ -9,18 +9,15 @@ export function applyTheme(theme: Theme): void {
   else root.dataset.theme = theme;
 }
 
-function applyAppearance(theme: Theme, language: Language): void {
-  applyTheme(theme);
-  setLanguage(language);
-}
-
 class SettingsStore {
   value = $state<Settings_Serialize | null>(null);
   #unlisten: (() => void) | null = null;
+  #followTheme = true;
   #subscribed: Promise<void> | null = null;
 
   /** Listens for `SettingsChanged`, then loads. Call once per window. */
-  async start(): Promise<void> {
+  async start({ followTheme = true } = {}): Promise<void> {
+    this.#followTheme = followTheme;
     this.#subscribed ??= events.settingsChanged.listen((e) => this.#adopt(e.payload)).then((off) => {
       this.#unlisten = off;
     });
@@ -43,20 +40,25 @@ class SettingsStore {
   async update(patch: SettingsPatch_Deserialize): Promise<void> {
     const before = this.value;
     if (before && (patch.theme || patch.language)) {
-      applyAppearance(patch.theme ?? before.theme, patch.language ?? before.language);
+      this.#applyAppearance(patch.theme ?? before.theme, patch.language ?? before.language);
     }
     try {
       this.#adopt(await api.settingsUpdate(patch));
     } catch (e) {
       // Revert only when nothing newer arrived meanwhile.
-      if (before && this.value === before) applyAppearance(before.theme, before.language);
+      if (before && this.value === before) this.#applyAppearance(before.theme, before.language);
       throw e;
     }
   }
 
   #adopt(next: Settings_Serialize): void {
     this.value = next;
-    applyAppearance(next.theme, next.language);
+    this.#applyAppearance(next.theme, next.language);
+  }
+
+  #applyAppearance(theme: Theme, language: Language): void {
+    if (this.#followTheme) applyTheme(theme);
+    setLanguage(language);
   }
 }
 

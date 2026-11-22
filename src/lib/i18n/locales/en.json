@@ -417,6 +417,7 @@
   "The vault changed on disk": "The vault changed on disk",
   "The vault could not be saved (%@). If you quit anyway, MyPass tries to keep your unsaved changes as a recovery copy in the backups folder.": "The vault could not be saved ({0}). If you quit anyway, MyPass tries to keep your unsaved changes as a recovery copy in the backups folder.",
   "The vault file looks damaged": "The vault file looks damaged",
+  "App icon": "App icon",
   "Theme": "Theme",
   "Then retry the website’s passkey action. Confirm in MyPass and wait for the website to finish. A saved key in MyPass alone does not confirm that the website completed registration.": "Then retry the website’s passkey action. Confirm in MyPass and wait for the website to finish. A saved key in MyPass alone does not confirm that the website completed registration.",
   "These controls do not remove saved credentials or guarantee that every autofill and passkey option is off. Review any remaining provider choices when signing in.": "These controls do not remove saved credentials or guarantee that every autofill and passkey option is off. Review any remaining provider choices when signing in.",

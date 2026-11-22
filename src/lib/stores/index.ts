@@ -19,7 +19,7 @@ import { settings } from "./settings.svelte";
  * leaves the sticky "Saving failed" toast to the main window. `sync: false` keeps the tray
  * panel from querying sync/storage state that it does not render or have permission to read.
  */
-export async function startStores(opts: { entries?: boolean; saveToast?: boolean; sync?: boolean } = {}): Promise<() => void> {
+export async function startStores(opts: { entries?: boolean; saveToast?: boolean; sync?: boolean; theme?: boolean } = {}): Promise<() => void> {
   const withEntries = opts.entries ?? true;
   session.saveToasts = opts.saveToast ?? true;
   navigation.start();
@@ -28,7 +28,7 @@ export async function startStores(opts: { entries?: boolean; saveToast?: boolean
   const stopUpdate = update.start();
   const stopSync = opts.sync === false ? () => {} : sync.start();
   const results = await Promise.allSettled([
-    settings.start(),
+    settings.start({ followTheme: opts.theme }),
     withEntries ? entries.start() : Promise.resolve(),
     session.start(),
   ]);
