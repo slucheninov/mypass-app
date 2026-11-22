@@ -1122,7 +1122,9 @@ async function fillSelectedPerson(message) {
 // Address entries and fills the form from the chosen one. Unlike the popup-only browse views this
 // is asked by a content script, so every request must come from the top frame of an https page
 // whose url the message names, with the address switch on (re-read here, never trusted from the
-// page). The list carries only id, title and the person's name; the fill answers to the very
+// page). The list carries only id, title and an address's name, never a person field: a person row
+// is its title and its linked address ids (every person field is protected in the vault, and this
+// list reaches the page's shadow root before the user picks anyone). The fill answers to the very
 // document that asked (sendResponse), with the address fields only.
 const IDENTITY_LIST_LIMIT = 50;
 const IDENTITY_ADDRESS_FIELDS = Object.freeze(["fullName", "givenName", "familyName", "organization",
@@ -1172,7 +1174,8 @@ function identityRows(response, kind) {
         id: entry.id,
         kind,
         title: entry.title.slice(0, 200),
-        username: typeof entry.username === "string" ? entry.username.slice(0, 200) : "",
+        // A person row never shows a value, even if an older app sends its email as the username.
+        username: kind !== "person" && typeof entry.username === "string" ? entry.username.slice(0, 200) : "",
       };
       if (kind === "person") {
         row.addressIds = (Array.isArray(entry.addressIds) ? entry.addressIds : [])

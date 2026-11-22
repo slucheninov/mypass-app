@@ -116,6 +116,9 @@ async function run() {
   assert.deepEqual(chooseIdentityPanel({ type: 'identityList', entries: [{ id: 'a1', title: 'Home' }, { id: 3 }] }),
     { panel: 'entries', entries: [{ id: 'a1', kind: 'address', title: 'Home', username: '', addressIds: [], hasTotp: false }],
       addresses: [] });
+  // A person row never renders a value in the page, whatever the list carried.
+  assert.equal(chooseIdentityPanel({ type: 'identityList',
+    entries: [{ id: 'p1', kind: 'person', title: 'Me', username: 'me@example.test' }] }).entries[0].username, '');
 
   // The save prompt carries the captured fields, and only when there are some.
   const messages = [];

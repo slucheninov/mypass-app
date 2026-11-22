@@ -191,9 +191,9 @@
   }
 
   // The identity panel of a registration form field lists the vault's people first, then the
-  // addresses no person links (the background answers `identityList` with id, kind, title and the
-  // email or name only; a person row also carries its linked address ids, the first one being the
-  // default). `addresses` is every address, for a person row's address picker. Same panel states
+  // addresses no person links (the background answers `identityList` with id, kind and title, and
+  // an address's name; a person row carries no person value, only its linked address ids, the
+  // first one being the default). `addresses` is every address, for a person row's address picker. Same panel states
   // as chooseInlinePanel; an empty vault says there is no person or address rather than no login.
   function chooseIdentityPanel(response) {
     if (response && response.type === 'locked') return { panel: 'locked', entries: [] };
@@ -207,7 +207,7 @@
         id: entry.id,
         kind: entry.kind === 'person' ? 'person' : 'address',
         title: entry.title,
-        username: typeof entry.username === 'string' ? entry.username : '',
+        username: entry.kind !== 'person' && typeof entry.username === 'string' ? entry.username : '',
         addressIds: entry.kind === 'person' && Array.isArray(entry.addressIds)
           ? entry.addressIds.filter((id) => typeof id === 'string' && id) : [],
         hasTotp: false,

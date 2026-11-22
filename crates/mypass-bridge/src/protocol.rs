@@ -475,8 +475,10 @@ pub enum Response {
     },
 }
 
-/// One credential offered to the extension. It never carries a password.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// One credential offered to the extension. It never carries a password, and a person row never
+/// carries a person field other than its linked address ids. `Debug` hides the user name, the URL
+/// and the identifiers.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtensionCredentialSummary {
     pub id: String,
@@ -494,6 +496,22 @@ pub struct ExtensionCredentialSummary {
     /// default). Only person browse rows carry it; the ids may name entries that are gone.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub address_ids: Vec<String>,
+}
+
+impl std::fmt::Debug for ExtensionCredentialSummary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExtensionCredentialSummary")
+            .field("id", &self.id)
+            .field("title", &"<redacted>")
+            .field("username", &"<redacted>")
+            .field("has_totp", &self.has_totp)
+            .field("has_passkey", &self.has_passkey)
+            .field("url", &self.url.as_ref().map(|_| "<redacted>"))
+            .field("entry_type", &self.entry_type)
+            .field("identifiers", &self.identifiers.len())
+            .field("address_ids", &self.address_ids.len())
+            .finish()
+    }
 }
 
 /// A person entry as the extension fills it into a form. `full_name` is the given and family

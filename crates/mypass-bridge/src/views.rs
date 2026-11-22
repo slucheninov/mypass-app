@@ -81,8 +81,10 @@ fn entry_type_name(t: EntryType) -> &'static str {
 }
 
 /// A browse row: the match row plus the saved URL (omitted when empty) and the entry type. The
-/// username of an address is its full name; the username of a person is its email (else its full
-/// name), and a person row carries its linked address ids.
+/// username of an address is its full name. A person row carries only its title and its linked
+/// address ids: every person field (label, names, email, birth date) is stored protected, and a
+/// browse row reaches the content script and the page's inline panel before the user picks
+/// anyone, so its username is left empty.
 #[must_use]
 pub fn browse_summary(entry: &Entry) -> ExtensionCredentialSummary {
     let mut row = summary(entry);
@@ -91,12 +93,8 @@ pub fn browse_summary(entry: &Entry) -> ExtensionCredentialSummary {
         row.username = std::mem::take(&mut address_of(entry).full_name);
     }
     if kind == EntryType::Person {
-        let mut p = person_of(entry);
-        row.username = if p.email.trim().is_empty() {
-            p.full_name()
-        } else {
-            std::mem::take(&mut p.email)
-        };
+        let p = person_of(entry);
+        row.username = String::new();
         row.address_ids = p
             .address_ids
             .iter()

@@ -349,16 +349,16 @@ mod tests {
     }
 
     #[test]
-    fn list_entries_people_rows_carry_email_and_links_but_no_person_values() {
+    fn list_entries_people_rows_carry_title_and_links_but_no_person_values() {
         let (mut db, ids) = crate::testing::sample_database();
         let now = mypass_kdbx::Timestamp::now();
         let root = db.root_id();
         let mut p = mypass_kdbx::Entry::new(now);
         p.set_field("Title", "Me", false);
         p.set_field("MyPass.EntryType", "Person", false);
-        p.set_field("MyPass.Person.givenName", "Alice", true);
-        p.set_field("MyPass.Person.familyName", "Example", true);
-        p.set_field("MyPass.Person.email", "alice@example.org", true);
+        p.set_field("MyPass.Person.givenName", "Zoe", true);
+        p.set_field("MyPass.Person.familyName", "Quill", true);
+        p.set_field("MyPass.Person.email", "zq@person.test", true);
         p.set_field("MyPass.Person.birthDate", "1990-02-03", true);
         let links = format!("{},not-a-uuid", ids.c.hyphenated());
         p.set_field("MyPass.Person.addressIds", &links, true);
@@ -375,14 +375,29 @@ mod tests {
         let rows = credential_rows(&r);
         assert_eq!(rows.len(), 2);
         let me = rows.iter().find(|c| c.id == wire_id(person)).unwrap();
-        assert_eq!(me.username, "alice@example.org");
+        // Every person field is protected: a row carries the title only, never the email.
+        assert_eq!(me.title, "Me");
+        assert_eq!(me.username, "");
         assert_eq!(me.entry_type.as_deref(), Some("Person"));
         assert_eq!(me.address_ids, [wire_id(ids.c)]);
         let bob = rows.iter().find(|c| c.title == "Bob").unwrap();
-        assert_eq!(bob.username, "Bob Smith");
+        assert_eq!(bob.username, "");
         assert!(bob.address_ids.is_empty());
-        // A row never carries the birth date; persons are not credentials.
-        assert!(!serde_json::to_string(&r).unwrap().contains("1990"));
+        // No serialized row, listed or searched, carries the email, a name or the birth date,
+        // and `Debug` hides the rest.
+        let searched = send(&f, search("Me"));
+        assert!(credential_rows(&searched)
+            .iter()
+            .any(|c| c.id == wire_id(person)));
+        for response in [&r, &searched] {
+            let text = serde_json::to_string(response).unwrap();
+            for secret in ["Zoe", "Quill", "zq@person.test", "Smith", "1990"] {
+                assert!(!text.contains(secret), "{secret} in {text}");
+            }
+        }
+        let debug = format!("{me:?}");
+        assert!(!debug.contains("Me\""), "{debug}");
+        assert!(debug.contains("<redacted>"));
         assert!(
             credential_rows(&send(&f, creds("https://github.com/login")))
                 .iter()

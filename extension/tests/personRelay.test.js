@@ -85,12 +85,14 @@ async function run() {
   const list = await request({ type: 'getIdentitySuggestions', url: page }, content());
   assert.equal(list.type, 'identityList');
   assert.deepEqual(list.entries, [
-    { id: 'P-1', kind: 'person', title: 'Ada', username: 'ada@example.test', addressIds: ['A-2', 'A-1'] },
+    { id: 'P-1', kind: 'person', title: 'Ada', username: '', addressIds: ['A-2', 'A-1'] },
     { id: 'P-2', kind: 'person', title: 'Bob', username: '', addressIds: [] },
     { id: 'A-3', kind: 'address', title: 'Cottage', username: '' },
   ]);
   assert.deepEqual(list.addresses.map((row) => row.id), ['A-1', 'A-2', 'A-3']);
   assert.ok(!JSON.stringify(list).includes('never'), 'the list never carries anything but ids and names');
+  // An older app that still sends a person's email as its username: the row drops it.
+  assert.ok(!JSON.stringify(list).includes('ada@example.test'), 'a person row never carries the email');
 
   // An app without the people category answers an error: the addresses are still listed.
   reset();
