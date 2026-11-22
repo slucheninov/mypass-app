@@ -9,6 +9,7 @@ import { emit } from "@tauri-apps/api/event";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type {
   AddressDto,
+  PersonDto,
   EntryTypeDto,
   ApiError,
   HistoryReveal,
@@ -68,6 +69,11 @@ export type EventName = keyof typeof events;
 const ADDRESS_FIELDS: ReadonlySet<string> = new Set<keyof AddressDto>([
   "label", "fullName", "givenName", "familyName", "organization", "addressLine1", "addressLine2",
   "city", "region", "postalCode", "countryCode", "countryName", "phone", "email",
+]);
+
+/** The person fields a copy or reveal may name (never the address links). */
+const PERSON_FIELDS: ReadonlySet<string> = new Set<keyof PersonDto>([
+  "label", "givenName", "familyName", "middleName", "email", "birthDate",
 ]);
 
 /** Canonical shortcuts the backend refuses on every platform (a subset of its reserved list). */
@@ -337,6 +343,11 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       case "address":
         if (!ADDRESS_FIELDS.has(field.name)) throw apiError("invalidInput");
         return model.address?.[field.name as keyof AddressDto] ?? "";
+      case "person": {
+        if (!PERSON_FIELDS.has(field.name)) throw apiError("invalidInput");
+        const value = model.person?.[field.name as Exclude<keyof PersonDto, "addressIds">];
+        return value ?? "";
+      }
       case "totp":
         if (!entry.summary.hasTotp) throw apiError("invalidInput");
         return state.totp.code;
@@ -560,7 +571,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     },
     entryGet: ({ id }) => {
       requireUnlocked();
-      return detailOf(findEntry(id));
+      return detailOf(findEntry(id), state.entries);
     },
     // Newest first; `changedFields` names what the next newer version (or the entry) changed.
     entryHistory: ({ id }) => {
@@ -651,6 +662,10 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         totp: "",
         notes: "",
         address: entryType === "address" ? blankAddress : null,
+        person:
+          entryType === "person"
+            ? { label: "", givenName: "", familyName: "", middleName: "", email: "", birthDate: "", addressIds: [] }
+            : null,
         card: entryType === "card" ? { holder: "", number: "", expiry: "", cvv: "" } : null,
         customFields: [],
         attachments: [],
@@ -753,8 +768,24 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       }
       if (attachments.length > 8) throw apiError("limitExceeded");
       for (const op of model.attachmentOps) if (op.kind === "add") pickedFiles.delete(op.path);
+      // Like `editing::apply`: an untitled person takes its label, then its full name.
+      const personTitle = () => {
+        const p = model.person;
+        if (!p) return "";
+        if (p.label.trim() !== "") return p.label.trim();
+        return [p.givenName, p.middleName, p.familyName].map((s) => s.trim()).filter((s) => s !== "").join(" ");
+      };
+      if (model.person && model.person.birthDate !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(model.person.birthDate)) {
+        throw apiError("invalidInput");
+      }
       const title =
-        model.entryType === "address" && model.title.trim() === "" ? (model.address?.label ?? "") : model.title.trim();
+        model.title.trim() !== ""
+          ? model.title.trim()
+          : model.entryType === "address"
+            ? (model.address?.label ?? "")
+            : model.entryType === "person"
+              ? personTitle()
+              : "";
       const found = model.id ? findEntry(model.id) : null;
       // Like `editing::apply`: `passkey` is display data and never an input; only `removePasskey`
       // changes the stored passkey, on save, and only while `passkeyRef` still names the stored one.

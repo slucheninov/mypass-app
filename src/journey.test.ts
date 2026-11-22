@@ -68,7 +68,7 @@ describe("journeys", () => {
     await user.click(screen.getByRole("button", { name: "Unlock" }));
     await screen.findByRole("listbox");
     const names = within(screen.getByRole("group", { name: "Categories" })).getAllByRole("treeitem");
-    expect(names).toHaveLength(10);
+    expect(names).toHaveLength(11);
     await waitFor(() => expect(options()).toHaveLength(nonBin(fake).length));
     expect(titles()).toContain("GitHub");
     await user.click(option(/GitHub/));
@@ -152,7 +152,7 @@ describe("journeys", () => {
     const { user } = await unlocked();
     render(SettingsApp);
     await user.selectOptions(await screen.findByRole("combobox", { name: "Language" }), "ru");
-    const labels = ["All", "Favorites", "Codes", "Passkeys", "Addresses", "Cards", "Notes", "Files", "Security", "Deleted"];
+    const labels = ["All", "Favorites", "Codes", "Passkeys", "Addresses", "People", "Cards", "Notes", "Files", "Security", "Deleted"];
     const group = screen.getByRole("group", { name: ru["Categories"] });
     await waitFor(() => {
       const shown = within(group)

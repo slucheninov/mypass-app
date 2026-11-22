@@ -23,7 +23,7 @@
   import { events } from "../lib/bindings";
   import { onDestroy, onMount, tick, untrack } from "svelte";
   import { api, ApiFailure, errorMessage } from "../lib/api";
-  import type { AddressDto, EntryEditModel_Serialize, EntryTypeDto } from "../lib/bindings";
+  import type { AddressDto, EntryEditModel_Serialize, EntryTypeDto, PersonDto } from "../lib/bindings";
   import { findGroup, isLiveGroup } from "../lib/group-tree";
   import { t } from "../lib/i18n/index.svelte";
   import { lockGuard } from "../lib/lock-guard";
@@ -43,6 +43,7 @@
   import Generator from "./Generator.svelte";
   import LoginForm from "./editors/LoginForm.svelte";
   import NotesForm from "./editors/NotesForm.svelte";
+  import PersonForm from "./editors/PersonForm.svelte";
   import GroupPicker from "./GroupPicker.svelte";
 
   let { model = $bindable() }: { model: EntryEditModel_Serialize } = $props();
@@ -64,10 +65,21 @@
     email: "",
   });
 
+  const blankPerson = (): PersonDto => ({
+    label: "",
+    givenName: "",
+    familyName: "",
+    middleName: "",
+    email: "",
+    birthDate: "",
+    addressIds: [],
+  });
+
   // The backend sends the address and card of those types; a model without them still gets a form.
   // This runs before the baseline is taken, so it never counts as a change.
   untrack(() => {
     if (model.entryType === "address" && !model.address) model.address = blankAddress();
+    if (model.entryType === "person" && !model.person) model.person = blankPerson();
     if (model.entryType === "card" && !model.card) model.card = { holder: "", number: "", expiry: "", cvv: "" };
   });
 
@@ -84,6 +96,7 @@
   let titleError = $state<string | null>(null);
   let formError = $state<string | null>(null);
   let filesError = $state<string | null>(null);
+  let birthDateError = $state<string | null>(null);
   let titleInput: HTMLInputElement | undefined = $state();
   let formEl: HTMLFormElement | undefined = $state();
   let notes: { settle(): Promise<void> } | undefined = $state();
@@ -91,6 +104,7 @@
   const headings: Record<EntryTypeDto, () => string> = {
     login: () => t("New Login"),
     address: () => t("New Address"),
+    person: () => t("New Person"),
     card: () => t("New Card"),
     notes: () => t("New Note"),
     files: () => t("New Files item"),
@@ -228,7 +242,7 @@
 
   async function save() {
     if (saving) return;
-    titleError = formError = filesError = null;
+    titleError = formError = filesError = birthDateError = null;
     if (blocked) {
       // The alert is already on screen (it follows `blocked`); Save only moves focus to it.
       void focusError();
@@ -238,6 +252,11 @@
     payload.title = payload.title.trim();
     payload.urls = payload.urls.map((u) => u.trim()).filter((u) => u !== "");
     payload.customFields = payload.customFields.filter((f) => f.key.trim() !== "" || f.value !== "");
+    // A date input gives an ISO date or nothing; the backend checks the calendar date again.
+    if (payload.person && payload.person.birthDate !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(payload.person.birthDate)) {
+      birthDateError = t("Enter a valid birth date");
+      return;
+    }
     // Only a login needs a title here: an address takes its label from the backend when it has none.
     if (payload.entryType === "login" && payload.title === "") {
       titleError = t("Enter a title");
@@ -335,6 +354,8 @@
       </LoginForm>
     {:else if model.entryType === "address" && model.address}
       <AddressForm bind:address={model.address} />
+    {:else if model.entryType === "person" && model.person}
+      <PersonForm bind:person={model.person} {birthDateError} />
     {:else if model.entryType === "card" && model.card}
       <CardForm bind:card={model.card} />
     {:else if model.entryType === "notes"}

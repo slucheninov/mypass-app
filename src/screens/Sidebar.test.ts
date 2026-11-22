@@ -15,7 +15,7 @@ import {
 } from "../test/fixtures";
 import { calls, renderMainApp } from "../test/mainApp";
 
-const CATEGORY_NAMES = ["All", "Favorites", "Codes", "Passkeys", "Addresses", "Cards", "Notes", "Files", "Security", "Deleted"];
+const CATEGORY_NAMES = ["All", "Favorites", "Codes", "Passkeys", "Addresses", "People", "Cards", "Notes", "Files", "Security", "Deleted"];
 
 async function openVault() {
   const app = await renderMainApp({ session: "unlocked" });
@@ -27,7 +27,7 @@ const row = (name: RegExp | string) => screen.getByRole("treeitem", { name });
 const nameOf = (el: HTMLElement) => (el.textContent ?? "").trim().replace(/\s+(\d+|—)$/, "");
 
 describe("categories", () => {
-  it("sidebar_lists_ten_categories_in_spec_order", async () => {
+  it("sidebar_lists_eleven_categories_in_spec_order", async () => {
     await openVault();
     const group = screen.getByRole("group", { name: "Categories" });
     expect(within(group).getAllByRole("treeitem").map(nameOf)).toEqual(CATEGORY_NAMES);

@@ -2,6 +2,7 @@
 // password (`FIXTURE_LOGIN_PASSWORD`) so tests can prove it never reaches a store.
 import type {
   AddressDto,
+  PersonDto,
   AttachmentMeta,
   CardEdit,
   Category,
@@ -109,6 +110,7 @@ export interface EntrySpec {
   username?: string;
   notes?: string;
   address?: AddressDto;
+  person?: PersonDto;
   attachments?: AttachmentMeta[];
   hasPasskey?: boolean;
   card?: CardEdit;
@@ -167,6 +169,7 @@ export function makeEntry(spec: EntrySpec): FixtureEntry {
       totp: "",
       notes: spec.notes ?? "",
       address: spec.address ?? null,
+      person: spec.person ?? null,
       card: spec.card ?? null,
       customFields: spec.customFields ?? [],
       attachments: spec.attachments ?? [],
@@ -240,6 +243,7 @@ export function fixtureEntries(): FixtureEntry[] {
 
 const TYPE_OF: Partial<Record<Category, EntrySummary["entryType"]>> = {
   addresses: "address",
+  people: "person",
   cards: "card",
   notes: "notes",
   files: "files",
@@ -293,6 +297,10 @@ export function entryMatches(e: FixtureEntry, groupName: string, search: string)
   if (model.urls.some(hit)) return true;
   if (e.summary.entryType === "address" && model.address && Object.values(model.address).some((v) => hit(v))) {
     return true;
+  }
+  if (e.summary.entryType === "person" && model.person) {
+    const { addressIds: _links, ...fields } = model.person;
+    if (Object.values(fields).some((v) => hit(v))) return true;
   }
   return model.attachments.some((a) => hit(a.name));
 }
@@ -354,6 +362,7 @@ const CATEGORIES: Category[] = [
   "codes",
   "passkeys",
   "addresses",
+  "people",
   "cards",
   "notes",
   "files",
@@ -402,7 +411,15 @@ export function fixtureSidebar(
   return { categories, rootGroupId: ROOT_GROUP_ID, groups: counted(groups, summaries).nodes, recycleBinEnabled };
 }
 
-export function detailOf(e: FixtureEntry): EntryDetailDto_Serialize {
+/** Like `queries::linked_addresses`: the live Address entries a person links to, in order. */
+function linkedAddresses(e: FixtureEntry, all: FixtureEntry[]) {
+  return (e.model.person?.addressIds ?? []).flatMap((id) => {
+    const a = all.find((x) => x.summary.id === id && x.summary.entryType === "address" && !x.summary.inRecycleBin);
+    return a ? [{ id: a.summary.id, title: a.summary.title, subtitle: a.summary.subtitle }] : [];
+  });
+}
+
+export function detailOf(e: FixtureEntry, all: FixtureEntry[] = []): EntryDetailDto_Serialize {
   const { summary, model } = e;
   return {
     id: summary.id,
@@ -422,6 +439,8 @@ export function detailOf(e: FixtureEntry): EntryDetailDto_Serialize {
     totpDigits: summary.hasTotp ? 6 : null,
     passkey: e.passkey,
     address: model.address,
+    person: summary.entryType === "person" ? model.person : null,
+    personAddresses: summary.entryType === "person" ? linkedAddresses(e, all) : [],
     card: model.card
       ? {
           holder: model.card.holder,

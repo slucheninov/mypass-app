@@ -10,6 +10,7 @@ export const CATEGORIES: readonly { category: Category; icon: IconName }[] = [
   { category: "codes", icon: "shield-key" },
   { category: "passkeys", icon: "passkey" },
   { category: "addresses", icon: "address" },
+  { category: "people", icon: "person" },
   { category: "cards", icon: "card" },
   { category: "notes", icon: "note" },
   { category: "files", icon: "paperclip" },
@@ -35,6 +36,8 @@ export function categoryLabel(category: Category): string {
       return t("Passkeys");
     case "addresses":
       return t("Addresses");
+    case "people":
+      return t("People");
     case "cards":
       return t("Cards");
     case "notes":

@@ -115,6 +115,7 @@
       codes: t("No items with codes"),
       passkeys: t("No passkeys"),
       addresses: t("No addresses"),
+      people: t("No people"),
       cards: t("No cards"),
       notes: t("No notes"),
       files: t("No files"),
