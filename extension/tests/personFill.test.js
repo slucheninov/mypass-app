@@ -48,6 +48,11 @@ function page() {
       fields.push(created);
       return created;
     },
+    textarea(attrs = {}, extra = {}) {
+      const created = node('TEXTAREA', attrs, extra);
+      fields.push(created);
+      return created;
+    },
     password() {
       return this.input({ type: 'password', autocomplete: 'new-password' });
     },
@@ -161,6 +166,36 @@ test('a person and its address fill names, email, a date input and the address f
   assert.equal(fill(p, registration.personProfile(ADA, HOME)), 6);
   assert.deepEqual([given.value, middle.value, family.value, email.value, birthday.value, city.value],
     ['Ada', 'King', 'Lovelace', 'ada@example.test', '1815-12-10', 'London']);
+});
+
+test('a street address textarea takes both address lines; other textareas are left alone', () => {
+  const homeLines = { ...HOME, addressLine2: 'Flat 2' };
+  for (const attrs of [{ autocomplete: 'street-address' }, { name: 'address' }]) {
+    const p = page();
+    p.input({ autocomplete: 'given-name' });
+    p.input({ type: 'email', name: 'email' });
+    const street = p.textarea(attrs);
+    const bio = p.textarea({ name: 'bio' }, { label: 'About you' });
+    p.password();
+    const [form] = registration.find(p.doc, visible);
+    assert.deepEqual(kinds(form), ['givenName', 'email', 'addressLine1'], JSON.stringify(attrs));
+    assert.equal(fill(p, registration.personProfile(ADA, homeLines)), 3);
+    assert.equal(street.value, '1 Main St\nFlat 2', JSON.stringify(attrs));
+    assert.equal(bio.value, '');
+  }
+  // An explicit first-line token takes the first line alone; a captured textarea is one line.
+  const p = page();
+  p.input({ type: 'email', name: 'email' });
+  const line1 = p.textarea({ autocomplete: 'address-line1' });
+  const city = p.input({ autocomplete: 'address-level2' });
+  p.password();
+  fill(p, registration.personProfile(ADA, homeLines));
+  assert.deepEqual([line1.value, city.value], ['1 Main St', 'London']);
+  line1.value = '1 Main St\n  Flat 2 ';
+  const pw = p.doc.querySelectorAll('input, select, textarea').find((node) => node.type === 'password');
+  pw.value = 'pw-1';
+  const captured = registration.capture(registration.find(p.doc, visible)[0]);
+  assert.equal(captured.fields.find((field) => field.kind === 'addressLine1').value, '1 Main St, Flat 2');
 });
 
 test('a text birthday follows the format its placeholder or label shows', () => {

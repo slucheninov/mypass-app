@@ -77,6 +77,9 @@ var mypassRegistrationForm = (() => {
     city: 'address-level2', region: 'address-level1', postalCode: 'postal-code', country: 'country-name',
   };
 
+  // The kinds a <textarea> may have: the address parts address-form.js fills into one (a street
+  // address textarea takes both address lines). Any other textarea (a bio, a comment) is left out.
+  const TEXTAREA_KINDS = new Set(['organization', 'addressLine1', 'addressLine2', 'city', 'region', 'postalCode', 'country']);
   // The kinds only a person fills, from the profile's `middleName` and `birthDate`.
   const PERSON_KINDS = new Set(['middleName', 'birthday', 'bdayDay', 'bdayMonth', 'bdayYear']);
   // The kinds of a person's own values: a form with one of these can take a person.
@@ -122,7 +125,7 @@ var mypassRegistrationForm = (() => {
     const tag = tagOf(node);
     if (tag === 'SELECT') {
       if (node.multiple) return false;
-    } else if (tag !== 'INPUT' || !FIELD_TYPES.has(typeOf(node))) {
+    } else if (tag !== 'TEXTAREA' && (tag !== 'INPUT' || !FIELD_TYPES.has(typeOf(node)))) {
       return false;
     }
     if (typeof node.closest === 'function' && node.closest('[hidden], [inert]')) return false;
@@ -273,14 +276,16 @@ var mypassRegistrationForm = (() => {
     const isVisible = (options && options.isVisible) || formDetection.isControlShown;
     const submitter = (options && options.submitter) || null;
     const entries = [];
-    for (const node of doc.querySelectorAll('input, select')) {
+    for (const node of doc.querySelectorAll('input, select, textarea')) {
       if (usablePassword(node, isVisible)) {
         entries.push({ node, role: 'password' });
         continue;
       }
       if (!usable(node, isVisible)) continue;
       const kind = classify(node);
-      if (kind) entries.push({ node, role: 'field', kind, label: readableLabel(node) });
+      if (kind && (tagOf(node) !== 'TEXTAREA' || TEXTAREA_KINDS.has(kind))) {
+        entries.push({ node, role: 'field', kind, label: readableLabel(node) });
+      }
     }
     for (const node of doc.querySelectorAll(ACTION_SELECTOR)) {
       if (node === submitter || isActionControl(node)) entries.push({ node, role: 'action' });
@@ -358,6 +363,10 @@ var mypassRegistrationForm = (() => {
   }
 
   function tokenFor(field) {
+    // A street address textarea takes both lines, one per row (address-form.js `valueFor`),
+    // unless its autocomplete names the first line alone.
+    if (field.kind === 'addressLine1' && tagOf(field.node) === 'TEXTAREA'
+      && autocompleteToken(field.node) !== 'address-line1') return 'street-address';
     return field.kind === 'country' && autocompleteToken(field.node) === 'country' ? 'country' : FILL_TOKENS[field.kind];
   }
 
@@ -557,6 +566,10 @@ var mypassRegistrationForm = (() => {
       const option = Array.from(node.options || []).find((candidate) => candidate.selected);
       if (!option || option.disabled || !String(option.value || '').trim()) return '';
       return cleanText(option.textContent || option.value);
+    }
+    // A textarea's rows are one line for the vault: no control characters in a captured value.
+    if (tagOf(node) === 'TEXTAREA') {
+      return String(node.value || '').split(/\r\n|\r|\n/).map((line) => line.trim()).filter(Boolean).join(', ');
     }
     return String(node.value || '').trim();
   }
