@@ -52,8 +52,12 @@ var mypassRegistrationForm = (() => {
   const ACTION_SELECTOR = 'button, input[type="submit"], input[type="button"], input[type="image"], [role="button"]';
   // Elements that bound a group of form-less controls, like address-form.js `addressBoundaries`.
   const BOUNDARY_SELECTOR = 'form, dialog, [role="dialog"], [role="form"], section, fieldset, article, aside, main, header, footer, nav';
-  // How many levels up two form-less controls may look for a shared container.
-  const PROXIMITY_LEVELS = 4;
+  // How many levels up two form-less controls may look for a shared container. Component
+  // libraries nest each field deeply: on goldcar.es's booking page the first name and the phone
+  // number meet seven and six levels up, the email and the phone eight and five, with no <form>
+  // around them. The boundary rule (same section, dialog, fieldset...) is what keeps unrelated
+  // controls apart; this only has to reach a field's own row of the layout.
+  const PROXIMITY_LEVELS = 10;
 
   const AUTOCOMPLETE_KINDS = {
     name: 'name', 'given-name': 'givenName', 'family-name': 'familyName', email: 'email',
@@ -143,7 +147,7 @@ var mypassRegistrationForm = (() => {
 
   // A readable name for a field: its label, aria-label, placeholder or name, at most 64 characters.
   function readableLabel(node) {
-    const labels = Array.from(node.labels || [], (label) => label.textContent || '');
+    const labels = formDetection.labelTexts(node);
     for (const text of [...labels, attr(node, 'aria-label'), attr(node, 'placeholder'), attr(node, 'name')]) {
       const clean = cleanText(text).replace(/[\s:*]+$/, '').trim();
       if (clean) return Array.from(clean).slice(0, MAX_LABEL).join('').trim();
@@ -496,7 +500,9 @@ var mypassRegistrationForm = (() => {
   function dateFormatOf(node) {
     const labels = Array.from(node.labels || [], (label) => label.textContent || '');
     for (const hint of [attr(node, 'placeholder'), attr(node, 'title'), attr(node, 'aria-label'), ...labels]) {
-      const found = /(?:^|[^\p{L}])(([dt\u0434m\u043cyj\u0433\u0440])\2*)([./ -])(([dt\u0434m\u043cyj\u0433\u0440])\5*)\3(([dt\u0434m\u043cyj\u0433\u0440])\7*)(?:$|[^\p{L}])/iu
+      // The separator may carry spaces ("DD / MM / YYYY"); it is written back exactly as shown,
+      // which a masked input reformats from the digits anyway.
+      const found = /(?:^|[^\p{L}])(([dt\u0434m\u043cyj\u0433\u0440])\2*)(\s*[./-]\s*|\s+)(([dt\u0434m\u043cyj\u0433\u0440])\5*)\3(([dt\u0434m\u043cyj\u0433\u0440])\7*)(?:$|[^\p{L}])/iu
         .exec(String(hint || ''));
       if (!found) continue;
       const partOf = (letter) => ({ d: 'day', t: 'day', '\u0434': 'day', m: 'month', '\u043c': 'month' })[letter.toLowerCase()] || 'year';
@@ -561,14 +567,44 @@ var mypassRegistrationForm = (() => {
       const field = current && current.fields.find((candidate) => candidate.node === node);
       if (!field || field.kind !== control.kind || !isFillKind(field.kind)) continue;
       if (!addressForm.fillable(node)) continue;
-      const value = PERSON_KINDS.has(field.kind)
+      let value = PERSON_KINDS.has(field.kind)
         ? personValueFor(node, field.kind, profile)
         : addressForm.valueFor({ node, token: tokenFor(field) }, profile);
+      if (value !== null && field.kind === 'phone') value = withoutShownDialCode(node, value);
       if (value === null || value === node.value) continue;
       setValue(node, value);
       filled += 1;
     }
     return filled;
+  }
+
+  // The dial code ("48" of "+48") a phone field's own country-code menu shows, or ''. The menu is
+  // the one <select> within four wrapper levels of the field; a wrapper holding a second select or
+  // another text field ends the search, so a menu of some other field is never read.
+  function shownDialCode(node) {
+    let scope = node.parentElement;
+    for (let level = 0; scope && level < 4; level += 1, scope = scope.parentElement) {
+      if (typeof scope.querySelectorAll !== 'function') return '';
+      const selects = Array.from(scope.querySelectorAll('select'));
+      if (selects.length > 1) return '';
+      if (selects.length === 1) {
+        const option = Array.from(selects[0].options || []).find((candidate) => candidate.selected);
+        const match = option && /\+\s?(\d{1,4})(?!\d)/.exec(String(option.textContent || '') + ' ' + String(option.value || ''));
+        return match ? match[1] : '';
+      }
+      if (scope.querySelectorAll('input, textarea').length > 1) return '';
+    }
+    return '';
+  }
+
+  // A phone number written next to a country-code menu that already shows its dial code loses
+  // that code, so "+48 123 456 789" under "+48" becomes "123 456 789". Any other number is kept.
+  function withoutShownDialCode(node, value) {
+    const code = shownDialCode(node);
+    if (!code) return value;
+    const match = new RegExp('^\\s*(?:\\+|00)\\s?' + code + '(?!\\d)[\\s().-]*').exec(value);
+    const rest = match ? value.slice(match[0].length).trim() : '';
+    return rest ? rest : value;
   }
 
   function valueOf(node) {

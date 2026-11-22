@@ -721,6 +721,43 @@
     };
   }
 
+  // Whether something of the page covers the spot where `input`'s icon goes: a sticky header the
+  // field scrolled under, a cookie bar, a modal backdrop. The icon host is fixed and sits above
+  // every z-index, so without this check it is drawn over the header in place of the field
+  // (goldcar.es, after scrolling the driver details under the step bar). `hitTest(x, y)` lists the
+  // elements at a viewport point, topmost first (elementsFromPoint of the field's own root, so a
+  // field in a shadow root is hit-tested there); `isOwn(node)` says which are this script's hosts,
+  // skipped. The spot is clear when the topmost other element is the field, inside it, around it
+  // (its wrapper or the page itself) or inside its visual box. No hit test, no verdict: not covered.
+  function isFieldSpotCovered(input, rect, hitTest, isOwn, fieldBoxElement) {
+    if (typeof hitTest !== 'function' || !rect || rect.width <= 0 || rect.height <= 0) return false;
+    const x = Math.max(rect.left + 1, rect.right - 16);
+    const y = rect.top + rect.height / 2;
+    let hits;
+    try {
+      hits = hitTest(x, y);
+    } catch (error) {
+      return false;
+    }
+    for (const hit of hits || []) {
+      if (typeof isOwn === 'function' && isOwn(hit)) continue;
+      if (hit === input) return false;
+      if (typeof hit.contains === 'function' && hit.contains(input)) return false;
+      if (typeof input.contains === 'function' && input.contains(hit)) return false;
+      if (fieldBoxElement && typeof fieldBoxElement.contains === 'function' && fieldBoxElement.contains(hit)) return false;
+      return true;
+    }
+    return false;
+  }
+
+  // The elementsFromPoint of the root `input` lives in (its shadow root, or its document).
+  function hitTesterFor(input) {
+    const root = input && typeof input.getRootNode === 'function' ? input.getRootNode() : null;
+    const scope = root && typeof root.elementsFromPoint === 'function' ? root
+      : (input && input.ownerDocument && typeof input.ownerDocument.elementsFromPoint === 'function' ? input.ownerDocument : null);
+    return scope ? (x, y) => scope.elementsFromPoint(x, y) : null;
+  }
+
   // Where a host for `input` is mounted. A field inside an open modal <dialog> lives in the
   // browser top layer, which paints above every z-index; a host under <html> would be covered
   // and not clickable, so it goes inside that dialog instead. Everything else goes under
@@ -1283,10 +1320,16 @@
       attachedIcons.forEach((record, input) => {
         const rect = input.getBoundingClientRect();
         const offscreen = rect.bottom < 0 || rect.top > window.innerHeight || rect.width === 0;
+        // A field scrolled under a sticky header is on screen but not visible: its icon would be
+        // drawn over the header (isFieldSpotCovered).
+        const found = offscreen ? null : findFieldBox(input);
+        const covered = !offscreen && isFieldSpotCovered(
+          input, rect, hitTesterFor(input), isOwnHost, found ? found.element : null
+        );
         // important for the same reason as buildIconHost/positionHostToField: a plain
         // assignment here would silently drop the !important flag those set initially.
-        record.host.style.setProperty('display', offscreen ? 'none' : 'block', 'important');
-        if (!offscreen) placeIconHost(record, input, rect);
+        record.host.style.setProperty('display', offscreen || covered ? 'none' : 'block', 'important');
+        if (!offscreen && !covered) placeIconHost(record, input, rect);
       });
       positionOpenPanel();
     }
@@ -2025,7 +2068,7 @@
       isTrustedActivation, hasLiveUserActivation, isUserSubmit, handleIconActivate, handleEntrySelect, trustedClickHandler,
       buildTotpCandidateQueryResponse, buildNewPasswordFieldQueryResponse, buildGeneratePasswordRow,
       classifyGeneratePasswordResponse, showGeneratePasswordMessage,
-      KEY_ICON_PATH_D, buildKeyGlyph, buildShadowHost, buildIconHost, positionHostToField, fieldControlRects, fieldClipRect, fieldVisualBox, findFieldBox,
+      KEY_ICON_PATH_D, buildKeyGlyph, isFieldSpotCovered, hitTesterFor, buildShadowHost, buildIconHost, positionHostToField, fieldControlRects, fieldClipRect, fieldVisualBox, findFieldBox,
       mountParentFor, measurePlacementOffset, settlePlacementOffset, buildSettingsRow,
       buildPanelHost, buildPanelContent, ICON_HOST_STYLE, PANEL_HOST_STYLE,
       panelRingFraction,

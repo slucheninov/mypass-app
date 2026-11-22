@@ -330,8 +330,52 @@ function addressLabelText(node, control) {
   return Array.from(node.childNodes, (child) => addressLabelText(child, control)).join(' ');
 }
 
+// The texts that label a control: its <label> elements (for= or wrapping), the elements its
+// aria-labelledby names and, only when it has none of those and no aria-label, the short text
+// right before it (a "First name" <span> or <p> placed above an unlinked input, found up to three
+// wrapper levels up). That nearby text is never borrowed across another control: a wrapper or a
+// sibling holding a second field ends the search, so a field cannot take its neighbour's label.
+function labelTexts(control) {
+  const texts = Array.from(control.labels || [], (label) => addressLabelText(label, control));
+  const doc = control.ownerDocument;
+  for (const id of String(control.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean)) {
+    const node = doc && typeof doc.getElementById === 'function' ? doc.getElementById(id) : null;
+    if (node && node !== control) texts.push(node.textContent || '');
+  }
+  if (!texts.some((text) => String(text).trim()) && !String(control.getAttribute('aria-label') || '').trim()) {
+    const nearby = nearbyLabelText(control);
+    if (nearby) texts.push(nearby);
+  }
+  return texts;
+}
+
+const NEARBY_LABEL_MAX = 40;
+const CONTROL_SELECTOR = 'input, select, textarea, button';
+
+function holdsControl(node) {
+  if (typeof node.matches === 'function' && node.matches(CONTROL_SELECTOR)) return true;
+  return typeof node.querySelector === 'function' && !!node.querySelector(CONTROL_SELECTOR);
+}
+
+function nearbyLabelText(control) {
+  let node = control;
+  for (let level = 0; level < 3 && node && node.parentElement; level += 1) {
+    let sibling = node.previousElementSibling;
+    for (let seen = 0; sibling && seen < 2; seen += 1, sibling = sibling.previousElementSibling) {
+      if (['SCRIPT', 'STYLE', 'TEMPLATE'].includes(String(sibling.tagName).toUpperCase())) continue;
+      if (holdsControl(sibling)) return '';
+      const text = String(sibling.textContent || '').replace(/\s+/g, ' ').trim();
+      if (text) return text.length <= NEARBY_LABEL_MAX ? text : '';
+    }
+    const parent = node.parentElement;
+    if (typeof parent.querySelectorAll !== 'function' || parent.querySelectorAll(CONTROL_SELECTOR).length > 1) return '';
+    node = parent;
+  }
+  return '';
+}
+
 function addressFieldHint(control) {
-  const labels = Array.from(control.labels || [], (label) => addressLabelText(label, control));
+  const labels = labelTexts(control);
   const hints = [control.name, control.id, control.getAttribute('aria-label'), ...labels];
   for (const hint of hints) {
     const text = String(hint || '').normalize('NFKC')
@@ -503,9 +547,9 @@ const REGISTRATION_ACTION_TEXT = WORD([
   'зарегистрироваться', 'регистрация', 'создать (?:аккаунт|учетную запись|учётную запись)',
 ].join('|'));
 
-// The texts that describe a control: name, id, aria-label, placeholder, associated labels.
+// The texts that describe a control: name, id, aria-label, placeholder, its labels (labelTexts).
 function controlHints(control) {
-  const labels = Array.from(control.labels || [], (label) => addressLabelText(label, control));
+  const labels = labelTexts(control);
   return [
     control.getAttribute('name'), control.getAttribute('id'), control.getAttribute('aria-label'),
     control.getAttribute('placeholder'), ...labels,
@@ -603,6 +647,7 @@ var mypassFormDetection = {
   findFillableFields,
   findLoginForm,
   addressFieldHint,
+  labelTexts,
   identityFieldHint,
   isSensitiveFieldHint,
   isSensitivePasswordHint,
