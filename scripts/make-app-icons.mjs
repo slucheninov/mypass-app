@@ -1,9 +1,6 @@
 // Generates the MyPass app icon in a light and a dark variant from one key drawing.
 //
-// The key is the shape of the old app's brand key (round bow with an eye near the top, a straight
-// shaft with three teeth on the right and a pointed tip), drawn as signed distance fields so every
-// size is antialiased without a rasterizer dependency. The same key-unit geometry is the outline
-// SVG of the empty detail pane (`src/screens/DetailEmpty.svelte`).
+// The green key uses the same signed distance geometry as the tray icons.
 //
 // Outputs (committed; a Node test compares them with this generator pixel for pixel):
 // - `src-tauri/icons/source.png`, 1024 px light: the input of `pnpm tauri icon` (bundle icons).
@@ -13,6 +10,7 @@
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { keyDistanceAt } from "./key-shape.mjs";
 import { encodePng } from "./make-locked-icons.mjs";
 
 /** Every committed output: file name, variant and pixel size. */
@@ -28,16 +26,16 @@ const PALETTES = {
     tileTop: [255, 255, 255],
     tileBottom: [226, 226, 232],
     edge: [0, 0, 0, 0.07],
-    keyTop: [64, 64, 70],
-    keyBottom: [28, 28, 30],
+    keyTop: [134, 196, 108],
+    keyBottom: [92, 150, 68],
     keyShadow: 0.22,
   },
   dark: {
     tileTop: [60, 60, 64],
     tileBottom: [22, 22, 24],
     edge: [255, 255, 255, 0.12],
-    keyTop: [255, 255, 255],
-    keyBottom: [208, 208, 216],
+    keyTop: [134, 196, 108],
+    keyBottom: [92, 150, 68],
     keyShadow: 0.5,
   },
 };
@@ -48,17 +46,8 @@ const TILE_MAX = 924;
 const TILE_RADIUS = 185;
 const TILE_SHADOW = { dy: 10, blur: 26, alpha: 0.3 };
 
-// The key, in key units (the outline SVG uses the same numbers), placed 6 px per unit around the
-// tile centre. Bow: circle; eye: circle cut out; shaft, teeth and tip: one polygon, rounded.
-const KEY_SCALE = 6;
-const KEY_CENTER = [50, 49.25];
-const BOW = { x: 50, y: 26, r: 24 };
-const EYE = { x: 50, y: 19.5, r: 6.5 };
-const ROUNDING = 1.2;
-export const SHAFT = [
-  [56, 40], [56, 54], [63, 60], [57, 65], [63, 70], [57, 75], [63, 80], [56, 86],
-  [56, 89], [48.5, 96.5], [41, 89], [41, 40],
-];
+// Place the bow above and left of centre on the tile, leaving room for the tilted shaft.
+const KEY = { cx: 451, cy: 386, scale: 6 };
 const KEY_SHADOW = { dy: 12, blur: 30 };
 
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -77,35 +66,9 @@ function roundedBox(x, y) {
   return length(Math.max(dx, 0), Math.max(dy, 0)) + Math.min(Math.max(dx, dy), 0) - TILE_RADIUS;
 }
 
-function polygon(px, py, points) {
-  let best = Infinity;
-  let inside = false;
-  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
-    const [ax, ay] = points[j];
-    const [bx, by] = points[i];
-    const ex = bx - ax;
-    const ey = by - ay;
-    const t = clamp01(((px - ax) * ex + (py - ay) * ey) / (ex * ex + ey * ey));
-    const d = length(px - ax - ex * t, py - ay - ey * t);
-    if (d < best) best = d;
-    if ((ay > py) !== (by > py) && px < ax + ((py - ay) * ex) / ey) inside = !inside;
-  }
-  return inside ? -best : best;
-}
-
-/** Signed distance to the key in key units (negative inside). */
-export function keyDistance(u, v) {
-  const bow = length(u - BOW.x, v - BOW.y) - BOW.r;
-  const shaft = polygon(u, v, SHAFT) - ROUNDING;
-  const eye = length(u - EYE.x, v - EYE.y) - EYE.r;
-  return Math.max(Math.min(bow, shaft), -eye);
-}
-
 /** Signed distance to the key in 1024-grid pixels. */
 function keyPixels(x, y) {
-  const u = (x - 512) / KEY_SCALE + KEY_CENTER[0];
-  const v = (y - 512) / KEY_SCALE + KEY_CENTER[1];
-  return keyDistance(u, v) * KEY_SCALE;
+  return keyDistanceAt(x, y, KEY) * KEY.scale;
 }
 
 const mix = (a, b, t) => a + (b - a) * t;

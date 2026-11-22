@@ -10,9 +10,9 @@
 use mypass_session::settings::AppIcon;
 use std::sync::{Mutex, PoisonError};
 
-/// The light variant (light tile, dark key), also the bundle icon.
+/// The light variant (light tile, green key), also the bundle icon.
 pub const LIGHT_PNG: &[u8] = include_bytes!("../icons/app-light.png");
-/// The dark variant (dark tile, light key).
+/// The dark variant (dark tile, green key).
 pub const DARK_PNG: &[u8] = include_bytes!("../icons/app-dark.png");
 
 /// Which of the two icons the app shows.
