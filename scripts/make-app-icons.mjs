@@ -48,7 +48,7 @@ const TILE_SHADOW = { dy: 10, blur: 26, alpha: 0.3 };
 
 // Place the bow above and left of centre on the tile, leaving room for the tilted shaft.
 const KEY = { cx: 451, cy: 386, scale: 6 };
-const KEY_SHADOW = { dy: 12, blur: 30 };
+const KEY_SHADOW = { dy: 12, sigma: 10 };
 
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 const length = (x, y) => Math.sqrt(x * x + y * y);
@@ -71,6 +71,46 @@ function keyPixels(x, y) {
   return keyDistanceAt(x, y, KEY) * KEY.scale;
 }
 
+function keyShadowMask(size, scale) {
+  const sigma = KEY_SHADOW.sigma / scale;
+  const radius = Math.ceil(3 * sigma);
+  const weights = Array.from({ length: 2 * radius + 1 }, (_, index) =>
+    Math.exp(-0.5 * ((index - radius) / sigma) ** 2));
+  const sum = weights.reduce((total, weight) => total + weight, 0);
+  const kernel = weights.map((weight) => weight / sum);
+  const mask = new Float32Array(size * size);
+  for (let row = 0; row < size; row++) {
+    const y = (row + 0.5) * scale - KEY_SHADOW.dy;
+    for (let col = 0; col < size; col++) {
+      const x = (col + 0.5) * scale;
+      mask[row * size + col] = clamp01(0.5 - keyPixels(x, y) / scale);
+    }
+  }
+
+  // Blur the silhouette in two passes so corners and teeth cast the same soft shadow.
+  const horizontal = new Float32Array(mask.length);
+  const blurred = new Float32Array(mask.length);
+  for (let row = 0; row < size; row++) {
+    for (let col = 0; col < size; col++) {
+      let alpha = 0;
+      for (let x = Math.max(0, col - radius); x <= Math.min(size - 1, col + radius); x++) {
+        alpha += mask[row * size + x] * kernel[x - col + radius];
+      }
+      horizontal[row * size + col] = alpha;
+    }
+  }
+  for (let row = 0; row < size; row++) {
+    for (let col = 0; col < size; col++) {
+      let alpha = 0;
+      for (let y = Math.max(0, row - radius); y <= Math.min(size - 1, row + radius); y++) {
+        alpha += horizontal[y * size + col] * kernel[y - row + radius];
+      }
+      blurred[row * size + col] = alpha;
+    }
+  }
+  return blurred;
+}
+
 const mix = (a, b, t) => a + (b - a) * t;
 
 /** Source-over of a straight-alpha colour onto a straight-alpha pixel. */
@@ -88,6 +128,7 @@ export function renderIcon(variant, size) {
   const palette = PALETTES[variant];
   if (!palette) throw new Error(`Unknown variant ${variant}`);
   const scale = 1024 / size;
+  const keyShadow = keyShadowMask(size, scale);
   const rgba = Buffer.alloc(size * size * 4);
   const pixel = [0, 0, 0, 0];
   for (let row = 0; row < size; row++) {
@@ -111,8 +152,7 @@ export function renderIcon(variant, size) {
         const [er, eg, eb, ea] = palette.edge;
         over(layer, [er, eg, eb], ea * clamp01(1 - Math.abs(tile + 2 * scale) / (1.5 * scale)));
         // Key shadow and key, clipped to the tile.
-        const keyShadow = keyPixels(x, y - KEY_SHADOW.dy);
-        over(layer, [0, 0, 0], palette.keyShadow * (1 - smoothstep(-KEY_SHADOW.blur / 3, KEY_SHADOW.blur, keyShadow)));
+        over(layer, [0, 0, 0], palette.keyShadow * keyShadow[row * size + col]);
         const key = keyPixels(x, y);
         const keyCover = clamp01(0.5 - key / scale);
         if (keyCover > 0) {

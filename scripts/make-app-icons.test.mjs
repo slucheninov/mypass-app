@@ -30,3 +30,10 @@ test("both tiles carry the same green reference key", () => {
     assert.equal(at(img, 0, 0)[3], 0, "the corner outside the tile is transparent");
   }
 });
+
+test("the key shadow fades past the tip without leaving a streak", () => {
+  const { rgba, width } = renderIcon("light", 1024);
+  const red = (x, y) => rgba[(y * width + x) * 4];
+  assert.ok(red(608, 791) < red(500, 791), "a shadow remains near the tip");
+  assert.equal(red(622, 814), red(500, 814), "the tile is clear beyond the shadow");
+});
