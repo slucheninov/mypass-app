@@ -17,7 +17,8 @@
   import PasswordField from "../lib/ui/PasswordField.svelte";
   import KeyboardLayoutBadge from "./KeyboardLayoutBadge.svelte";
   import UnlockExtras from "./UnlockExtras.svelte";
-  import { connectedInfo, fileNameOf, folderOf, statusKind, statusLabel } from "./vault-status";
+  import { connectedInfo, fileNameOf, statusKind, statusLabel } from "./vault-status";
+  import VaultLocation from "./VaultLocation.svelte";
 
   let { compact = false }: { compact?: boolean } = $props();
 
@@ -76,7 +77,7 @@
     <Icon name="lock" size={compact ? 22 : 28} />
     <div class="names">
       <h1>{fileNameOf(path)}</h1>
-      <div class="folder">{folderOf(path)}</div>
+      <div class="folder"><VaultLocation {path} /></div>
     </div>
   </div>
   {#if kind}

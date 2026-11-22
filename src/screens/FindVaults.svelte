@@ -8,7 +8,8 @@
   import { openVaultAtPath } from "../lib/open-flow";
   import Button from "../lib/ui/Button.svelte";
   import Modal from "../lib/ui/Modal.svelte";
-  import { fileNameOf, folderOf } from "./vault-status";
+  import { fileNameOf } from "./vault-status";
+  import VaultLocation from "./VaultLocation.svelte";
 
   let { onclose }: { onclose: () => void } = $props();
 
@@ -59,7 +60,7 @@
         <li>
           <button type="button" class="row" onclick={() => void choose(file.path)}>
             <span class="name">{fileNameOf(file.path)}</span>
-            <span class="folder">{folderOf(file.path)}</span>
+            <span class="folder"><VaultLocation path={file.path} /></span>
             <span class="meta">
               {#if file.size !== null}<span>{formatBytes(file.size)}</span>{/if}
               {#if file.modified !== null}<span>{formatDate(file.modified)}</span>{/if}

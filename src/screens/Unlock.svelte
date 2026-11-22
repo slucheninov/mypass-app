@@ -15,7 +15,7 @@
   import CreateVault from "./CreateVault.svelte";
   import FindVaults from "./FindVaults.svelte";
   import UnlockCard from "./UnlockCard.svelte";
-  import { folderOf } from "./vault-status";
+  import VaultLocation from "./VaultLocation.svelte";
 
   onMount(() => {
     let active = true;
@@ -86,7 +86,7 @@
             {#if recent.exists}
               <button type="button" class="recent" onclick={() => void openVaultAtPath(recent.path)}>
                 <span class="name">{recent.fileName}</span>
-                <span class="folder">{folderOf(recent.path)}</span>
+                <span class="folder"><VaultLocation path={recent.path} /></span>
               </button>
             {:else}
               <span class="recent missing">
@@ -113,7 +113,7 @@
           <span class="file-icon"><Icon name="note" size={22} /></span>
           <span class="names">
             <span class="name">{recent.fileName}</span>
-            <span class="folder">{folderOf(recent.path)}</span>
+            <span class="folder"><VaultLocation path={recent.path} /></span>
           </span>
           <span class="open">{t("Open")}</span>
         </button>
