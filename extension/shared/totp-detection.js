@@ -15,7 +15,80 @@ const totpBase32 = typeof require === 'function'
   : { isBase32Secret, normalizeBase32Candidate };
 
 const OTPAUTH_REGEX = /otpauth:\/\/totp\/[^\s"'<>]+/i;
-const MANUAL_KEY_LABEL_REGEX = /secret|manual|setup key|authenticator/i;
+// A setup key is offered only next to words that ask for one. Weak words ("secret",
+// "manual") are everywhere on ordinary pages (a "manual" gearbox, CSS `hyphens: manual`, an
+// OAuth `clientSecret` in a script), so the context has to name 2FA itself: in English,
+// German, Ukrainian and Russian. Cyrillic is written as escapes (this file is not one of
+// the files allowed to hold literal Cyrillic).
+const TOTP_CONTEXT_REGEX = new RegExp([
+  'authenticat(?:or|ion app)', '\\b2fa\\b', '\\bmfa\\b', '\\btotp\\b', 'two[\\s-]?factor',
+  'multi[\\s-]?factor', '(?:two|2)[\\s-]?step', 'setup[\\s-]?key', 'secret[\\s-]?key',
+  // de: Zwei-Faktor, 2-Faktor, Authentifizierungs-App, Einrichtungsschlüssel, geheimer Schlüssel
+  'zwei[\\s-]?faktor', '2[\\s-]?faktor', 'authentifizierungs[\\s-]?app',
+  'einrichtungs[\\s-]?schlüssel', 'geheimer\\s+schlüssel', 'geheimschlüssel',
+  // uk: authenticator, two-factor, two-step, secret key, setup key
+  '\u0430\u0432\u0442\u0435\u043d\u0442\u0438\u0444\u0456\u043a\u0430\u0442\u043e\u0440',
+  '\u0434\u0432\u043e\u0444\u0430\u043a\u0442\u043e\u0440\u043d',
+  '\u0434\u0432\u043e\u0435\u0442\u0430\u043f\u043d',
+  '\u0441\u0435\u043a\u0440\u0435\u0442\u043d\u0438\u0439\\s+\u043a\u043b\u044e\u0447',
+  '\u043a\u043b\u044e\u0447\\s+\u043d\u0430\u043b\u0430\u0448\u0442\u0443\u0432\u0430\u043d\u043d\u044f',
+  // ru: authenticator, two-factor, two-step, secret key, setup key
+  '\u0430\u0443\u0442\u0435\u043d\u0442\u0438\u0444\u0438\u043a\u0430\u0442\u043e\u0440',
+  '\u0434\u0432\u0443\u0445\u0444\u0430\u043a\u0442\u043e\u0440\u043d',
+  '\u0434\u0432\u0443\u0445\u044d\u0442\u0430\u043f\u043d',
+  '\u0441\u0435\u043a\u0440\u0435\u0442\u043d\u044b\u0439\\s+\u043a\u043b\u044e\u0447',
+  '\u043a\u043b\u044e\u0447\\s+\u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438',
+].join('|'), 'i');
+// How far up from the key's own element the context may sit: the key's line, its card and
+// the setup step around it, not the page as a whole.
+const CONTEXT_LEVELS = 4;
+
+// Text a person can see. Scripts, styles, metadata, templates and hidden subtrees hold
+// strings no setup page shows (an OAuth client secret, an "outdated browser" banner kept
+// in the DOM for later), so they never count as a key or as its context.
+const INVISIBLE_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'HEAD', 'META', 'LINK',
+  'TITLE', 'SVG', 'IFRAME', 'OBJECT', 'CANVAS', 'TEXTAREA', 'SELECT']);
+
+function isElementHidden(element) {
+  return INVISIBLE_TAGS.has(element.tagName) || isHiddenByStyle(element);
+}
+
+function isHiddenByStyle(element) {
+  if (element.hidden || element.getAttribute('aria-hidden') === 'true') return true;
+  const view = element.ownerDocument && element.ownerDocument.defaultView;
+  if (!view || typeof view.getComputedStyle !== 'function') return false;
+  const style = view.getComputedStyle(element);
+  if (!style) return false;
+  return style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse'
+    || style.opacity === '0';
+}
+
+// The visible text nodes under `root`, in document order, as { text, element }.
+function visibleTextNodes(root) {
+  const out = [];
+  const visit = (node) => {
+    for (const child of node.childNodes || []) {
+      if (child.nodeType === 3) {
+        if (child.nodeValue && child.nodeValue.trim()) out.push({ text: child.nodeValue, element: node });
+      } else if (child.nodeType === 1 && !isElementHidden(child)) {
+        visit(child);
+      }
+    }
+  };
+  if (root && root.nodeType === 1 && isElementHidden(root)) return out;
+  if (root) visit(root);
+  return out;
+}
+
+function visibleText(root) {
+  return visibleTextNodes(root).map((entry) => entry.text).join(' ');
+}
+
+function scanRoot(root) {
+  const scope = root || (typeof document !== 'undefined' ? document : null);
+  if (!scope) return null;
+  return scope.body || scope;
+}
 
 function detectOtpauthLink(root) {
   const scope = root || document;
@@ -29,110 +102,126 @@ function detectOtpauthLink(root) {
 }
 
 function detectOtpauthText(root) {
-  const scope = root || document;
-  const body = scope.body || scope;
+  const body = scanRoot(root);
   if (!body) return null;
-  const text = body.textContent || '';
-  const match = text.match(OTPAUTH_REGEX);
+  // Cheap check first: most pages hold no otpauth URL at all, in any text.
+  if (!OTPAUTH_REGEX.test(body.textContent || '')) return null;
+  const match = visibleText(body).match(OTPAUTH_REGEX);
   return match ? match[0] : null;
 }
 
-// A plain sliding window over every token (including surrounding label words) is unsafe:
-// concatenating enough ordinary sentence words (e.g. "Your"+"manual"+"setup"+"key" ->
-// "YOURMANUALSETUPKEY") can accidentally satisfy the base32 alphabet+length check before
-// the real key is ever reached. Real setup keys are rendered either all-uppercase or
-// all-lowercase (e.g. "JBSW Y3DP EHPK 3PXP" or "jbsw y3dp ehpk 3pxp"), so restrict
-// the scan to maximal runs of tokens that are uniformly one case as written, which
-// excludes ordinary mixed-case words. A token holding a character outside the base32
-// alphabet (0, 1, 8, 9) can never be part of a key, so it ends the run.
-//
-// Inside a run the group structure decides what is a key, not a window size:
-//   1. A token whose width differs from both neighbours is a standalone key candidate.
-//      Those are tried first (unambiguous, no grouping to verify).
-//   2. Real grouped keys use fixed-width groups (e.g. 8x4 chars); prose words have varied
-//      lengths. So a candidate is a maximal block of consecutive equal-width tokens, taken
-//      as a whole. The whole block is validated, never a sub-span or a prefix of it, so a
-//      32-char key is not cut to its first valid 16-char prefix, and a key longer than 8
-//      groups is not cut at an arbitrary token count. A block that does not validate (for
-//      example one past the base32 length cap) is skipped, so detection fails closed.
-//
-// Limitations: an all-lowercase or all-uppercase key is indistinguishable from a run of
-// same-width words (a 4-letter label word such as "NEXT" directly before or after a
-// 4-wide grouped key joins its block, as does a 2-letter word such as "OK" after a key
-// grouped in 2s). A key whose final group is narrower than the others (a 26-char key
-// rendered as 6x4 + 2) is NOT supported: the short tail is indistinguishable from a
-// trailing prose word ("OK", "IN", "AM"), and absorbing it would corrupt the secret of
-// every ordinary key that is followed by such a word. Such a key is read as its
-// uniform-width groups only, which may be a valid-looking incomplete secret; that is a
-// known limitation, not a claim that the result is the complete key. The same holds for a
-// key whose groups are not all the same width (mixed-width groups): only the uniform
-// prefix block is read. Detection does not promise universal coverage; label words of
-// other widths are never absorbed.
-//
-// Digit-only tokens (2-7) are valid in both cases, so they belong to an uppercase run and
-// a lowercase run alike. Runs are therefore collected per case over the whole token list,
-// which keeps "2345 6723 jbsw y3dp ..." from losing its leading numeric groups to an
-// uppercase run that stops at the first lowercase letter.
-const CAPS_TOKEN_REGEX = /^[A-Z2-7]+$/;
-const LOWER_TOKEN_REGEX = /^[a-z2-7]+$/;
+// A setup key is a distinct token on the page, never words joined across a sentence: joining
+// the tokens of "Use the authenticator app to finish this step with code sent here." gave
+// THISSTEPWITHCODESENT, a valid-looking base32 string. So a key candidate is one of:
+//   - the entire (whitespace-collapsed) visible text of its own element: a <code>, <kbd>,
+//     <samp>, <tt>, <strong> or a monospace <span> holding just the key is that element;
+//   - that text after a short label ("Key:", "Secret key:", "Schlüssel:", "\u041a\u043b\u044e\u0447:" (uk/ru "key")): at most
+//     three words and a colon in the same element, or the label in its own child element right
+//     before the key's text node (<p><b>Secret</b> JBSW Y3DP …</p>);
+//   - the value of a read-only <input> or <textarea>.
+// The token itself must be all upper or all lower case and either
+//   - grouped: 4 to 8 groups of exactly 4 base32 characters separated by single spaces, the
+//     only form allowed without a digit (Google shows "aabb ccdd …" in lowercase), or
+//   - a single token holding at least one base32 digit (2-7): a 16+ letter word such as
+//     OUTDATEDINTERNET is a word, not a key.
+// Every other shape (groups of 8, more than 8 groups, a trailing word) is rejected: detection
+// fails closed and the user can still paste the key in the popup.
+const GROUPED_KEY_REGEX = /^(?:[A-Z2-7]{4}(?: [A-Z2-7]{4}){3,7}|[a-z2-7]{4}(?: [a-z2-7]{4}){3,7})$/;
+const SINGLE_KEY_REGEX = /^(?:[A-Z2-7]+|[a-z2-7]+)$/;
+const KEY_LABEL_REGEX = /^[\p{L}\p{M}][\p{L}\p{M}'’-]*(?: [\p{L}\p{M}][\p{L}\p{M}'’-]*){0,2}$/u;
+const MAX_LABEL_CHARS = 32;
+// Longest element text worth looking at: a 128-char key in groups, plus a label.
+const MAX_KEY_TEXT = 200;
 
-// Returns the normalized key found in one case-uniform run of tokens, or null.
-function extractKeyFromRun(run) {
-  const blocks = [];
-  for (let start = 0; start < run.length;) {
-    let end = start + 1;
-    while (end < run.length && run[end].length === run[start].length) end += 1;
-    blocks.push({ start, end });
-    start = end;
+function collapseSpaces(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim();
+}
+
+function keyFromToken(token) {
+  if (GROUPED_KEY_REGEX.test(token)) {
+    const joined = token.replace(/ /g, '');
+    return totpBase32.isBase32Secret(joined) ? totpBase32.normalizeBase32Candidate(joined) : null;
   }
-  for (const { start, end } of blocks) {
-    if (end - start === 1 && totpBase32.isBase32Secret(run[start])) {
-      return totpBase32.normalizeBase32Candidate(run[start]);
-    }
-  }
-  for (const { start, end } of blocks) {
-    if (end - start < 2) continue;
-    const candidate = run.slice(start, end).join('');
-    if (totpBase32.isBase32Secret(candidate)) {
-      return totpBase32.normalizeBase32Candidate(candidate);
-    }
+  if (SINGLE_KEY_REGEX.test(token) && /[2-7]/.test(token) && totpBase32.isBase32Secret(token)) {
+    return totpBase32.normalizeBase32Candidate(token);
   }
   return null;
 }
 
-// Maximal runs of consecutive tokens that all match tokenRegex, with their start index.
-function collectRuns(tokens, tokenRegex) {
-  const runs = [];
-  for (let i = 0; i < tokens.length;) {
-    if (!tokenRegex.test(tokens[i])) {
-      i += 1;
-      continue;
-    }
-    let runEnd = i;
-    while (runEnd < tokens.length && tokenRegex.test(tokens[runEnd])) runEnd += 1;
-    runs.push({ start: i, tokens: tokens.slice(i, runEnd) });
-    i = runEnd;
+function isShortLabel(text) {
+  const label = collapseSpaces(text).replace(/:$/, '').trim();
+  return label.length > 0 && label.length <= MAX_LABEL_CHARS && KEY_LABEL_REGEX.test(label);
+}
+
+// The key `element` shows as a distinct token (see above), or null.
+function keyShownBy(element) {
+  const text = collapseSpaces(visibleText(element));
+  if (!text || text.length > MAX_KEY_TEXT) return null;
+  const whole = keyFromToken(text);
+  if (whole) return whole;
+  const colon = text.indexOf(':');
+  if (colon > 0 && isShortLabel(text.slice(0, colon))) {
+    const labelled = keyFromToken(text.slice(colon + 1).trim());
+    if (labelled) return labelled;
   }
-  return runs;
+  const parts = Array.from(element.childNodes || []).filter((child) => (child.nodeType === 3
+    ? !!(child.nodeValue && child.nodeValue.trim()) : child.nodeType === 1 && !isElementHidden(child)));
+  if (parts.length === 2 && parts[0].nodeType === 1 && parts[1].nodeType === 3 && isShortLabel(visibleText(parts[0]))) {
+    return keyFromToken(collapseSpaces(parts[1].nodeValue));
+  }
+  return null;
+}
+
+// Hidden by its own style or attributes, or by an ancestor's.
+function isInHiddenSubtree(element) {
+  for (let node = element; node && node.nodeType === 1; node = node.parentElement) {
+    if (node === element ? isHiddenByStyle(node) : isElementHidden(node)) return true;
+  }
+  return false;
+}
+
+// The key in a read-only text field's value, or null.
+function keyInReadOnlyField(field) {
+  const type = String(field.getAttribute('type') || '').toLowerCase();
+  if (field.tagName === 'INPUT' && ['hidden', 'password', 'checkbox', 'radio', 'button', 'submit'].includes(type)) return null;
+  if (isInHiddenSubtree(field)) return null;
+  const value = collapseSpaces(field.value);
+  return value && value.length <= MAX_KEY_TEXT ? keyFromToken(value) : null;
+}
+
+// True when the key's element or one of its nearest ancestors shows 2FA wording.
+function hasContextNear(element) {
+  let node = element;
+  for (let level = 0; node && level <= CONTEXT_LEVELS; level += 1) {
+    if (TOTP_CONTEXT_REGEX.test(visibleText(node))) return true;
+    if (node.tagName === 'BODY') return false;
+    node = node.parentElement;
+  }
+  return false;
 }
 
 function detectManualSetupKey(root) {
-  const scope = root || document;
-  const body = scope.body || scope;
+  const body = scanRoot(root);
   if (!body) return null;
-  const text = (body.textContent || '').replace(/\s+/g, ' ');
-  if (!MANUAL_KEY_LABEL_REGEX.test(text)) return null;
-  const tokens = text.split(' ').filter(Boolean);
-  // Document order decides which key wins. At the same start (leading numeric groups are
-  // valid in both cases, so an uppercase and a lowercase run begin together) the longer run
-  // goes first: the shorter one is only the numeric prefix of the complete key and would
-  // otherwise win and return that prefix as a valid-looking incomplete secret.
-  const runs = collectRuns(tokens, CAPS_TOKEN_REGEX)
-    .concat(collectRuns(tokens, LOWER_TOKEN_REGEX))
-    .sort((a, b) => a.start - b.start || b.tokens.length - a.tokens.length);
-  for (const run of runs) {
-    const key = extractKeyFromRun(run.tokens);
-    if (key) return key;
+  // Cheap check first, over all text: no 2FA wording anywhere means no visible key context.
+  if (!TOTP_CONTEXT_REGEX.test(body.textContent || '')) return null;
+  // The elements that directly hold visible text, in document order: each is a candidate.
+  const elements = [];
+  const seen = new Set();
+  for (const entry of visibleTextNodes(body)) {
+    if (seen.has(entry.element)) continue;
+    seen.add(entry.element);
+    elements.push(entry.element);
+  }
+  for (const element of elements) {
+    const key = keyShownBy(element);
+    if (key && hasContextNear(element)) return key;
+  }
+  if (typeof body.querySelectorAll === 'function') {
+    for (const field of body.querySelectorAll('input[readonly], textarea[readonly]')) {
+      const key = keyInReadOnlyField(field);
+      if (key && hasContextNear(field)) return key;
+    }
   }
   return null;
 }

@@ -541,6 +541,220 @@
     input.dispatchEvent(new EventCtor('change', { bubbles: true }));
   }
 
+  // The password fields this script has seen, so a field a show-password toggle turned into
+  // type=text still counts as a password while it holds the password typed into it (for the
+  // confirm fill and for the save on submit; registration-form.js `createPasswordMemory`).
+  const passwordFieldMemory = shared.registrationForm.createPasswordMemory();
+  const passwordMemory = { wasPassword: passwordFieldMemory.wasPassword };
+
+  function rememberPasswordFields(root) {
+    passwordFieldMemory.observeAll(root);
+  }
+
+  // A generated password goes into the field it was generated for and into the confirm or repeat
+  // field of the same form (registration-form.js `newPasswordTargets`), so the two always match.
+  // Only fields really on the page are chosen (form-detection.js `isControlOnPage`: no field moved
+  // off-screen or clipped to a pixel). Every write runs the page's input and change handlers,
+  // which may hide, retype, detach or move the next field, so each target is checked again right
+  // before its own write: still connected, on the page, a password field (or one revealed by a
+  // show toggle, `options.wasPassword`), in the same <form> and still in the generated field's
+  // group. Returns the fields written.
+  function fillGeneratedPassword(doc, input, password, setValue, options) {
+    const registration = shared.registrationForm;
+    const opts = { ...passwordMemory, ...(options || {}) };
+    if (typeof opts.isVisible !== 'function') opts.isVisible = shared.formDetection.isControlOnPage;
+    const targets = registration.newPasswordTargets(doc, input, opts);
+    const formAtSelection = new Map(targets.map((node) => [node, node.form || null]));
+    // The field the user generated for may be a plain text field the generator was offered on;
+    // it only has to stay what it was.
+    const inputWasPassword = registration.isPasswordLike(input, opts);
+    const stillTarget = (node) => node.isConnected !== false
+      && (node.form || null) === formAtSelection.get(node)
+      && opts.isVisible(node)
+      && (registration.isPasswordLike(node, opts) || (node === input && !inputWasPassword))
+      && registration.newPasswordTargets(doc, input, opts).includes(node);
+    const written = [];
+    for (const node of targets) {
+      if (!stillTarget(node)) continue;
+      setValue(node, password);
+      written.push(node);
+    }
+    return written;
+  }
+
+  // What a sign-up submit would save, read at the moment of the submit: `{ captured, watch }`,
+  // where `captured` is registration-form.js `capture` (the login and the form's other values)
+  // and `watch` the nodes whose disappearance shows the submit worked (the password fields and
+  // the <form> element, if any). Null when `node` is in no sign-up form with a new password.
+  // `options` are `formFor`'s (wasPassword, isVisible).
+  function snapshotRegistration(doc, node, submitter, options) {
+    const formOptions = { ...(options || {}) };
+    if (submitter) formOptions.submitter = submitter;
+    const form = shared.registrationForm.formFor(doc, node, formOptions);
+    if (!form || !form.newPassword) return null;
+    const captured = shared.registrationForm.capture(form);
+    if (!captured) return null;
+    const watch = (form.passwords && form.passwords.length ? form.passwords : [form.newPassword]).slice();
+    if (form.owner && form.owner.nodeType === 1) watch.push(form.owner);
+    return { captured, watch };
+  }
+
+  // How long a submit waits for the page to show it worked, and how often it looks.
+  const SUBMIT_EVIDENCE_MS = 5000;
+  const SUBMIT_POLL_MS = 250;
+
+  // Turns the page's events into "the user submitted a sign-up form, and it worked" and calls
+  // `propose(captured, url)` for it (the password is read only on a trusted submit, and sent only
+  // from `propose`, so never on a fill or a keystroke). The submit-like actions, each a trusted
+  // user action (`isUserSubmit`):
+  //   - the `submit` event of a <form> (fires only after the browser's validation passed);
+  //   - a click on a script-driven "Sign up" control (no form, or not a submit control), and a
+  //     click on a native submit button whose default the page cancels: single-page apps often
+  //     prevent it and post the form themselves, so no `submit` event ever fires. The check
+  //     runs after the click was handled (`defer`): by then a native submit has fired its
+  //     event, which is the one that counts;
+  //   - Enter in a field: a form-less group never submits natively, so Enter is its submit; in a
+  //     <form> it counts only when no `submit` followed and the page took the key itself.
+  // Each takes a `snapshot` at once (the values as submitted: a success view may clear them), but
+  // a snapshot is proposed only on evidence that the page acted on the submit within
+  // SUBMIT_EVIDENCE_MS: the URL changed (a navigation, pushState/replaceState, popstate or
+  // hashchange; a content script cannot hook the page's history calls, so `getUrl` is compared on
+  // every poll and `onUrlChange` checks at once), the page is being left (`onPageHide`), or a
+  // watched node (a password field, the <form>) was detached or hidden (`isShown`). A form that
+  // stays as it was at an unchanged URL only showed validation errors: the snapshot is dropped.
+  // A native submit the page does not cancel navigates, so it is proposed right away, before the
+  // page unloads. A click or Enter that the browser's validation stopped asks nothing. A newer
+  // snapshot of the same form replaces the pending one.
+  function createRegistrationSubmitWatcher(deps) {
+    const { isUserSubmit: isUser, defer, snapshot, propose, getUrl, isShown, setTimer, clearTimer } = deps;
+    const NOT_TEXT = new Set(['button', 'submit', 'image', 'reset', 'checkbox', 'radio', 'file', 'range', 'color']);
+    const pending = new Set();
+    let submits = 0;
+
+    function settle(entry, accept) {
+      if (!pending.delete(entry)) return;
+      if (entry.timer !== null) clearTimer(entry.timer);
+      entry.timer = null;
+      if (accept) propose(entry.taken.captured, entry.url);
+    }
+    function worked(entry) {
+      if (getUrl() !== entry.url) return true;
+      return entry.taken.watch.some((node) => !node || node.isConnected === false || !isShown(node));
+    }
+    function poll(entry) {
+      entry.timer = null;
+      if (!pending.has(entry)) return;
+      if (worked(entry)) {
+        settle(entry, true);
+        return;
+      }
+      entry.waited += SUBMIT_POLL_MS;
+      if (entry.waited >= SUBMIT_EVIDENCE_MS) {
+        settle(entry, false);
+        return;
+      }
+      entry.timer = setTimer(() => poll(entry), SUBMIT_POLL_MS);
+    }
+    function hold(taken) {
+      if (!taken) return null;
+      for (const other of Array.from(pending)) {
+        if (other.taken.watch[0] === taken.watch[0]) settle(other, false);
+      }
+      const entry = { taken, url: getUrl(), waited: 0, timer: null };
+      pending.add(entry);
+      entry.timer = setTimer(() => poll(entry), SUBMIT_POLL_MS);
+      return entry;
+    }
+    function onSubmit(event) {
+      submits += 1;
+      if (!isUser(event)) return;
+      const entry = hold(snapshot(event.target, event.submitter || null));
+      if (!entry) return;
+      defer(() => {
+        if (!event.defaultPrevented) settle(entry, true);
+      });
+    }
+    function onClick(event) {
+      if (!isUser(event)) return;
+      const control = event.target && typeof event.target.closest === 'function'
+        ? event.target.closest('button, input[type="submit"], input[type="button"], input[type="image"], [role="button"]') : null;
+      if (!control) return;
+      if (shared.registrationForm.isScriptSubmitControl(control)) {
+        hold(snapshot(control, control));
+        return;
+      }
+      if (!shared.registrationForm.isNativeSubmitControl(control)) return;
+      const before = submits;
+      const taken = snapshot(control, control);
+      if (!taken) return;
+      defer(() => {
+        if (submits === before && event.defaultPrevented) hold(taken);
+      });
+    }
+    function onKeydown(event) {
+      if (event.key !== 'Enter' || event.isComposing || !isUser(event)) return;
+      const field = event.target;
+      if (!field || field.tagName !== 'INPUT') return;
+      if (NOT_TEXT.has(String(field.getAttribute('type') || '').toLowerCase())) return;
+      const before = submits;
+      const taken = snapshot(field, null);
+      if (!taken) return;
+      defer(() => {
+        if (submits !== before) return;
+        if (field.form && !event.defaultPrevented) return;
+        hold(taken);
+      });
+    }
+    function onUrlChange() {
+      for (const entry of Array.from(pending)) {
+        if (worked(entry)) settle(entry, true);
+      }
+    }
+    function onPageHide() {
+      for (const entry of Array.from(pending)) settle(entry, true);
+    }
+    return { onSubmit, onClick, onKeydown, onUrlChange, onPageHide };
+  }
+
+  // A short note after a generated password went into a sign-up form: MyPass will offer to save
+  // the login once the user submits it (nothing is sent before). One at a time, bottom right, in a
+  // closed shadow root so the page cannot read or restyle it, gone after a few seconds or on its
+  // close button. `options.text` and `options.closeLabel` are the localized strings.
+  const SAVE_HINT_MS = 6000;
+  const SAVE_HINT_STYLE = ':host{all:initial}'
+    + '.hint{display:flex;align-items:center;gap:8px;max-width:320px;padding:10px 12px;border-radius:10px;'
+    + 'background:#1c1c1e;color:#fff;font:13px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;'
+    + 'box-shadow:0 6px 24px rgba(0,0,0,.25)}'
+    + '.close{all:unset;cursor:pointer;padding:0 4px;font-size:16px;line-height:1;color:#c7c7cc}'
+    + '.close:focus-visible{outline:2px solid #0a84ff;border-radius:4px}';
+
+  function showSaveHintToast(doc, options) {
+    const opts = options || {};
+    for (const old of doc.querySelectorAll('[data-mypass-save-hint]')) old.remove();
+    const { host, shadow } = buildShadowHost(doc, 'data-mypass-save-hint', SAVE_HINT_STYLE);
+    host.style.setProperty('right', '16px', 'important');
+    host.style.setProperty('bottom', '16px', 'important');
+    const box = doc.createElement('div');
+    box.setAttribute('class', 'hint');
+    box.setAttribute('role', 'status');
+    box.setAttribute('aria-live', 'polite');
+    const text = doc.createElement('span');
+    text.textContent = opts.text || '';
+    box.appendChild(text);
+    const close = doc.createElement('button');
+    close.setAttribute('type', 'button');
+    close.setAttribute('class', 'close');
+    close.setAttribute('aria-label', opts.closeLabel || '');
+    close.textContent = '\u00d7';
+    close.addEventListener('click', trustedClickHandler(() => host.remove()));
+    box.appendChild(close);
+    shadow.appendChild(box);
+    (doc.body || doc.documentElement).appendChild(host);
+    const later = opts.setTimeout || setTimeout;
+    later(() => host.remove(), SAVE_HINT_MS);
+    return host;
+  }
+
   // Built from DOM nodes rather than an innerHTML string: sites that enforce the
   // require-trusted-types-for 'script' CSP directive throw on any innerHTML assignment,
   // and those are exactly the sites this feature most needs to work on.
@@ -719,6 +933,45 @@
       fits: placed.fits,
       intended: { left: placed.left, top: placed.top, width: placed.size, height: placed.size }
     };
+  }
+
+  // Whether something of the page covers the spot where `input`'s icon sits: a sticky header the
+  // field scrolled under, a cookie bar, a modal backdrop. The icon host is fixed and sits above
+  // every z-index, so without this check it is drawn over the header in place of the field
+  // (goldcar.es, after scrolling the driver details under the step bar). `hitTest(x, y)` lists the
+  // elements at a viewport point, topmost first (elementsFromPoint of the field's own root, so a
+  // field in a shadow root is hit-tested there); `isOwn(node)` says which are this script's hosts,
+  // skipped. `iconRect` is the placed icon's own box (its host's getBoundingClientRect, after
+  // placement), and its centre is the point tested. The spot is clear when the topmost other
+  // element is the field, inside it, around it (its wrapper or the page itself) or inside its
+  // visual box. No hit test, no verdict: not covered.
+  function isFieldSpotCovered(input, iconRect, hitTest, isOwn, fieldBoxElement) {
+    if (typeof hitTest !== 'function' || !iconRect || iconRect.width <= 0 || iconRect.height <= 0) return false;
+    const x = iconRect.left + iconRect.width / 2;
+    const y = iconRect.top + iconRect.height / 2;
+    let hits;
+    try {
+      hits = hitTest(x, y);
+    } catch (error) {
+      return false;
+    }
+    for (const hit of hits || []) {
+      if (typeof isOwn === 'function' && isOwn(hit)) continue;
+      if (hit === input) return false;
+      if (typeof hit.contains === 'function' && hit.contains(input)) return false;
+      if (typeof input.contains === 'function' && input.contains(hit)) return false;
+      if (fieldBoxElement && typeof fieldBoxElement.contains === 'function' && fieldBoxElement.contains(hit)) return false;
+      return true;
+    }
+    return false;
+  }
+
+  // The elementsFromPoint of the root `input` lives in (its shadow root, or its document).
+  function hitTesterFor(input) {
+    const root = input && typeof input.getRootNode === 'function' ? input.getRootNode() : null;
+    const scope = root && typeof root.elementsFromPoint === 'function' ? root
+      : (input && input.ownerDocument && typeof input.ownerDocument.elementsFromPoint === 'function' ? input.ownerDocument : null);
+    return scope ? (x, y) => scope.elementsFromPoint(x, y) : null;
   }
 
   // Where a host for `input` is mounted. A field inside an open modal <dialog> lives in the
@@ -1286,7 +1539,17 @@
         // important for the same reason as buildIconHost/positionHostToField: a plain
         // assignment here would silently drop the !important flag those set initially.
         record.host.style.setProperty('display', offscreen ? 'none' : 'block', 'important');
-        if (!offscreen) placeIconHost(record, input, rect);
+        if (offscreen) return;
+        placeIconHost(record, input, rect);
+        if (record.host.style.getPropertyValue('display') === 'none') return; // did not fit
+        // A field scrolled under a sticky header is on screen but not visible: its icon would be
+        // drawn over the header. Hit-test where the icon was really placed (isFieldSpotCovered);
+        // all of this runs in one frame, so a covered icon is never painted.
+        const found = findFieldBox(input);
+        const covered = isFieldSpotCovered(
+          input, record.host.getBoundingClientRect(), hitTesterFor(input), isOwnHost, found ? found.element : null
+        );
+        if (covered) record.host.style.setProperty('display', 'none', 'important');
       });
       positionOpenPanel();
     }
@@ -1324,6 +1587,7 @@
     }
 
     function attachIcons() {
+      rememberPasswordFields(document);
       if (!autofillSettingsReady) return;
       pruneDetachedIcons();
       if (!pageAutofillSettings.showFieldIcon) {
@@ -1626,7 +1890,8 @@
               if (requestId !== panelRequestId) return;
               const outcome = classifyGeneratePasswordResponse(genResponse);
               if (outcome.action === 'fill') {
-                setNativeValue(input, outcome.password);
+                fillGeneratedPassword(document, input, outcome.password, setNativeValue);
+                showSaveHint(input);
                 closePanel();
                 return;
               }
@@ -1673,30 +1938,51 @@
     function registrationSaveTarget(node, submitter) {
       if (!runsHere('saveBanner') || !pageAutofillSettings.offerSaveLogin
         || !shared.urlMatch.isHttpsAddressPage(location.href)) return null;
-      const form = shared.registrationForm.formFor(document, node, submitter ? { submitter } : undefined);
+      rememberPasswordFields(document);
+      const options = { wasPassword: passwordMemory.wasPassword };
+      if (submitter) options.submitter = submitter;
+      const form = shared.registrationForm.formFor(document, node, options);
       return form && form.newPassword ? form : null;
     }
 
+    // After a generated password went into a sign-up form, say that MyPass will offer to save
+    // the login on submit. Only where that offer can really come (see registrationSaveTarget).
+    function showSaveHint(input) {
+      if (!registrationSaveTarget(input, null)) return;
+      showSaveHintToast(document, { text: i18n.t('saveHintAfterSubmit'), closeLabel: i18n.t('close') });
+    }
+
     // A user's submit of a registration form asks to save the new login with the form's other
-    // values. A <form> counts on its native `submit` event, which the browser fires only after its
-    // constraint validation passed; a click on a script-driven "Sign up" control (not a native
-    // submit button of a form) is the fallback for forms that never submit natively. Capture
-    // phase, so a page that stops the event or swaps the form on submit is still seen. A locked
+    // values, once the page showed the submit worked (createRegistrationSubmitWatcher). Capture
+    // phase, so a page that stops the event or swaps the form on submit is still seen. The login
+    // is saved for the page the form was submitted on, not the one the app moved to. A locked
     // vault is not a reason to stay quiet: the prompt itself asks to unlock before it saves.
-    function onRegistrationSubmit(event, node, submitter) {
-      if (!isUserSubmit(event)) return;
-      const form = registrationSaveTarget(node, submitter);
-      const captured = form && shared.registrationForm.capture(form);
-      if (!captured) return;
-      requestSavePrompt(location.href, captured.username, captured.password, state, sendRuntimeMessage,
+    function registrationSnapshot(node, submitter) {
+      if (!registrationSaveTarget(node, submitter)) return null;
+      return snapshotRegistration(document, node, submitter, { wasPassword: passwordMemory.wasPassword });
+    }
+    function onRegistrationSubmit(captured, url) {
+      requestSavePrompt(url, captured.username, captured.password, state, sendRuntimeMessage,
         undefined, captured.fields, captured.usernameIsEmail);
     }
-    document.addEventListener('submit', (event) => onRegistrationSubmit(event, event.target, event.submitter || null), true);
-    document.addEventListener('click', (event) => {
-      const target = event.target && typeof event.target.closest === 'function'
-        ? event.target.closest('button, input[type="submit"], input[type="button"], input[type="image"], [role="button"]') : null;
-      if (target && shared.registrationForm.isScriptSubmitControl(target)) onRegistrationSubmit(event, target, target);
-    }, true);
+    const submitWatcher = createRegistrationSubmitWatcher({
+      isUserSubmit: (event) => isUserSubmit(event),
+      defer: (fn) => setTimeout(fn, 0),
+      snapshot: registrationSnapshot,
+      propose: onRegistrationSubmit,
+      getUrl: () => location.href,
+      isShown: (node) => shared.formDetection.isControlShown(node),
+      setTimer: (fn, ms) => setTimeout(fn, ms),
+      clearTimer: (timer) => clearTimeout(timer),
+    });
+    document.addEventListener('submit', submitWatcher.onSubmit, true);
+    document.addEventListener('click', submitWatcher.onClick, true);
+    document.addEventListener('keydown', submitWatcher.onKeydown, true);
+    // Every value typed or filled into a password field, so a later reveal is recognised.
+    document.addEventListener('input', (event) => passwordFieldMemory.observe(event.target), true);
+    window.addEventListener('pagehide', submitWatcher.onPageHide, true);
+    window.addEventListener('popstate', submitWatcher.onUrlChange, true);
+    window.addEventListener('hashchange', submitWatcher.onUrlChange, true);
 
     let addressSnapshot = null;
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -1804,7 +2090,13 @@
         }
         let wrotePassword = false;
         if (passwordInput && message.password) {
-          setNativeValue(passwordInput, message.password);
+          // A generated password also goes into the form's confirm field.
+          if (message.fillTarget === 'newPassword') {
+            fillGeneratedPassword(document, passwordInput, message.password, setNativeValue);
+            showSaveHint(passwordInput);
+          } else {
+            setNativeValue(passwordInput, message.password);
+          }
           wrotePassword = true;
         }
         if (message.totp && otpInput) {
@@ -2016,7 +2308,7 @@
     module.exports = {
       scoreUsernameLikeness, findBestUsernameInput, hostnameMatches, fillTargetMatches, scoreOtpLikeness, findOtpField,
       isFieldVisible, findFillableFields, findLoginForm, resolveFillTargets, resolveApplyFillTargets,
-      isNewPasswordCandidate,
+      isNewPasswordCandidate, fillGeneratedPassword, snapshotRegistration, createRegistrationSubmitWatcher, showSaveHintToast,
       isFillTargetUsable,
       detectOtpauthLink, detectOtpauthText, isBase32Secret, detectManualSetupKey,
       decodeQrFromImage, detectQrCandidate,
@@ -2025,7 +2317,7 @@
       isTrustedActivation, hasLiveUserActivation, isUserSubmit, handleIconActivate, handleEntrySelect, trustedClickHandler,
       buildTotpCandidateQueryResponse, buildNewPasswordFieldQueryResponse, buildGeneratePasswordRow,
       classifyGeneratePasswordResponse, showGeneratePasswordMessage,
-      KEY_ICON_PATH_D, buildKeyGlyph, buildShadowHost, buildIconHost, positionHostToField, fieldControlRects, fieldClipRect, fieldVisualBox, findFieldBox,
+      KEY_ICON_PATH_D, buildKeyGlyph, isFieldSpotCovered, hitTesterFor, buildShadowHost, buildIconHost, positionHostToField, fieldControlRects, fieldClipRect, fieldVisualBox, findFieldBox,
       mountParentFor, measurePlacementOffset, settlePlacementOffset, buildSettingsRow,
       buildPanelHost, buildPanelContent, ICON_HOST_STYLE, PANEL_HOST_STYLE,
       panelRingFraction,

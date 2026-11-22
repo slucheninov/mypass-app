@@ -30,8 +30,9 @@ fn extension_suites_are_discovered_and_manifest_pins_the_extension_id() {
     // 46: `popupMenus.test.js`, 47: `registrationForm.test.js`, 48: `registrationRelay.test.js`,
     // 49: `personFill.test.js`, 50: `personRelay.test.js`, 51: `socialSignIn.test.js`,
     // 52: `socialSignInBackground.test.js`, 53: `socialSignInPopup.test.js`,
-    // 54: `socialSignInPage.test.js`).
-    assert_eq!(suites().len(), 54);
+    // 54: `socialSignInPage.test.js`, 55: `contactForm.test.js`, 56: `totpContext.test.js`,
+    // 57: `confirmPassword.test.js`, 58: `saveAfterSubmit.test.js`).
+    assert_eq!(suites().len(), 58);
     let manifest: serde_json::Value =
         serde_json::from_str(&read("extension/manifest.json")).unwrap();
     let key = manifest["key"].as_str().expect("manifest.json needs a key");

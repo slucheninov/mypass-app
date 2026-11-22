@@ -52,8 +52,12 @@ var mypassRegistrationForm = (() => {
   const ACTION_SELECTOR = 'button, input[type="submit"], input[type="button"], input[type="image"], [role="button"]';
   // Elements that bound a group of form-less controls, like address-form.js `addressBoundaries`.
   const BOUNDARY_SELECTOR = 'form, dialog, [role="dialog"], [role="form"], section, fieldset, article, aside, main, header, footer, nav';
-  // How many levels up two form-less controls may look for a shared container.
-  const PROXIMITY_LEVELS = 4;
+  // How many levels up two form-less controls may look for a shared container. Component
+  // libraries nest each field deeply: on goldcar.es's booking page the first name and the phone
+  // number meet seven and six levels up, the email and the phone eight and five, with no <form>
+  // around them. The boundary rule (same section, dialog, fieldset...) is what keeps unrelated
+  // controls apart; this only has to reach a field's own row of the layout.
+  const PROXIMITY_LEVELS = 10;
 
   const AUTOCOMPLETE_KINDS = {
     name: 'name', 'given-name': 'givenName', 'family-name': 'familyName', email: 'email',
@@ -132,9 +136,103 @@ var mypassRegistrationForm = (() => {
     return editable(node, isVisible);
   }
 
-  function usablePassword(node, isVisible) {
-    return tagOf(node) === 'INPUT' && typeOf(node) === 'password' && editable(node, isVisible)
+  // A field that takes a password: type=password, a text field marked autocomplete=new-password,
+  // or one the caller remembers as a password (`options.wasPassword`, from createPasswordMemory: a
+  // field a show-password toggle turned into text still counts while it holds the password).
+  function isPasswordLike(node, options) {
+    if (tagOf(node) !== 'INPUT') return false;
+    const type = typeOf(node);
+    if (type === 'password') return true;
+    if (type !== 'text' && type !== '') return false;
+    if (autocompleteToken(node) === 'new-password') return true;
+    return !!(options && typeof options.wasPassword === 'function' && options.wasPassword(node));
+  }
+
+  function usablePassword(node, isVisible, options) {
+    return isPasswordLike(node, options) && editable(node, isVisible)
       && autocompleteToken(node) !== SENSITIVE && !formDetection.isSensitivePasswordHint(node);
+  }
+
+  // A show/hide control next to a field: a button, switch or checkbox in the field's parent or
+  // grandparent whose text, label, title, class or id says show, hide, reveal, toggle or eye (en,
+  // de, uk, ru; Cyrillic as escapes), or that controls the field (aria-controls).
+  const REVEAL_TOGGLE = new RegExp(['show', 'hide', 'reveal', 'toggle', 'eye', 'visib', 'anzeigen', 'zeigen',
+    'einblenden', 'ausblenden', 'verbergen',
+    '\u043f\u043e\u043a\u0430\u0437', // uk/ru "show"
+    '\u043f\u0440\u0438\u0445\u043e\u0432', // uk "hide"
+    '\u0441\u043a\u0440\u044b', // ru "hide"
+  ].join('|'), 'i');
+
+  function hasRevealToggle(node) {
+    const scopes = [];
+    for (let scope = node.parentElement, level = 0; scope && level < 2; scope = scope.parentElement, level += 1) {
+      scopes.push(scope);
+    }
+    for (const scope of scopes) {
+      if (typeof scope.querySelectorAll !== 'function') continue;
+      for (const control of scope.querySelectorAll('button, [role="button"], [role="switch"], input[type="checkbox"]')) {
+        if (control === node) continue;
+        const id = attr(node, 'id');
+        if (id && attr(control, 'aria-controls').split(/\s+/).includes(id)) return true;
+        const texts = [control.textContent, attr(control, 'aria-label'), attr(control, 'title'),
+          attr(control, 'class'), attr(control, 'id'), ...formDetection.labelTexts(control)];
+        if (texts.some((text) => REVEAL_TOGGLE.test(String(text || '')))) return true;
+      }
+    }
+    return false;
+  }
+
+  // FNV-1a over the UTF-16 code units: a value fingerprint, so the memory below holds no copy of
+  // a password.
+  function valueHash(value) {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < value.length; i += 1) {
+      hash ^= value.charCodeAt(i);
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return hash;
+  }
+
+  function fieldIdentity(node) {
+    return [attr(node, 'name'), attr(node, 'id'), attr(node, 'autocomplete'), readableLabel(node)].join('\u0000');
+  }
+
+  // Which text fields still count as password fields after a page's show toggle turned them into
+  // type=text (`wasPassword`, for isPasswordLike). `observe(node)` records a type=password field
+  // with a fingerprint of its value (content.js calls it on every input event and each sweep);
+  // `observeAll(root)` does that for every password field under `root`.
+  // A text field counts only when it was seen as a password holding a non-empty value and still
+  // holds that same value, or a changed one while a show/hide toggle sits next to it. The record
+  // is dropped once the value is emptied or the field's name, id, autocomplete or label changes
+  // (a wizard that reuses the input for its next step), so ordinary text is never taken for a
+  // password.
+  function createPasswordMemory() {
+    const records = new WeakMap();
+    function observe(node) {
+      if (tagOf(node) !== 'INPUT' || typeOf(node) !== 'password') return;
+      const value = String(node.value || '');
+      records.set(node, { identity: fieldIdentity(node), hash: value ? valueHash(value) : null });
+    }
+    function observeAll(root) {
+      if (!root || typeof root.querySelectorAll !== 'function') return;
+      for (const node of root.querySelectorAll('input[type="password"]')) observe(node);
+    }
+    function wasPassword(node) {
+      const record = records.get(node);
+      if (!record) return false;
+      if (typeOf(node) === 'password') {
+        observe(node);
+        return true;
+      }
+      const value = String(node.value || '');
+      if (!value || fieldIdentity(node) !== record.identity) {
+        records.delete(node);
+        return false;
+      }
+      if (record.hash === null) return false;
+      return valueHash(value) === record.hash || hasRevealToggle(node);
+    }
+    return { observe, observeAll, wasPassword };
   }
 
   function cleanText(text) {
@@ -143,7 +241,7 @@ var mypassRegistrationForm = (() => {
 
   // A readable name for a field: its label, aria-label, placeholder or name, at most 64 characters.
   function readableLabel(node) {
-    const labels = Array.from(node.labels || [], (label) => label.textContent || '');
+    const labels = formDetection.labelTexts(node);
     for (const text of [...labels, attr(node, 'aria-label'), attr(node, 'placeholder'), attr(node, 'name')]) {
       const clean = cleanText(text).replace(/[\s:*]+$/, '').trim();
       if (clean) return Array.from(clean).slice(0, MAX_LABEL).join('').trim();
@@ -265,11 +363,13 @@ var mypassRegistrationForm = (() => {
     });
   }
 
-  // Every registration form of `doc`, each `{ owner, fields, newPassword, actions }` where
-  // `fields` is `[{ node, kind, label }]` in document order and `newPassword` the field the new
-  // password is typed into (null for a form without one). `owner` is the <form> element, or an
+  // Every registration form of `doc`, each `{ owner, fields, newPassword, passwords, actions }`
+  // where `fields` is `[{ node, kind, label }]` in document order, `newPassword` the field the new
+  // password is typed into (null for a form without one) and `passwords` every password field
+  // (the new one, its confirm field). `owner` is the <form> element, or an
   // opaque key of a proximity group (only stable within one call).
-  // `options.isVisible` replaces the visibility check; `options.submitter` is the control that
+  // `options.isVisible` replaces the visibility check; `options.wasPassword` names fields to treat
+  // as passwords although they are text now (see isPasswordLike); `options.submitter` is the control that
   // submitted (a submit event's submitter, or the clicked script control): its own text is then
   // the only "Sign up" evidence of its form.
   function find(doc, options) {
@@ -277,7 +377,7 @@ var mypassRegistrationForm = (() => {
     const submitter = (options && options.submitter) || null;
     const entries = [];
     for (const node of doc.querySelectorAll('input, select, textarea')) {
-      if (usablePassword(node, isVisible)) {
+      if (usablePassword(node, isVisible, options)) {
         entries.push({ node, role: 'password' });
         continue;
       }
@@ -306,7 +406,7 @@ var mypassRegistrationForm = (() => {
       const kinds = new Set(group.fields.map((field) => field.kind).filter((kind) => kind !== 'other'));
       const passwordless = group.passwords.length === 0 && kinds.size >= 2 && group.fields.length >= 3;
       if (newPassword || passwordless) {
-        forms.push({ owner: group.owner, fields: group.fields, newPassword, actions: group.actions });
+        forms.push({ owner: group.owner, fields: group.fields, newPassword, passwords: group.passwords, actions: group.actions });
       }
     }
     return forms;
@@ -341,8 +441,34 @@ var mypassRegistrationForm = (() => {
     return signUpAction ? passwords[0] : null;
   }
 
+  // The fields a password generated for `input` goes into: `input` and the other new-password
+  // fields of its form (its "confirm" or "repeat" field), so the two always match. Grouped like
+  // `find` (the same <form>, or form-less fields under one boundary close together), so another
+  // form on the page is never touched, and a field for the current password never is either: a
+  // current-password `input` gets the value alone. A field is a new-password one when it says so
+  // (autocomplete=new-password, confirm wording) or by its place (form-detection.js
+  // `isNewPasswordCandidate`: both of two unhinted fields, all but the first of three or more).
+  // `options` takes `isVisible` and `wasPassword` as in `find`. Node references only.
+  function newPasswordTargets(doc, input, options) {
+    if (!input) return [];
+    const isVisible = (options && options.isVisible) || formDetection.isControlShown;
+    const entries = [];
+    for (const node of doc.querySelectorAll('input')) {
+      if (node === input || usablePassword(node, isVisible, options)) entries.push({ node, role: 'password' });
+    }
+    if (!entries.some((entry) => entry.node === input)) return [input];
+    assignOwners(entries);
+    const owner = entries.find((entry) => entry.node === input).owner;
+    const group = entries.filter((entry) => entry.owner === owner).map((entry) => entry.node);
+    if (isCurrentPassword(input)) return [input];
+    return group.filter((node) => node === input || (!isCurrentPassword(node)
+      && (autocompleteToken(node) === 'new-password' || formDetection.isConfirmPasswordHint(node)
+        || formDetection.isNewPasswordCandidate(node, group))));
+  }
+
   function contains(form, node) {
     return form.owner === node || form.newPassword === node || form.actions.includes(node)
+      || (form.passwords || []).includes(node)
       || form.fields.some((field) => field.node === node);
   }
 
@@ -496,7 +622,9 @@ var mypassRegistrationForm = (() => {
   function dateFormatOf(node) {
     const labels = Array.from(node.labels || [], (label) => label.textContent || '');
     for (const hint of [attr(node, 'placeholder'), attr(node, 'title'), attr(node, 'aria-label'), ...labels]) {
-      const found = /(?:^|[^\p{L}])(([dt\u0434m\u043cyj\u0433\u0440])\2*)([./ -])(([dt\u0434m\u043cyj\u0433\u0440])\5*)\3(([dt\u0434m\u043cyj\u0433\u0440])\7*)(?:$|[^\p{L}])/iu
+      // The separator may carry spaces ("DD / MM / YYYY"); it is written back exactly as shown,
+      // which a masked input reformats from the digits anyway.
+      const found = /(?:^|[^\p{L}])(([dt\u0434m\u043cyj\u0433\u0440])\2*)(\s*[./-]\s*|\s+)(([dt\u0434m\u043cyj\u0433\u0440])\5*)\3(([dt\u0434m\u043cyj\u0433\u0440])\7*)(?:$|[^\p{L}])/iu
         .exec(String(hint || ''));
       if (!found) continue;
       const partOf = (letter) => ({ d: 'day', t: 'day', '\u0434': 'day', m: 'month', '\u043c': 'month' })[letter.toLowerCase()] || 'year';
@@ -561,14 +689,44 @@ var mypassRegistrationForm = (() => {
       const field = current && current.fields.find((candidate) => candidate.node === node);
       if (!field || field.kind !== control.kind || !isFillKind(field.kind)) continue;
       if (!addressForm.fillable(node)) continue;
-      const value = PERSON_KINDS.has(field.kind)
+      let value = PERSON_KINDS.has(field.kind)
         ? personValueFor(node, field.kind, profile)
         : addressForm.valueFor({ node, token: tokenFor(field) }, profile);
+      if (value !== null && field.kind === 'phone') value = withoutShownDialCode(node, value);
       if (value === null || value === node.value) continue;
       setValue(node, value);
       filled += 1;
     }
     return filled;
+  }
+
+  // The dial code ("48" of "+48") a phone field's own country-code menu shows, or ''. The menu is
+  // the one <select> within four wrapper levels of the field; a wrapper holding a second select or
+  // another text field ends the search, so a menu of some other field is never read.
+  function shownDialCode(node) {
+    let scope = node.parentElement;
+    for (let level = 0; scope && level < 4; level += 1, scope = scope.parentElement) {
+      if (typeof scope.querySelectorAll !== 'function') return '';
+      const selects = Array.from(scope.querySelectorAll('select'));
+      if (selects.length > 1) return '';
+      if (selects.length === 1) {
+        const option = Array.from(selects[0].options || []).find((candidate) => candidate.selected);
+        const match = option && /\+\s?(\d{1,4})(?!\d)/.exec(String(option.textContent || '') + ' ' + String(option.value || ''));
+        return match ? match[1] : '';
+      }
+      if (scope.querySelectorAll('input, textarea').length > 1) return '';
+    }
+    return '';
+  }
+
+  // A phone number written next to a country-code menu that already shows its dial code loses
+  // that code, so "+48 123 456 789" under "+48" becomes "123 456 789". Any other number is kept.
+  function withoutShownDialCode(node, value) {
+    const code = shownDialCode(node);
+    if (!code) return value;
+    const match = new RegExp('^\\s*(?:\\+|00)\\s?' + code + '(?!\\d)[\\s().-]*').exec(value);
+    const rest = match ? value.slice(match[0].length).trim() : '';
+    return rest ? rest : value;
   }
 
   function valueOf(node) {
@@ -624,6 +782,7 @@ var mypassRegistrationForm = (() => {
   return {
     MAX_FIELDS, MAX_LABEL, MAX_VALUE,
     classify, find, formFor, fillableFields, selectionFor, personSelections, fillSelection, capture,
+    newPasswordTargets, isPasswordLike, createPasswordMemory,
     personProfile, parseIsoDate,
     isSubmitControl, isScriptSubmitControl, isNativeSubmitControl, readableLabel,
   };

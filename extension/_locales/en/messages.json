@@ -409,6 +409,12 @@
   "newFile": {
     "message": "New file"
   },
+  "newTotp": {
+    "message": "2FA code"
+  },
+  "saveHintAfterSubmit": {
+    "message": "MyPass will offer to save this login when you submit the form."
+  },
   "totpInvalid": {
     "message": "Enter a valid authenticator URL or secret key"
   },

@@ -330,8 +330,52 @@ function addressLabelText(node, control) {
   return Array.from(node.childNodes, (child) => addressLabelText(child, control)).join(' ');
 }
 
+// The texts that label a control: its <label> elements (for= or wrapping), the elements its
+// aria-labelledby names and, only when it has none of those and no aria-label, the short text
+// right before it (a "First name" <span> or <p> placed above an unlinked input, found up to three
+// wrapper levels up). That nearby text is never borrowed across another control: a wrapper or a
+// sibling holding a second field ends the search, so a field cannot take its neighbour's label.
+function labelTexts(control) {
+  const texts = Array.from(control.labels || [], (label) => addressLabelText(label, control));
+  const doc = control.ownerDocument;
+  for (const id of String(control.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean)) {
+    const node = doc && typeof doc.getElementById === 'function' ? doc.getElementById(id) : null;
+    if (node && node !== control) texts.push(node.textContent || '');
+  }
+  if (!texts.some((text) => String(text).trim()) && !String(control.getAttribute('aria-label') || '').trim()) {
+    const nearby = nearbyLabelText(control);
+    if (nearby) texts.push(nearby);
+  }
+  return texts;
+}
+
+const NEARBY_LABEL_MAX = 40;
+const CONTROL_SELECTOR = 'input, select, textarea, button';
+
+function holdsControl(node) {
+  if (typeof node.matches === 'function' && node.matches(CONTROL_SELECTOR)) return true;
+  return typeof node.querySelector === 'function' && !!node.querySelector(CONTROL_SELECTOR);
+}
+
+function nearbyLabelText(control) {
+  let node = control;
+  for (let level = 0; level < 3 && node && node.parentElement; level += 1) {
+    let sibling = node.previousElementSibling;
+    for (let seen = 0; sibling && seen < 2; seen += 1, sibling = sibling.previousElementSibling) {
+      if (['SCRIPT', 'STYLE', 'TEMPLATE'].includes(String(sibling.tagName).toUpperCase())) continue;
+      if (holdsControl(sibling)) return '';
+      const text = String(sibling.textContent || '').replace(/\s+/g, ' ').trim();
+      if (text) return text.length <= NEARBY_LABEL_MAX ? text : '';
+    }
+    const parent = node.parentElement;
+    if (typeof parent.querySelectorAll !== 'function' || parent.querySelectorAll(CONTROL_SELECTOR).length > 1) return '';
+    node = parent;
+  }
+  return '';
+}
+
 function addressFieldHint(control) {
-  const labels = Array.from(control.labels || [], (label) => addressLabelText(label, control));
+  const labels = labelTexts(control);
   const hints = [control.name, control.id, control.getAttribute('aria-label'), ...labels];
   for (const hint of hints) {
     const text = String(hint || '').normalize('NFKC')
@@ -412,6 +456,15 @@ const CURRENT_PASSWORD_HINT = WORD([
   'derzeitiges(?: passwort| kennwort)?',
   'поточний(?: пароль)?', 'старий(?: пароль)?', 'чинний(?: пароль)?', 'теперішній(?: пароль)?',
   'текущий(?: пароль)?', 'старый(?: пароль)?', 'действующий(?: пароль)?', 'прежний(?: пароль)?',
+].join('|'));
+
+// A password field that repeats the new password ("confirm password", "repeat password",
+// "password again", a name such as password_confirmation or password2), in the four languages.
+const CONFIRM_PASSWORD_HINT = WORD([
+  'confirm(?:ed|ation)?', 're ?type', 're ?enter', 'repeat(?:ed)?', 'again', 'verify', '(?:password|pass|pwd) ?2',
+  'bestätigen', 'bestätigung', 'wiederholen', 'wiederholung', 'erneut', 'nochmal', 'noch einmal',
+  'повтор(?:іть|ити|но|ення)?', 'підтвердіть', 'підтвердити', 'підтвердження', 'ще раз',
+  'повтор(?:ите|ить|но|ение)?', 'подтвердите', 'подтвердить', 'подтверждение', 'ещё раз', 'еще раз',
 ].join('|'));
 
 // Birthday words, used alone (a whole birthday) and as the context of a split day, month or year.
@@ -503,9 +556,9 @@ const REGISTRATION_ACTION_TEXT = WORD([
   'зарегистрироваться', 'регистрация', 'создать (?:аккаунт|учетную запись|учётную запись)',
 ].join('|'));
 
-// The texts that describe a control: name, id, aria-label, placeholder, associated labels.
+// The texts that describe a control: name, id, aria-label, placeholder, its labels (labelTexts).
 function controlHints(control) {
-  const labels = Array.from(control.labels || [], (label) => addressLabelText(label, control));
+  const labels = labelTexts(control);
   return [
     control.getAttribute('name'), control.getAttribute('id'), control.getAttribute('aria-label'),
     control.getAttribute('placeholder'), ...labels,
@@ -522,6 +575,10 @@ function isSensitivePasswordHint(control) {
 
 function isCurrentPasswordHint(control) {
   return controlHints(control).some((hint) => CURRENT_PASSWORD_HINT.test(hint));
+}
+
+function isConfirmPasswordHint(control) {
+  return controlHints(control).some((hint) => CONFIRM_PASSWORD_HINT.test(hint));
 }
 
 // Whether a control is really on screen, the way the address autofill decides it
@@ -541,6 +598,27 @@ function isControlShown(control) {
   }
   const box = control.getBoundingClientRect();
   return !!box && box.width > 0 && box.height > 0;
+}
+
+// Stricter than isControlShown, for fields a value is written into without the user pointing at
+// them (the confirm field of a generated password): also a box of at least 2x2 px (the 1 px
+// "visually hidden" clip pattern is not a field anyone sees) that lies at least partly inside the
+// document's scrollable area. A field moved to left:-9999px is shown by CSS but on no screen.
+function isControlOnPage(control) {
+  if (!isControlShown(control)) return false;
+  const box = control.getBoundingClientRect();
+  if (!box || box.width < 2 || box.height < 2) return false;
+  const doc = control.ownerDocument;
+  const view = doc.defaultView;
+  const root = doc.documentElement || {};
+  const body = doc.body || {};
+  const scrollX = Number(view.scrollX || view.pageXOffset || 0);
+  const scrollY = Number(view.scrollY || view.pageYOffset || 0);
+  const width = Math.max(Number(root.scrollWidth) || 0, Number(body.scrollWidth) || 0, Number(view.innerWidth) || 0);
+  const height = Math.max(Number(root.scrollHeight) || 0, Number(body.scrollHeight) || 0, Number(view.innerHeight) || 0);
+  const left = box.left + scrollX;
+  const top = box.top + scrollY;
+  return left + box.width > 0 && top + box.height > 0 && left < width && top < height;
 }
 
 // Disabled itself or through a disabled <fieldset> (`:disabled` matches both).
@@ -603,11 +681,14 @@ var mypassFormDetection = {
   findFillableFields,
   findLoginForm,
   addressFieldHint,
+  labelTexts,
   identityFieldHint,
   isSensitiveFieldHint,
   isSensitivePasswordHint,
   isCurrentPasswordHint,
+  isConfirmPasswordHint,
   isControlShown,
+  isControlOnPage,
   isEffectivelyDisabled,
   isRegistrationActionText,
 };

@@ -405,6 +405,12 @@
   "newFile": {
     "message": "Новий файл"
   },
+  "newTotp": {
+    "message": "Код 2FA"
+  },
+  "saveHintAfterSubmit": {
+    "message": "MyPass запропонує зберегти цей логін, коли ви надішлете форму."
+  },
   "totpInvalid": {
     "message": "Введіть дійсну URL-адресу автентифікатора або секретний ключ"
   },
