@@ -197,6 +197,8 @@ export type ApiError = {
 	message: string,
 };
 
+export type AppIcon = "system" | "light" | "dark";
+
 /**  What the About pane and the unlock screen need to know about the running app. */
 export type AppInfo = {
 	version: string,
@@ -1420,6 +1422,7 @@ export type SettingsPatch = SettingsPatch_Serialize | SettingsPatch_Deserialize;
 export type SettingsPatch_Deserialize = {
 	language?: Language | null,
 	theme?: Theme | null,
+	appIcon?: AppIcon | null,
 	autoLockIdleTimeout?: IdleTimeout | null,
 	lockOnDeviceSleep?: boolean | null,
 	lockOnScreenLock?: boolean | null,
@@ -1451,6 +1454,7 @@ export type SettingsPatch_Deserialize = {
 export type SettingsPatch_Serialize = {
 	language?: Language,
 	theme?: Theme,
+	appIcon?: AppIcon,
 	autoLockIdleTimeout?: IdleTimeout,
 	lockOnDeviceSleep?: boolean,
 	lockOnScreenLock?: boolean,
@@ -1473,6 +1477,7 @@ export type SettingsPatch_Serialize = {
 export type Settings_Deserialize = {
 	language?: Language,
 	theme?: Theme,
+	appIcon?: AppIcon,
 	autoLockIdleTimeout?: IdleTimeout,
 	lockOnDeviceSleep?: boolean,
 	lockOnScreenLock?: boolean,
@@ -1504,6 +1509,7 @@ export type Settings_Deserialize = {
 export type Settings_Serialize = {
 	language: Language,
 	theme: Theme,
+	appIcon: AppIcon,
 	autoLockIdleTimeout: IdleTimeout,
 	lockOnDeviceSleep: boolean,
 	lockOnScreenLock: boolean,

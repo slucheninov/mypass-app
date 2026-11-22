@@ -439,6 +439,7 @@ export function defaultSettings(): Settings_Serialize {
   return {
     language: "system",
     theme: "system",
+    appIcon: "system",
     autoLockIdleTimeout: "thirtyMinutes",
     lockOnDeviceSleep: true,
     lockOnScreenLock: true,
