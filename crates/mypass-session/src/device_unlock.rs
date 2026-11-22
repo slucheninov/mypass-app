@@ -242,42 +242,19 @@ fn from_unix_seconds(secs: i64) -> SystemTime {
     t.unwrap_or(UNIX_EPOCH)
 }
 
-/// An in-flight prompt older than this is treated as abandoned (the OS callback never came), so
-/// it cannot wedge device unlock for the rest of the locked session. The 10 s freshness of an
-/// extension unlock request is owned by [`UnlockRequestState`].
-pub const PROMPT_STALE_AFTER: Duration = Duration::from_secs(60);
-
-/// An automatic prompt (the unlock screen shown with Touch ID first) is refused this soon after
-/// the last prompt ended, so a cancel in one window is not followed at once by a prompt from
-/// another window or from a focus change.
+/// An automatic prompt is refused this soon after the last prompt ended, so a cancel in one
+/// window is not followed at once by a prompt from another window or from a focus change.
 pub const AUTOMATIC_PROMPT_DEBOUNCE: Duration = Duration::from_secs(2);
 
-/// The prompt slot: who owns it (an opaque token) and since when (monotonic), and when the last
-/// prompt ended (monotonic).
 #[derive(Debug, Default)]
 struct PromptSlotState {
-    owner: Option<(u64, Duration)>,
-    next_token: u64,
+    in_flight: bool,
     last_ended: Option<Duration>,
 }
 
-/// Keeps at most one device-unlock prompt in flight across every surface (unlock screen, tray
-/// panel, extension request). Nothing here starts a prompt: the backend never prompts because the
-/// vault locked, and locking never notes an extension request. The unlock screens (main window,
-/// tray panel) start an automatic prompt when they are shown to the user with Touch ID enabled;
-/// such a prompt claims the slot through [`PromptCoordinator::claim_automatic`], which also
-/// refuses it within [`AUTOMATIC_PROMPT_DEBOUNCE`] of the last prompt ending. Port of the old
-/// `DeviceUnlockPromptCoordinator` without its extension-request half,
-/// which is the stage 3 [`UnlockRequestState`] (the bridge calls `note`; this coordinator clears
-/// it when the vault unlocks by any means).
-///
-/// The slot is owned through a [`PromptClaim`] carrying a token: a claim releases the slot only
-/// while it still owns it, so a prompt that outlived [`PROMPT_STALE_AFTER`] and was replaced can
-/// never free its successor's slot when its OS callback finally returns, and its result is known
-/// to be superseded ([`PromptClaim::is_current`]).
-///
-/// Staleness is measured on the scheduler's monotonic timeline, so a wall clock set back cannot
-/// keep a prompt "in flight" for longer than [`PROMPT_STALE_AFTER`].
+/// Keeps at most one device-unlock prompt in flight across the main window, tray and browser.
+/// The claim stays live until the platform call returns. Locking or replacing the vault
+/// invalidates the session authorization but leaves ownership with the running evaluation.
 pub struct PromptCoordinator {
     scheduler: Arc<dyn Scheduler>,
     unlock_requests: UnlockRequestState,
@@ -292,32 +269,17 @@ impl std::fmt::Debug for PromptCoordinator {
     }
 }
 
-/// Ownership of the one prompt slot; released on drop, but only while it still owns the slot.
+/// Ownership of the one prompt slot, released on drop.
 #[derive(Debug)]
 pub struct PromptClaim<'a> {
     coordinator: &'a PromptCoordinator,
-    token: u64,
-}
-
-impl PromptClaim<'_> {
-    /// `false` once the slot was taken over (this prompt went stale and another surface claimed
-    /// it) or cleared by a lock: the prompt's result must then be discarded.
-    pub fn is_current(&self) -> bool {
-        lock(&self.coordinator.slot)
-            .owner
-            .is_some_and(|(token, _)| token == self.token)
-    }
 }
 
 impl Drop for PromptClaim<'_> {
     fn drop(&mut self) {
-        let now = self.coordinator.scheduler.monotonic_now();
         let mut slot = lock(&self.coordinator.slot);
-        // Every prompt that ends starts the automatic debounce, also one a lock superseded.
-        slot.last_ended = Some(now);
-        if slot.owner.is_some_and(|(token, _)| token == self.token) {
-            slot.owner = None;
-        }
+        slot.last_ended = Some(self.coordinator.scheduler.monotonic_now());
+        slot.in_flight = false;
     }
 }
 
@@ -330,59 +292,36 @@ impl PromptCoordinator {
         }
     }
 
-    /// Claims the one prompt slot. `None` while another prompt is in flight (and younger than
-    /// [`PROMPT_STALE_AFTER`]): the caller must not show a second system sheet. Dropping the
-    /// claim ends the prompt (success, failure or cancel).
+    /// Claims the one prompt slot. Dropping the claim ends the prompt.
     pub fn claim(&self) -> Option<PromptClaim<'_>> {
         self.claim_with(false)
     }
 
-    /// Claims the slot for an automatic prompt: like [`claim`](Self::claim), and also `None`
-    /// within [`AUTOMATIC_PROMPT_DEBOUNCE`] of the last prompt ending.
+    /// Claims the slot for an automatic prompt, subject to the debounce after the last prompt.
     pub fn claim_automatic(&self) -> Option<PromptClaim<'_>> {
         self.claim_with(true)
     }
 
     fn claim_with(&self, automatic: bool) -> Option<PromptClaim<'_>> {
-        let now = self.scheduler.monotonic_now();
         let mut slot = lock(&self.slot);
-        if automatic
-            && slot
-                .last_ended
-                .is_some_and(|ended| now.saturating_sub(ended) < AUTOMATIC_PROMPT_DEBOUNCE)
+        let now = self.scheduler.monotonic_now();
+        if slot.in_flight
+            || (automatic
+                && slot
+                    .last_ended
+                    .is_some_and(|ended| now.saturating_sub(ended) < AUTOMATIC_PROMPT_DEBOUNCE))
         {
             return None;
         }
-        if let Some((_, at)) = slot.owner {
-            if now.saturating_sub(at) < PROMPT_STALE_AFTER {
-                return None;
-            }
-        }
-        let token = slot.next_token;
-        slot.next_token = slot.next_token.wrapping_add(1);
-        slot.owner = Some((token, now));
-        Some(PromptClaim {
-            coordinator: self,
-            token,
-        })
+        slot.in_flight = true;
+        Some(PromptClaim { coordinator: self })
     }
 
-    /// Whether a prompt is in flight (claimed, not stale).
     pub fn is_in_flight(&self) -> bool {
-        let now = self.scheduler.monotonic_now();
-        lock(&self.slot)
-            .owner
-            .is_some_and(|(_, at)| now.saturating_sub(at) < PROMPT_STALE_AFTER)
+        lock(&self.slot).in_flight
     }
 
-    /// The vault locked: clears the in-flight state only (a prompt still waiting is superseded).
-    /// It never notes an extension request, so a lock alone can never cause a prompt.
-    pub fn vault_did_lock(&self) {
-        lock(&self.slot).owner = None;
-    }
-
-    /// The vault unlocked by any means: a pending extension request nobody consumed must not
-    /// survive, or a lock within its freshness window would find it and prompt.
+    /// Discard pending extension requests on unlock so they cannot trigger a later prompt.
     pub fn vault_did_unlock(&self) {
         self.unlock_requests.clear();
     }
@@ -806,7 +745,7 @@ impl DeviceUnlockService {
 
     fn unlock_with_device_as(&self, reason: &str, automatic: bool) -> Result<(), ApiError> {
         refuse_main_thread()?;
-        let (binding, claim) = {
+        let (binding, _claim) = {
             let mut config = self.config();
             self.0.session.vault_id().ok_or(SessionError::NoVault)?;
             if self.0.session.is_unlocked() {
@@ -865,7 +804,13 @@ impl DeviceUnlockService {
             .unlock(binding.mode, &binding.vault_id, reason);
         let mut config = self.config();
         let s = self.0.settings.get();
-        if !claim.is_current()
+        if self
+            .0
+            .session
+            .locked_binding()
+            .is_none_or(|(incarnation, vault_id)| {
+                incarnation != binding.incarnation || vault_id != binding.vault_id
+            })
             || config.generation != binding.generation
             || mode_for_toggles(s.unlock_touch_id_enabled, s.unlock_mac_password_enabled)
                 != Some(binding.mode)
@@ -885,11 +830,10 @@ impl DeviceUnlockService {
             binding.incarnation,
             &self.0.settings,
             &|settings| {
-                claim.is_current()
-                    && mode_for_toggles(
-                        settings.unlock_touch_id_enabled,
-                        settings.unlock_mac_password_enabled,
-                    ) == Some(binding.mode)
+                mode_for_toggles(
+                    settings.unlock_touch_id_enabled,
+                    settings.unlock_mac_password_enabled,
+                ) == Some(binding.mode)
                     && self
                         .window_block(self.0.state.get(&binding.vault_id), settings)
                         .is_none()
@@ -933,8 +877,6 @@ impl DeviceUnlockService {
         let previous = std::mem::replace(&mut *lock(&self.0.observed), next.clone());
         if next.unlocked && (!previous.unlocked || previous.vault_id != next.vault_id) {
             self.0.prompts.vault_did_unlock();
-        } else if !next.unlocked && previous.unlocked {
-            self.0.prompts.vault_did_lock();
         }
     }
 }
@@ -1335,59 +1277,7 @@ mod service_tests {
     }
 
     #[test]
-    fn stale_in_flight_prompt_self_heals_at_60s() {
-        let (c, s, _) = coordinator();
-        let _a = c.claim().unwrap();
-        s.advance(Duration::from_millis(59_900));
-        assert!(c.claim().is_none());
-        s.advance(Duration::from_millis(100));
-        let _b = c.claim().unwrap();
-        // The healed request is a new prompt in flight.
-        assert!(c.claim().is_none());
-    }
-
-    /// Review A+B I2: the replaced prompt's late completion must not free its successor's slot,
-    /// and it knows its own result is superseded.
-    #[test]
-    fn stale_prompt_completion_does_not_release_the_newer_slot() {
-        let (c, s, _) = coordinator();
-        let a = c.claim().unwrap();
-        s.advance(PROMPT_STALE_AFTER);
-        let b = c.claim().unwrap();
-        assert!(!a.is_current());
-        assert!(b.is_current());
-        drop(a);
-        assert!(b.is_current());
-        assert!(c.claim().is_none(), "B is still in flight");
-        drop(b);
-        assert!(c.claim().is_some());
-    }
-
-    #[test]
-    fn wall_clock_set_back_does_not_wedge_the_prompt_slot() {
-        let (c, s, _) = coordinator();
-        let _a = c.claim().unwrap();
-        s.set_wall_clock(UNIX_EPOCH);
-        s.advance(PROMPT_STALE_AFTER);
-        assert!(c.claim().is_some());
-    }
-
-    #[test]
-    fn lock_clears_in_flight_flag() {
-        let (c, _, _) = coordinator();
-        let a = c.claim().unwrap();
-        c.vault_did_lock();
-        assert!(!a.is_current());
-        let b = c.claim().unwrap();
-        drop(a);
-        assert!(b.is_current());
-    }
-
-    #[test]
     fn lock_never_creates_a_request() {
-        let (c, _, requests) = coordinator();
-        c.vault_did_lock();
-        assert!(!requests.consume());
         let f = fx();
         f.enable(true, false);
         f.lock();
@@ -2028,6 +1918,63 @@ mod service_tests {
         assert_eq!(f.toggles(), (true, false));
     }
 
+    #[test]
+    fn another_surface_cannot_prompt_after_the_old_takeover_deadline() {
+        let f = fx();
+        f.enable(true, false);
+        f.lock();
+        let service = f.service.clone();
+        let scheduler = f.scheduler.clone();
+        f.on_unlock(move || {
+            scheduler.advance(Duration::from_secs(61));
+            assert_eq!(
+                code(service.unlock_with_device_automatically("Main window")),
+                ErrorCode::Cancelled
+            );
+        });
+        f.service.unlock_with_device("Browser popup").unwrap();
+        assert_eq!(f.fake.evaluation_count(), 1);
+    }
+
+    #[test]
+    fn relocking_does_not_free_an_in_flight_evaluation() {
+        let f = fx();
+        f.enable(true, false);
+        f.lock();
+        let service = f.service.clone();
+        let session = f.session.clone();
+        f.on_unlock(move || {
+            session.unlock(pw("pw")).unwrap();
+            session.lock(LockReason::Manual);
+            assert_eq!(
+                code(service.unlock_with_device_automatically("Main window")),
+                ErrorCode::Cancelled
+            );
+        });
+        assert_eq!(
+            code(f.service.unlock_with_device("Browser popup")),
+            ErrorCode::Cancelled
+        );
+        assert_eq!(f.fake.evaluation_count(), 1);
+        assert!(!f.session.is_unlocked());
+        f.service.unlock_with_device("Main window").unwrap();
+        assert_eq!(f.fake.evaluation_count(), 2);
+    }
+
+    #[test]
+    fn locking_an_already_locked_vault_discards_a_pending_success() {
+        let f = fx();
+        f.enable(true, false);
+        f.lock();
+        let session = f.session.clone();
+        f.on_unlock(move || session.lock(LockReason::Manual));
+        assert_eq!(
+            code(f.service.unlock_with_device("r")),
+            ErrorCode::Cancelled
+        );
+        assert!(!f.session.is_unlocked());
+    }
+
     /// Plain file IO whose next `read` runs a hook after reading (inside the session's unlock
     /// KDF phase, which holds no session lock).
     struct ReadHookIo(Mutex<Option<Hook>>);
@@ -2069,29 +2016,6 @@ mod service_tests {
         );
         assert!(!f.session.is_unlocked());
         assert!(f.enrolled(DeviceUnlockMode::Biometrics));
-    }
-
-    /// I1 + I2: a prompt that went stale and lost its slot to another surface is discarded on
-    /// return and leaves that surface's slot in flight.
-    #[test]
-    fn stale_prompt_result_is_discarded_and_keeps_the_newer_slot() {
-        let f = fx();
-        f.enable(true, false);
-        f.lock();
-        let service = f.service.clone();
-        let scheduler = f.scheduler.clone();
-        f.on_unlock(move || {
-            scheduler.advance(PROMPT_STALE_AFTER);
-            // Another surface claims the healed slot; its prompt is still up afterwards.
-            std::mem::forget(service.prompts().claim().unwrap());
-        });
-        assert_eq!(
-            code(f.service.unlock_with_device("r")),
-            ErrorCode::Cancelled
-        );
-        assert!(!f.session.is_unlocked());
-        assert!(f.service.prompts().is_in_flight());
-        assert!(f.service.prompts().claim().is_none());
     }
 
     /// I3: a disable that runs while a mode switch is deciding cannot be undone by that switch:

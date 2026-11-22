@@ -6,6 +6,10 @@
 
 use crate::{PlatformError, PlatformResult};
 use secrecy::SecretString;
+use std::time::Duration;
+
+/// Time before the platform cancels a device unlock evaluation.
+pub const DEVICE_UNLOCK_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// How the device proves the user is present.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

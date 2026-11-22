@@ -96,7 +96,6 @@ mod tests {
     use super::*;
     use crate::testing::{open_world, pw, shared_world, world};
     use mypass_bridge::relay::RelayOptions;
-    use mypass_session::device_unlock::PROMPT_STALE_AFTER;
     use mypass_session::vault_files::ProcessLookup;
     use std::path::PathBuf;
 
@@ -240,6 +239,6 @@ mod tests {
 
     #[test]
     fn relay_drain_outlasts_the_device_prompt() {
-        assert!(RelayOptions::default().drain_timeout > PROMPT_STALE_AFTER);
+        assert!(RelayOptions::default().drain_timeout > mypass_platform::DEVICE_UNLOCK_TIMEOUT);
     }
 }

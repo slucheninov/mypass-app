@@ -64,8 +64,6 @@ pub(crate) const SERVICE: &str = "com.mypass.app.biometric";
 pub(crate) const PASSWORD_ACCOUNT: &str = "deviceUnlockPassword";
 /// Account prefix of the stored biometric domain-state hash.
 pub(crate) const DOMAIN_STATE_ACCOUNT: &str = "deviceUnlockDomainState";
-/// Ceiling of one unlock prompt.
-pub(crate) const UNLOCK_TIMEOUT: Duration = Duration::from_secs(120);
 /// Ceiling of one presence prompt (R9; the passkey relay deadline is longer).
 pub(crate) const PRESENCE_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -447,9 +445,9 @@ impl<A: LocalAuth> DeviceUnlock for KeychainDeviceUnlock<A> {
         if !self.is_enrolled(mode, vault_id)? {
             return Err(PlatformError::Invalidated);
         }
-        let evaluated = self
-            .auth
-            .evaluate(policy_for(mode), reason, UNLOCK_TIMEOUT)?;
+        let evaluated =
+            self.auth
+                .evaluate(policy_for(mode), reason, crate::DEVICE_UNLOCK_TIMEOUT)?;
         if mode == DeviceUnlockMode::Biometrics {
             // The state the evaluation itself saw is authoritative (a finger added during the
             // prompt counts); `enrolled_with` falls back to a silent preflight when the context
@@ -1119,7 +1117,7 @@ mod tests {
         assert_eq!(got.expose_secret(), "pw");
         let s = lock(&f.auth.0);
         assert_eq!(s.last_policy, Some(AuthPolicy::Biometrics));
-        assert_eq!(s.last_timeout, Some(UNLOCK_TIMEOUT));
+        assert_eq!(s.last_timeout, Some(crate::DEVICE_UNLOCK_TIMEOUT));
     }
 
     #[test]

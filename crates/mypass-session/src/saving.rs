@@ -673,6 +673,8 @@ impl VaultSession {
         {
             let mut inner = lock(&self.0.inner);
             if inner.db.is_none() {
+                // Even a repeated lock revokes any device authorization already in progress.
+                inner.incarnation = inner.incarnation.wrapping_add(1);
                 return;
             }
             inner.cancel_save_job();
@@ -682,6 +684,8 @@ impl VaultSession {
         {
             let mut inner = self.wait_quiescent(lock(&self.0.inner));
             if inner.db.is_none() {
+                // Even a repeated lock revokes any device authorization already in progress.
+                inner.incarnation = inner.incarnation.wrapping_add(1);
                 return;
             }
             inner.cancel_save_job();
