@@ -243,6 +243,47 @@ test('split birthday selects match numbers and month names; inputs take the numb
   assert.deepEqual([day.value, month.value], ['07', '3']);
 });
 
+test('years 0001 to 0099 are real years', () => {
+  assert.deepEqual(registration.parseIsoDate('0099-03-01'), { year: 99, month: 3, day: 1 });
+  assert.deepEqual(registration.parseIsoDate('0004-02-29'), { year: 4, month: 2, day: 29 });
+  assert.equal(registration.parseIsoDate('0100-02-29'), null);
+  assert.equal(registration.parseIsoDate('0001-02-29'), null);
+  assert.equal(registration.parseIsoDate('0000-01-01'), null);
+  assert.equal(registration.parseIsoDate('2024-13-01'), null);
+  const p = page();
+  p.input({ type: 'email', name: 'email' });
+  const birthday = p.input({ name: 'birthdate', placeholder: 'DD.MM.YYYY' });
+  const date = p.input({ type: 'date', name: 'birthday' });
+  p.password();
+  fill(p, registration.personProfile({ ...ADA, birthDate: '0099-03-01' }, null));
+  assert.deepEqual([birthday.value, date.value], ['01.03.0099', '0099-03-01']);
+});
+
+test('a numbered month menu matches by value, zero-based or one-based, whatever its names', () => {
+  const names = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September',
+    'October', 'November', 'December'];
+  for (const [base, birthDate, expected] of [
+    [0, '1990-01-07', '0'], [0, '1990-12-07', '11'], [0, '1990-02-07', '1'],
+    [1, '1990-01-07', '1'], [1, '1990-12-07', '12'], [1, '1990-02-07', '2'],
+  ]) {
+    const p = page();
+    p.input({ type: 'email', name: 'email' });
+    const month = p.select({ autocomplete: 'bday-month' }, [placeholder('Month'),
+      ...names.map((name, index) => option(String(index + base), name))]);
+    p.password();
+    fill(p, registration.personProfile({ ...ADA, birthDate }, null));
+    assert.equal(month.value, expected, `${base}-based ${birthDate}`);
+  }
+  // A one-based menu whose placeholder is the value 0 is not zero-based.
+  const p = page();
+  p.input({ type: 'email', name: 'email' });
+  const month = p.select({ autocomplete: 'bday-month' }, [{ ...placeholder('Month'), value: '0' },
+    ...names.map((name, index) => option(String(index + 1), name))]);
+  p.password();
+  fill(p, registration.personProfile({ ...ADA, birthDate: '1990-01-07' }, null));
+  assert.equal(month.value, '1');
+});
+
 test('no birth date or middle name leaves those fields alone; an address-only form takes no person', () => {
   const p = page();
   p.input({ type: 'email', name: 'email' });

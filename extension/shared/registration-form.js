@@ -425,10 +425,10 @@ var mypassRegistrationForm = (() => {
     const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text(value));
     if (!match) return null;
     const [year, month, day] = match.slice(1).map(Number);
-    const date = new Date(Date.UTC(year, month - 1, day));
-    if (year < 1 || date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
-      return null;
-    }
+    // Checked by hand: Date.UTC maps the years 0 to 99 to 1900 to 1999.
+    const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+    const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+    if (year < 1 || !days || day < 1 || day > days) return null;
     return { year, month, day };
   }
 
@@ -460,15 +460,25 @@ var mypassRegistrationForm = (() => {
     return names;
   }
 
-  // The one enabled option of `node` that stands for `part` (a day, month or year number, or a
-  // month name); null when none or several do.
+  // The one enabled option of `node` that stands for `part` (a day, month or year number); null
+  // when none or several do. A menu whose values are all numbers is matched by value only (a month
+  // menu numbered 0 to 11, with no 12, is zero-based); any other menu by its text, a number or a
+  // month name, or by a month name in its values.
   function partOption(node, kind, part) {
     const number = (value) => (/^\d+$/.test(String(value).trim()) ? Number(String(value).trim()) : NaN);
-    const names = kind === 'bdayMonth' ? monthNames(part) : new Set();
-    const matches = Array.from(node.options || []).filter((option) => !option.disabled
-      && String(option.value || '').trim() !== ''
-      && (number(option.value) === part || number(option.textContent || '') === part
-        || names.has(foldName(option.textContent)) || names.has(foldName(option.value))));
+    const options = Array.from(node.options || []).filter((option) => !option.disabled
+      && String(option.value || '').trim() !== '');
+    const values = options.map((option) => number(option.value));
+    let matches;
+    if (options.length && values.every((value) => !Number.isNaN(value))) {
+      const zeroBased = kind === 'bdayMonth' && values.includes(0) && !values.includes(12);
+      const wanted = zeroBased ? part - 1 : part;
+      matches = options.filter((option, index) => values[index] === wanted);
+    } else {
+      const names = kind === 'bdayMonth' ? monthNames(part) : new Set();
+      matches = options.filter((option) => number(option.textContent || '') === part
+        || names.has(foldName(option.textContent)) || names.has(foldName(option.value)));
+    }
     return matches.length === 1 ? matches[0].value : null;
   }
 
@@ -504,7 +514,7 @@ var mypassRegistrationForm = (() => {
     if (!format) return iso;
     return format.order.map((part, index) => {
       const width = format.widths[index];
-      if (part === 'year') return width === 2 ? String(date.year % 100).padStart(2, '0') : String(date.year);
+      if (part === 'year') return width === 2 ? String(date.year % 100).padStart(2, '0') : String(date.year).padStart(4, '0');
       const value = String(date[part]);
       return width >= 2 ? value.padStart(2, '0') : value;
     }).join(format.separator);
