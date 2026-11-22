@@ -17,7 +17,13 @@ function touchId(f: FakeBackend, extra: Partial<FakeBackend["state"]["device"]> 
 }
 
 function failWith(f: FakeBackend, code: Parameters<typeof apiError>[0]) {
-  f.handlers.vaultUnlockDevice = () => { throw apiError(code, "untrusted backend text"); };
+  f.handlers.vaultUnlockDevice = () => {
+    if (code === "authenticationFailed") f.state.device.deviceFailures++;
+    if (["lockout", "notEnrolledOnDevice", "deviceUnlockUnavailable"].includes(code)) {
+      f.state.device.deviceBlocked = true;
+    }
+    throw apiError(code, "untrusted backend text");
+  };
 }
 
 /** Makes the window look hidden (to the tray, minimized) or shown and focused. */
@@ -118,6 +124,33 @@ describe("main window, Touch ID first", () => {
     expect(deviceCalls(fake)).toHaveLength(0);
     expect(screen.queryByTestId("touch-id-view")).toBeNull();
     expect(screen.queryByRole("button", { name: "Try Touch ID again" })).toBeNull();
+  });
+
+  it("keeps the manual device button when live biometrics are unavailable", async () => {
+    const { fake } = await renderMainApp({ deviceUnlockAvailable: true }, (f) => {
+      touchId(f, { biometrics: false, macPasswordEnabled: true });
+      failWith(f, "cancelled");
+    });
+    expect(await screen.findByLabelText("Master password")).toBeTruthy();
+    expect(deviceCalls(fake)).toHaveLength(0);
+    await userEvent.click(await screen.findByRole("button", { name: "Unlock with Touch ID or Mac password" }));
+    expect(deviceCalls(fake)[0]?.args).toEqual({ reasonKey: "Unlock MyPass", automatic: false });
+  });
+
+  it.each([
+    ["main window", renderMainApp],
+    ["tray panel", renderTrayPanel],
+  ] as const)("%s switches to password when another surface reports the third failure", async (_surface, render) => {
+    const { fake } = await render({ session: "locked", deviceUnlockAvailable: true }, (f) => {
+      touchId(f, { deviceFailures: 2 });
+      failWith(f, "cancelled");
+    });
+    expect(await screen.findByTestId("touch-id-view")).toBeTruthy();
+    fake.state.device.deviceFailures = 3;
+    await fake.emit("deviceUnlockChanged");
+    expect(await screen.findByLabelText("Master password")).toBeTruthy();
+    expect((await screen.findByRole("alert")).textContent).toBe(THREE_TIMES);
+    expect(deviceCalls(fake)).toHaveLength(1);
   });
 
   it("no_automatic_prompt_while_the_window_is_hidden_then_one_when_it_is_shown", async () => {
@@ -275,6 +308,7 @@ describe("main window, Touch ID first", () => {
     await fake.emit("sessionChanged", fake.state.session);
     await waitFor(() => expect(screen.queryByTestId("unlock-screen")).toBeNull());
     failWith(fake, "cancelled");
+    fake.state.device.deviceBlocked = false;
     fake.state.session = { ...fake.state.session, state: "locked" };
     await fake.emit("sessionChanged", fake.state.session);
     expect(await screen.findByTestId("touch-id-view")).toBeTruthy();

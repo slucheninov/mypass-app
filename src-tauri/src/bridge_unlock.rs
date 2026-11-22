@@ -56,6 +56,7 @@ impl VaultUnlocker for AppUnlocker {
         DeviceOffer {
             offered: status.can_offer_now,
             touch_id: status.biometrics && status.touch_id_enabled,
+            prompt_in_flight: self.core.device_unlock.prompts().is_in_flight(),
         }
     }
 }
@@ -189,7 +190,7 @@ mod tests {
                 UnlockFailure::DeviceUnavailable,
             ),
             (ErrorCode::NoVault, UnlockFailure::InApp),
-            // A rejected finger is counted by the popup (three switch it to the password).
+            // A rejected finger is counted in the locked session.
             (
                 ErrorCode::AuthenticationFailed,
                 UnlockFailure::NotRecognized,

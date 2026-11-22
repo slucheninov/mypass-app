@@ -101,7 +101,7 @@
       <Button variant="plain" onclick={() => device.usePassword()}>{t("Use password")}</Button>
     </div>
   {:else}
-  {#if touchFirst && device.error}<p class="error" role="alert">{device.error}</p>{/if}
+  {#if (touchFirst || device.blocked) && device.error}<p class="error" role="alert">{device.error}</p>{/if}
   <form onsubmit={submit}>
     <PasswordField
       bind:this={field}
@@ -121,7 +121,7 @@
     {#if !device.blocked}
       <Button variant="plain" disabled={device.pending} onclick={() => device.tryDeviceAgain()}>{t("Try Touch ID again")}</Button>
     {/if}
-  {:else}
+  {:else if !device.blocked}
     <UnlockExtras available={platform.deviceUnlockAvailable} variant={compact ? "panel" : "main"} />
   {/if}
   {/if}

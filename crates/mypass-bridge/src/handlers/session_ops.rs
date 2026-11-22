@@ -67,7 +67,6 @@ pub(crate) fn unlock_with_device(ctx: &Ctx<'_>, automatic: bool) -> Response {
             if ctx.deps.session.is_unlocked() {
                 return Response::UnlockNotNeeded;
             }
-            let generation = ctx.throttle.generation();
             match ctx.deps.unlocker.unlock_with_device(automatic) {
                 Ok(()) => {
                     ctx.throttle.reset();
@@ -77,7 +76,7 @@ pub(crate) fn unlock_with_device(ctx: &Ctx<'_>, automatic: bool) -> Response {
                 Err(UnlockFailure::DeviceUnavailable) => Response::DeviceUnlockUnavailable,
                 Err(UnlockFailure::InApp) => Response::UnlockInApp,
                 Err(UnlockFailure::NotRecognized) => Response::DeviceNotRecognized {
-                    device_failures: ctx.throttle.record_device_failure(generation),
+                    device_failures: ctx.deps.session.device_unlock_attempts().failures,
                 },
                 Err(UnlockFailure::WrongPassword | UnlockFailure::Failed) => error("unlock_failed"),
             }
@@ -87,10 +86,13 @@ pub(crate) fn unlock_with_device(ctx: &Ctx<'_>, automatic: bool) -> Response {
 
 pub(crate) fn get_unlock_options(ctx: &Ctx<'_>) -> Response {
     let offer = ctx.deps.unlocker.device_offer();
+    let attempts = ctx.deps.session.device_unlock_attempts();
     Response::UnlockOptions {
-        device_unlock: offer.offered && !ctx.deps.session.is_unlocked(),
+        device_unlock: offer.offered && !attempts.blocked && !ctx.deps.session.is_unlocked(),
         touch_id: offer.touch_id,
-        device_failures: ctx.throttle.device_failures(),
+        device_failures: attempts.failures,
+        device_blocked: attempts.blocked,
+        device_prompt_in_flight: offer.prompt_in_flight,
         retry_after_secs: ctx.throttle.retry_after_secs(),
     }
 }

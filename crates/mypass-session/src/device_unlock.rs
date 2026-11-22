@@ -104,9 +104,10 @@ pub struct DeviceUnlockStatus {
     pub mac_password_enabled: bool,
     /// The unlock screen may show the device-unlock button now.
     pub can_offer_now: bool,
-    /// What blocks the button: the toggles, the enrolment or a window. `None` when none of them
-    /// does, and `can_offer_now` is then `available`.
+    /// The configured policy restriction, if any. Availability is checked separately.
     pub reason: Option<OfferBlock>,
+    pub device_failures: u32,
+    pub device_blocked: bool,
 }
 
 /// When device unlock and the master password were last used for one vault (Unix seconds).
@@ -245,6 +246,8 @@ fn from_unix_seconds(secs: i64) -> SystemTime {
 /// An automatic prompt is refused this soon after the last prompt ended, so a cancel in one
 /// window is not followed at once by a prompt from another window or from a focus change.
 pub const AUTOMATIC_PROMPT_DEBOUNCE: Duration = Duration::from_secs(2);
+
+const AUTOMATIC_FAILURE_LIMIT: u32 = 3;
 
 #[derive(Debug, Default)]
 struct PromptSlotState {
@@ -512,14 +515,19 @@ impl DeviceUnlockService {
             let stamps = vault_id.as_deref().and_then(|id| self.0.state.get(id));
             self.window_block(stamps, &s)
         };
+        let attempts = self.0.session.device_unlock_attempts();
         DeviceUnlockStatus {
             available,
             biometrics,
             enrolled,
             touch_id_enabled: s.unlock_touch_id_enabled,
             mac_password_enabled: s.unlock_mac_password_enabled,
-            can_offer_now: available && reason.is_none(),
+            can_offer_now: available
+                && reason.is_none()
+                && (biometrics || mode == Some(DeviceUnlockMode::AccountPassword)),
             reason,
+            device_failures: attempts.failures,
+            device_blocked: attempts.blocked,
         }
     }
 
@@ -736,9 +744,8 @@ impl DeviceUnlockService {
     }
 
     /// [`unlock_with_device`](Self::unlock_with_device) for the prompt an unlock screen starts by
-    /// itself when it is shown. The only difference is the slot claim: while another prompt is in
-    /// flight, or within [`AUTOMATIC_PROMPT_DEBOUNCE`] of the last prompt ending, it is refused
-    /// without a prompt as `Cancelled` (the screen then waits for a press, like after a cancel).
+    /// itself when shown. It requires live biometrics and always uses the biometrics-only
+    /// policy. A busy slot, the debounce or three failures leave the next attempt to the user.
     pub fn unlock_with_device_automatically(&self, reason: &str) -> Result<(), ApiError> {
         self.unlock_with_device_as(reason, true)
     }
@@ -751,15 +758,37 @@ impl DeviceUnlockService {
             if self.0.session.is_unlocked() {
                 return Ok(());
             }
+            if automatic && self.0.prompts.is_in_flight() {
+                return Err(superseded());
+            }
+            let Some((incarnation, vault_id)) = self.0.session.locked_binding() else {
+                return Err(superseded());
+            };
             self.reconcile_locked(&mut config);
             let status = self.status_view();
-            if !status.available {
+            if status.device_blocked {
                 return Err(PlatformError::DeviceUnlockUnavailable.into());
             }
-            let s = self.0.settings.get();
+            if !status.available {
+                if !self
+                    .0
+                    .session
+                    .record_device_unlock_failure(incarnation, true)
+                {
+                    return Err(superseded());
+                }
+                return Err(PlatformError::DeviceUnlockUnavailable.into());
+            }
+            if automatic
+                && (!status.biometrics
+                    || !status.touch_id_enabled
+                    || status.device_failures >= AUTOMATIC_FAILURE_LIMIT)
+            {
+                return Err(superseded());
+            }
             let mode = match (
                 status.can_offer_now,
-                mode_for_toggles(s.unlock_touch_id_enabled, s.unlock_mac_password_enabled),
+                mode_for_toggles(status.touch_id_enabled, status.mac_password_enabled),
             ) {
                 (true, Some(mode)) => mode,
                 _ => {
@@ -769,10 +798,14 @@ impl DeviceUnlockService {
                     ))
                 }
             };
-            let Some((incarnation, vault_id)) = self.0.session.locked_binding() else {
-                // Unlocked, closed or quitting since the checks above.
+            if self
+                .0
+                .session
+                .locked_binding()
+                .is_none_or(|(current, _)| current != incarnation)
+            {
                 return Err(superseded());
-            };
+            }
             let claim = if automatic {
                 self.0.prompts.claim_automatic().ok_or_else(|| {
                     api(
@@ -798,10 +831,12 @@ impl DeviceUnlockService {
         };
         // The OS prompt runs with no lock held: a disable, a lock or a vault switch proceeds
         // meanwhile and supersedes this prompt.
-        let result = self
-            .0
-            .platform
-            .unlock(binding.mode, &binding.vault_id, reason);
+        let platform = &self.0.platform;
+        let result = if automatic {
+            platform.unlock_with_biometrics(binding.mode, &binding.vault_id, reason)
+        } else {
+            platform.unlock(binding.mode, &binding.vault_id, reason)
+        };
         let mut config = self.config();
         let s = self.0.settings.get();
         if self
@@ -819,11 +854,27 @@ impl DeviceUnlockService {
         }
         let secret = match result {
             Ok(secret) => secret,
-            Err(PlatformError::Invalidated) => {
-                self.drop_enrolment_locked(&mut config, &binding.vault_id);
-                return Err(PlatformError::Invalidated.into());
+            Err(error) => {
+                let terminal = matches!(
+                    error,
+                    PlatformError::Lockout
+                        | PlatformError::NotEnrolledOnDevice
+                        | PlatformError::DeviceUnlockUnavailable
+                        | PlatformError::Invalidated
+                );
+                if (terminal || error == PlatformError::AuthenticationFailed)
+                    && !self
+                        .0
+                        .session
+                        .record_device_unlock_failure(binding.incarnation, terminal)
+                {
+                    return Err(superseded());
+                }
+                if error == PlatformError::Invalidated {
+                    self.drop_enrolment_locked(&mut config, &binding.vault_id);
+                }
+                return Err(error.into());
             }
-            Err(e) => return Err(e.into()),
         };
         match self.0.session.unlock_if_incarnation(
             secret,
@@ -850,6 +901,13 @@ impl DeviceUnlockService {
             // The incarnation held, so this is the stored password failing the very vault it
             // was enrolled for (changed in another app).
             Err(SessionError::WrongPassword) => {
+                if !self
+                    .0
+                    .session
+                    .record_device_unlock_failure(binding.incarnation, true)
+                {
+                    return Err(superseded());
+                }
                 self.drop_enrolment_locked(&mut config, &binding.vault_id);
                 Err(PlatformError::Invalidated.into())
             }
@@ -1057,6 +1115,16 @@ mod service_tests {
             Self::run(&self.on_unlock);
             r
         }
+        fn unlock_with_biometrics(
+            &self,
+            mode: DeviceUnlockMode,
+            vault_id: &str,
+            reason: &str,
+        ) -> mypass_platform::PlatformResult<SecretString> {
+            let result = self.fake.unlock_with_biometrics(mode, vault_id, reason);
+            Self::run(&self.on_unlock);
+            result
+        }
         fn forget(&self, vault_id: &str) -> mypass_platform::PlatformResult<()> {
             self.fake.forget(vault_id)
         }
@@ -1112,7 +1180,11 @@ mod service_tests {
 
     /// An unlocked vault `v.kdbx` (password `pw`), device unlock available with biometrics.
     fn fx() -> Fx {
-        let f = fx_with(DeviceUnlockAvailability::Available { biometrics: true });
+        fx_open_with(DeviceUnlockAvailability::Available { biometrics: true })
+    }
+
+    fn fx_open_with(availability: DeviceUnlockAvailability) -> Fx {
+        let f = fx_with(availability);
         f.session
             .create_vault_with(&f.vault_path(), pw("pw"), fast_database("Vault"))
             .unwrap();
@@ -1584,6 +1656,31 @@ mod service_tests {
     }
 
     #[test]
+    fn unavailable_biometrics_do_not_offer_a_biometric_only_enrolment() {
+        let f = fx_open_with(DeviceUnlockAvailability::Available { biometrics: false });
+        f.enable(true, false);
+        f.lock();
+        assert!(!f.service.status().can_offer_now);
+        assert_eq!(f.fake.evaluation_count(), 0);
+    }
+
+    #[test]
+    fn automatic_unlock_requires_live_biometrics_even_with_an_account_password_enrolment() {
+        let f = fx_open_with(DeviceUnlockAvailability::Available { biometrics: false });
+        f.enable(true, true);
+        f.lock();
+        assert!(f.service.status().can_offer_now);
+        assert_eq!(
+            code(f.service.unlock_with_device_automatically("r")),
+            ErrorCode::Cancelled
+        );
+        assert_eq!(f.fake.evaluation_count(), 0);
+        assert!(!f.session.is_unlocked());
+        f.service.unlock_with_device("r").unwrap();
+        assert_eq!(f.fake.evaluation_count(), 1);
+    }
+
+    #[test]
     fn unlock_cancel_leaves_locked_enrolled_and_no_error_toast_code_is_cancelled() {
         let f = fx();
         f.enable(true, false);
@@ -1603,9 +1700,6 @@ mod service_tests {
 
     #[test]
     fn lockout_and_not_enrolled_on_device_pass_through_and_keep_enrolment() {
-        let f = fx();
-        f.enable(false, true);
-        f.lock();
         for (e, expected) in [
             (PlatformError::Lockout, ErrorCode::Lockout),
             (
@@ -1617,6 +1711,9 @@ mod service_tests {
                 ErrorCode::AuthenticationFailed,
             ),
         ] {
+            let f = fx();
+            f.enable(false, true);
+            f.lock();
             f.fake.fail_next_unlock(e);
             assert_eq!(code(f.service.unlock_with_device("r")), expected);
             assert!(f.enrolled(DeviceUnlockMode::AccountPassword));

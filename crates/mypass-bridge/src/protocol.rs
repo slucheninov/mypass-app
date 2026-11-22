@@ -451,8 +451,8 @@ pub enum Response {
         retry_after_secs: u64,
     },
     DeviceUnlockUnavailable,
-    /// The device prompt did not recognize the user; `device_failures` counts such prompts from
-    /// browsers in this lock spell.
+    /// The device prompt did not recognize the user; `device_failures` counts such prompts across
+    /// the app in this lock spell.
     DeviceNotRecognized {
         device_failures: u32,
     },
@@ -463,6 +463,10 @@ pub enum Response {
         touch_id: bool,
         #[serde(default)]
         device_failures: u32,
+        #[serde(default)]
+        device_blocked: bool,
+        #[serde(default)]
+        device_prompt_in_flight: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         retry_after_secs: Option<u64>,
     },
@@ -974,10 +978,12 @@ mod unlock_protocol_tests {
                     device_unlock: true,
                     touch_id: true,
                     device_failures: 1,
+                    device_blocked: true,
+                    device_prompt_in_flight: true,
                     retry_after_secs: None,
                 },
                 json!({"type": "unlockOptions", "deviceUnlock": true, "touchId": true,
-                    "deviceFailures": 1}),
+                    "deviceFailures": 1, "deviceBlocked": true, "devicePromptInFlight": true}),
             ),
         ];
         for (response, wire) in cases {

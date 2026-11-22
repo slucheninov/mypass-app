@@ -2,6 +2,8 @@
 // Touch ID view and starts one prompt by itself on opening. The per-lock-spell failure count comes
 // from the bridge (`deviceFailures`), so it survives closing and reopening the popup.
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { test } = require('node:test');
 const { openPopup, flush } = require('./popupHarness.js');
 const popup = require('../popup.js');
@@ -13,7 +15,7 @@ function lockedPopup({ options = TOUCH_ID, device, browse } = {}) {
   return openPopup({ reply(message, cb) {
     switch (message.type) {
       case 'getCredentials': return browse ? browse() : { type: 'locked' };
-      case 'getUnlockOptions': return { type: 'unlockOptions', ...options };
+      case 'getUnlockOptions': return { type: 'unlockOptions', ...(typeof options === 'function' ? options() : options) };
       case 'unlockWithDevice': return device?.(message, cb);
       case 'getPrompt': return { type: 'promptUnavailable' };
       default: return {};
@@ -141,6 +143,38 @@ test('a popup reopened during an in-flight prompt starts no second prompt and co
   assert.equal(second.el('empty-panel').hidden, false);
 });
 
+for (const [name, outcome, options, expected] of [
+  ['third failure', { type: 'deviceNotRecognized', deviceFailures: 3 },
+    { deviceFailures: 3 }, THREE_TIMES],
+  ['lockout', { type: 'deviceUnlockUnavailable' },
+    { deviceBlocked: true, touchId: false, deviceUnlock: false },
+    "Touch ID isn't available. Use your master password."],
+]) {
+  test(`a reopened popup follows the original prompt's ${name} without prompting again`, async () => {
+    let finish;
+    let state = { ...TOUCH_ID, deviceFailures: 2 };
+    const first = lockedPopup({ options: () => state, device: (_message, cb) => { finish = cb; } });
+    await flush();
+    assert.equal(devicePrompts(first).length, 1);
+
+    state = { ...state, devicePromptInFlight: true };
+    const second = lockedPopup({
+      options: () => state,
+      device: () => ({ type: 'unlockCancelled' }),
+    });
+    await flush();
+    assert.ok(touchView(second));
+    assert.equal(devicePrompts(second).length, 1);
+
+    state = { ...state, ...options, devicePromptInFlight: false };
+    finish(outcome);
+    await second.advance(2000);
+    assert.equal(second.el('unlock-form').hidden, false);
+    assert.equal(second.el('unlock-error').textContent, expected);
+    assert.equal(devicePrompts(second).length, 1);
+  });
+}
+
 test('Use password shows the form without an error; Try Touch ID again prompts once', async () => {
   const h = lockedPopup({ device: () => ({ type: 'unlockCancelled' }) });
   await flush();
@@ -165,5 +199,35 @@ test('without Touch ID the popup keeps the password form and never prompts by it
     assert.equal(h.el('unlock-form').hidden, false);
     assert.equal(h.el('try-touch-id-btn').hidden, true);
     assert.equal(devicePrompts(h).length, 0);
+  }
+});
+
+test('both unlock links have 4.5:1 contrast in light and dark, including hover and focus', () => {
+  const styles = fs.readFileSync(path.join(__dirname, '../popup.html'), 'utf8');
+  const shared = fs.readFileSync(path.join(__dirname, '../shared/ui.css'), 'utf8');
+  const rule = styles.match(/\.unlock-link \{([^}]+)\}/)[1];
+  const interaction = styles.match(/\.unlock-link:hover, \.unlock-link:focus-visible \{([^}]+)\}/)[1];
+  const luminance = (rgb) => rgb.map((x) => {
+    const s = x / 255;
+    return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  }).reduce((sum, x, i) => sum + x * [0.2126, 0.7152, 0.0722][i], 0);
+  const rgb = (hex) => hex.slice(1).match(/../g).map((pair) => parseInt(pair, 16));
+  for (const theme of ['light', 'dark', 'system-dark']) {
+    const selector = theme === 'system-dark' ? 'system' : theme;
+    const vars = shared.match(new RegExp(String.raw`html\[data-theme="${selector}"\] \{([^}]+)\}`))[1];
+    const color = (declaration) => {
+      const token = declaration.match(/var\((--[\w-]+)\)/)?.[1];
+      return rgb(token ? vars.match(new RegExp(`${token}: (#[a-f0-9]{6})`))[1] : declaration.match(/#[a-f0-9]{6}/)[0]);
+    };
+    const foreground = luminance(color(rule.match(/color: ([^;]+)/)[1]));
+    const background = color('var(--mp-bg)');
+    const interactive = interaction.match(/background: ([^;]+)/)[1];
+    const tint = interactive.match(/rgba\(([^)]+)\)/)?.[1].split(',').map(Number);
+    const hover = tint ? background.map((channel, i) => channel * (1 - tint[3]) + tint[i] * tint[3]) : color(interactive);
+    for (const [state, bg] of [['default', background], ['hover and focus-visible', hover]]) {
+      const L = luminance(bg);
+      const ratio = (Math.max(L, foreground) + 0.05) / (Math.min(L, foreground) + 0.05);
+      assert.ok(ratio >= 4.5, `${theme} ${state} contrast was ${ratio.toFixed(2)}:1`);
+    }
   }
 });

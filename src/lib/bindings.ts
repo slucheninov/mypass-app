@@ -156,6 +156,7 @@ export const commands = {
 export const events = {
 	bridgeChangedEvent: makeEvent<BridgeChangedEvent, BridgeChangedEvent>("bridge-changed-event"),
 	clipboardClearedEvent: makeEvent<ClipboardClearedEvent, ClipboardClearedEvent>("clipboard-cleared-event"),
+	deviceUnlockChanged: makeEvent<DeviceUnlockChanged, DeviceUnlockChanged>("device-unlock-changed"),
 	newEntryEvent: makeEvent<NewEntryEvent, NewEntryEvent>("new-entry-event"),
 	openEntryEvent: makeEvent<OpenEntryEvent, OpenEntryEvent>("open-entry-event"),
 	pairingChallengeEvent: makeEvent<PairingChallengeEvent_Serialize, PairingChallengeEvent_Deserialize>("pairing-challenge-event"),
@@ -470,6 +471,9 @@ export type CustomFieldEdit = {
 	protected: boolean,
 };
 
+/**  Device unlock attempts changed for the locked vault. */
+export type DeviceUnlockChanged = null;
+
 /**  What the Security pane and the unlock screen show about device unlock. */
 export type DeviceUnlockStatus = DeviceUnlockStatus_Serialize | DeviceUnlockStatus_Deserialize;
 
@@ -485,11 +489,10 @@ export type DeviceUnlockStatus_Deserialize = {
 	macPasswordEnabled: boolean,
 	/**  The unlock screen may show the device-unlock button now. */
 	canOfferNow: boolean,
-	/**
-	 *  What blocks the button: the toggles, the enrolment or a window. `None` when none of them
-	 *  does, and `can_offer_now` is then `available`.
-	 */
+	/**  The configured policy restriction, if any. Availability is checked separately. */
 	reason?: OfferBlock | null,
+	deviceFailures: number,
+	deviceBlocked: boolean,
 };
 
 /**  What the Security pane and the unlock screen show about device unlock. */
@@ -504,11 +507,10 @@ export type DeviceUnlockStatus_Serialize = {
 	macPasswordEnabled: boolean,
 	/**  The unlock screen may show the device-unlock button now. */
 	canOfferNow: boolean,
-	/**
-	 *  What blocks the button: the toggles, the enrolment or a window. `None` when none of them
-	 *  does, and `can_offer_now` is then `available`.
-	 */
+	/**  The configured policy restriction, if any. Availability is checked separately. */
 	reason: OfferBlock | null,
+	deviceFailures: number,
+	deviceBlocked: boolean,
 };
 
 /**  The retained copies of the open vault. */
@@ -838,14 +840,7 @@ export type ErrorCode = "locked" | "noVault" | "wrongPassword" | "alreadyExists"
 /**  The CSV is not valid UTF-8 text. */
 "csvNotUtf8" | 
 /**  The CSV file has no content. */
-"csvEmpty" | "cancelled" | 
-/**  The device prompt did not recognize the user (a rejected finger or password). */
-"authenticationFailed" | "lockout" | "invalidated" | "notEnrolledOnDevice" | "deviceUnlockUnavailable" | "migrationLocked" | "migrationTargetUnreadable" | "migrationTargetNotAVault" | "migrationTargetPasswordMismatch" | "migrationTargetWriteFailed" | "migrationSourceInvalid" | "migrationSameFile" | "migrationValidationFailed" | 
-/**
- *  A retained vault copy was not deleted: the id is stale, or the copy no longer verifies
- *  (`message` names the reason, such as `changed`, `liveVaultMissing` or `staleId`).
- */
-"retainedCopyRefused" | "internal";
+"csvEmpty" | "cancelled" | "authenticationFailed" | "lockout" | "invalidated" | "notEnrolledOnDevice" | "deviceUnlockUnavailable" | "migrationLocked" | "migrationTargetUnreadable" | "migrationTargetNotAVault" | "migrationTargetPasswordMismatch" | "migrationTargetWriteFailed" | "migrationSourceInvalid" | "migrationSameFile" | "migrationValidationFailed" | "retainedCopyRefused" | "internal";
 
 /**  A single field to reveal or copy. `Totp` resolves to the current code. */
 export type FieldRef = { kind: "username" } | { kind: "password" } | { kind: "url" } | { kind: "urlAt"; index: number } | { kind: "notesBody" } | { kind: "cardNumber" } | { kind: "cardCvv" } | { kind: "address"; name: string } | { kind: "person"; name: string } | { kind: "totp" } | { kind: "custom"; key: string };

@@ -704,6 +704,7 @@ impl VaultSession {
             inner.file = None;
             inner.incarnation = inner.incarnation.wrapping_add(1);
             inner.lock_reason = Some(reason);
+            inner.device_unlock_attempts = Default::default();
             out.state_changed = true;
         }
         self.emit(out);

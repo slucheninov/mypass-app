@@ -1,5 +1,5 @@
 import { update } from "./lib/stores/update.svelte";
-import { screen, waitFor, within } from "@testing-library/svelte";
+import { act, screen, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { expect, it } from "vitest";
 import { renderMainApp, calls } from "./test/mainApp";
@@ -72,14 +72,34 @@ it.each([
   });
   expect(await screen.findByRole("button", { name: label })).toBeTruthy();
 });
-it("fresh extension unlock request prompts once; consumed false event does nothing", async () => {
+it("fresh extension unlock request uses an automatic biometric prompt", async () => {
   const { fake } = await renderMainApp({ deviceUnlockAvailable: true }, f => {
-    Object.assign(f.state.device, { macPasswordEnabled: true, canOfferNow: true });
+    Object.assign(f.state.device, { touchIdEnabled: true, macPasswordEnabled: true, canOfferNow: true });
     f.state.extensionUnlockRequested = true;
   });
   await waitFor(() => expect(calls(fake, "vaultUnlockDevice")).toHaveLength(1));
+  expect(calls(fake, "vaultUnlockDevice")[0]?.args).toEqual({ reasonKey: "Unlock MyPass", automatic: true });
   await fake.emit("unlockRequestedEvent", null);
   expect(calls(fake, "vaultUnlockDevice")).toHaveLength(1);
+});
+it("a browser unlock request leaves the password form when only Mac password is available", async () => {
+  const { fake, unmount } = await renderMainApp({ deviceUnlockAvailable: true }, f => {
+    Object.assign(f.state.device, { macPasswordEnabled: true, canOfferNow: true, biometrics: false });
+  });
+  await screen.findByRole("button", { name: "Unlock with Mac password" });
+  fake.state.extensionUnlockRequested = true;
+  const reads = calls(fake, "deviceUnlockStatus").length;
+  await act(async () => {
+    await fake.emit("unlockRequestedEvent", null);
+    await waitFor(() => expect(calls(fake, "deviceUnlockStatus").length).toBeGreaterThan(reads));
+  });
+  await waitFor(() => expect(fake.state.extensionUnlockRequested).toBe(false));
+  try {
+    expect(calls(fake, "vaultUnlockDevice")).toHaveLength(0);
+    expect(screen.getByLabelText("Master password")).toBeTruthy();
+  } finally {
+    unmount();
+  }
 });
 it.each(["cancelled", "invalidated", "lockout"] as const)("device unlock %s keeps password fallback", async code => {
   const { fake } = await renderMainApp({ deviceUnlockAvailable: true }, f => {

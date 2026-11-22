@@ -80,7 +80,7 @@ pub enum ErrorCode {
     /// The CSV file has no content.
     CsvEmpty,
     Cancelled,
-    /// The device prompt did not recognize the user (a rejected finger or password).
+    // The device prompt rejected a finger or password.
     AuthenticationFailed,
     Lockout,
     Invalidated,
@@ -94,8 +94,7 @@ pub enum ErrorCode {
     MigrationSourceInvalid,
     MigrationSameFile,
     MigrationValidationFailed,
-    /// A retained vault copy was not deleted: the id is stale, or the copy no longer verifies
-    /// (`message` names the reason, such as `changed`, `liveVaultMissing` or `staleId`).
+    // The code covers stale IDs and copies that no longer verify. See the message for the reason.
     RetainedCopyRefused,
     Internal,
 }

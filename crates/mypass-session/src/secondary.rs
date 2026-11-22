@@ -982,7 +982,7 @@ impl SecondarySync {
                     self.schedule(&mut st, Slot::Push, SECONDARY_PUSH_DEBOUNCE, RunKind::Push);
                 }
             }
-            SessionEvent::VaultChanged => {}
+            SessionEvent::VaultChanged | SessionEvent::DeviceUnlockChanged => {}
         }
     }
 

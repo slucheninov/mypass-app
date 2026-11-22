@@ -598,6 +598,7 @@ mod tests {
         f.unlocker.set_offer(crate::unlock::DeviceOffer {
             offered: true,
             touch_id: true,
+            prompt_in_flight: false,
         });
         let request = || named("getUnlockOptions", Some(&f.secret));
         assert_eq!(
@@ -606,6 +607,8 @@ mod tests {
                 device_unlock: true,
                 touch_id: true,
                 device_failures: 0,
+                device_blocked: false,
+                device_prompt_in_flight: false,
                 retry_after_secs: None,
             }
         );
@@ -616,6 +619,8 @@ mod tests {
                 device_unlock: true,
                 touch_id: true,
                 device_failures: 0,
+                device_blocked: false,
+                device_prompt_in_flight: false,
                 retry_after_secs: Some(30),
             }
         );
@@ -638,26 +643,6 @@ mod tests {
             panic!("expected UnlockOptions, got {response:?}");
         };
         device_failures
-    }
-
-    #[test]
-    fn not_recognized_device_prompts_are_counted_for_the_popup() {
-        use crate::unlock::UnlockFailure;
-        let f = fx();
-        f.session.lock(LockReason::Manual);
-        for count in 1..=3 {
-            f.unlocker.script_device(Err(UnlockFailure::NotRecognized));
-            assert_eq!(
-                f.svc.handle(device_request(&f, false)),
-                Response::DeviceNotRecognized {
-                    device_failures: count
-                }
-            );
-            assert_eq!(device_failures(&f), count);
-            f.sched.advance(Duration::from_secs(2));
-        }
-        // Not recognized never feeds the password backoff.
-        assert_eq!(wrong_password(&f), Response::WrongPassword);
     }
 
     #[test]
@@ -692,19 +677,6 @@ mod tests {
         f.svc.handle(device_request(&f, true));
         assert_eq!(f.unlocker.device_calls(), 2);
         assert_eq!(f.unlocker.automatic_device_calls(), 1);
-    }
-
-    #[test]
-    fn an_unlock_clears_the_device_failure_count_for_the_next_lock_spell() {
-        use crate::unlock::UnlockFailure;
-        let f = fx();
-        f.session.lock(LockReason::Manual);
-        f.unlocker.script_device(Err(UnlockFailure::NotRecognized));
-        f.svc.handle(device_request(&f, false));
-        assert_eq!(device_failures(&f), 1);
-        f.session.unlock(secrecy::SecretString::from("pw")).unwrap();
-        f.session.lock(LockReason::Manual);
-        assert_eq!(device_failures(&f), 0);
     }
 
     #[test]

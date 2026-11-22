@@ -333,6 +333,18 @@ impl DeviceUnlock for FakeDeviceUnlock {
             .ok_or(PlatformError::Invalidated)
     }
 
+    fn unlock_with_biometrics(
+        &self,
+        mode: DeviceUnlockMode,
+        vault_id: &str,
+        reason: &str,
+    ) -> PlatformResult<SecretString> {
+        if self.availability != (DeviceUnlockAvailability::Available { biometrics: true }) {
+            return Err(PlatformError::DeviceUnlockUnavailable);
+        }
+        self.unlock(mode, vault_id, reason)
+    }
+
     fn forget(&self, vault_id: &str) -> PlatformResult<()> {
         self.check_available()?;
         lock(&self.state).enrolled.retain(|(_, v), _| v != vault_id);

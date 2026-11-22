@@ -229,7 +229,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       endpointStore: "developmentFile",
       canReinstallHost: true,
     },
-    device: { available: deviceUnlockAvailable, biometrics: deviceUnlockAvailable, enrolled: false, touchIdEnabled: false, macPasswordEnabled: false, canOfferNow: false, reason: "disabled" },
+    device: { available: deviceUnlockAvailable, biometrics: deviceUnlockAvailable, enrolled: false, touchIdEnabled: false, macPasswordEnabled: false, canOfferNow: false, reason: "disabled", deviceFailures: 0, deviceBlocked: false },
     extensionUnlockRequested: false,
     update: { status: { state: "idle" }, banner: null },
     browserReinstall: [],
@@ -416,6 +416,9 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
   const pickedFiles = new Map<string, PickedFile>();
 
   const setSession = (next: SessionStatus_Serialize) => {
+    if (state.session.state !== next.state || state.session.vaultPath !== next.vaultPath) {
+      Object.assign(state.device, { deviceFailures: 0, deviceBlocked: false });
+    }
     state.session = next;
     publish("sessionChanged", structuredClone(next));
     return structuredClone(next);

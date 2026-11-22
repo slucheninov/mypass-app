@@ -32,6 +32,7 @@ pub enum UnlockFailure {
 pub struct DeviceOffer {
     pub offered: bool,
     pub touch_id: bool,
+    pub prompt_in_flight: bool,
 }
 
 pub trait VaultUnlocker: Send + Sync {
@@ -57,10 +58,6 @@ pub enum PasswordAttempt {
 struct State {
     consecutive_wrong: u32,
     blocked_until: Option<Duration>,
-    /// Device prompts started from a browser that did not recognize the user, since the last
-    /// unlock. Every lock spell follows an unlock (which resets it), so this is the count of the
-    /// current lock spell; the popup reads it on every opening.
-    device_failures: u32,
     generation: u64,
 }
 
@@ -162,33 +159,6 @@ impl UnlockThrottle {
         }
         *last = Some(now);
         Some(try_unlock())
-    }
-
-    /// The reset generation, read before a device prompt starts and handed back to
-    /// [`Self::record_device_failure`].
-    pub(crate) fn generation(&self) -> u64 {
-        self.state
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .generation
-    }
-
-    /// Counts a device prompt that did not recognize the user and returns the new count. An unlock
-    /// that happened while the prompt ran (a new generation) supersedes it: nothing is counted.
-    pub(crate) fn record_device_failure(&self, generation: u64) -> u32 {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        if state.generation == generation {
-            state.device_failures = state.device_failures.saturating_add(1);
-        }
-        state.device_failures
-    }
-
-    /// Device prompts from a browser that did not recognize the user in this lock spell.
-    pub fn device_failures(&self) -> u32 {
-        self.state
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .device_failures
     }
 
     pub fn retry_after_secs(&self) -> Option<u64> {
@@ -335,39 +305,6 @@ mod tests {
             PasswordAttempt::Unlocked
         );
         four_wrong(&throttle);
-    }
-
-    #[test]
-    fn device_failures_count_up_and_reset_with_the_throttle() {
-        let (_, throttle) = fixture();
-        assert_eq!(throttle.device_failures(), 0);
-        let generation = throttle.generation();
-        assert_eq!(throttle.record_device_failure(generation), 1);
-        assert_eq!(throttle.record_device_failure(generation), 2);
-        assert_eq!(throttle.device_failures(), 2);
-        throttle.reset();
-        assert_eq!(throttle.device_failures(), 0);
-    }
-
-    #[test]
-    fn device_failure_after_an_unlock_during_the_prompt_is_not_counted() {
-        let (_, throttle) = fixture();
-        let generation = throttle.generation();
-        throttle.reset();
-        assert_eq!(throttle.record_device_failure(generation), 0);
-        assert_eq!(throttle.device_failures(), 0);
-    }
-
-    #[test]
-    fn device_failures_never_touch_the_password_backoff() {
-        let (_, throttle) = fixture();
-        let generation = throttle.generation();
-        for _ in 0..10 {
-            throttle.record_device_failure(generation);
-        }
-        assert_eq!(throttle.retry_after_secs(), None);
-        four_wrong(&throttle);
-        assert_eq!(throttle.device_failures(), 10);
     }
 
     #[test]

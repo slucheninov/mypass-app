@@ -23,7 +23,7 @@
     const consume = async () => {
       if (await api.deviceUnlockConsumeExtensionRequest()) {
         await device.refresh();
-        if (active) await device.unlock();
+        if (active) await device.unlock(true);
       }
     };
     void events.unlockRequestedEvent.listen(() => void consume().catch(() => {})).then(unlisten => {

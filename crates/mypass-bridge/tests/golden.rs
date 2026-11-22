@@ -997,9 +997,11 @@ fn response_cases() -> Vec<(Response, Value)> {
                 device_unlock: true,
                 touch_id: true,
                 device_failures: 0,
+                device_blocked: false,
+                device_prompt_in_flight: false,
                 retry_after_secs: None,
             },
-            json!({"type":"unlockOptions","deviceUnlock":true,"touchId":true,"deviceFailures":0}),
+            json!({"type":"unlockOptions","deviceUnlock":true,"touchId":true,"deviceFailures":0,"deviceBlocked":false,"devicePromptInFlight":false}),
         ),
     ]
 }

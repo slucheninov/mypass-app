@@ -327,7 +327,7 @@ impl<A: LocalAuth> KeychainDeviceUnlock<A> {
         }
     }
 
-    /// The stored master password: the one data read, only on the explicit unlock path.
+    /// Read the stored master password after device authentication.
     fn read_secret(&self, account: &str) -> PlatformResult<Option<Zeroizing<Vec<u8>>>> {
         Ok(self.store.get(&self.service, account)?.map(Zeroizing::new))
     }
@@ -375,6 +375,38 @@ impl<A: LocalAuth> KeychainDeviceUnlock<A> {
             stored.as_deref(),
             Some(&current),
         ))
+    }
+
+    fn unlock_using(
+        &self,
+        mode: DeviceUnlockMode,
+        vault_id: &str,
+        reason: &str,
+        policy: AuthPolicy,
+    ) -> PlatformResult<SecretString> {
+        check_reason(reason)?;
+        let v = vault(vault_id)?;
+        if !self.is_enrolled(mode, vault_id)? {
+            return Err(PlatformError::Invalidated);
+        }
+        let evaluated = self
+            .auth
+            .evaluate(policy, reason, crate::DEVICE_UNLOCK_TIMEOUT)?;
+        if mode == DeviceUnlockMode::Biometrics {
+            // The state the evaluation itself saw is authoritative (a finger added during the
+            // prompt counts); `enrolled_with` falls back to a silent preflight when the context
+            // reported none.
+            if !self.enrolled_with(mode, &v, evaluated)? {
+                return Err(PlatformError::Invalidated);
+            }
+        }
+        // The only read of item data: the user just passed the prompt for this unlock.
+        let bytes = self
+            .read_secret(&account_for(mode, &v))?
+            .ok_or(PlatformError::Invalidated)?;
+        let text = std::str::from_utf8(&bytes)
+            .map_err(|_| PlatformError::Failed("the stored secret is not valid text".to_owned()))?;
+        Ok(SecretString::from(text.to_owned()))
     }
 }
 
@@ -440,29 +472,16 @@ impl<A: LocalAuth> DeviceUnlock for KeychainDeviceUnlock<A> {
         vault_id: &str,
         reason: &str,
     ) -> PlatformResult<SecretString> {
-        check_reason(reason)?;
-        let v = vault(vault_id)?;
-        if !self.is_enrolled(mode, vault_id)? {
-            return Err(PlatformError::Invalidated);
-        }
-        let evaluated =
-            self.auth
-                .evaluate(policy_for(mode), reason, crate::DEVICE_UNLOCK_TIMEOUT)?;
-        if mode == DeviceUnlockMode::Biometrics {
-            // The state the evaluation itself saw is authoritative (a finger added during the
-            // prompt counts); `enrolled_with` falls back to a silent preflight when the context
-            // reported none.
-            if !self.enrolled_with(mode, &v, evaluated)? {
-                return Err(PlatformError::Invalidated);
-            }
-        }
-        // The only read of item data: the user just passed the prompt for this unlock.
-        let bytes = self
-            .read_secret(&account_for(mode, &v))?
-            .ok_or(PlatformError::Invalidated)?;
-        let text = std::str::from_utf8(&bytes)
-            .map_err(|_| PlatformError::Failed("the stored secret is not valid text".to_owned()))?;
-        Ok(SecretString::from(text.to_owned()))
+        self.unlock_using(mode, vault_id, reason, policy_for(mode))
+    }
+
+    fn unlock_with_biometrics(
+        &self,
+        mode: DeviceUnlockMode,
+        vault_id: &str,
+        reason: &str,
+    ) -> PlatformResult<SecretString> {
+        self.unlock_using(mode, vault_id, reason, AuthPolicy::Biometrics)
     }
 
     fn forget(&self, vault_id: &str) -> PlatformResult<()> {
@@ -1118,6 +1137,20 @@ mod tests {
         let s = lock(&f.auth.0);
         assert_eq!(s.last_policy, Some(AuthPolicy::Biometrics));
         assert_eq!(s.last_timeout, Some(crate::DEVICE_UNLOCK_TIMEOUT));
+    }
+
+    #[test]
+    fn automatic_unlock_uses_biometrics_for_an_account_password_enrolment() {
+        let f = fixture();
+        let mode = DeviceUnlockMode::AccountPassword;
+        f.du.enroll(mode, "vault-a", &secret("pw")).unwrap();
+        let got =
+            f.du.unlock_with_biometrics(mode, "vault-a", "Unlock MyPass")
+                .unwrap();
+        assert_eq!(got.expose_secret(), "pw");
+        assert_eq!(lock(&f.auth.0).last_policy, Some(AuthPolicy::Biometrics));
+        f.du.unlock(mode, "vault-a", "Unlock MyPass").unwrap();
+        assert_eq!(lock(&f.auth.0).last_policy, Some(AuthPolicy::DeviceOwner));
     }
 
     #[test]
