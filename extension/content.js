@@ -553,11 +553,33 @@
 
   // A generated password goes into the field it was generated for and into the confirm or repeat
   // field of the same form (registration-form.js `newPasswordTargets`), so the two always match.
-  // Returns the fields written.
+  // Only fields really on the page are chosen (form-detection.js `isControlOnPage`: no field moved
+  // off-screen or clipped to a pixel). Every write runs the page's input and change handlers,
+  // which may hide, retype, detach or move the next field, so each target is checked again right
+  // before its own write: still connected, on the page, a password field (or one revealed by a
+  // show toggle, `options.wasPassword`), in the same <form> and still in the generated field's
+  // group. Returns the fields written.
   function fillGeneratedPassword(doc, input, password, setValue, options) {
-    const targets = shared.registrationForm.newPasswordTargets(doc, input, options || passwordMemory);
-    for (const node of targets) setValue(node, password);
-    return targets;
+    const registration = shared.registrationForm;
+    const opts = { ...passwordMemory, ...(options || {}) };
+    if (typeof opts.isVisible !== 'function') opts.isVisible = shared.formDetection.isControlOnPage;
+    const targets = registration.newPasswordTargets(doc, input, opts);
+    const formAtSelection = new Map(targets.map((node) => [node, node.form || null]));
+    // The field the user generated for may be a plain text field the generator was offered on;
+    // it only has to stay what it was.
+    const inputWasPassword = registration.isPasswordLike(input, opts);
+    const stillTarget = (node) => node.isConnected !== false
+      && (node.form || null) === formAtSelection.get(node)
+      && opts.isVisible(node)
+      && (registration.isPasswordLike(node, opts) || (node === input && !inputWasPassword))
+      && registration.newPasswordTargets(doc, input, opts).includes(node);
+    const written = [];
+    for (const node of targets) {
+      if (!stillTarget(node)) continue;
+      setValue(node, password);
+      written.push(node);
+    }
+    return written;
   }
 
   // What a sign-up submit would save, read at the moment of the submit: `{ captured, watch }`,

@@ -92,3 +92,57 @@ test('confirm, repeat and retype wording is recognised in four languages', () =>
   assert.equal(formDetection.isConfirmPasswordHint(plain.getElementById('x')), false);
   assert.equal(typeof registration.newPasswordTargets, 'function');
 });
+
+// The page reacts to each write: its input and change handlers run synchronously inside
+// setValue and may hide, retype, detach or move the confirm field before it is written. Every
+// target is checked again right before its write, and fields that are not on the page at all
+// (moved far off-screen, clipped to a pixel) are never chosen.
+test('a confirm field the page hides, retypes, detaches or moves after the first write is left alone', () => {
+  const reactions = {
+    hidden: (confirm) => confirm.setAttribute('style', 'display:none'),
+    invisible: (confirm) => confirm.setAttribute('style', 'visibility:hidden'),
+    transparent: (confirm) => confirm.setAttribute('style', 'opacity:0'),
+    ariaHidden: (confirm) => confirm.parentElement.setAttribute('aria-hidden', 'true'),
+    retyped: (confirm) => confirm.setAttribute('type', 'text'),
+    detached: (confirm) => confirm.remove(),
+    offscreen: (confirm) => confirm.setAttribute('data-rect', '-9999,0,100,30'),
+  };
+  for (const [name, react] of Object.entries(reactions)) {
+    const doc = parseHtml(SIGN_UP);
+    const confirm = doc.getElementById('password-confirm');
+    const onWrite = (node, value) => {
+      node.value = value;
+      if (node.id === 'password') react(confirm);
+    };
+    const filled = fillGeneratedPassword(doc, doc.getElementById('password'), 'Gen-3rated!', onWrite);
+    assert.deepEqual(filled.map((node) => node.id), ['password'], name);
+    assert.notEqual(confirm.value, 'Gen-3rated!', name);
+  }
+});
+
+test('a confirm field moved into another form after the first write is left alone', () => {
+  const doc = parseHtml('<form id="signup"><input id="a" type="password" autocomplete="new-password">'
+    + '<input id="b" type="password" autocomplete="new-password"></form><form id="other"><input id="o" name="q"></form>');
+  const confirm = doc.getElementById('b');
+  const onWrite = (node, value) => {
+    node.value = value;
+    if (node.id === 'a') doc.getElementById('other').appendChild(confirm);
+  };
+  const filled = fillGeneratedPassword(doc, doc.getElementById('a'), 'Gen-3rated!', onWrite);
+  assert.deepEqual(filled.map((node) => node.id), ['a']);
+  assert.equal(confirm.value, '');
+});
+
+test('off-screen and pixel-sized password fields are never chosen as confirm fields', () => {
+  for (const rect of ['-9999,0,100,30', '0,-9999,100,30', '0,0,1,1']) {
+    const doc = parseHtml(SIGN_UP);
+    doc.getElementById('password-confirm').setAttribute('data-rect', rect);
+    const filled = fillGeneratedPassword(doc, doc.getElementById('password'), 'Gen-3rated!', write);
+    assert.deepEqual(filled.map((node) => node.id), ['password'], rect);
+  }
+  const below = parseHtml(SIGN_UP);
+  below.getElementById('password-confirm').setAttribute('data-rect', '0,1200,100,30');
+  below.documentElement.scrollHeight = 2400;
+  const filled = fillGeneratedPassword(below, below.getElementById('password'), 'Gen-3rated!', write);
+  assert.deepEqual(filled.map((node) => node.id), ['password', 'password-confirm'], 'below the fold but on the page');
+});

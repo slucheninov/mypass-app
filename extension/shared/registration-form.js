@@ -700,7 +700,7 @@ var mypassRegistrationForm = (() => {
   return {
     MAX_FIELDS, MAX_LABEL, MAX_VALUE,
     classify, find, formFor, fillableFields, selectionFor, personSelections, fillSelection, capture,
-    newPasswordTargets,
+    newPasswordTargets, isPasswordLike,
     personProfile, parseIsoDate,
     isSubmitControl, isScriptSubmitControl, isNativeSubmitControl, readableLabel,
   };

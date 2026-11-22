@@ -600,6 +600,27 @@ function isControlShown(control) {
   return !!box && box.width > 0 && box.height > 0;
 }
 
+// Stricter than isControlShown, for fields a value is written into without the user pointing at
+// them (the confirm field of a generated password): also a box of at least 2x2 px (the 1 px
+// "visually hidden" clip pattern is not a field anyone sees) that lies at least partly inside the
+// document's scrollable area. A field moved to left:-9999px is shown by CSS but on no screen.
+function isControlOnPage(control) {
+  if (!isControlShown(control)) return false;
+  const box = control.getBoundingClientRect();
+  if (!box || box.width < 2 || box.height < 2) return false;
+  const doc = control.ownerDocument;
+  const view = doc.defaultView;
+  const root = doc.documentElement || {};
+  const body = doc.body || {};
+  const scrollX = Number(view.scrollX || view.pageXOffset || 0);
+  const scrollY = Number(view.scrollY || view.pageYOffset || 0);
+  const width = Math.max(Number(root.scrollWidth) || 0, Number(body.scrollWidth) || 0, Number(view.innerWidth) || 0);
+  const height = Math.max(Number(root.scrollHeight) || 0, Number(body.scrollHeight) || 0, Number(view.innerHeight) || 0);
+  const left = box.left + scrollX;
+  const top = box.top + scrollY;
+  return left + box.width > 0 && top + box.height > 0 && left < width && top < height;
+}
+
 // Disabled itself or through a disabled <fieldset> (`:disabled` matches both).
 function isEffectivelyDisabled(control) {
   if (!control) return true;
@@ -667,6 +688,7 @@ var mypassFormDetection = {
   isCurrentPasswordHint,
   isConfirmPasswordHint,
   isControlShown,
+  isControlOnPage,
   isEffectivelyDisabled,
   isRegistrationActionText,
 };
