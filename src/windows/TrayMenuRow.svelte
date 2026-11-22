@@ -59,8 +59,7 @@
     text-align: left;
     cursor: default;
   }
-  .row[data-active],
-  .row:focus-visible {
+  .row[data-active] {
     background: var(--menu-accent);
     color: #fff;
     outline: none;
@@ -92,8 +91,7 @@
   .icon {
     display: inline-flex;
   }
-  .row[data-active] :is(.shortcut, .subtitle),
-  .row:focus-visible :is(.shortcut, .subtitle) {
+  .row[data-active] :is(.shortcut, .subtitle) {
     color: inherit;
   }
 </style>
