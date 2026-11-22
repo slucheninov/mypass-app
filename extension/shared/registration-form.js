@@ -281,11 +281,13 @@ var mypassRegistrationForm = (() => {
     });
   }
 
-  // Every registration form of `doc`, each `{ owner, fields, newPassword, actions }` where
-  // `fields` is `[{ node, kind, label }]` in document order and `newPassword` the field the new
-  // password is typed into (null for a form without one). `owner` is the <form> element, or an
+  // Every registration form of `doc`, each `{ owner, fields, newPassword, passwords, actions }`
+  // where `fields` is `[{ node, kind, label }]` in document order, `newPassword` the field the new
+  // password is typed into (null for a form without one) and `passwords` every password field
+  // (the new one, its confirm field). `owner` is the <form> element, or an
   // opaque key of a proximity group (only stable within one call).
-  // `options.isVisible` replaces the visibility check; `options.submitter` is the control that
+  // `options.isVisible` replaces the visibility check; `options.wasPassword` names fields to treat
+  // as passwords although they are text now (see isPasswordLike); `options.submitter` is the control that
   // submitted (a submit event's submitter, or the clicked script control): its own text is then
   // the only "Sign up" evidence of its form.
   function find(doc, options) {
@@ -293,7 +295,7 @@ var mypassRegistrationForm = (() => {
     const submitter = (options && options.submitter) || null;
     const entries = [];
     for (const node of doc.querySelectorAll('input, select, textarea')) {
-      if (usablePassword(node, isVisible)) {
+      if (usablePassword(node, isVisible, options)) {
         entries.push({ node, role: 'password' });
         continue;
       }
@@ -322,7 +324,7 @@ var mypassRegistrationForm = (() => {
       const kinds = new Set(group.fields.map((field) => field.kind).filter((kind) => kind !== 'other'));
       const passwordless = group.passwords.length === 0 && kinds.size >= 2 && group.fields.length >= 3;
       if (newPassword || passwordless) {
-        forms.push({ owner: group.owner, fields: group.fields, newPassword, actions: group.actions });
+        forms.push({ owner: group.owner, fields: group.fields, newPassword, passwords: group.passwords, actions: group.actions });
       }
     }
     return forms;
@@ -384,6 +386,7 @@ var mypassRegistrationForm = (() => {
 
   function contains(form, node) {
     return form.owner === node || form.newPassword === node || form.actions.includes(node)
+      || (form.passwords || []).includes(node)
       || form.fields.some((field) => field.node === node);
   }
 

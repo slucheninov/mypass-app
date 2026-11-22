@@ -560,6 +560,97 @@
     return targets;
   }
 
+  // Turns the page's events into "the user submitted a sign-up form" and calls
+  // `propose(node, submitter)` for it; the caller then captures the form (the password is read
+  // and sent only from there, so never on a fill or a keystroke). Three ways in, each a trusted
+  // user action (`isUserSubmit`):
+  //   - the `submit` event of a <form> (fires only after the browser's validation passed);
+  //   - a click on a script-driven "Sign up" control (no form, or not a submit control), and a
+  //     click on a native submit button whose default the page cancels: single-page apps often
+  //     prevent it and post the form themselves, so no `submit` event ever fires. The check
+  //     runs after the click was handled (`defer`): by then a native submit has fired its
+  //     event, which is the one that counts;
+  //   - Enter in a field: a form-less group never submits natively, so Enter is its submit; in a
+  //     <form> it counts only when no `submit` followed and the page took the key itself.
+  // A click or Enter that the browser's validation stopped (nothing submitted, nothing
+  // cancelled) asks nothing. Duplicates are harmless: requestSavePrompt drops a repeat.
+  function createRegistrationSubmitWatcher({ isUserSubmit: isUser, defer, propose }) {
+    let submits = 0;
+    const NOT_TEXT = new Set(['button', 'submit', 'image', 'reset', 'checkbox', 'radio', 'file', 'range', 'color']);
+    function onSubmit(event) {
+      submits += 1;
+      if (!isUser(event)) return;
+      propose(event.target, event.submitter || null);
+    }
+    function onClick(event) {
+      if (!isUser(event)) return;
+      const control = event.target && typeof event.target.closest === 'function'
+        ? event.target.closest('button, input[type="submit"], input[type="button"], input[type="image"], [role="button"]') : null;
+      if (!control) return;
+      if (shared.registrationForm.isScriptSubmitControl(control)) {
+        propose(control, control);
+        return;
+      }
+      if (!shared.registrationForm.isNativeSubmitControl(control)) return;
+      const before = submits;
+      defer(() => {
+        if (submits === before && event.defaultPrevented) propose(control, control);
+      });
+    }
+    function onKeydown(event) {
+      if (event.key !== 'Enter' || event.isComposing || !isUser(event)) return;
+      const field = event.target;
+      if (!field || field.tagName !== 'INPUT') return;
+      if (NOT_TEXT.has(String(field.getAttribute('type') || '').toLowerCase())) return;
+      const before = submits;
+      defer(() => {
+        if (submits !== before) return;
+        if (field.form && !event.defaultPrevented) return;
+        propose(field, null);
+      });
+    }
+    return { onSubmit, onClick, onKeydown };
+  }
+
+  // A short note after a generated password went into a sign-up form: MyPass will offer to save
+  // the login once the user submits it (nothing is sent before). One at a time, bottom right, in a
+  // closed shadow root so the page cannot read or restyle it, gone after a few seconds or on its
+  // close button. `options.text` and `options.closeLabel` are the localized strings.
+  const SAVE_HINT_MS = 6000;
+  const SAVE_HINT_STYLE = ':host{all:initial}'
+    + '.hint{display:flex;align-items:center;gap:8px;max-width:320px;padding:10px 12px;border-radius:10px;'
+    + 'background:#1c1c1e;color:#fff;font:13px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;'
+    + 'box-shadow:0 6px 24px rgba(0,0,0,.25)}'
+    + '.close{all:unset;cursor:pointer;padding:0 4px;font-size:16px;line-height:1;color:#c7c7cc}'
+    + '.close:focus-visible{outline:2px solid #0a84ff;border-radius:4px}';
+
+  function showSaveHintToast(doc, options) {
+    const opts = options || {};
+    for (const old of doc.querySelectorAll('[data-mypass-save-hint]')) old.remove();
+    const { host, shadow } = buildShadowHost(doc, 'data-mypass-save-hint', SAVE_HINT_STYLE);
+    host.style.setProperty('right', '16px', 'important');
+    host.style.setProperty('bottom', '16px', 'important');
+    const box = doc.createElement('div');
+    box.setAttribute('class', 'hint');
+    box.setAttribute('role', 'status');
+    box.setAttribute('aria-live', 'polite');
+    const text = doc.createElement('span');
+    text.textContent = opts.text || '';
+    box.appendChild(text);
+    const close = doc.createElement('button');
+    close.setAttribute('type', 'button');
+    close.setAttribute('class', 'close');
+    close.setAttribute('aria-label', opts.closeLabel || '');
+    close.textContent = '\u00d7';
+    close.addEventListener('click', trustedClickHandler(() => host.remove()));
+    box.appendChild(close);
+    shadow.appendChild(box);
+    (doc.body || doc.documentElement).appendChild(host);
+    const later = opts.setTimeout || setTimeout;
+    later(() => host.remove(), SAVE_HINT_MS);
+    return host;
+  }
+
   // Built from DOM nodes rather than an innerHTML string: sites that enforce the
   // require-trusted-types-for 'script' CSP directive throw on any innerHTML assignment,
   // and those are exactly the sites this feature most needs to work on.
@@ -1690,6 +1781,7 @@
               const outcome = classifyGeneratePasswordResponse(genResponse);
               if (outcome.action === 'fill') {
                 fillGeneratedPassword(document, input, outcome.password, setNativeValue);
+                showSaveHint(input);
                 closePanel();
                 return;
               }
@@ -1736,8 +1828,18 @@
     function registrationSaveTarget(node, submitter) {
       if (!runsHere('saveBanner') || !pageAutofillSettings.offerSaveLogin
         || !shared.urlMatch.isHttpsAddressPage(location.href)) return null;
-      const form = shared.registrationForm.formFor(document, node, submitter ? { submitter } : undefined);
+      rememberPasswordFields(document);
+      const options = { wasPassword: passwordMemory.wasPassword };
+      if (submitter) options.submitter = submitter;
+      const form = shared.registrationForm.formFor(document, node, options);
       return form && form.newPassword ? form : null;
+    }
+
+    // After a generated password went into a sign-up form, say that MyPass will offer to save
+    // the login on submit. Only where that offer can really come (see registrationSaveTarget).
+    function showSaveHint(input) {
+      if (!registrationSaveTarget(input, null)) return;
+      showSaveHintToast(document, { text: i18n.t('saveHintAfterSubmit'), closeLabel: i18n.t('close') });
     }
 
     // A user's submit of a registration form asks to save the new login with the form's other
@@ -1746,20 +1848,21 @@
     // submit button of a form) is the fallback for forms that never submit natively. Capture
     // phase, so a page that stops the event or swaps the form on submit is still seen. A locked
     // vault is not a reason to stay quiet: the prompt itself asks to unlock before it saves.
-    function onRegistrationSubmit(event, node, submitter) {
-      if (!isUserSubmit(event)) return;
+    function onRegistrationSubmit(node, submitter) {
       const form = registrationSaveTarget(node, submitter);
       const captured = form && shared.registrationForm.capture(form);
       if (!captured) return;
       requestSavePrompt(location.href, captured.username, captured.password, state, sendRuntimeMessage,
         undefined, captured.fields, captured.usernameIsEmail);
     }
-    document.addEventListener('submit', (event) => onRegistrationSubmit(event, event.target, event.submitter || null), true);
-    document.addEventListener('click', (event) => {
-      const target = event.target && typeof event.target.closest === 'function'
-        ? event.target.closest('button, input[type="submit"], input[type="button"], input[type="image"], [role="button"]') : null;
-      if (target && shared.registrationForm.isScriptSubmitControl(target)) onRegistrationSubmit(event, target, target);
-    }, true);
+    const submitWatcher = createRegistrationSubmitWatcher({
+      isUserSubmit: (event) => isUserSubmit(event),
+      defer: (fn) => setTimeout(fn, 0),
+      propose: onRegistrationSubmit,
+    });
+    document.addEventListener('submit', submitWatcher.onSubmit, true);
+    document.addEventListener('click', submitWatcher.onClick, true);
+    document.addEventListener('keydown', submitWatcher.onKeydown, true);
 
     let addressSnapshot = null;
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -1870,6 +1973,7 @@
           // A generated password also goes into the form's confirm field.
           if (message.fillTarget === 'newPassword') {
             fillGeneratedPassword(document, passwordInput, message.password, setNativeValue);
+            showSaveHint(passwordInput);
           } else {
             setNativeValue(passwordInput, message.password);
           }
@@ -2084,7 +2188,7 @@
     module.exports = {
       scoreUsernameLikeness, findBestUsernameInput, hostnameMatches, fillTargetMatches, scoreOtpLikeness, findOtpField,
       isFieldVisible, findFillableFields, findLoginForm, resolveFillTargets, resolveApplyFillTargets,
-      isNewPasswordCandidate, fillGeneratedPassword,
+      isNewPasswordCandidate, fillGeneratedPassword, createRegistrationSubmitWatcher, showSaveHintToast,
       isFillTargetUsable,
       detectOtpauthLink, detectOtpauthText, isBase32Secret, detectManualSetupKey,
       decodeQrFromImage, detectQrCandidate,

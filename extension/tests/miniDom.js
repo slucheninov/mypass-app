@@ -202,6 +202,14 @@ class Element extends Node {
     return !event.defaultPrevented;
   }
   focus() { this.ownerDocument.activeElement = this; }
+  // A shadow root is a detached element, so its text is not part of the host's or the page's
+  // textContent. `shadowRoot` is set for a closed root too, so tests can look inside.
+  attachShadow() {
+    const root = new Element(this.ownerDocument, '#shadow-root');
+    root.host = this;
+    this.shadowRoot = root;
+    return root;
+  }
 }
 
 class Document extends Node {

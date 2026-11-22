@@ -408,6 +408,9 @@
   "newTotp": {
     "message": "2FA-Code"
   },
+  "saveHintAfterSubmit": {
+    "message": "MyPass bietet an, diese Anmeldung zu speichern, sobald Sie das Formular absenden."
+  },
   "totpInvalid": {
     "message": "Gib eine gültige Authenticator-URL oder einen geheimen Schlüssel ein"
   },
