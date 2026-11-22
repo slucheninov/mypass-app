@@ -210,18 +210,28 @@ fn setup_panel(app: &AppHandle) {
     let material = choose_panel_material(TrayOs::current(), |effect| {
         apply_panel_effect(&panel, effect)
     });
-    if material == PanelMaterial::Solid {
-        let shade = if panel.theme().ok() == Some(tauri::Theme::Dark) {
-            32
-        } else {
-            246
-        };
-        let _ = panel.set_background_color(Some(tauri::window::Color(shade, shade, shade, 255)));
-    }
+    paint_panel_background(
+        material,
+        panel.theme().unwrap_or(tauri::Theme::Light),
+        |color| {
+            let _ = panel.set_background_color(Some(color));
+        },
+    );
     app.manage(PanelState {
         anchor: Mutex::new(PanelAnchor::Top),
         material,
     });
+}
+
+fn paint_panel_background(
+    material: PanelMaterial,
+    theme: tauri::Theme,
+    paint: impl FnOnce(tauri::window::Color),
+) {
+    if material == PanelMaterial::Solid {
+        let shade = if theme == tauri::Theme::Dark { 32 } else { 246 };
+        paint(tauri::window::Color(shade, shade, shade, 255));
+    }
 }
 
 fn record_panel_anchor(app: &AppHandle, anchor: PanelAnchor) {
@@ -704,6 +714,17 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
                 tauri::async_runtime::spawn_blocking(move || watcher.check());
             }
         }
+        (PANEL_WINDOW, WindowEvent::ThemeChanged(theme)) => {
+            if let (Some(state), Some(panel)) = (
+                app.try_state::<PanelState>(),
+                app.get_webview_window(PANEL_WINDOW),
+            ) {
+                paint_panel_background(state.material, *theme, |color| {
+                    let _ = panel.set_background_color(Some(color));
+                });
+            }
+            refresh_app_icon(app, false);
+        }
         // The OS appearance (or the forced app theme) changed: the icon may follow.
         (_, WindowEvent::ThemeChanged(_)) => refresh_app_icon(app, false),
         (PANEL_WINDOW, WindowEvent::CloseRequested { api, .. }) => {
@@ -929,6 +950,25 @@ mod tests {
     use std::time::{Duration, Instant};
     use tauri::test::{mock_builder, mock_context, noop_assets};
     use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+    #[test]
+    fn panel_theme_changes_repaint_only_the_solid_material() {
+        let mut paints = Vec::new();
+        for theme in [tauri::Theme::Light, tauri::Theme::Dark, tauri::Theme::Light] {
+            paint_panel_background(PanelMaterial::Solid, theme, |color| paints.push(color));
+            paint_panel_background(PanelMaterial::Native, theme, |_| {
+                panic!("native material must stay transparent")
+            });
+        }
+        assert_eq!(
+            paints,
+            [
+                tauri::window::Color(246, 246, 246, 255),
+                tauri::window::Color(32, 32, 32, 255),
+                tauri::window::Color(246, 246, 246, 255),
+            ]
+        );
+    }
 
     /// A quit port with a programmed answer; reports every call on a channel.
     struct FakePort {
