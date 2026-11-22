@@ -67,7 +67,7 @@ export const commands = {
 	 *  click. `entry_history` never carries values.
 	 */
 	entryHistoryReveal: (id: string, revision: string, field: FieldRef) => typedError<SecretText, ApiError>(__TAURI_INVOKE("entry_history_reveal", { id, revision, field })),
-	entryList: (query: EntryQuery) => typedError<EntrySummary[], ApiError>(__TAURI_INVOKE("entry_list", { query })),
+	entryList: (query: EntryQuery) => typedError<EntrySummary_Serialize[], ApiError>(__TAURI_INVOKE("entry_list", { query })),
 	entryMove: (id: string, groupId: string) => typedError<null, ApiError>(__TAURI_INVOKE("entry_move", { id, groupId })),
 	entryNewModel: (entryType: EntryTypeDto, groupId: string | null) => typedError<EntryEditModel_Serialize, ApiError>(__TAURI_INVOKE("entry_new_model", { entryType, groupId })),
 	/**
@@ -76,7 +76,7 @@ export const commands = {
 	 */
 	entryPasskeyDetails: (id: string) => typedError<PasskeyDetails_Serialize | null, ApiError>(__TAURI_INVOKE("entry_passkey_details", { id })),
 	entryPurge: (id: string) => typedError<null, ApiError>(__TAURI_INVOKE("entry_purge", { id })),
-	entryRecent: (limit: number) => typedError<EntrySummary[], ApiError>(__TAURI_INVOKE("entry_recent", { limit })),
+	entryRecent: (limit: number) => typedError<EntrySummary_Serialize[], ApiError>(__TAURI_INVOKE("entry_recent", { limit })),
 	entryRestore: (id: string, groupId: string | null) => typedError<null, ApiError>(__TAURI_INVOKE("entry_restore", { id, groupId })),
 	/**  Reveal command: returns one secret value after the user's explicit click. */
 	entryReveal: (id: string, field: FieldRef) => typedError<SecretText, ApiError>(__TAURI_INVOKE("entry_reveal", { id, field })),
@@ -607,6 +607,8 @@ export type EntryDetailDto_Deserialize = {
 	attachments: AttachmentMeta[],
 	historyCount: number,
 	inRecycleBin: boolean,
+	/**  The social sign-in method remembered on the entry, absent when it has none. */
+	signIn?: SignInDto_Deserialize | null,
 };
 
 export type EntryDetailDto_Serialize = {
@@ -641,6 +643,8 @@ export type EntryDetailDto_Serialize = {
 	attachments: AttachmentMeta[],
 	historyCount: number,
 	inRecycleBin: boolean,
+	/**  The social sign-in method remembered on the entry, absent when it has none. */
+	signIn?: SignInDto_Serialize,
 };
 
 /**
@@ -694,6 +698,19 @@ export type EntryEditModel_Deserialize = {
 	 *  bin, a save is refused unless this is set, and then it moves the entry to `group_id`.
 	 */
 	restore?: boolean,
+	/**
+	 *  The social sign-in method the editor shows (`None`: none). Informational only, ignored on
+	 *  save: `sign_in_edit` says what a save changes. `serde(default)` keeps older stored drafts
+	 *  loadable.
+	 */
+	signInProvider?: SignInProvider | null,
+	/**
+	 *  What a save does to the social sign-in method: `unchanged` (the default) leaves the stored
+	 *  fields alone, so a method the browser recorded while the editor was open survives a save
+	 *  of other fields; `set` stores a provider (another one drops the recorded last use, the
+	 *  same one keeps it); `clear` removes it.
+	 */
+	signInEdit?: SignInEdit,
 };
 
 /**
@@ -741,6 +758,19 @@ export type EntryEditModel_Serialize = {
 	 *  bin, a save is refused unless this is set, and then it moves the entry to `group_id`.
 	 */
 	restore: boolean,
+	/**
+	 *  The social sign-in method the editor shows (`None`: none). Informational only, ignored on
+	 *  save: `sign_in_edit` says what a save changes. `serde(default)` keeps older stored drafts
+	 *  loadable.
+	 */
+	signInProvider?: SignInProvider,
+	/**
+	 *  What a save does to the social sign-in method: `unchanged` (the default) leaves the stored
+	 *  fields alone, so a method the browser recorded while the editor was open survives a save
+	 *  of other fields; `set` stores a provider (another one drops the recorded last use, the
+	 *  same one keeps it); `clear` removes it.
+	 */
+	signInEdit: SignInEdit,
 };
 
 export type EntryQuery = {
@@ -750,7 +780,9 @@ export type EntryQuery = {
 	order: SortOrder,
 };
 
-export type EntrySummary = {
+export type EntrySummary = EntrySummary_Serialize | EntrySummary_Deserialize;
+
+export type EntrySummary_Deserialize = {
 	id: string,
 	title: string,
 	subtitle: string,
@@ -766,6 +798,28 @@ export type EntrySummary = {
 	groupId: string,
 	inRecycleBin: boolean,
 	flags: SecurityFlag[],
+	/**  The social sign-in method remembered on the entry (a list badge), absent when it has none. */
+	signInProvider?: SignInProvider | null,
+};
+
+export type EntrySummary_Serialize = {
+	id: string,
+	title: string,
+	subtitle: string,
+	entryType: EntryTypeDto,
+	favorite: boolean,
+	hasUsername: boolean,
+	hasPassword: boolean,
+	hasTotp: boolean,
+	hasPasskey: boolean,
+	attachmentCount: number,
+	/**  Unix milliseconds. */
+	modified: number | null,
+	groupId: string,
+	inRecycleBin: boolean,
+	flags: SecurityFlag[],
+	/**  The social sign-in method remembered on the entry (a list badge), absent when it has none. */
+	signInProvider?: SignInProvider,
 };
 
 export type EntryTypeDto = "login" | "address" | "person" | "card" | "notes" | "files";
@@ -1480,6 +1534,7 @@ export type SettingsPatch_Deserialize = {
 	shortcutShow?: string | null,
 	generator?: GeneratorOptionsDto_Deserialize | null,
 	passkeyProxyEnabled?: boolean | null,
+	rememberSocialSignIn?: boolean | null,
 	unlockWithDeviceWindow?: UnlockWithDeviceWindow | null,
 	requireAccountPasswordWindow?: RequireAccountPasswordWindow | null,
 	updateCheckEnabled?: boolean | null,
@@ -1512,6 +1567,7 @@ export type SettingsPatch_Serialize = {
 	shortcutShow?: string,
 	generator?: GeneratorOptionsDto_Serialize,
 	passkeyProxyEnabled?: boolean,
+	rememberSocialSignIn?: boolean,
 	unlockWithDeviceWindow?: UnlockWithDeviceWindow,
 	requireAccountPasswordWindow?: RequireAccountPasswordWindow,
 	updateCheckEnabled?: boolean,
@@ -1538,6 +1594,7 @@ export type Settings_Deserialize = {
 	shortcutShow?: string,
 	generator?: GeneratorOptionsDto_Deserialize,
 	passkeyProxyEnabled?: boolean,
+	rememberSocialSignIn?: boolean,
 	unlockTouchIdEnabled?: boolean,
 	unlockMacPasswordEnabled?: boolean,
 	unlockWithDeviceWindow?: UnlockWithDeviceWindow,
@@ -1570,6 +1627,7 @@ export type Settings_Serialize = {
 	shortcutShow: string,
 	generator: GeneratorOptionsDto_Serialize,
 	passkeyProxyEnabled: boolean,
+	rememberSocialSignIn: boolean,
 	unlockTouchIdEnabled: boolean,
 	unlockMacPasswordEnabled: boolean,
 	unlockWithDeviceWindow: UnlockWithDeviceWindow,
@@ -1623,6 +1681,42 @@ export type Sidebar_Serialize = {
 	/**  The vault's `RecycleBinEnabled` flag: when false a delete is permanent. */
 	recycleBinEnabled: boolean,
 };
+
+/**
+ *  The social sign-in method of an entry: the provider and, when the browser recorded it, the
+ *  last use (Unix milliseconds).
+ */
+export type SignInDto = SignInDto_Serialize | SignInDto_Deserialize;
+
+/**
+ *  The social sign-in method of an entry: the provider and, when the browser recorded it, the
+ *  last use (Unix milliseconds).
+ */
+export type SignInDto_Deserialize = {
+	provider: SignInProvider,
+	lastUsed?: number | null,
+};
+
+/**
+ *  The social sign-in method of an entry: the provider and, when the browser recorded it, the
+ *  last use (Unix milliseconds).
+ */
+export type SignInDto_Serialize = {
+	provider: SignInProvider,
+	lastUsed?: number | null,
+};
+
+/**  How a save changes the social sign-in method of an entry. */
+export type SignInEdit = 
+/**  The editor did not touch it: the stored fields are kept as they are on disk. */
+{ op: "unchanged" } | 
+/**  The user picked this provider. */
+{ op: "set"; provider: SignInProvider } | 
+/**  The user picked "none". */
+{ op: "clear" };
+
+/**  A social sign-in provider MyPass recognises. */
+export type SignInProvider = "google" | "facebook" | "apple" | "microsoft" | "github";
 
 /**
  *  Why a CSV data row was not imported. A stable code: the UI localises it, the backend never

@@ -1,12 +1,12 @@
 <script lang="ts">
   import { api } from "../lib/api";
-  import type { EntrySummary, FieldRef } from "../lib/bindings";
+  import type { EntrySummary_Serialize, FieldRef } from "../lib/bindings";
   import { t } from "../lib/i18n/index.svelte";
   import { toasts } from "../lib/stores/toasts.svelte";
   import TrayMenuRow from "./TrayMenuRow.svelte";
 
   let { entry, highlight, onback, ondone, onhover, isCurrent }: {
-    entry: EntrySummary;
+    entry: EntrySummary_Serialize;
     highlight: string | null;
     onback: () => void;
     ondone: () => void;

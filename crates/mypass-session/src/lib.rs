@@ -24,6 +24,7 @@ pub mod secondary;
 pub mod session;
 pub mod settings;
 pub mod shortcut;
+pub mod sign_in;
 pub mod storage;
 pub mod unlock_request;
 pub mod vault_files;

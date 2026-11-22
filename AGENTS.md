@@ -31,7 +31,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `src-tauri` (package `mypass-app`, lib `mypass_app_lib`) | implemented | The Tauri 2 app shell: the typed commands and events (`tauri-specta`), capabilities, native file dialogs, plugins, tray, global hotkeys, single instance, quit flow, native-side i18n; a workspace member listed explicitly |
 | `mypass-bridge` | implemented | Browser bridge protocol, codec, endpoint, relay and loopback server (`server` feature, off for the host); the passkey service (`passkeys`) |
 | `mypass-host` | implemented | Native messaging host binary; never links the session, core or KDBX crates |
-| `extension/` | implemented | The Chromium extension (Manifest V3 JavaScript, vendored `vendor/jsQR.js`), with its 50 Node suites in `extension/tests/`, run by `scripts/test-extension.sh`; its text lives in `extension/_locales/{en,uk,ru,de}/messages.json` (`chrome.i18n`, read through `shared/i18n.js`, `en` is the default locale), pinned by `tests/locales.test.js` |
+| `extension/` | implemented | The Chromium extension (Manifest V3 JavaScript, vendored `vendor/jsQR.js`), with its 54 Node suites in `extension/tests/`, run by `scripts/test-extension.sh`; its text lives in `extension/_locales/{en,uk,ru,de}/messages.json` (`chrome.i18n`, read through `shared/i18n.js`, `en` is the default locale), pinned by `tests/locales.test.js` |
 
 ## Repo layout
 
@@ -58,7 +58,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `scripts/make-tray-icons.mjs` | Generates the tray icons from `scripts/key-shape.mjs`: the macOS 18 pt @2x template `src-tauri/icons/tray-template.png` and the green Windows `tray-windows.png`. A Node test compares the committed pixels with the generator |
 | `scripts/convert-xcstrings.mjs` | One-time converter of the old app's String Catalogs; its output (`src/lib/i18n/locales/{en,uk,ru}.json`, `src-tauri/resources/macos/{en,uk,ru}.lproj/InfoPlist.strings`) is then the hand-edited source of truth; `de.json` and `de.lproj` were written by hand and never went through it |
 | `.github/` | Workflows (`ci.yml`, `codeql.yml`), Dependabot config, issue forms, pull request template |
-| `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts), the Stage 2b UI walk-through and the Stage 3 browser bridge checklist (M1 to M14) and the Stage 4 passkey checklist (P1 to P13), Stage 5 checks (S1 to S21), cutover (C1 to C10) Stage 6 Windows checks (W1 to W17), the extension popup and page checks (E1 to E11) and the person checks (PR1 to PR8) |
+| `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts), the Stage 2b UI walk-through and the Stage 3 browser bridge checklist (M1 to M14) and the Stage 4 passkey checklist (P1 to P13), Stage 5 checks (S1 to S21), cutover (C1 to C10) Stage 6 Windows checks (W1 to W17), the extension popup and page checks (E1 to E11), the person checks (PR1 to PR8) and the social sign-in checks (SG1 to SG6) |
 | `docs/implementation/ROADMAP.md` | The only tracked document under `docs/`: unfinished work |
 | `LICENSE`, `THIRD_PARTY_NOTICES.md` | Apache-2.0 and the notices for vendored data and linked crates |
 
@@ -393,6 +393,30 @@ change is done.
     without the master password. Anyone with access to the unlocked OS session can pair another
     browser profile. That profile can access vault data after the owner unlocks and can try
     passwords at the bridge's throttled rate.
+- **Social sign-in.** `mypass_session::sign_in` stores the method on a login as the custom fields
+  `MyPass.SignIn.provider` (google, facebook, apple, microsoft, github), `MyPass.SignIn.lastUsed`
+  (RFC 3339) and `MyPass.SignIn.host` (the page host the click was recorded on). The bridge requests `recordSocialSignIn` and `getSocialSignIn` (`handlers/social.rs`)
+  are paired and refused while locked; https only and PSL-matched like credentials. A record goes on
+  the most recently used matching login, or creates a root Login titled with the registrable domain;
+  a host is written at most once a day whatever the provider, except by a direct click naming
+  another provider. A `source: frame` record (a trusted pointer over a provider's own button frame,
+  e.g. `accounts.google.com`, within 1.5 s before the page lost focus to it) never creates an entry
+  or overrides that limit. With `rememberSocialSignIn` off both answer
+  `enabled: false` and nothing is written. The setting reaches the extension in every
+  `socialSignIn` reply and in `passkeyProxyStatus.rememberSocialSignIn` (the status poll a popup
+  open triggers); the service worker mirrors it into `chrome.storage.local`, open pages follow the
+  change (off removes the ring and stops reporting, on looks up again), and while it is known off
+  page lookups are answered locally for at most a minute before the bridge is asked again. The extension (`shared/social-sign-in.js`) records only
+  trusted clicks in the https top frame, keeps clicks made while locked in `chrome.storage.session`
+  for ten minutes and sends them after unlock (every queue read and write runs on one promise
+  chain; a flush removes only what it delivered; the bridge exposes no vault identity, so an
+  unlocked-to-locked change clears the queue and only a vault switched within one locked spell
+  can receive its clicks), and draws the remembered button's ring in a closed
+  shadow root under `<html>`, only on exactly the recorded host (the service worker strips any
+  other method from a page's lookup; the popup still shows it).
+  - **Residual risk (owner-accepted).** The page owns the DOM, so the ring is observable: the same
+    host can learn which provider was used there last time. Sibling hosts and methods picked in
+    the app are never revealed to a page.
 - **Passkeys.** `mypass_core::passkey` holds the pure parts: request parsing and origin validation (`https` only,
   the rpId must be a registrable suffix of the origin host through the Public Suffix List, no IP literals, no
   localhost exception, so passkeys never work on `localhost`), the ES256 ceremonies (`perform_create`,
@@ -583,7 +607,7 @@ skipped. Pause, re-read this file, dispatch the next chunk.
 
 English for code, comments, commit messages, docs, plans and specs. Cyrillic appears only inside tests
 as `\u{..}` escapes, in `*.xcstrings` and in the root `RUN.md` (the Ukrainian manual checklist,
-never translated). Literal Cyrillic is also allowed in the extension files `extension/shared/{form-detection,page-identifier}.js` and `extension/tests/{formDetection,inlineIcon,pageIdentifier}.test.js` (localized keyword lists and their tests; the extension is vendored as copied), and in the translation files
+never translated). Literal Cyrillic is also allowed in the extension files `extension/shared/{form-detection,page-identifier,social-sign-in}.js` and `extension/tests/{formDetection,inlineIcon,pageIdentifier,socialSignIn}.test.js` (localized keyword lists and their tests; the extension is vendored as copied), and in the translation files
 `src/lib/i18n/locales/{uk,ru}.json` and `src-tauri/resources/macos/{uk,ru}.lproj/InfoPlist.strings`
 (exactly these four of the translation files; the English and German files stay Cyrillic-free, and the Node tests read their expectations
 from the catalogs), in the extension's `chrome.i18n` catalogs `extension/_locales/{uk,ru}/messages.json` (the `en` and `de`

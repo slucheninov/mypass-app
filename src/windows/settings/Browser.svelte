@@ -13,6 +13,11 @@
   import { toasts } from "../../lib/stores/toasts.svelte";
   import Button from "../../lib/ui/Button.svelte";
   import Modal from "../../lib/ui/Modal.svelte";
+  import Toggle from "../../lib/ui/Toggle.svelte";
+  import { settings } from "../../lib/stores/settings.svelte";
+  import { applyPatch } from "./apply";
+  import FormError from "./FormError.svelte";
+  import Row from "./Row.svelte";
   import BrowserHelpSheet from "./BrowserHelpSheet.svelte";
 
   onMount(() => browser.watchStatus());
@@ -24,6 +29,11 @@
   let busy = $state(false);
 
   const status = $derived(browser.status);
+
+  let settingError = $state<string | null>(null);
+  async function setRememberSocialSignIn(rememberSocialSignIn: boolean) {
+    settingError = await applyPatch({ rememberSocialSignIn });
+  }
 
   // The machine-readable reason the bridge is down (other than the pairing list), as a message.
   const startFailureLine = $derived.by(() => {
@@ -149,6 +159,20 @@
     await browser.refresh();
   }
 </script>
+
+{#if settings.value}
+  <Row label={t("Remember social sign-in")}>
+    <Toggle
+      checked={settings.value.rememberSocialSignIn}
+      label={t("Remember social sign-in")}
+      onchange={(v) => void setRememberSocialSignIn(v)}
+    />
+    {#snippet hint()}
+      {t("When you sign in to a website with Google, Facebook, Apple, Microsoft or GitHub, the browser extension remembers which one and highlights it next time.")}
+    {/snippet}
+  </Row>
+  <FormError message={settingError} />
+{/if}
 
 {#if browser.failed && !status}
   <div class="notice" role="alert">

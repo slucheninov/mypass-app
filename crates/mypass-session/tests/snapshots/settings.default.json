@@ -20,6 +20,7 @@
     "symbols": true
   },
   "passkeyProxyEnabled": true,
+  "rememberSocialSignIn": true,
   "unlockTouchIdEnabled": false,
   "unlockMacPasswordEnabled": false,
   "unlockWithDeviceWindow": "eightHours",

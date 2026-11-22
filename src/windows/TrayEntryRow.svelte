@@ -1,9 +1,9 @@
 <script lang="ts">
-  import type { EntrySummary } from "../lib/bindings";
+  import type { EntrySummary_Serialize } from "../lib/bindings";
   import TrayMenuRow from "./TrayMenuRow.svelte";
 
   let { entry, key, active, onopen, onhover }: {
-    entry: EntrySummary;
+    entry: EntrySummary_Serialize;
     key: string;
     active: boolean;
     onopen: (id: string) => void;

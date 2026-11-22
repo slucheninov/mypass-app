@@ -5,7 +5,7 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { tick } from "svelte";
   import { api } from "../lib/api";
-  import type { EntrySummary, FieldRef, SecurityFlag, SortKey, SortOrder } from "../lib/bindings";
+  import type { EntrySummary_Serialize, FieldRef, SecurityFlag, SortKey, SortOrder } from "../lib/bindings";
   import { startDrag } from "../lib/dnd";
   import { t } from "../lib/i18n/index.svelte";
   import { lockGuard } from "../lib/lock-guard";
@@ -17,6 +17,8 @@
   import Button from "../lib/ui/Button.svelte";
   import ContextMenu from "../lib/ui/ContextMenu.svelte";
   import Icon from "../lib/ui/Icon.svelte";
+  import ProviderMark from "../lib/ui/ProviderMark.svelte";
+  import { PROVIDER_NAME } from "../lib/sign-in";
   import type { MenuEntry, MenuItem } from "../lib/ui/menu";
   import Menu from "../lib/ui/Menu.svelte";
   import Modal from "../lib/ui/Modal.svelte";
@@ -125,7 +127,7 @@
     return { scope: `cat:${scope.category}`, heading, hint: null };
   });
 
-  const byId = (id: string): EntrySummary | undefined => items.find((e) => e.id === id);
+  const byId = (id: string): EntrySummary_Serialize | undefined => items.find((e) => e.id === id);
   const activeRow = $derived(selectedId !== null && byId(selectedId) ? rowId(selectedId) : undefined);
 
   function select(id: string | null) {
@@ -189,7 +191,7 @@
    */
   const isBeingEdited = (id: string) => navigation.editModel?.id === id;
 
-  const toggleFavorite = (entry: EntrySummary) => guard(() => api.entrySetFavorite(entry.id, !entry.favorite));
+  const toggleFavorite = (entry: EntrySummary_Serialize) => guard(() => api.entrySetFavorite(entry.id, !entry.favorite));
 
   /** Where the selection goes when `id` leaves the list: the row below, else the row above. */
   function neighbourOf(id: string): string | null {
@@ -197,7 +199,7 @@
     return items[at + 1]?.id ?? items[at - 1]?.id ?? null;
   }
 
-  const remove = (entry: EntrySummary, permanent: boolean) =>
+  const remove = (entry: EntrySummary_Serialize, permanent: boolean) =>
     guard(async () => {
       const next = neighbourOf(entry.id);
       const unchanged = lockGuard();
@@ -211,7 +213,7 @@
    * Delete key and menu: an enabled bin takes a live entry at once; anything permanent (an entry
    * already in the bin, or a vault whose bin is disabled) asks first.
    */
-  function requestDelete(entry: EntrySummary) {
+  function requestDelete(entry: EntrySummary_Serialize) {
     if (isBeingEdited(entry.id)) return;
     if (entry.inRecycleBin || !binEnabled) confirming = { kind: "purge", id: entry.id };
     else void remove(entry, false);
@@ -291,7 +293,7 @@
     menu = { id, x: rect ? rect.left + 24 : 0, y: rect ? rect.bottom : 0 };
   }
 
-  function oncontextmenu(event: MouseEvent, entry: EntrySummary) {
+  function oncontextmenu(event: MouseEvent, entry: EntrySummary_Serialize) {
     event.preventDefault();
     // The list owns focus, so a closed menu hands it back here; the row under the pointer is the selection.
     listbox?.focus();
@@ -442,7 +444,10 @@
                 >
               {/if}
             </span>
-            {#if entry.subtitle}<span class="subtitle">{entry.subtitle}</span>{/if}
+            {#if entry.subtitle}<span class="subtitle">{entry.subtitle}</span
+              >{:else if entry.signInProvider}<span class="subtitle sign-in" data-testid="sign-in-badge"
+                ><ProviderMark provider={entry.signInProvider} size={12} />{t("Sign in with %@", [PROVIDER_NAME[entry.signInProvider]])}</span
+              >{/if}
             {#if entry.flags.length > 0}
               <span class="flags">
                 {#each entry.flags as flag (flag)}<span class="chip">{FLAG_LABEL(flag)}</span>{/each}
@@ -452,6 +457,9 @@
           <span class="badges">
             {#if entry.hasTotp}<span role="img" aria-label={t("Verification Code")}><Icon name="shield-key" size={13} /></span>{/if}
             {#if entry.hasPasskey}<span role="img" aria-label={t("Passkey")}><Icon name="passkey" size={13} /></span>{/if}
+            {#if entry.signInProvider && entry.subtitle}<span role="img" aria-label={t("Sign in with %@", [PROVIDER_NAME[entry.signInProvider]])}
+                ><ProviderMark provider={entry.signInProvider} size={13} /></span
+              >{/if}
             {#if entry.attachmentCount > 0}
               <span role="img" aria-label={t("%lld files", entry.attachmentCount)}
                 ><Icon name="paperclip" size={13} />{entry.attachmentCount}</span
@@ -570,6 +578,11 @@
     font-size: var(--font-size-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .sign-in {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
   }
   .flags {
     display: flex;

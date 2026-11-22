@@ -73,6 +73,7 @@ assert.deepStrictEqual(
     'shared/registration-form.js',
     'shared/totp-detection.js',
     'shared/placement.js',
+    'shared/social-sign-in.js',
     'content.js',
   ],
   'shared scripts load before content.js, which reads them'

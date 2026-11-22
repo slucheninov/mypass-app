@@ -28,8 +28,10 @@ fn extension_suites_are_discovered_and_manifest_pins_the_extension_id() {
     // 41 is the pin of the import from the old repository; a suite added later raises it here
     // (42: `locales.test.js`, 43: `actionIcon.test.js`, 44: `popupUnlock.test.js`, 45: `popupPairing.test.js`,
     // 46: `popupMenus.test.js`, 47: `registrationForm.test.js`, 48: `registrationRelay.test.js`,
-    // 49: `personFill.test.js`, 50: `personRelay.test.js`).
-    assert_eq!(suites().len(), 50);
+    // 49: `personFill.test.js`, 50: `personRelay.test.js`, 51: `socialSignIn.test.js`,
+    // 52: `socialSignInBackground.test.js`, 53: `socialSignInPopup.test.js`,
+    // 54: `socialSignInPage.test.js`).
+    assert_eq!(suites().len(), 54);
     let manifest: serde_json::Value =
         serde_json::from_str(&read("extension/manifest.json")).unwrap();
     let key = manifest["key"].as_str().expect("manifest.json needs a key");

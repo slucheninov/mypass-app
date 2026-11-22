@@ -28,6 +28,7 @@ function model(urls: string[], mode = "registrable-domain"): EntryEditModel_Seri
     removePasskey: false,
     passkeyRef: null,
     restore: false,
+    signInEdit: { op: "unchanged" },
   };
 }
 

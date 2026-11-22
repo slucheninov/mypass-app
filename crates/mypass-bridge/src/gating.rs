@@ -46,7 +46,9 @@ impl Request {
             | Self::DeleteGeneratedPassword { token, .. }
             | Self::UnlockWithPassword { token, .. }
             | Self::UnlockWithDevice { token, .. }
-            | Self::GetUnlockOptions { token, .. } => token,
+            | Self::GetUnlockOptions { token, .. }
+            | Self::RecordSocialSignIn { token, .. }
+            | Self::GetSocialSignIn { token, .. } => token,
         }
     }
 
@@ -84,7 +86,9 @@ impl Request {
             | Self::DeleteGeneratedPassword { pairing, .. }
             | Self::UnlockWithPassword { pairing, .. }
             | Self::UnlockWithDevice { pairing, .. }
-            | Self::GetUnlockOptions { pairing, .. } => pairing.as_deref(),
+            | Self::GetUnlockOptions { pairing, .. }
+            | Self::RecordSocialSignIn { pairing, .. }
+            | Self::GetSocialSignIn { pairing, .. } => pairing.as_deref(),
         }
     }
 
@@ -124,6 +128,8 @@ impl Request {
             Self::UnlockWithPassword { .. } => "unlockWithPassword",
             Self::UnlockWithDevice { .. } => "unlockWithDevice",
             Self::GetUnlockOptions { .. } => "getUnlockOptions",
+            Self::RecordSocialSignIn { .. } => "recordSocialSignIn",
+            Self::GetSocialSignIn { .. } => "getSocialSignIn",
         }
     }
 
@@ -162,7 +168,9 @@ impl Request {
             | Self::GeneratePassword { .. }
             | Self::RecordGeneratedPassword { .. }
             | Self::GetGeneratedPasswordHistory { .. }
-            | Self::DeleteGeneratedPassword { .. } => false,
+            | Self::DeleteGeneratedPassword { .. }
+            | Self::RecordSocialSignIn { .. }
+            | Self::GetSocialSignIn { .. } => false,
         }
     }
 
@@ -208,12 +216,16 @@ impl Request {
             | Self::RecordGeneratedPassword { .. }
             | Self::GetGeneratedPasswordHistory { .. }
             | Self::DeleteGeneratedPassword { .. } => true,
+            // A trusted click on a social sign-in button (`isTrusted` in the content script), or
+            // that click replayed right after the user unlocked: a gesture either way.
+            Self::RecordSocialSignIn { .. } => true,
             // Page-triggerable, no user gesture required: the automatic credential lookup on any
-            // detected login form, and the passkey create/get events forwarded for
-            // page-initiated `navigator.credentials` calls.
-            Self::GetCredentials { .. } | Self::PasskeyCreate { .. } | Self::PasskeyGet { .. } => {
-                false
-            }
+            // detected login form, the social sign-in lookup at page load, and the passkey
+            // create/get events forwarded for page-initiated `navigator.credentials` calls.
+            Self::GetCredentials { .. }
+            | Self::GetSocialSignIn { .. }
+            | Self::PasskeyCreate { .. }
+            | Self::PasskeyGet { .. } => false,
             // Can all fire without the user acting: status polling, the app-side toggle mirrored
             // from Settings, the pairing handshake driven by the browser side and the
             // diagnostics report. `lockVault` is a popup gesture, but its job is to lock, so it
@@ -265,7 +277,9 @@ impl Request {
             | Self::UnlockWithPassword { .. }
             | Self::UnlockWithDevice { .. }
             | Self::GetUnlockOptions { .. }
-            | Self::DeleteGeneratedPassword { .. } => true,
+            | Self::DeleteGeneratedPassword { .. }
+            | Self::RecordSocialSignIn { .. }
+            | Self::GetSocialSignIn { .. } => true,
         }
     }
 
@@ -304,7 +318,9 @@ impl Request {
             | Self::UnlockWithPassword { .. }
             | Self::UnlockWithDevice { .. }
             | Self::GetUnlockOptions { .. }
-            | Self::DeleteGeneratedPassword { .. } => false,
+            | Self::DeleteGeneratedPassword { .. }
+            | Self::RecordSocialSignIn { .. }
+            | Self::GetSocialSignIn { .. } => false,
         }
     }
 }
@@ -345,7 +361,8 @@ impl Response {
             | Self::GeneratedPassword { .. }
             | Self::EntryCreated
             | Self::Acknowledged
-            | Self::PasswordHistory { .. } => true,
+            | Self::PasswordHistory { .. }
+            | Self::SocialSignIn { .. } => true,
         }
     }
 }
@@ -377,6 +394,8 @@ mod tests {
             "requestDetailsJson": "{}",
             "originUrl": "https://example.com",
             "entryId": "e-1",
+            "pageUrl": "https://example.com/login",
+            "provider": "google",
             "domain": "example.com",
             "username": "u",
             "password": "p",
@@ -460,9 +479,11 @@ mod tests {
             "recordGeneratedPassword",
             "getGeneratedPasswordHistory",
             "deleteGeneratedPassword",
+            "recordSocialSignIn",
         ];
         let no = [
             "getCredentials",
+            "getSocialSignIn",
             "passkeyCreate",
             "passkeyGet",
             "getPasskeyProxyStatus",
@@ -476,7 +497,7 @@ mod tests {
             "openApp",
             "getUnlockOptions",
         ];
-        assert_eq!(yes.len() + no.len(), 33);
+        assert_eq!(yes.len() + no.len(), 35);
         assert_eq!(names_where(Request::resets_auto_lock_timer), sorted(&yes));
         let others = names_where(|r| !r.resets_auto_lock_timer());
         assert_eq!(others, sorted(&no));
@@ -486,7 +507,7 @@ mod tests {
     fn pairing_required_for_all_but_the_two_handshake_requests() {
         let no = names_where(|r| !r.requires_pairing());
         assert_eq!(no, vec!["completePairing", "startPairing"]);
-        assert_eq!(names_where(Request::requires_pairing).len(), 31);
+        assert_eq!(names_where(Request::requires_pairing).len(), 33);
     }
 
     #[test]
@@ -518,9 +539,9 @@ mod tests {
     }
 
     #[test]
-    fn name_matches_serde_tag_for_all_33() {
+    fn name_matches_serde_tag_for_all_35() {
         let all = all_requests(None);
-        assert_eq!(all.len(), 33);
+        assert_eq!(all.len(), 35);
         for (r, expected) in all.iter().zip(REQUEST_TYPES) {
             assert_eq!(r.name(), expected);
             let v = serde_json::to_value(r).unwrap();
@@ -578,6 +599,7 @@ mod tests {
                 paired: true,
                 attach_allowed: true,
                 enabled: true,
+                remember_social_sign_in: true,
             },
             Response::PasskeyProxyEnabled { enabled: true },
             Response::PasskeyCreatePending {
@@ -598,6 +620,12 @@ mod tests {
             Response::EntryCreated,
             Response::Acknowledged,
             Response::PasswordHistory { entries: vec![] },
+            Response::SocialSignIn {
+                enabled: true,
+                provider: None,
+                last_used: None,
+                host: None,
+            },
         ] {
             assert!(r.was_served(), "{r:?}");
         }

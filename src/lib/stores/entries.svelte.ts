@@ -1,5 +1,5 @@
 import { ApiFailure, api } from "../api";
-import { events, type EntryQuery, type EntrySummary, type SortKey, type SortOrder, type Sidebar_Serialize } from "../bindings";
+import { events, type EntryQuery, type EntrySummary_Serialize, type SortKey, type SortOrder, type Sidebar_Serialize } from "../bindings";
 import { navigation } from "./navigation.svelte";
 import { session } from "./session.svelte";
 import { toasts } from "./toasts.svelte";
@@ -13,7 +13,7 @@ export function defaultOrder(sort: SortKey): SortOrder {
 }
 
 class EntriesStore {
-  items = $state<EntrySummary[]>([]);
+  items = $state<EntrySummary_Serialize[]>([]);
   sidebar = $state<Sidebar_Serialize | null>(null);
   loading = $state(false);
   /** True once a list answer has been applied since the last `clear()`; an empty list before that is "not yet known". */

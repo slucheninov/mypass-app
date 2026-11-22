@@ -507,7 +507,8 @@ fn full_create_then_get_ceremony_over_tcp() {
     assert_eq!(
         status,
         json!({"type": "passkeyProxyStatus", "unlocked": true, "paired": true,
-               "attachAllowed": true, "enabled": true})
+               "attachAllowed": true, "enabled": true,
+               "rememberSocialSignIn": true})
     );
 
     // Create, phase one: no candidate on this site, nothing written.
@@ -635,7 +636,8 @@ fn locked_vault_answers_status_but_locks_ceremonies() {
     assert_eq!(
         app.ext(json!({"type": "getPasskeyProxyStatus"})),
         json!({"type": "passkeyProxyStatus", "unlocked": false, "paired": true,
-               "attachAllowed": false, "enabled": true})
+               "attachAllowed": false, "enabled": true,
+               "rememberSocialSignIn": true})
     );
     assert_eq!(app.handled(), 1);
     for message in all_seven().into_iter().skip(1) {

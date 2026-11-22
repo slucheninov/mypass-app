@@ -141,7 +141,7 @@ pub const PERSON_ADDRESS_IDS: &str = "addressIds";
 /// Keys with a dedicated UI that must never appear as generic custom-field rows. The `KPEX_*`
 /// keys are matched by prefix, `MyPass.Address.*` by the exact 14 keys, like the Swift set, and
 /// `MyPass.Person.*` by the exact keys of [`PERSON_FIELDS`].
-const STANDARD_KEYS: [&str; 14] = [
+const STANDARD_KEYS: [&str; 17] = [
     "Title",
     "UserName",
     "Password",
@@ -156,6 +156,9 @@ const STANDARD_KEYS: [&str; 14] = [
     CARD_CVV,
     NOTES_BODY,
     mypass_core::entry_ext::URI_MATCH_MODE_FIELD,
+    crate::sign_in::SIGN_IN_PROVIDER,
+    crate::sign_in::SIGN_IN_LAST_USED,
+    crate::sign_in::SIGN_IN_HOST,
 ];
 
 /// Whether `text` is a real calendar date written `YYYY-MM-DD` (years 0001 to 9999, leap years

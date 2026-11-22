@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { EntrySummary, Sidebar_Serialize } from "../bindings";
+import type { EntrySummary_Serialize, Sidebar_Serialize } from "../bindings";
 import { createFakeBackend } from "../../test/fakeBackend";
 import { fixtureSidebar, sessionStatus } from "../../test/fixtures";
 import { entries } from "./entries.svelte";
@@ -63,7 +63,7 @@ describe("sidebar staleness", () => {
 
   it("list_resolving_after_lock_is_discarded", async () => {
     const fake = await bootUnlocked();
-    let release: ((rows: EntrySummary[]) => void) | undefined;
+    let release: ((rows: EntrySummary_Serialize[]) => void) | undefined;
     fake.handlers.entryList = () => new Promise((resolve) => (release = resolve));
     const refreshing = entries.refreshList();
     await vi.waitFor(() => expect(release).toBeDefined());
@@ -104,7 +104,7 @@ describe("vault switch while unlocked", () => {
 
   it("a_fetch_begun_for_the_old_vault_is_discarded_after_the_switch", async () => {
     const fake = await bootUnlocked();
-    let release: ((rows: EntrySummary[]) => void) | undefined;
+    let release: ((rows: EntrySummary_Serialize[]) => void) | undefined;
     fake.handlers.entryList = () => new Promise((resolve) => (release = resolve));
     const refreshing = entries.refreshList();
     await vi.waitFor(() => expect(release).toBeDefined());

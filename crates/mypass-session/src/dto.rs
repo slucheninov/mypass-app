@@ -4,6 +4,7 @@
 //! integers because JavaScript numbers cannot hold them).
 
 use crate::settings::GeneratorOptionsDto;
+pub use crate::sign_in::SignInProvider;
 use mypass_core::entry_ext::EntryType;
 use mypass_kdbx::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -176,6 +177,9 @@ pub struct EntrySummary {
     pub group_id: String,
     pub in_recycle_bin: bool,
     pub flags: Vec<SecurityFlag>,
+    /// The social sign-in method remembered on the entry (a list badge), absent when it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_in_provider: Option<SignInProvider>,
 }
 
 /// `count` is `None` for `Security`: the sidebar shows an em dash instead of a number.
@@ -451,6 +455,19 @@ pub struct EntryDetailDto {
     pub attachments: Vec<AttachmentMeta>,
     pub history_count: u32,
     pub in_recycle_bin: bool,
+    /// The social sign-in method remembered on the entry, absent when it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_in: Option<SignInDto>,
+}
+
+/// The social sign-in method of an entry: the provider and, when the browser recorded it, the
+/// last use (Unix milliseconds).
+#[derive(Serialize, Deserialize, specta::Type, Clone, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SignInDto {
+    pub provider: SignInProvider,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used: Option<f64>,
 }
 
 /// A TOTP display value (the code is meant to be shown, the secret never leaves Rust).
@@ -620,6 +637,30 @@ pub struct EntryEditModel {
     /// bin, a save is refused unless this is set, and then it moves the entry to `group_id`.
     #[serde(default)]
     pub restore: bool,
+    /// The social sign-in method the editor shows (`None`: none). Informational only, ignored on
+    /// save: `sign_in_edit` says what a save changes. `serde(default)` keeps older stored drafts
+    /// loadable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_in_provider: Option<SignInProvider>,
+    /// What a save does to the social sign-in method: `unchanged` (the default) leaves the stored
+    /// fields alone, so a method the browser recorded while the editor was open survives a save
+    /// of other fields; `set` stores a provider (another one drops the recorded last use, the
+    /// same one keeps it); `clear` removes it.
+    #[serde(default)]
+    pub sign_in_edit: SignInEdit,
+}
+
+/// How a save changes the social sign-in method of an entry.
+#[derive(Serialize, Deserialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[serde(tag = "op", rename_all = "camelCase")]
+pub enum SignInEdit {
+    /// The editor did not touch it: the stored fields are kept as they are on disk.
+    #[default]
+    Unchanged,
+    /// The user picked this provider.
+    Set { provider: SignInProvider },
+    /// The user picked "none".
+    Clear,
 }
 
 impl EntryEditModel {

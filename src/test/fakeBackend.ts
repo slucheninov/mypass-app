@@ -674,6 +674,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         removePasskey: false,
         passkeyRef: null,
         restore: false,
+        signInEdit: { op: "unchanged" },
       };
     },
     // Like `queries::passkey_details`: the metadata plus the public credential id, never the key.
@@ -793,7 +794,12 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         found !== null && model.removePasskey && model.passkeyRef !== null && model.passkeyRef === found.model.passkeyRef;
       const passkey = found && !remove ? found.passkey : null;
       const passkeyRef = found && !remove ? found.model.passkeyRef : null;
-      const saved = {
+      // Like `editing::apply`: `signInProvider` is display data; only `signInEdit` changes the
+      // stored method, so a stale model never overwrites what the browser recorded meanwhile.
+      const edit = model.signInEdit ?? { op: "unchanged" };
+      const storedSignIn = found?.summary.signInProvider;
+      const signInProvider = edit.op === "set" ? edit.provider : edit.op === "clear" ? undefined : storedSignIn;
+      const saved: EntryEditModel_Serialize = {
         ...structuredClone(model),
         title,
         attachments,
@@ -802,7 +808,10 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         removePasskey: false,
         passkeyRef,
         restore: false,
+        signInEdit: { op: "unchanged" },
       };
+      delete saved.signInProvider;
+      if (signInProvider) saved.signInProvider = signInProvider;
       if (found) {
         found.passkey = passkey;
         if (remove) found.summary.hasPasskey = false;
@@ -819,6 +828,10 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
         found.summary.inRecycleBin = locate(model.groupId)?.node.isRecycleBin ?? false;
         found.summary.attachmentCount = attachments.length;
         found.summary.hasTotp = model.totp !== "";
+        // Like `set_sign_in_provider`: another provider drops the recorded last use.
+        if ((signInProvider ?? null) !== (storedSignIn ?? null)) found.signInLastUsed = null;
+        if (signInProvider) found.summary.signInProvider = signInProvider;
+        else delete found.summary.signInProvider;
         found.modified += 1;
         found.summary.modified = found.modified;
         changed();
@@ -838,6 +851,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       created.model = { ...saved, id: created.summary.id };
       created.summary.subtitle = model.username;
       created.summary.attachmentCount = attachments.length;
+      if (signInProvider) created.summary.signInProvider = signInProvider;
       state.entries.push(created);
       changed();
       return created.summary.id;

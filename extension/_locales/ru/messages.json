@@ -1145,5 +1145,23 @@
         "content": "$1"
       }
     }
+  },
+  "socialSignInLastTime": {
+    "message": "В прошлый раз вы входили через $PROVIDER$",
+    "placeholders": {
+      "provider": {
+        "content": "$1",
+        "example": "Google"
+      }
+    }
+  },
+  "socialSignInPopupRow": {
+    "message": "В прошлый раз вход через $PROVIDER$",
+    "placeholders": {
+      "provider": {
+        "content": "$1",
+        "example": "Google"
+      }
+    }
   }
 }

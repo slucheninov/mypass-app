@@ -67,6 +67,7 @@
         "shared/registration-form.js",
         "shared/totp-detection.js",
         "shared/placement.js",
+        "shared/social-sign-in.js",
         "content.js"
       ],
       "run_at": "document_idle"

@@ -37,6 +37,7 @@
         securityWatch: require('./shared/security-watch.js'),
         autofillSettings: require('./shared/autofill-settings.js'),
         placement: require('./shared/placement.js'),
+        socialSignIn: require('./shared/social-sign-in.js'),
         i18n: require('./shared/i18n.js'),
       }
     : {
@@ -51,6 +52,7 @@
         securityWatch: mypassSecurityWatch,
         autofillSettings: mypassAutofillSettings,
         placement: mypassPlacement,
+        socialSignIn: mypassSocialSignIn,
         i18n: mypassI18n,
       };
   const hostnameMatches = shared.urlMatch.hostnameMatches;
@@ -97,6 +99,9 @@
     // The registration form identity icon and its fill: page data from the vault (Address
     // entries), like the address autofill, which also runs in the top frame only.
     identityIcon: 'topOnly',
+    // The social sign-in click recording and the ring around the remembered button: the page's
+    // own sign-in buttons (an embedded frame records nothing and is never ringed).
+    socialSignIn: 'topOnly',
   };
 
   function isFeatureEnabledInFrame(feature, isTopFrame) {
@@ -1456,7 +1461,10 @@
         totpImageLoadListener = null;
         totpImageLoadListenerAttached = false;
       }
+      if (socialSignInPage) socialSignInPage.stop();
     }
+    // The social sign-in page controller (startSocialSignIn, below), or null.
+    let socialSignInPage = null;
     handleExtensionContextLost = teardownExtensionContext;
 
     // Adds the settings row, mounts the panel under the field and starts its ring ticker. Shared
@@ -1971,6 +1979,37 @@
     mutationObserver = observeTotpCandidates(
       state, attachIcons, IS_TOP_FRAME, () => autofillSettingsReady && pageAutofillSettings.offerSaveTotp
     );
+
+    // Social sign-in (shared/social-sign-in.js decides and draws): a trusted click on a "Sign in
+    // with ..." button is sent to the service worker, and the button remembered for exactly this
+    // host gets a green ring. https top frame only. The service worker mirrors the app's
+    // "Remember social sign-in" setting into storage.local; while it is off nothing is sent and
+    // nothing drawn, and a page load still asks (the service worker throttles that to once a
+    // minute), so turning it back on is noticed.
+    function startSocialSignIn() {
+      if (!runsHere('socialSignIn') || location.protocol !== 'https:') return;
+      const local = chrome.storage && chrome.storage.local;
+      socialSignInPage = shared.socialSignIn.startPage({
+        window,
+        document,
+        location,
+        storage: local && typeof local.get === 'function' ? {
+          get: (keys, callback) => local.get(keys, (stored) => callback(chrome.runtime.lastError ? undefined : stored)),
+        } : null,
+        storageChanged: chrome.storage && chrome.storage.onChanged,
+        sendMessage: (message, callback) => sendRuntimeMessage(message, (response) => {
+          void chrome.runtime.lastError;
+          callback(response);
+        }),
+        t: (key, substitutions) => i18n.t(key, substitutions),
+        now: () => Date.now(),
+        setTimeout: (fn, ms) => setTimeout(fn, ms),
+        requestAnimationFrame: (fn) => requestAnimationFrame(fn),
+        ResizeObserver: typeof ResizeObserver === 'function' ? ResizeObserver : null,
+        contextAlive: () => isExtensionContextAlive(),
+      });
+    }
+    startSocialSignIn();
   }
 
   if (typeof module !== 'undefined') {

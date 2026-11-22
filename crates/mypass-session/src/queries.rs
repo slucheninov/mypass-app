@@ -10,8 +10,8 @@
 use crate::dto::{
     timestamp_ms, AddressDto, AttachmentMeta, CardDto, Category, CategoryCount, CustomFieldDto,
     EntryDetailDto, EntryQuery, EntrySummary, EntryTypeDto, GroupNode, LinkedAddressDto,
-    PasskeyDetails, PasskeyMeta, PersonDto, Scope, SecurityFlag, Sidebar, SortKey, SortOrder,
-    TotpDto,
+    PasskeyDetails, PasskeyMeta, PersonDto, Scope, SecurityFlag, Sidebar, SignInDto, SortKey,
+    SortOrder, TotpDto,
 };
 use crate::fields::{
     bin_id, is_history_group, parse_address_ids, EntryFields, ADDRESS_FIELDS, ADDRESS_LABELS,
@@ -20,6 +20,7 @@ use crate::fields::{
     PERSON_ADDRESS_IDS, PERSON_FIELDS, PERSON_PREFIX,
 };
 use crate::session::SessionError;
+use crate::sign_in::sign_in_of;
 use mypass_core::entry_ext::{EntryExt, EntryType};
 use mypass_core::matcher::host_of;
 use mypass_core::passkey::{b64url, parse_created, PasskeyRecord};
@@ -123,7 +124,10 @@ impl Audit {
         }
         let password = entry.field("Password").unwrap_or("");
         if password.is_empty() {
-            flags.push(SecurityFlag::EmptyPassword);
+            // A login used through a social sign-in button has no password of its own.
+            if sign_in_of(entry).is_none() {
+                flags.push(SecurityFlag::EmptyPassword);
+            }
         } else {
             if self.reused.contains(&digest(password)) {
                 flags.push(SecurityFlag::Reused);
@@ -410,6 +414,7 @@ fn summary(item: &Item<'_>, audit: &Audit) -> EntrySummary {
         group_id: item.group_id.simple().to_string(),
         in_recycle_bin: item.in_bin,
         flags: audit.flags(e),
+        sign_in_provider: sign_in_of(e).map(|s| s.provider),
     }
 }
 
@@ -654,6 +659,10 @@ pub fn entry_detail(db: &Database, id: Uuid) -> Option<EntryDetailDto> {
             .collect(),
         history_count: count_u32(entry.history.len()),
         in_recycle_bin: db.is_in_recycle_bin(id),
+        sign_in: sign_in_of(entry).map(|s| SignInDto {
+            provider: s.provider,
+            last_used: s.last_used.map(timestamp_ms),
+        }),
     })
 }
 

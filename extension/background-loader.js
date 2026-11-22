@@ -14,4 +14,5 @@ importScripts('shared/security-watch.js');
 importScripts('shared/notification-settings.js');
 importScripts('shared/autofill-settings.js');
 importScripts('shared/prompt-record.js');
+importScripts('shared/social-sign-in.js');
 importScripts('background.js');

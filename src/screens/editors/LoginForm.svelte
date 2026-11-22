@@ -13,6 +13,9 @@
   import Modal from "../../lib/ui/Modal.svelte";
   import PasskeyPopover from "../PasskeyPopover.svelte";
   import IconButton from "../../lib/ui/IconButton.svelte";
+  import Select from "../../lib/ui/Select.svelte";
+  import { PROVIDER_NAME, SIGN_IN_PROVIDERS } from "../../lib/sign-in";
+  import type { SignInProvider } from "../../lib/bindings";
   import TextField from "../../lib/ui/TextField.svelte";
   import CustomFields from "./CustomFields.svelte";
   import WebsitesSheet from "./WebsitesSheet.svelte";
@@ -44,6 +47,11 @@
     }
   });
   const websiteCount = $derived(model.urls.filter((u) => u.trim() !== "").length);
+
+  const signInOptions = $derived([
+    { value: "", label: t("None") },
+    ...SIGN_IN_PROVIDERS.map((p) => ({ value: p as string, label: PROVIDER_NAME[p] })),
+  ]);
 
   function use(value: string) {
     model.password = value;
@@ -80,6 +88,22 @@
     placeholder={t("Paste an otpauth link or a secret key")}
     autocomplete="off"
   />
+
+  <div class="sign-in">
+    <span class="caption">{t("Sign-in method")}</span>
+    <Select
+      label={t("Sign-in method")}
+      value={model.signInProvider ?? ""}
+      options={signInOptions}
+      onchange={(v) => {
+        // The pick is recorded as an explicit edit: a save without one leaves the stored method
+        // alone, so a sign-in the browser recorded while the editor was open is kept.
+        const provider = v === "" ? undefined : (v as SignInProvider);
+        model.signInProvider = provider;
+        model.signInEdit = provider ? { op: "set", provider } : { op: "clear" };
+      }}
+    />
+  </div>
 
   <label class="notes">
     <span class="caption">{t("Notes")}</span>
@@ -155,7 +179,8 @@
   .password :global(.text-field) {
     flex: 1;
   }
-  .websites {
+  .websites,
+  .sign-in {
     display: flex;
     align-items: center;
     gap: 12px;
