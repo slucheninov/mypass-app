@@ -119,6 +119,18 @@
   "deviceUnlockUnavailable": {
     "message": "Touch ID isn't available. Use your master password."
   },
+  "touchIdCaption": {
+    "message": "Touch your Touch ID sensor"
+  },
+  "touchIdFailedThreeTimes": {
+    "message": "Touch ID didn't recognize your fingerprint 3 times. Enter your master password."
+  },
+  "tryTouchIdAgain": {
+    "message": "Try Touch ID again"
+  },
+  "deviceNotRecognized": {
+    "message": "Not recognized. Try again."
+  },
   "startingMyPass": {
     "message": "Starting MyPass…"
   },

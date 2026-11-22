@@ -40,12 +40,15 @@ impl VaultUnlocker for AppUnlocker {
             .map_err(|error| map_password_error(error.code))
     }
 
-    fn unlock_with_device(&self) -> Result<(), UnlockFailure> {
+    fn unlock_with_device(&self, automatic: bool) -> Result<(), UnlockFailure> {
         let reason = crate::i18n::t(self.core.settings.get().language, "Unlock MyPass", &[]);
-        self.core
-            .device_unlock
-            .unlock_with_device(&reason)
-            .map_err(|error| map_device_error(error.code))
+        let device = &self.core.device_unlock;
+        if automatic {
+            device.unlock_with_device_automatically(&reason)
+        } else {
+            device.unlock_with_device(&reason)
+        }
+        .map_err(|error| map_device_error(error.code))
     }
 
     fn device_offer(&self) -> DeviceOffer {
@@ -82,6 +85,7 @@ fn map_device_error(code: ErrorCode) -> UnlockFailure {
         | ErrorCode::Invalidated
         | ErrorCode::NotEnrolledOnDevice => UnlockFailure::DeviceUnavailable,
         ErrorCode::NoVault => UnlockFailure::InApp,
+        ErrorCode::AuthenticationFailed => UnlockFailure::NotRecognized,
         _ => UnlockFailure::Failed,
     }
 }
@@ -186,8 +190,11 @@ mod tests {
                 UnlockFailure::DeviceUnavailable,
             ),
             (ErrorCode::NoVault, UnlockFailure::InApp),
-            // The popup flow is unchanged by the distinct code: a rejected finger is a failure.
-            (ErrorCode::AuthenticationFailed, UnlockFailure::Failed),
+            // A rejected finger is counted by the popup (three switch it to the password).
+            (
+                ErrorCode::AuthenticationFailed,
+                UnlockFailure::NotRecognized,
+            ),
             (ErrorCode::Internal, UnlockFailure::Failed),
         ] {
             assert_eq!(map_device_error(code), failure);
@@ -200,6 +207,35 @@ mod tests {
         w.core.vault_lock().unwrap();
         let unlocker = AppUnlocker::new(w.core.clone());
         assert_eq!(unlocker.device_offer(), DeviceOffer::default());
+    }
+
+    #[test]
+    fn a_rejected_finger_is_not_recognized_and_an_automatic_prompt_right_after_is_cancelled() {
+        let w = shared_world(true);
+        w.core
+            .device_unlock
+            .configure(Some(pw("pw")), true, false)
+            .unwrap();
+        w.core.vault_lock().unwrap();
+        let unlocker = AppUnlocker::new(w.core.clone());
+        w.fake
+            .device_unlock
+            .fail_next_unlock(mypass_platform::PlatformError::AuthenticationFailed);
+        assert_eq!(
+            unlocker.unlock_with_device(false),
+            Err(UnlockFailure::NotRecognized)
+        );
+        assert_eq!(w.fake.device_unlock.evaluation_count(), 1);
+        // The popup's automatic prompt within the app's debounce is refused without a prompt.
+        assert_eq!(
+            unlocker.unlock_with_device(true),
+            Err(UnlockFailure::Cancelled)
+        );
+        assert_eq!(w.fake.device_unlock.evaluation_count(), 1);
+        // An explicit press still prompts.
+        assert_eq!(unlocker.unlock_with_device(false), Ok(()));
+        assert_eq!(w.fake.device_unlock.evaluation_count(), 2);
+        assert_eq!(w.core.session.status().state, SessionState::Unlocked);
     }
 
     #[test]

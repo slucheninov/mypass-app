@@ -22,6 +22,8 @@ function lockedPanelModel(mode, options = {}) {
   const showDevice = showForm && options.deviceUnlock === true;
   const model = {
     title: LOCKED_TITLE_TEXT, showForm, showDevice,
+    // Touch ID first: the Touch ID view and one automatic prompt instead of the password form.
+    touchFirst: showDevice && options.touchId === true,
     deviceLabelKey: showDevice ? (options.touchId ? 'unlockWithTouchId' : 'unlockWithSystemPassword') : null,
     helperKey: null, launchAction: null,
   };
@@ -41,6 +43,9 @@ function lockedPanelModel(mode, options = {}) {
       return model;
   }
 }
+
+/** Unrecognized Touch ID prompts in one lock spell before the popup switches to the password. */
+const DEVICE_FAILURE_LIMIT = 3;
 
 function classifyLaunchResponse(response) {
   if (response?.type === 'launchStarted' || response?.type === 'launchNotNeeded') return 'started';
@@ -616,7 +621,19 @@ if (typeof document !== 'undefined') {
   const unlockSubmitBtn = document.getElementById('unlock-submit-btn');
   const unlockDeviceBtn = document.getElementById('unlock-device-btn');
   const unlockErrorEl = document.getElementById('unlock-error');
+  const touchIdView = document.getElementById('touch-id-view');
+  const touchIdBtn = document.getElementById('touch-id-btn');
+  document.getElementById('touch-id-caption').textContent = i18n.t('touchIdCaption');
+  touchIdBtn.textContent = i18n.t('unlockWithTouchId');
+  const touchIdErrorEl = document.getElementById('touch-id-error');
+  const usePasswordBtn = document.getElementById('use-password-btn');
+  const tryTouchIdBtn = document.getElementById('try-touch-id-btn');
   const launchAppBtn = document.getElementById('launch-app-btn');
+  // Touch ID first, for one locked panel. The failure count of the lock spell lives in the bridge
+  // (`deviceFailures`): it survives closing and reopening the popup and resets on every unlock.
+  const touch = { first: false, method: 'device', failures: 0, blocked: false };
+  // One automatic prompt per popup opening: a cancel waits for a press or the next opening.
+  let autoPrompted = false;
   let lockedMode = null;
   let unlockPanelRevision = 0;
   let unlockBusy = false;
@@ -1273,6 +1290,29 @@ if (typeof document !== 'undefined') {
   function updateUnlockButtons() {
     unlockSubmitBtn.disabled = unlockBusy || retryDeadline !== 0 || !unlockPassword.value;
     unlockDeviceBtn.disabled = unlockBusy;
+    touchIdBtn.disabled = unlockBusy;
+    tryTouchIdBtn.disabled = unlockBusy;
+  }
+
+  function setTouchIdError(text) {
+    touchIdErrorEl.textContent = text;
+    touchIdErrorEl.hidden = !text;
+  }
+
+  /** The Touch ID view or the password form, by the Touch ID first state of the locked panel. */
+  function renderUnlockMethod(offer) {
+    const showTouchId = touch.first && touch.method === 'device' && !touch.blocked;
+    touchIdView.hidden = !showTouchId;
+    unlockForm.hidden = showTouchId;
+    unlockDeviceBtn.hidden = touch.first || !offer?.showDevice;
+    tryTouchIdBtn.hidden = !touch.first || touch.blocked;
+    if (!showTouchId) unlockPassword.focus?.();
+  }
+
+  function showPasswordMethod(errorText) {
+    touch.method = 'password';
+    renderUnlockMethod();
+    if (retryDeadline === 0) setUnlockError(errorText);
   }
 
   function clearUnlockPanel() {
@@ -1288,6 +1328,10 @@ if (typeof document !== 'undefined') {
     retryDeadline = 0;
     unlockBusy = false;
     unlockPassword.value = '';
+    Object.assign(touch, { first: false, method: 'device', failures: 0, blocked: false });
+    touchIdView.hidden = true;
+    tryTouchIdBtn.hidden = true;
+    setTouchIdError('');
     setReveal(false);
     setUnlockError('');
     updateUnlockButtons();
@@ -1327,18 +1371,30 @@ if (typeof document !== 'undefined') {
     launchAppBtn.hidden = !model.launchAction;
     if (mode === 'locked' || mode === 'inApp') startLockedPolling(reloadCurrentContext);
     if (!model.showForm) return;
-    unlockPassword.focus?.();
+    // The form waits for the unlock options, so Touch ID first never flashes the password field.
+    unlockForm.hidden = true;
     sendPopupMessage({ type: 'getUnlockOptions' }).then((response) => {
       if (revision !== unlockPanelRevision) return;
       if (response?.type === 'pairingRequired') {
         handleCredentialsResponse(response, currentTabUrl);
         return;
       }
-      if (response?.type !== 'unlockOptions') return;
-      const offer = lockedPanelModel(mode, response);
-      unlockDeviceBtn.hidden = !offer.showDevice;
+      const options = response?.type === 'unlockOptions' ? response : {};
+      const offer = lockedPanelModel(mode, options);
       unlockDeviceBtn.textContent = offer.deviceLabelKey ? i18n.t(offer.deviceLabelKey) : '';
-      if (retryDeadline === 0) showUnlockBackoff(response.retryAfterSecs);
+      touch.first = offer.touchFirst;
+      touch.failures = Number.isInteger(options.deviceFailures) ? options.deviceFailures : 0;
+      if (touch.first && touch.failures >= DEVICE_FAILURE_LIMIT) touch.method = 'password';
+      renderUnlockMethod(offer);
+      if (retryDeadline === 0) showUnlockBackoff(options.retryAfterSecs);
+      if (!touch.first) return;
+      if (touch.method === 'password') {
+        if (retryDeadline === 0) setUnlockError(i18n.t('touchIdFailedThreeTimes'));
+        return;
+      }
+      if (autoPrompted) return;
+      autoPrompted = true;
+      void runDeviceUnlock(true);
     });
   };
 
@@ -1369,12 +1425,27 @@ if (typeof document !== 'undefined') {
         break;
       case 'unlockCancelled':
         break;
+      case 'deviceNotRecognized':
+        touch.failures = Number.isInteger(response.deviceFailures)
+          ? response.deviceFailures : touch.failures + 1;
+        if (touch.first && touch.failures >= DEVICE_FAILURE_LIMIT) {
+          showPasswordMethod(i18n.t('touchIdFailedThreeTimes'));
+        } else if (!touchIdView.hidden) {
+          setTouchIdError(i18n.t('deviceNotRecognized'));
+        } else {
+          setUnlockError(i18n.t('deviceNotRecognized'));
+        }
+        break;
       case 'deviceUnlockUnavailable':
+        // Also a lockout: Touch ID stays out for the rest of the lock spell.
         unlockDeviceBtn.hidden = true;
-        setUnlockError(i18n.t('deviceUnlockUnavailable'));
+        touch.blocked = true;
+        if (touch.first) showPasswordMethod(i18n.t('deviceUnlockUnavailable'));
+        else setUnlockError(i18n.t('deviceUnlockUnavailable'));
         break;
       default:
-        setUnlockError(i18n.t('unlockFailed'));
+        if (!touchIdView.hidden) setTouchIdError(i18n.t('unlockFailed'));
+        else setUnlockError(i18n.t('unlockFailed'));
     }
   }
 
@@ -1398,9 +1469,16 @@ if (typeof document !== 'undefined') {
     return runUnlock({ type: 'unlockWithPassword', password });
   };
 
+  /** One device prompt; `automatic` when the popup starts it by itself on opening. */
+  function runDeviceUnlock(automatic) {
+    if (lockedMode !== 'locked' || unlockBusy) return;
+    setTouchIdError('');
+    return runUnlock(automatic ? { type: 'unlockWithDevice', automatic: true } : { type: 'unlockWithDevice' });
+  }
+
   unlockWithDevice = function () {
-    if (lockedMode !== 'locked' || unlockDeviceBtn.hidden || unlockDeviceBtn.disabled) return;
-    return runUnlock({ type: 'unlockWithDevice' });
+    if (touch.first ? touch.blocked : unlockDeviceBtn.hidden || unlockDeviceBtn.disabled) return;
+    return runDeviceUnlock(false);
   };
 
   unlockPassword.addEventListener('input', updateUnlockButtons);
@@ -1410,6 +1488,20 @@ if (typeof document !== 'undefined') {
   });
   unlockRevealBtn.addEventListener('click', () => setReveal(unlockPassword.type === 'password'));
   unlockDeviceBtn.addEventListener('click', () => { void unlockWithDevice(); });
+  touchIdBtn.addEventListener('click', () => { void unlockWithDevice(); });
+  // "Use password": the form without an error line, and no prompt until a press or a reopening.
+  usePasswordBtn.addEventListener('click', () => {
+    setTouchIdError('');
+    showPasswordMethod('');
+  });
+  // "Try Touch ID again": back to the Touch ID view with one prompt.
+  tryTouchIdBtn.addEventListener('click', () => {
+    if (!touch.first || touch.blocked || unlockBusy) return;
+    touch.method = 'device';
+    if (retryDeadline === 0) setUnlockError('');
+    renderUnlockMethod();
+    void runDeviceUnlock(false);
+  });
   launchAppBtn.addEventListener('click', () => {
     if (lockedMode === 'inApp') void sendPopupMessage({ type: 'openApp' });
     else if (lockedMode === 'notRunning') void startLaunchFlow();

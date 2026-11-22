@@ -31,7 +31,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `src-tauri` (package `mypass-app`, lib `mypass_app_lib`) | implemented | The Tauri 2 app shell: the typed commands and events (`tauri-specta`), capabilities, native file dialogs, plugins, tray, global hotkeys, single instance, quit flow, native-side i18n; a workspace member listed explicitly |
 | `mypass-bridge` | implemented | Browser bridge protocol, codec, endpoint, relay and loopback server (`server` feature, off for the host); the passkey service (`passkeys`) |
 | `mypass-host` | implemented | Native messaging host binary; never links the session, core or KDBX crates |
-| `extension/` | implemented | The Chromium extension (Manifest V3 JavaScript, vendored `vendor/jsQR.js`), with its 58 Node suites in `extension/tests/`, run by `scripts/test-extension.sh`; its text lives in `extension/_locales/{en,uk,ru,de}/messages.json` (`chrome.i18n`, read through `shared/i18n.js`, `en` is the default locale), pinned by `tests/locales.test.js` |
+| `extension/` | implemented | The Chromium extension (Manifest V3 JavaScript, vendored `vendor/jsQR.js`), with its 59 Node suites in `extension/tests/`, run by `scripts/test-extension.sh`; its text lives in `extension/_locales/{en,uk,ru,de}/messages.json` (`chrome.i18n`, read through `shared/i18n.js`, `en` is the default locale), pinned by `tests/locales.test.js` |
 
 ## Repo layout
 
@@ -58,7 +58,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `scripts/make-tray-icons.mjs` | Generates the tray icons from `scripts/key-shape.mjs`: the macOS 18 pt @2x template `src-tauri/icons/tray-template.png` and the green Windows `tray-windows.png`. A Node test compares the committed pixels with the generator |
 | `scripts/convert-xcstrings.mjs` | One-time converter of the old app's String Catalogs; its output (`src/lib/i18n/locales/{en,uk,ru}.json`, `src-tauri/resources/macos/{en,uk,ru}.lproj/InfoPlist.strings`) is then the hand-edited source of truth; `de.json` and `de.lproj` were written by hand and never went through it |
 | `.github/` | Workflows (`ci.yml`, `codeql.yml`), Dependabot config, issue forms, pull request template |
-| `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts), the Stage 2b UI walk-through and the Stage 3 browser bridge checklist (M1 to M14) and the Stage 4 passkey checklist (P1 to P13), Stage 5 checks (S1 to S21), cutover (C1 to C10) Stage 6 Windows checks (W1 to W17), the extension popup and page checks (E1 to E11), the person checks (PR1 to PR8), the social sign-in checks (SG1 to SG6) and the form fill fixes (FX1 to FX4) |
+| `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts), the Stage 2b UI walk-through and the Stage 3 browser bridge checklist (M1 to M14) and the Stage 4 passkey checklist (P1 to P13), Stage 5 checks (S1 to S21), cutover (C1 to C10) Stage 6 Windows checks (W1 to W17), the extension popup and page checks (E1 to E12), the person checks (PR1 to PR8), the social sign-in checks (SG1 to SG6) and the form fill fixes (FX1 to FX4) |
 | `docs/implementation/ROADMAP.md` | The only tracked document under `docs/`: unfinished work |
 | `LICENSE`, `THIRD_PARTY_NOTICES.md` | Apache-2.0 and the notices for vendored data and linked crates |
 
@@ -366,6 +366,16 @@ change is done.
   `deviceUnlockUnavailable` switch to the password form for the rest of the lock spell. The fallback button of the
   Touch ID sheet stays hidden, so macOS never reports a separate "use password" choice. With only the Mac password
   mode enabled the screen keeps the button and never prompts by itself.
+  The extension popup does the same for a paired browser: with `unlockOptions.deviceUnlock` and
+  `touchId` it shows the Touch ID view and sends one `unlockWithDevice` with `automatic: true` per
+  opening (the app then refuses it as `unlockCancelled` while any prompt is in flight or within
+  `AUTOMATIC_PROMPT_DEBOUNCE`). A rejected finger answers `deviceNotRecognized` with the lock
+  spell's `deviceFailures`, which the bridge's `UnlockThrottle` keeps (cleared by every unlock,
+  separate from the password backoff) and `unlockOptions` reports, so the count survives closing
+  and reopening the popup; three switch the popup to the password form. `deviceUnlockUnavailable`
+  (also a lockout) switches for the rest of the lock spell. A request dropped by the bridge's own
+  prompt guard (one in flight, two seconds from the last start) answers `unlockCancelled` and
+  counts nothing.
 - **Browser bridge.** Three hops: the extension talks to `mypass-host` (native messaging, one host process per
   message), the host to the app's loopback server (`127.0.0.1`, `mypass_bridge::server`, thread per connection, no async
   runtime). The host never links the session, core or KDBX crates. Each launch draws a fresh token and port and

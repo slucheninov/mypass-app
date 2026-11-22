@@ -335,6 +335,7 @@ impl Response {
             | Self::WrongPassword
             | Self::UnlockThrottled { .. }
             | Self::DeviceUnlockUnavailable
+            | Self::DeviceNotRecognized { .. }
             | Self::UnlockCancelled
             | Self::UnlockInApp
             | Self::Error { .. } => false,

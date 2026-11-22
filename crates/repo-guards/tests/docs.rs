@@ -439,12 +439,12 @@ fn run_md_has_the_stage_3_sections_and_only_open_boxes() {
 #[test]
 fn run_md_has_extension_popup_unlock_section() {
     let run = read("RUN.md");
-    let heading = "## \u{420}\u{43e}\u{437}\u{431}\u{43b}\u{43e}\u{43a}\u{443}\u{432}\u{430}\u{43d}\u{43d}\u{44f} \u{437} \u{43f}\u{43e}\u{43f}\u{430}\u{43f}\u{430} \u{440}\u{43e}\u{437}\u{448}\u{438}\u{440}\u{435}\u{43d}\u{43d}\u{44f} (E1\u{2013}E11)";
+    let heading = "## \u{420}\u{43e}\u{437}\u{431}\u{43b}\u{43e}\u{43a}\u{443}\u{432}\u{430}\u{43d}\u{43d}\u{44f} \u{437} \u{43f}\u{43e}\u{43f}\u{430}\u{43f}\u{430} \u{440}\u{43e}\u{437}\u{448}\u{438}\u{440}\u{435}\u{43d}\u{43d}\u{44f} (E1\u{2013}E12)";
     assert_eq!(run.matches(heading).count(), 1);
     let (_, rest) = run.split_once(heading).unwrap();
     let section = rest.split("\n## ").next().unwrap();
     let mut items = section.split("\n### E").skip(1);
-    for number in 1..=11 {
+    for number in 1..=12 {
         let item = items.next().unwrap();
         assert!(
             item.starts_with(&format!("{number} ")),
