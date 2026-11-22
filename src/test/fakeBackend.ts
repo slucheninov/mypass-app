@@ -13,6 +13,7 @@ import type {
   EntryTypeDto,
   ApiError,
   HistoryReveal,
+  DeviceUnlockOffer_Serialize,
   DeviceUnlockStatus_Serialize,
   UpdateStatus_Serialize,
   AttachmentMeta,
@@ -210,6 +211,9 @@ export interface FakeBackend {
   install(): void;
   /** Delivers a backend event to the listeners registered through the generated `events`. */
   emit(event: EventName, payload?: unknown): Promise<void>;
+  /** Changes the stored settings outside the webview and broadcasts `SettingsChanged` like the
+   *  backend does: with the public part only. */
+  changeSettings(patch: Partial<Settings_Serialize>): Promise<void>;
 }
 
 const snake = (name: string) => name.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
@@ -281,6 +285,24 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
   const settingsGate = () => {
     if (state.session.state === "noVault") throw apiError("noVault");
     requireUnlocked();
+  };
+  /** Like Rust's `PublicSettings`: what `settings_get_public` and every `SettingsChanged` carry. */
+  const publicSettings = () => ({
+    language: state.settings.language,
+    theme: state.settings.theme,
+    shortcutLock: state.settings.shortcutLock,
+    shortcutShow: state.settings.shortcutShow,
+    updateCheckEnabled: state.settings.updateCheckEnabled,
+  });
+  /** Like Rust's `DeviceUnlockService::offer`: the button and its label, nothing more. */
+  const deviceOffer = (): DeviceUnlockOffer_Serialize => {
+    const d = state.device;
+    const canOfferNow = d.available && d.canOfferNow;
+    const method = !canOfferNow ? null
+      : d.touchIdEnabled && d.macPasswordEnabled ? "touchIdOrMacPassword" as const
+        : d.touchIdEnabled ? "touchId" as const : "macPassword" as const;
+    const expired = d.reason === "deviceWindowExpired" || d.reason === "accountWindowExpired";
+    return { canOfferNow, label: expired ? "masterPasswordRequired" : method };
   };
   const findEntry = (id: string) => {
     const found = state.entries.find((e) => e.summary.id === id);
@@ -1052,13 +1074,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     platformKeyboardLayout: () => keyboardLayout,
     settingsGet: () => (settingsGate(), structuredClone(state.settings)),
     // Like Rust: the subset every window renders, in every session state.
-    settingsGetPublic: () => ({
-      language: state.settings.language,
-      theme: state.settings.theme,
-      shortcutLock: state.settings.shortcutLock,
-      shortcutShow: state.settings.shortcutShow,
-      updateCheckEnabled: state.settings.updateCheckEnabled,
-    }),
+    settingsGetPublic: () => publicSettings(),
     settingsLoginItemStatus: () => (settingsGate(), state.loginItem),
     settingsUpdate: ({ patch }) => {
       settingsGate();
@@ -1090,7 +1106,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       next.backupCount = Math.min(50, Math.max(1, next.backupCount));
       next.clipboardClearSeconds = Math.floor((Math.min(120, Math.max(10, next.clipboardClearSeconds)) + 2) / 5) * 5;
       state.settings = next;
-      publish("settingsChanged", structuredClone(state.settings));
+      publish("settingsChanged", publicSettings());
       return structuredClone(state.settings);
     },
     // Take-once like the Rust list: what the hotkey layer could not register at startup.
@@ -1105,25 +1121,26 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       }
       requireUnlocked();
       state.sync = { state: "idle", lastSync: 1_700_000_000_000 };
-      publish("syncStatusChanged", structuredClone(state.sync));
+      publish("syncStatusChanged", null);
       return structuredClone(state.sync);
     },
     syncConnectSecondary: () => {
       requireUnlocked();
       state.settings.secondaryFolder = "/fake/secondary";
-      publish("settingsChanged", structuredClone(state.settings));
+      publish("settingsChanged", publicSettings());
       state.sync = { state: "idle", lastSync: 1_700_000_000_000 };
-      publish("syncStatusChanged", structuredClone(state.sync));
+      publish("syncStatusChanged", null);
       return structuredClone(state.sync);
     },
-    deviceUnlockStatus: () => structuredClone(state.device),
+    deviceUnlockStatus: () => (settingsGate(), structuredClone(state.device)),
+    deviceUnlockOffer: () => deviceOffer(),
     deviceUnlockConfigure: ({ password, touchId, macPassword }) => {
       settingsGate();
       if ((touchId || macPassword) && !state.device.enrolled && password !== state.masterPassword) throw apiError("wrongPassword");
       state.device = { ...state.device, enrolled: touchId || macPassword, touchIdEnabled: touchId, macPasswordEnabled: macPassword, canOfferNow: touchId || macPassword, reason: touchId || macPassword ? null : "disabled" };
       state.settings.unlockTouchIdEnabled = touchId;
       state.settings.unlockMacPasswordEnabled = macPassword;
-      publish("settingsChanged", structuredClone(state.settings));
+      publish("settingsChanged", publicSettings());
       return structuredClone(state.device);
     },
     deviceUnlockConsumeExtensionRequest: () => { const pending = state.extensionUnlockRequested; state.extensionUnlockRequested = false; return pending; },
@@ -1151,9 +1168,9 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     syncDisconnectSecondary: () => {
       settingsGate();
       state.settings.secondaryFolder = null;
-      publish("settingsChanged", structuredClone(state.settings));
+      publish("settingsChanged", publicSettings());
       state.sync = { state: "off" };
-      publish("syncStatusChanged", structuredClone(state.sync));
+      publish("syncStatusChanged", null);
       return null;
     },
     sidebarGet: () => {
@@ -1263,6 +1280,10 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     },
     emit(event, payload) {
       return emit(kebab(event), payload ?? null);
+    },
+    changeSettings(patch) {
+      state.settings = { ...state.settings, ...patch };
+      return emit("settings-changed", publicSettings());
     },
   };
 }

@@ -45,26 +45,33 @@ pub fn serves_conflicts(label: &str) -> bool {
     label == super::app::MAIN_WINDOW
 }
 
-/// Applies `patch` and returns the new settings with the effects the change calls for.
-pub fn update(core: &AppCore, patch: SettingsPatch) -> Result<(Settings, Vec<Effect>), ApiError> {
+/// Applies `patch` and returns the new settings with the effects the change calls for. The write
+/// commits only while the session is still the unlocked `incarnation` the command's gate saw.
+pub fn update(
+    core: &AppCore,
+    incarnation: u64,
+    patch: SettingsPatch,
+) -> Result<(Settings, Vec<Effect>), ApiError> {
     let old = core.settings_get()?;
-    let new = core.settings_update(patch)?;
+    let new = core.settings_update_for(incarnation, patch)?;
     let effects = settings_effects(&old, &new);
     Ok((new, effects))
 }
 
 /// The whole update sequence under `gate`: read the old settings, apply the patch, compute and run
 /// the effects, then `emit`. Two quick updates therefore cannot interleave: each one's effects
-/// are computed against the previous committed settings and the events go out in call order.
+/// are computed against the previous committed settings and the events go out in call order. An
+/// update that waited here while the vault locked is refused (see [`update`]).
 pub fn apply(
     core: &AppCore,
+    incarnation: u64,
     gate: &Mutex<()>,
     runner: &dyn EffectRunner,
     emit: impl FnOnce(&Settings),
     patch: SettingsPatch,
 ) -> Result<Settings, ApiError> {
     let _serial = gate.lock().unwrap_or_else(PoisonError::into_inner);
-    let (new, effects) = update(core, patch)?;
+    let (new, effects) = update(core, incarnation, patch)?;
     runner.run(effects);
     // The effects may have corrected the store (a refused login item is written back off), so
     // the webview gets what is stored now, not the value the patch asked for.
@@ -81,7 +88,7 @@ pub async fn settings_update(
     shell: State<'_, ShellState>,
     patch: SettingsPatch,
 ) -> Result<Settings, ApiError> {
-    super::ensure_unlocked(&state.0)?;
+    let incarnation = super::ensure_unlocked(&state.0)?;
     // The settings file is written atomically, so off the main thread.
     let core = state.0.clone();
     let gate = shell.settings_gate.clone();
@@ -89,11 +96,12 @@ pub async fn settings_update(
     blocking(move || {
         apply(
             &core,
+            incarnation,
             &gate,
             runner.as_ref(),
             // A window that is gone is not an error of the update.
             |new| {
-                let _ = SettingsChanged(new.clone()).emit(&app);
+                let _ = SettingsChanged::of(new).emit(&app);
             },
             patch,
         )
@@ -118,8 +126,8 @@ mod tests {
     }
 
     use super::*;
-    use crate::testing::world;
-    use mypass_session::{Language, Theme};
+    use crate::testing::{open_world, pw};
+    use mypass_session::{ErrorCode, Language, Theme};
     use std::sync::mpsc;
     use std::sync::Arc;
     use std::time::Duration;
@@ -144,8 +152,9 @@ mod tests {
 
     #[test]
     fn concurrent_updates_are_serialised_and_computed_in_call_order() {
-        let w = world();
+        let w = open_world();
         let core = Arc::new(w.core.clone());
+        let incarnation = core.session.unlocked_incarnation().unwrap();
         let gate = Arc::new(Mutex::new(()));
         let (entered_tx, entered_rx) = mpsc::sync_channel(1);
         let (release_tx, release_rx) = mpsc::channel();
@@ -163,6 +172,7 @@ mod tests {
             std::thread::spawn(move || {
                 apply(
                     &core,
+                    incarnation,
                     &gate,
                     runner.as_ref(),
                     |s| emitted.lock().unwrap().push(s.clone()),
@@ -203,12 +213,13 @@ mod tests {
 
     #[test]
     fn update_returns_the_new_settings_and_their_effects() {
-        let w = world();
+        let w = open_world();
         let patch = SettingsPatch {
             theme: Some(Theme::Dark),
             ..SettingsPatch::default()
         };
-        let (new, effects) = update(&w.core, patch).unwrap();
+        let incarnation = w.core.session.unlocked_incarnation().unwrap();
+        let (new, effects) = update(&w.core, incarnation, patch).unwrap();
         assert_eq!(new.theme, Theme::Dark);
         assert_eq!(effects, vec![Effect::ApplyTheme(Theme::Dark)]);
         assert_eq!(w.core.settings_get().unwrap().theme, Theme::Dark);
@@ -216,8 +227,9 @@ mod tests {
 
     #[test]
     fn an_update_that_changes_nothing_has_no_effects() {
-        let w = world();
-        let (_, effects) = update(&w.core, SettingsPatch::default()).unwrap();
+        let w = open_world();
+        let incarnation = w.core.session.unlocked_incarnation().unwrap();
+        let (_, effects) = update(&w.core, incarnation, SettingsPatch::default()).unwrap();
         assert!(effects.is_empty());
     }
 
@@ -237,10 +249,11 @@ mod tests {
 
     #[test]
     fn the_emitted_and_returned_settings_include_what_the_effects_corrected() {
-        let w = world();
+        let w = open_world();
         let emitted = Mutex::new(None);
         let returned = apply(
             &w.core,
+            w.core.session.unlocked_incarnation().unwrap(),
             &Mutex::new(()),
             &Corrects(w.core.clone()),
             |s| *emitted.lock().unwrap() = Some(s.clone()),
@@ -253,5 +266,71 @@ mod tests {
         assert_eq!(returned.language, Language::Uk);
         assert_eq!(returned.theme, Theme::Dark);
         assert_eq!(emitted.lock().unwrap().as_ref(), Some(&returned));
+    }
+
+    fn dark() -> SettingsPatch {
+        SettingsPatch {
+            theme: Some(Theme::Dark),
+            ..SettingsPatch::default()
+        }
+    }
+
+    fn refuse_waiting_update(reunlock: bool) {
+        let w = open_world();
+        let core = Arc::new(w.core.clone());
+        let incarnation = core.session.unlocked_incarnation().unwrap();
+        let gate = Arc::new(Mutex::new(()));
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::channel();
+        let runner = Arc::new(Gated {
+            log: Mutex::new(Vec::new()),
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+            first: false.into(),
+        });
+        let emitted: Arc<Mutex<Vec<Settings>>> = Arc::default();
+        let spawn = |patch: SettingsPatch| {
+            let (core, gate, runner, emitted) =
+                (core.clone(), gate.clone(), runner.clone(), emitted.clone());
+            std::thread::spawn(move || {
+                apply(
+                    &core,
+                    incarnation,
+                    &gate,
+                    runner.as_ref(),
+                    |s| emitted.lock().unwrap().push(s.clone()),
+                    patch,
+                )
+            })
+        };
+        let first = spawn(SettingsPatch {
+            language: Some(Language::Uk),
+            ..SettingsPatch::default()
+        });
+        entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        // Queued behind the first one, already past the command's gate.
+        let second = spawn(dark());
+        w.core.vault_lock().unwrap();
+        if reunlock {
+            w.core.session.unlock(pw("pw")).unwrap();
+        }
+        release_tx.send(()).unwrap();
+        assert!(first.join().unwrap().is_ok());
+        assert_eq!(second.join().unwrap().unwrap_err().code, ErrorCode::Locked);
+        let stored = core.settings_get().unwrap();
+        assert_eq!(stored.language, Language::Uk);
+        assert_ne!(stored.theme, Theme::Dark);
+        assert_eq!(emitted.lock().unwrap().len(), 1);
+        assert_eq!(runner.log.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_update_waiting_behind_another_is_refused_once_the_vault_locks() {
+        refuse_waiting_update(false);
+    }
+
+    #[test]
+    fn an_update_waiting_behind_another_is_refused_after_reunlock() {
+        refuse_waiting_update(true);
     }
 }

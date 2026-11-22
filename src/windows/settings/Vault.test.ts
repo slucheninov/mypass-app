@@ -216,7 +216,9 @@ describe("retained vault copies", () => {
     expect(screen.getByText(/Last synced/)).toBeTruthy();
 
     fake.state.displaced = { count: 0, copies: [], unavailable: [] };
-    await fake.emit("syncStatusChanged", { state: "idle", lastSync: 5000 });
+    // The event carries nothing: the pane re-reads the status through `sync_status`.
+    fake.state.sync = { state: "idle", lastSync: 5000 };
+    await fake.emit("syncStatusChanged", null);
     await waitFor(() => expect(screen.queryByTestId("displaced-copies")).toBeNull());
     expect(screen.queryByTestId("sync-recovery-file")).toBeNull();
   });

@@ -817,12 +817,21 @@ mod tests {
     }
 
     /// Pairing while locked is a feature: the main window reads the code through
-    /// `browser_pairing_status`, which carries the code alone and is served without a vault.
+    /// `browser_pairing_status`, which carries the code alone and is served while locked.
     #[test]
     fn the_pairing_status_serves_the_code_while_locked() {
-        let f = fixture(false);
-        assert!(f.w.core.vault_status().unwrap().state != mypass_session::SessionState::Unlocked);
-        assert_eq!(pairing_status(&f.state), None);
+        let f = fixture(true);
+        f.w.core.vault_lock().unwrap();
+        assert_eq!(
+            f.w.core.vault_status().unwrap().state,
+            mypass_session::SessionState::Locked
+        );
+        let app = tauri::test::mock_builder()
+            .manage(f.state.clone())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let status = || browser_pairing_status(app.state());
+        assert_eq!(status().unwrap(), None);
         f.handle()
             .service
             .handle(mypass_bridge::protocol::Request::StartPairing {
@@ -830,9 +839,9 @@ mod tests {
                 browser: None,
             });
         let code = f.handle().pairing.active().unwrap().code;
-        assert_eq!(pairing_status(&f.state).map(|p| p.code), Some(code));
+        assert_eq!(status().unwrap().map(|p| p.code), Some(code));
         pairing_cancel(&f.state).unwrap();
-        assert_eq!(pairing_status(&f.state), None);
+        assert_eq!(status().unwrap(), None);
     }
 
     #[test]

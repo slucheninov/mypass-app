@@ -1,8 +1,10 @@
-import { commands } from "./lib/bindings";
+import { commands, type SecondaryStatus_Serialize, type Settings_Serialize } from "./lib/bindings";
 import { update } from "./lib/stores/update.svelte";
-import { screen, waitFor, within } from "@testing-library/svelte";
+import { act, screen, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { api } from "./lib/api";
+import { settings } from "./lib/stores/settings.svelte";
 import { renderMainApp, calls } from "./test/mainApp";
 import { renderSettingsApp } from "./test/settingsApp";
 import { FIXTURE_MASTER_PASSWORD } from "./test/fixtures";
@@ -14,6 +16,9 @@ it("device unlock is offered without prompting on mount and presses once", async
   });
   const button = await screen.findByRole("button", { name: "Unlock with Touch ID" });
   expect(calls(fake, "vaultUnlockDevice")).toHaveLength(0);
+  // The lock screen reads only the offer; the full status is gated behind an unlock.
+  expect(calls(fake, "deviceUnlockOffer").length).toBeGreaterThan(0);
+  expect(calls(fake, "deviceUnlockStatus")).toHaveLength(0);
   await expectNoAxeViolations(container);
   await userEvent.click(button);
   await waitFor(() => expect(calls(fake, "vaultUnlockDevice")).toHaveLength(1));
@@ -33,6 +38,53 @@ it("enabling Touch ID requires a typed password and clears it", async () => {
   await waitFor(() => expect(calls(fake, "deviceUnlockConfigure")).toHaveLength(1));
   expect(field.value).toBe("");
 });
+it("a device policy save from the old session does not refresh the new Security pane", async () => {
+  let finish!: (value: Settings_Serialize) => void;
+  const reply = new Promise<Settings_Serialize>(resolve => { finish = resolve; });
+  const { fake } = await renderSettingsApp({ deviceUnlockAvailable: true }, { pane: "Security", prepare: f => {
+    f.handlers.settingsUpdate = () => reply;
+  } });
+  const save = vi.spyOn(settings, "update");
+  await userEvent.selectOptions(await screen.findByRole("combobox", { name: "Unlock with device:" }), "oneHour");
+  const saving = save.mock.results[0]?.value;
+  save.mockRestore();
+  expect(saving).toBeDefined();
+  await act(() => fake.handlers.vaultLock({}));
+  await screen.findByTestId("settings-locked");
+  await act(() => fake.handlers.vaultUnlock({ password: fake.state.masterPassword }));
+  await screen.findByRole("combobox", { name: "Unlock with device:" });
+  const before = calls(fake, "deviceUnlockStatus").length;
+  await act(async () => {
+    finish({ ...fake.state.settings, unlockWithDeviceWindow: "oneHour" });
+    await saving;
+  });
+  expect(calls(fake, "deviceUnlockStatus")).toHaveLength(before);
+});
+
+it("a Sync now result from the old session does not appear in the new Vault pane", async () => {
+  let finish!: (value: SecondaryStatus_Serialize) => void;
+  const reply = new Promise<SecondaryStatus_Serialize>(resolve => { finish = resolve; });
+  const { fake } = await renderSettingsApp({}, { pane: "Vault", prepare: f => {
+    f.state.sync = { state: "idle", lastSync: 5000 };
+    f.handlers.syncNow = () => reply;
+  } });
+  const syncNow = vi.spyOn(api, "syncNow");
+  await userEvent.click(await screen.findByRole("button", { name: "Sync now" }));
+  const syncing = syncNow.mock.results[0]?.value;
+  syncNow.mockRestore();
+  expect(syncing).toBeDefined();
+  await act(() => fake.handlers.vaultLock({}));
+  await screen.findByTestId("settings-locked");
+  fake.state.sync = { state: "off" };
+  await act(() => fake.handlers.vaultUnlock({ password: fake.state.masterPassword }));
+  await screen.findByText("Not syncing to another folder");
+  await act(async () => {
+    finish({ state: "idle", lastSync: 6000, recoveryFile: "old-vault.kdbx" });
+    await syncing;
+  });
+  expect(screen.queryByTestId("sync-recovery-file")).toBeNull();
+});
+
 it("update banner dismisses and returns for a newer event", async () => {
   const { fake } = await renderMainApp({}, f => { f.state.update.banner = { version: "9.0.0", url: "https://github.com/release" }; });
   await userEvent.click(await screen.findByRole("button", { name: "View release" }));
@@ -267,7 +319,7 @@ it("secondary events cannot discard a pending storage warning snapshot", async (
   const { fake } = await renderMainApp({}, f => {
     f.handlers.vaultStorageStatus = () => new Promise(resolve => release = resolve);
   });
-  await fake.emit("syncStatusChanged", { state: "off" });
+  await fake.emit("syncStatusChanged", null);
   release({ location: "iCloudDrive", fallbackActive: true, cacheAhead: true, downloading: true });
   expect(await screen.findByText(/iCloud Drive is not available/)).toBeTruthy();
   expect(await screen.findByText("Waiting for iCloud to download your vault…")).toBeTruthy();

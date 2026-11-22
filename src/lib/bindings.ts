@@ -41,7 +41,13 @@ export const commands = {
 	browserShowExtensionFolder: () => typedError<null, ApiError>(__TAURI_INVOKE("browser_show_extension_folder")),
 	browserStatus: () => typedError<BrowserStatus_Serialize, ApiError>(__TAURI_INVOKE("browser_status")),
 	browserUnregisterHost: () => typedError<BrowserRegistrationDto_Serialize[], ApiError>(__TAURI_INVOKE("browser_unregister_host")),
+	/**  The full status (toggles, enrolment, block reason) for the Security pane; unlocked only. */
 	deviceUnlockStatus: () => typedError<DeviceUnlockStatus_Serialize, ApiError>(__TAURI_INVOKE("device_unlock_status")),
+	/**
+	 *  What an unlock screen needs to show the device-unlock button, in any session state. Reads
+	 *  only: no reconcile, no setting written.
+	 */
+	deviceUnlockOffer: () => typedError<DeviceUnlockOffer_Serialize, ApiError>(__TAURI_INVOKE("device_unlock_offer")),
 	deviceUnlockConfigure: (password: string | null, touchId: boolean, macPassword: boolean) => typedError<DeviceUnlockStatus_Serialize, ApiError>(__TAURI_INVOKE("device_unlock_configure", { password, touchId, macPassword })),
 	deviceUnlockConsumeExtensionRequest: () => __TAURI_INVOKE<boolean>("device_unlock_consume_extension_request"),
 	updateStatus: () => __TAURI_INVOKE<UpdateStatus_Serialize>("update_status"),
@@ -159,15 +165,15 @@ export const events = {
 	clipboardClearedEvent: makeEvent<ClipboardClearedEvent, ClipboardClearedEvent>("clipboard-cleared-event"),
 	newEntryEvent: makeEvent<NewEntryEvent, NewEntryEvent>("new-entry-event"),
 	openEntryEvent: makeEvent<OpenEntryEvent, OpenEntryEvent>("open-entry-event"),
-	pairingChallengeEvent: makeEvent<PairingChallengeEvent_Serialize, PairingChallengeEvent_Deserialize>("pairing-challenge-event"),
+	pairingChallengeEvent: makeEvent<PairingChallengeEvent, PairingChallengeEvent>("pairing-challenge-event"),
 	proposalEvent: makeEvent<ProposalEvent_Serialize, ProposalEvent_Deserialize>("proposal-event"),
 	saveStateChanged: makeEvent<SaveStateChanged_Serialize, SaveStateChanged_Deserialize>("save-state-changed"),
 	sessionChanged: makeEvent<SessionChanged_Serialize, SessionChanged_Deserialize>("session-changed"),
-	settingsChanged: makeEvent<SettingsChanged_Serialize, SettingsChanged_Deserialize>("settings-changed"),
+	settingsChanged: makeEvent<SettingsChanged, SettingsChanged>("settings-changed"),
 	settingsPaneEvent: makeEvent<SettingsPaneEvent, SettingsPaneEvent>("settings-pane-event"),
 	shortcutConflictEvent: makeEvent<ShortcutConflictEvent, ShortcutConflictEvent>("shortcut-conflict-event"),
 	storageStatusChanged: makeEvent<StorageStatusChanged, StorageStatusChanged>("storage-status-changed"),
-	syncStatusChanged: makeEvent<SyncStatusChanged_Serialize, SyncStatusChanged_Deserialize>("sync-status-changed"),
+	syncStatusChanged: makeEvent<SyncStatusChanged, SyncStatusChanged>("sync-status-changed"),
 	unlockRequestedEvent: makeEvent<UnlockRequestedEvent, UnlockRequestedEvent>("unlock-requested-event"),
 	updateChanged: makeEvent<UpdateChanged_Serialize, UpdateChanged_Deserialize>("update-changed"),
 	vaultChanged: makeEvent<VaultChanged, VaultChanged>("vault-changed"),
@@ -469,6 +475,37 @@ export type CustomFieldEdit = {
 	key: string,
 	value: string,
 	protected: boolean,
+};
+
+/**  The text the unlock screen shows for device unlock. */
+export type DeviceUnlockLabel = "touchId" | "macPassword" | "touchIdOrMacPassword" | "masterPasswordRequired";
+
+/**
+ *  What an unlock screen needs to offer device unlock, and nothing more: no toggles, enrolment or
+ *  block reason. Served in any session state and read without side effects.
+ */
+export type DeviceUnlockOffer = DeviceUnlockOffer_Serialize | DeviceUnlockOffer_Deserialize;
+
+/**
+ *  What an unlock screen needs to offer device unlock, and nothing more: no toggles, enrolment or
+ *  block reason. Served in any session state and read without side effects.
+ */
+export type DeviceUnlockOffer_Deserialize = {
+	/**  The unlock screen may show the device-unlock button now. */
+	canOfferNow: boolean,
+	/**  The button label or the existing master-password prompt. */
+	label?: DeviceUnlockLabel | null,
+};
+
+/**
+ *  What an unlock screen needs to offer device unlock, and nothing more: no toggles, enrolment or
+ *  block reason. Served in any session state and read without side effects.
+ */
+export type DeviceUnlockOffer_Serialize = {
+	/**  The unlock screen may show the device-unlock button now. */
+	canOfferNow: boolean,
+	/**  The button label or the existing master-password prompt. */
+	label: DeviceUnlockLabel | null,
 };
 
 /**  What the Security pane and the unlock screen show about device unlock. */
@@ -1112,25 +1149,12 @@ export type PairingChallengeDto = {
 };
 
 /**
- *  The pairing challenge changed: `Some` while a code is waiting for the browser, `None` once it
- *  was finished, cancelled, expired or the vault locked. Sent to the main window only (it carries
- *  the code the user types into the extension).
+ *  The pairing challenge changed (a code is waiting for the browser, or it was finished,
+ *  cancelled, expired or dismissed by a lock). Payload-free: Tauri also hands a targeted event to
+ *  `Any` listeners of other webviews, so the code never travels in it; the main window reads it
+ *  with `browser_pairing_status`.
  */
-export type PairingChallengeEvent = PairingChallengeEvent_Serialize | PairingChallengeEvent_Deserialize;
-
-/**
- *  The pairing challenge changed: `Some` while a code is waiting for the browser, `None` once it
- *  was finished, cancelled, expired or the vault locked. Sent to the main window only (it carries
- *  the code the user types into the extension).
- */
-export type PairingChallengeEvent_Deserialize = PairingChallengeDto | null;
-
-/**
- *  The pairing challenge changed: `Some` while a code is waiting for the browser, `None` once it
- *  was finished, cancelled, expired or the vault locked. Sent to the main window only (it carries
- *  the code the user types into the extension).
- */
-export type PairingChallengeEvent_Serialize = PairingChallengeDto | null;
+export type PairingChallengeEvent = null;
 
 /**  Whether the panel can leave the webview background transparent. */
 export type PanelMaterial = "native" | "solid";
@@ -1502,14 +1526,12 @@ export type SessionStatus_Serialize = {
 /**  Every persisted setting. Exactly one `Default` impl; there is no tray-click-action setting. */
 export type Settings = Settings_Serialize | Settings_Deserialize;
 
-/**  The settings changed (every window shows the same ones). */
-export type SettingsChanged = SettingsChanged_Serialize | SettingsChanged_Deserialize;
-
-/**  The settings changed (every window shows the same ones). */
-export type SettingsChanged_Deserialize = Settings_Deserialize;
-
-/**  The settings changed (every window shows the same ones). */
-export type SettingsChanged_Serialize = Settings_Serialize;
+/**
+ *  The settings changed. A broadcast reaches every webview in any session state, so it carries
+ *  only the public part (theme, language, shortcut hints, the update flag); a window that shows
+ *  the full settings re-reads them through the gated `settings_get`.
+ */
+export type SettingsChanged = PublicSettings;
 
 /**  The settings window, already open, should select `pane` (for example `browser`). */
 export type SettingsPaneEvent = {
@@ -1801,14 +1823,11 @@ export type StorageStatus = {
  */
 export type StorageStatusChanged = StorageStatus;
 
-/**  The secondary-folder sync status changed. */
-export type SyncStatusChanged = SyncStatusChanged_Serialize | SyncStatusChanged_Deserialize;
-
-/**  The secondary-folder sync status changed. */
-export type SyncStatusChanged_Deserialize = SecondaryStatus_Deserialize;
-
-/**  The secondary-folder sync status changed. */
-export type SyncStatusChanged_Serialize = SecondaryStatus_Serialize;
+/**
+ *  The secondary-folder sync status changed. Payload-free, as every webview receives it in any
+ *  session state: the settings window re-reads the status through the gated `sync_status`.
+ */
+export type SyncStatusChanged = null;
 
 export type TargetProbe = TargetProbe_Serialize | TargetProbe_Deserialize;
 

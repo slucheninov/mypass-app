@@ -23,13 +23,16 @@ describe("PairingCodeSheet", () => {
   it("pairing_sheet_opens_on_challenge_event_shows_grouped_code_and_closes_on_clear", async () => {
     const { fake } = await openApp();
     expect(screen.queryByRole("dialog")).toBeNull();
-    await fake.emit("pairingChallengeEvent", challenge());
+    // The event only nudges: the window reads the code with `browser_pairing_status`.
+    fake.state.browser.pairing = challenge();
+    await fake.emit("pairingChallengeEvent", null);
     const dialog = await screen.findByRole("dialog", { name: "Pairing code" });
     expect(within(dialog).getByText("123 456")).toBeTruthy();
     expect(within(dialog).getByText("Chrome (Work)")).toBeTruthy();
     expect(within(dialog).getByText(/It expires in \d+ seconds\./)).toBeTruthy();
     // The code is shown, not announced.
     expect(dialog.querySelector("[aria-live]")).toBeNull();
+    fake.state.browser.pairing = null;
     await fake.emit("pairingChallengeEvent", null);
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
@@ -43,7 +46,7 @@ describe("PairingCodeSheet", () => {
   it("pairing_sheet_cancel_calls_browser_pairing_cancel", async () => {
     const { fake } = await openApp();
     fake.state.browser.pairing = challenge();
-    await fake.emit("pairingChallengeEvent", challenge());
+    await fake.emit("pairingChallengeEvent", null);
     await userEvent.setup().click(await screen.findByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(calls(fake, "browserPairingCancel")).toHaveLength(1));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -52,7 +55,7 @@ describe("PairingCodeSheet", () => {
   it("pairing_code_not_present_in_any_store_after_close", async () => {
     const { fake } = await openApp();
     fake.state.browser.pairing = challenge();
-    await fake.emit("pairingChallengeEvent", challenge());
+    await fake.emit("pairingChallengeEvent", null);
     await screen.findByRole("dialog", { name: "Pairing code" });
     // The status a window fetches meanwhile never keeps the code either.
     await browser.refresh();
@@ -69,7 +72,7 @@ describe("PairingCodeSheet", () => {
     // The backend still lists the challenge, but its own deadline has passed (the clear event is late).
     const soon = challenge({ expiresAt: Date.now() + 1200 });
     fake.state.browser.pairing = soon;
-    await fake.emit("pairingChallengeEvent", soon);
+    await fake.emit("pairingChallengeEvent", null);
     await screen.findByRole("dialog", { name: "Pairing code" });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), { timeout: 4000 });
     expect(calls(fake, "browserPairingStatus").length).toBeGreaterThanOrEqual(2);
@@ -79,9 +82,11 @@ describe("PairingCodeSheet", () => {
   it("the countdown reaching zero shows a refreshed challenge", async () => {
     const { fake } = await openApp();
     const soon = challenge({ expiresAt: Date.now() + 1200 });
-    fake.state.browser.pairing = challenge({ code: "999888", expiresAt: Date.now() + 60_000 });
-    await fake.emit("pairingChallengeEvent", soon);
+    fake.state.browser.pairing = soon;
+    await fake.emit("pairingChallengeEvent", null);
     expect(await screen.findByText("123 456")).toBeTruthy();
+    // Refreshed meanwhile: the countdown reaching zero reads it again.
+    fake.state.browser.pairing = challenge({ code: "999888", expiresAt: Date.now() + 60_000 });
     expect(await screen.findByText("999 888", undefined, { timeout: 4000 })).toBeTruthy();
   });
 
@@ -89,7 +94,7 @@ describe("PairingCodeSheet", () => {
     const { fake } = await openApp();
     navigation.openEditor(await api.entryNewModel("login", null), "browser");
     fake.state.browser.pairing = challenge();
-    await fake.emit("pairingChallengeEvent", challenge());
+    await fake.emit("pairingChallengeEvent", null);
     await screen.findByRole("dialog", { name: "Pairing code" });
     await api.vaultLock();
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Pairing code" })).toBeNull());
@@ -102,7 +107,7 @@ describe("PairingCodeSheet", () => {
   it("a_backdrop_click_does_not_cancel_and_focus_is_not_on_a_button", async () => {
     const { fake } = await openApp();
     fake.state.browser.pairing = challenge();
-    await fake.emit("pairingChallengeEvent", challenge());
+    await fake.emit("pairingChallengeEvent", null);
     const dialog = await screen.findByRole("dialog", { name: "Pairing code" });
     await waitFor(() => expect(document.activeElement).toBe(dialog));
     const user = userEvent.setup();

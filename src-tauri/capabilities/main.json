@@ -30,7 +30,7 @@
     "allow-browser-pairing-status",
     "allow-browser-proposal-take",
     "allow-device-unlock-consume-extension-request",
-    "allow-device-unlock-status",
+    "allow-device-unlock-offer",
     "allow-draft-clear",
     "allow-draft-save",
     "allow-draft-versions",

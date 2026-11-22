@@ -46,8 +46,8 @@
   {/if}
   <Button disabled={busy || session.status.state !== "unlocked"} onclick={() => void run(choose)}>{t("Choose folder…")}</Button>
   {#if sync.status.state !== "off"}
-    <Button disabled={busy || sync.status.state === "syncing" || session.status.state !== "unlocked"} onclick={() => void run(async () => { sync.status = await api.syncNow(); })}>{t("Sync now")}</Button>
-    <Button disabled={busy} onclick={() => void run(async () => { await api.syncDisconnectSecondary(); sync.status = { state: "off" }; await settings.load(); })}>{t("Stop syncing")}</Button>
+    <Button disabled={busy || sync.status.state === "syncing" || session.status.state !== "unlocked"} onclick={() => void run(async () => { const epoch = session.lockEpoch; sync.adopt(await api.syncNow(), epoch); })}>{t("Sync now")}</Button>
+    <Button disabled={busy} onclick={() => void run(async () => { const epoch = session.lockEpoch; await api.syncDisconnectSecondary(); if (sync.adopt({ state: "off" }, epoch)) await settings.load(); })}>{t("Stop syncing")}</Button>
   {/if}
   <p>{t("Stopping sync keeps the files in that folder.")}</p>
   {#if error}<p role="alert">{error}</p>{/if}

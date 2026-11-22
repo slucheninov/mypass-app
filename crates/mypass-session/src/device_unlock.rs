@@ -109,6 +109,27 @@ pub struct DeviceUnlockStatus {
     pub reason: Option<OfferBlock>,
 }
 
+/// What an unlock screen needs to offer device unlock, and nothing more: no toggles, enrolment or
+/// block reason. Served in any session state and read without side effects.
+#[derive(Serialize, specta::Type, Clone, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceUnlockOffer {
+    /// The unlock screen may show the device-unlock button now.
+    pub can_offer_now: bool,
+    /// The button label or the existing master-password prompt.
+    pub label: Option<DeviceUnlockLabel>,
+}
+
+/// The text the unlock screen shows for device unlock.
+#[derive(Serialize, specta::Type, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum DeviceUnlockLabel {
+    TouchId,
+    MacPassword,
+    TouchIdOrMacPassword,
+    MasterPasswordRequired,
+}
+
 /// When device unlock and the master password were last used for one vault (Unix seconds).
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -511,16 +532,67 @@ impl DeviceUnlockService {
         lock(&self.0.config)
     }
 
-    /// The status for the current vault; runs [`DeviceUnlockService::reconcile`] first unless a
-    /// configuration change or a device unlock is running (that one settles the state itself), so
-    /// the status never waits for a KDF or a Keychain call of another surface.
+    /// The status for the current vault. While the vault is unlocked it runs
+    /// [`DeviceUnlockService::reconcile`] first unless a configuration change or a device unlock
+    /// is running (that one settles the state itself), so the status never waits for a KDF or a
+    /// Keychain call of another surface. While it is not, nothing is written: a missing
+    /// enrolment only shows as `NotEnrolled`, and the toggles heal on the next unlocked read.
     pub fn status(&self) -> DeviceUnlockStatus {
-        match self.0.config.try_lock() {
-            Ok(mut config) => self.reconcile_locked(&mut config),
-            Err(TryLockError::Poisoned(p)) => self.reconcile_locked(&mut p.into_inner()),
-            Err(TryLockError::WouldBlock) => {}
+        if let Ok(incarnation) = self.0.session.unlocked_incarnation() {
+            self.try_reconcile(incarnation);
         }
         self.status_view()
+    }
+
+    /// The gated Security pane read, bound to the session that requested it.
+    pub fn status_for(&self, incarnation: u64) -> Result<DeviceUnlockStatus, ApiError> {
+        self.check_incarnation(incarnation)?;
+        self.try_reconcile(incarnation);
+        let status = self.status_view();
+        self.check_incarnation(incarnation)?;
+        Ok(status)
+    }
+
+    fn check_incarnation(&self, incarnation: u64) -> Result<(), ApiError> {
+        match self.0.session.unlocked_incarnation()? {
+            current if current == incarnation => Ok(()),
+            _ => Err(SessionError::Locked.into()),
+        }
+    }
+
+    fn try_reconcile(&self, incarnation: u64) {
+        match self.0.config.try_lock() {
+            Ok(mut config) => self.reconcile_locked(&mut config, incarnation),
+            Err(TryLockError::Poisoned(p)) => {
+                self.reconcile_locked(&mut p.into_inner(), incarnation)
+            }
+            Err(TryLockError::WouldBlock) => {}
+        }
+    }
+
+    /// What an unlock screen shows (see [`DeviceUnlockOffer`]). Read-only in every session state.
+    pub fn offer(&self) -> DeviceUnlockOffer {
+        let status = self.status_view();
+        let label = if status.can_offer_now {
+            Some(
+                match (status.touch_id_enabled, status.mac_password_enabled) {
+                    (true, true) => DeviceUnlockLabel::TouchIdOrMacPassword,
+                    (true, false) => DeviceUnlockLabel::TouchId,
+                    _ => DeviceUnlockLabel::MacPassword,
+                },
+            )
+        } else if matches!(
+            status.reason,
+            Some(OfferBlock::DeviceWindowExpired | OfferBlock::AccountWindowExpired)
+        ) {
+            Some(DeviceUnlockLabel::MasterPasswordRequired)
+        } else {
+            None
+        };
+        DeviceUnlockOffer {
+            can_offer_now: status.can_offer_now,
+            label,
+        }
     }
 
     /// The status, without reconciling.
@@ -579,10 +651,12 @@ impl DeviceUnlockService {
     /// the biometrics changed, the Keychain was reset, a new Mac), turns both toggles off. Never
     /// prompts and never fails; an error from the platform leaves the toggles as they are.
     pub fn reconcile(&self) {
-        self.reconcile_locked(&mut self.config());
+        if let Ok(incarnation) = self.0.session.unlocked_incarnation() {
+            self.reconcile_locked(&mut self.config(), incarnation);
+        }
     }
 
-    fn reconcile_locked(&self, config: &mut ConfigState) {
+    fn reconcile_locked(&self, config: &mut ConfigState, incarnation: u64) {
         let s = self.0.settings.get();
         let Some(mode) = mode_for_toggles(s.unlock_touch_id_enabled, s.unlock_mac_password_enabled)
         else {
@@ -592,8 +666,10 @@ impl DeviceUnlockService {
             return;
         };
         if self.0.platform.is_enrolled(mode, &id) == Ok(false) {
-            config.bump();
-            let _ = self.0.settings.set_device_unlock_toggles(false, false);
+            let _ = self.0.session.configure_if_incarnation(incarnation, || {
+                config.bump();
+                self.0.settings.set_device_unlock_toggles(false, false)
+            });
         }
     }
 
@@ -642,47 +718,80 @@ impl DeviceUnlockService {
         touch_id: bool,
         mac_password: bool,
     ) -> Result<DeviceUnlockStatus, ApiError> {
+        self.configure_inner(None, password, touch_id, mac_password)
+    }
+
+    /// [`DeviceUnlockService::configure`] for the settings window: every toggle write, switching
+    /// off included, commits only while the session is still the unlocked `incarnation` the
+    /// command's gate saw. A lock (or a lock and a new unlock) in between refuses with `Locked`
+    /// before anything is changed or forgotten.
+    pub fn configure_for(
+        &self,
+        incarnation: u64,
+        password: Option<SecretString>,
+        touch_id: bool,
+        mac_password: bool,
+    ) -> Result<DeviceUnlockStatus, ApiError> {
+        self.configure_inner(Some(incarnation), password, touch_id, mac_password)
+    }
+
+    fn configure_inner(
+        &self,
+        expected: Option<u64>,
+        password: Option<SecretString>,
+        touch_id: bool,
+        mac_password: bool,
+    ) -> Result<DeviceUnlockStatus, ApiError> {
         refuse_main_thread()?;
         let mut config = self.config();
-        // Any configure call supersedes a device prompt that is still waiting.
+        if let Some(incarnation) = expected {
+            self.check_incarnation(incarnation)?;
+        }
+        // A configure call in this session supersedes a device prompt that is still waiting.
         config.bump();
-        self.configure_locked(&mut config, password, touch_id, mac_password)?;
-        self.reconcile_locked(&mut config);
+        self.configure_locked(&mut config, expected, password, touch_id, mac_password)?;
         Ok(self.status_view())
     }
 
     fn configure_locked(
         &self,
         config: &mut ConfigState,
+        expected: Option<u64>,
         password: Option<SecretString>,
         touch_id: bool,
         mac_password: bool,
     ) -> Result<(), ApiError> {
-        let binding = if mode_for_toggles(touch_id, mac_password).is_some() {
-            Some(self.0.session.identity_with_password()?)
-        } else {
-            None
+        let Some(mode) = mode_for_toggles(touch_id, mac_password) else {
+            let id = self.0.session.vault_id();
+            match expected {
+                Some(incarnation) => self
+                    .0
+                    .session
+                    .configure_if_incarnation(incarnation, || {
+                        self.0.settings.set_device_unlock_toggles(false, false)
+                    })
+                    .ok_or_else(|| ApiError::from(SessionError::Locked))?,
+                None => self.0.settings.set_device_unlock_toggles(false, false),
+            }?;
+            if let Some(id) = id {
+                self.0.platform.forget(&id)?;
+            }
+            return Ok(());
         };
-        self.reconcile_locked(config);
+        // Bind the id and password in one snapshot before any platform call.
+        let (incarnation, id, session_password) = self.0.session.identity_with_password()?;
+        if expected.is_some_and(|expected| expected != incarnation) {
+            return Err(SessionError::Locked.into());
+        }
+        self.reconcile_locked(config, incarnation);
         let current = self.0.settings.get();
         let current_mode = mode_for_toggles(
             current.unlock_touch_id_enabled,
             current.unlock_mac_password_enabled,
         );
-        let Some(mode) = mode_for_toggles(touch_id, mac_password) else {
-            let toggles = self.0.settings.set_device_unlock_toggles(false, false);
-            if let Some(id) = self.0.session.vault_id() {
-                self.0.platform.forget(&id)?;
-            }
-            toggles?;
-            return Ok(());
-        };
         if self.0.platform.availability() == DeviceUnlockAvailability::Unavailable {
             return Err(PlatformError::DeviceUnlockUnavailable.into());
         }
-        // `Locked` / `NoVault` before anything is touched. The id and the password copy come
-        // from one session snapshot, so they always belong to the same vault.
-        let (incarnation, id, session_password) = binding.ok_or_else(superseded)?;
         let check_current = || {
             if self.0.session.is_incarnation(incarnation) {
                 Ok(())
@@ -765,12 +874,11 @@ impl DeviceUnlockService {
     pub fn unlock_with_device(&self, reason: &str) -> Result<(), ApiError> {
         refuse_main_thread()?;
         let (binding, claim) = {
-            let mut config = self.config();
+            let config = self.config();
             self.0.session.vault_id().ok_or(SessionError::NoVault)?;
             if self.0.session.is_unlocked() {
                 return Ok(());
             }
-            self.reconcile_locked(&mut config);
             let status = self.status_view();
             if !status.available {
                 return Err(PlatformError::DeviceUnlockUnavailable.into());
@@ -1022,6 +1130,7 @@ mod service_tests {
         fake: Arc<FakeDeviceUnlock>,
         on_unlock: Mutex<Option<Hook>>,
         on_availability: Mutex<Option<Hook>>,
+        on_is_enrolled: Mutex<Option<Hook>>,
     }
 
     impl Hooked {
@@ -1044,7 +1153,9 @@ mod service_tests {
             mode: DeviceUnlockMode,
             vault_id: &str,
         ) -> mypass_platform::PlatformResult<bool> {
-            self.fake.is_enrolled(mode, vault_id)
+            let result = self.fake.is_enrolled(mode, vault_id);
+            Self::run(&self.on_is_enrolled);
+            result
         }
         fn enroll(
             &self,
@@ -1095,6 +1206,7 @@ mod service_tests {
             fake: fake.clone(),
             on_unlock: Mutex::new(None),
             on_availability: Mutex::new(None),
+            on_is_enrolled: Mutex::new(None),
         });
         let requests = UnlockRequestState::new(scheduler.clone());
         let service = DeviceUnlockService::new(
@@ -1438,6 +1550,32 @@ mod service_tests {
         assert!(!f.enrolled(DeviceUnlockMode::Biometrics));
     }
 
+    /// Switching off through the settings window is bound to the session its gate saw: after a
+    /// lock, or a lock and a new unlock, nothing is changed or forgotten.
+    #[test]
+    fn switching_off_for_an_earlier_session_changes_nothing() {
+        let f = fx();
+        f.enable(true, false);
+        let incarnation = f.session.unlocked_incarnation().unwrap();
+        f.lock();
+        let refused = f.service.configure_for(incarnation, None, false, false);
+        assert_eq!(code(refused), ErrorCode::Locked);
+        assert_eq!(f.toggles(), (true, false));
+        assert!(f.enrolled(DeviceUnlockMode::Biometrics));
+        f.session.unlock(pw("pw")).unwrap();
+        let stale = f.service.configure_for(incarnation, None, false, false);
+        assert_eq!(code(stale), ErrorCode::Locked);
+        let stale_on = f.service.configure_for(incarnation, None, true, true);
+        assert_eq!(code(stale_on), ErrorCode::Locked);
+        assert_eq!(f.toggles(), (true, false));
+        assert!(f.enrolled(DeviceUnlockMode::Biometrics));
+        let current = f.session.unlocked_incarnation().unwrap();
+        f.service
+            .configure_for(current, None, false, false)
+            .unwrap();
+        assert_eq!(f.toggles(), (false, false));
+    }
+
     /// R16: enrolment is per mode, so a mode change re-enrols the new mode from the session's
     /// password (no prompt for it) and forgets the old one.
     #[test]
@@ -1491,13 +1629,65 @@ mod service_tests {
     fn reconcile_turns_toggles_off_when_item_missing_without_prompting() {
         let f = fx();
         f.enable(true, true);
-        f.lock();
         f.fake.forget(&f.id()).unwrap();
         let st = f.service.status();
         assert_eq!(f.toggles(), (false, false));
         assert_eq!(st.reason, Some(OfferBlock::Disabled));
         assert_eq!(f.fake.evaluation_count(), 0);
         assert_eq!(f.fake.presence_count(), 0);
+    }
+
+    /// While the vault is not unlocked no read writes a setting: the status and the offer show a
+    /// missing enrolment, and the toggles heal on the first unlocked status read.
+    #[test]
+    fn reads_while_locked_write_nothing() {
+        let f = fx();
+        f.enable(true, true);
+        f.lock();
+        f.fake.forget(&f.id()).unwrap();
+        let offer = f.service.offer();
+        assert!(!offer.can_offer_now);
+        assert_eq!(offer.label, None);
+        assert_eq!(f.service.status().reason, Some(OfferBlock::NotEnrolled));
+        assert_eq!(f.toggles(), (true, true));
+        f.session.unlock(pw("pw")).unwrap();
+        f.service.status();
+        assert_eq!(f.toggles(), (false, false));
+    }
+
+    #[test]
+    fn a_status_read_that_locks_during_reconcile_does_not_persist() {
+        let f = fx();
+        f.enable(true, true);
+        f.fake.forget(&f.id()).unwrap();
+        let session = f.session.clone();
+        *f.hooks.on_is_enrolled.lock().unwrap() = Some(Box::new(move || {
+            session.lock(LockReason::Manual);
+        }));
+        f.service.status();
+        assert_eq!(f.toggles(), (true, true));
+    }
+
+    /// The offer carries only what the unlock screen renders: whether to show the button, its
+    /// label. No toggles, enrolment or block reason.
+    #[test]
+    fn the_offer_names_the_method_and_nothing_else() {
+        let f = fx();
+        f.enable(true, false);
+        f.lock();
+        let offer = f.service.offer();
+        assert!(offer.can_offer_now);
+        assert_eq!(offer.label, Some(DeviceUnlockLabel::TouchId));
+        let json = serde_json::to_value(&offer).unwrap();
+        let keys: Vec<_> = json.as_object().unwrap().keys().cloned().collect();
+        assert_eq!(keys, ["canOfferNow", "label"]);
+        f.session.unlock(pw("pw")).unwrap();
+        f.service.configure(None, true, true).unwrap();
+        f.lock();
+        assert_eq!(
+            f.service.offer().label,
+            Some(DeviceUnlockLabel::TouchIdOrMacPassword)
+        );
     }
 
     #[test]
@@ -1710,7 +1900,7 @@ mod service_tests {
 
     #[test]
     fn biometric_change_invalidates_biometrics_only_enrollment() {
-        // Found silently by reconcile: no prompt, toggles off.
+        // A missing enrolment blocks the prompt. An unlocked Security read heals the toggles.
         let f = fx();
         f.enable(true, false);
         f.lock();
@@ -1720,8 +1910,11 @@ mod service_tests {
             ErrorCode::InvalidInput
         );
         assert_eq!(f.fake.evaluation_count(), 0);
-        assert_eq!(f.toggles(), (false, false));
+        assert_eq!(f.toggles(), (true, false));
         assert!(!f.session.is_unlocked());
+        f.session.unlock(pw("pw")).unwrap();
+        assert!(!f.service.status().touch_id_enabled);
+        assert_eq!(f.toggles(), (false, false));
         // Found only at evaluation (a real Keychain reports it then): forgotten, `Invalidated`.
         let f = fx();
         f.enable(true, false);

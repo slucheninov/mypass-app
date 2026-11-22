@@ -48,7 +48,9 @@
     else void configure(touchId, macPassword);
   }
   async function saveWindow(patch: Parameters<typeof settings.update>[0]) {
-    try { await settings.update(patch); await device.refresh(); } catch (e) { error = errorMessage(e); }
+    const epoch = session.lockEpoch;
+    try { await settings.update(patch); if (epoch === session.lockEpoch) await device.refresh(); }
+    catch (e) { if (epoch === session.lockEpoch) error = errorMessage(e); }
   }
 </script>
 <section data-testid="device-unlock-slot">

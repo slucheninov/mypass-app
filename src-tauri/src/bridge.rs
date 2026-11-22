@@ -74,7 +74,8 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 /// What the bridge tells the webview, and the one window it can open. A seam so tests record it.
 pub trait BridgeEvents: Send + Sync {
-    /// The pairing challenge (`None`: gone). Main window only.
+    /// The pairing challenge changed (`None`: gone). The app only nudges the main window, which
+    /// re-reads the code itself.
     fn pairing_challenge(&self, challenge: Option<PairingChallengeDto>);
     /// Paired browsers, diagnostics or registration changed. May broadcast.
     fn bridge_changed(&self);
@@ -96,9 +97,11 @@ pub trait BridgeEvents: Send + Sync {
 pub struct TauriBridgeEvents(pub AppHandle);
 
 impl BridgeEvents for TauriBridgeEvents {
-    fn pairing_challenge(&self, challenge: Option<PairingChallengeDto>) {
+    fn pairing_challenge(&self, _challenge: Option<PairingChallengeDto>) {
+        // Only a nudge: the code never travels in an event (other webviews' `Any` listeners
+        // receive targeted events too); the main window reads it with `browser_pairing_status`.
         // A window that is gone is not an error of the bridge.
-        let _ = PairingChallengeEvent(challenge).emit_to(&self.0, MAIN);
+        let _ = PairingChallengeEvent.emit_to(&self.0, MAIN);
     }
     fn bridge_changed(&self) {
         let _ = BridgeChangedEvent.emit(&self.0);
@@ -116,7 +119,7 @@ impl BridgeEvents for TauriBridgeEvents {
         let _ = crate::commands::app::open_settings(&self.0, pane);
     }
     fn settings_changed(&self, settings: Settings) {
-        let _ = SettingsChanged(settings).emit(&self.0);
+        let _ = SettingsChanged::of(&settings).emit(&self.0);
     }
 }
 
@@ -271,7 +274,7 @@ impl BridgeUi for TauriBridgeUi {
 
     fn passkey_proxy_changed(&self, _enabled: bool) {
         // The whole stored snapshot, not just the flag: the settings store of every window
-        // replaces its copy with what `SettingsChanged` carries (one source of truth, no event
+        // re-reads the settings after `SettingsChanged` (one source of truth, no event
         // of its own for this one field). Read and emitted under the gate `settings_update`
         // holds for its read, write and emit, so the two emitters cannot interleave and leave a
         // window with an older snapshot than the store (each one reads what is stored when it

@@ -570,8 +570,22 @@ impl AppCore {
         ))
     }
 
+    /// Removes `path` from the recent list (the unlock screen offers this in any session state).
+    /// Only while the vault is unlocked does it also clear the startup vault when that is `path`:
+    /// a locked or vault-less app changes no other setting.
     pub fn vault_forget(&self, path: &str) -> Result<(), ApiError> {
-        self.settings.forget_vault(path);
+        let cleared = self
+            .session
+            .unlocked_incarnation()
+            .ok()
+            .and_then(|incarnation| {
+                self.session.configure_if_incarnation(incarnation, || {
+                    self.settings.forget_vault(path, true)
+                })
+            });
+        if cleared.is_none() {
+            self.settings.forget_vault(path, false);
+        }
         Ok(())
     }
 
@@ -990,9 +1004,39 @@ impl AppCore {
     /// Applies the patch and re-arms the idle timer with the new timeout.
     pub fn settings_update(&self, patch: SettingsPatch) -> Result<Settings, ApiError> {
         let updated = self.settings.update(patch)?;
+        self.settings_applied();
+        Ok(updated)
+    }
+
+    /// [`AppCore::settings_update`] for the settings window: the patch is written only while the
+    /// session is still the unlocked `incarnation` its gate saw. The check and the write happen
+    /// under the session lock, so a lock (or a lock and a new unlock) that lands after the gate
+    /// refuses the update with `Locked` and nothing is written.
+    pub fn settings_update_for(
+        &self,
+        incarnation: u64,
+        patch: SettingsPatch,
+    ) -> Result<Settings, ApiError> {
+        let updated = self
+            .session
+            .configure_if_incarnation(incarnation, || self.settings.update(patch))
+            .ok_or_else(|| self.not_current())??;
+        self.settings_applied();
+        Ok(updated)
+    }
+
+    fn settings_applied(&self) {
         self.autolock.settings_changed();
         self.update.enabled_changed();
-        Ok(updated)
+    }
+
+    /// The refusal of a write whose unlocked session is gone: `NoVault`, or `Locked` (also when
+    /// the vault was unlocked again since, which is another session).
+    pub(crate) fn not_current(&self) -> ApiError {
+        match self.session.unlocked_incarnation() {
+            Err(SessionError::NoVault) => SessionError::NoVault.into(),
+            _ => SessionError::Locked.into(),
+        }
     }
 
     // ---- backups ----
@@ -1306,12 +1350,14 @@ impl AppCore {
     }
 
     /// Stops syncing and forgets the folder; the copy in it is left as it is.
-    pub fn sync_disconnect_secondary(&self) -> Result<(), ApiError> {
+    /// Stops the secondary sync, only while the session is still the unlocked `incarnation` the
+    /// caller's gate saw (`Locked` and nothing changed otherwise).
+    pub fn sync_disconnect_secondary(&self, incarnation: u64) -> Result<(), ApiError> {
         let _gate = self
             .migration_gate
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.secondary.disconnect()
+        self.secondary.disconnect(incarnation)
     }
 
     // ---- CSV import ----
@@ -2021,6 +2067,22 @@ mod tests {
         assert!(recent[0].exists);
         f.core.vault_forget(&recent[0].path).unwrap();
         assert!(f.core.vault_recent().unwrap().is_empty());
+        // Removing a recent vault while locked changes no other setting: the startup vault stays.
+        f.core.settings.remember_vault(&recent[0].path);
+        f.core
+            .settings_update(SettingsPatch {
+                vault_path: Some(Some(recent[0].path.clone())),
+                ..SettingsPatch::default()
+            })
+            .unwrap();
+        f.core.vault_lock().unwrap();
+        f.core.vault_forget(&recent[0].path).unwrap();
+        assert!(f.core.vault_recent().unwrap().is_empty());
+        assert_eq!(
+            f.core.settings_get().unwrap().vault_path,
+            Some(recent[0].path.clone())
+        );
+        f.core.vault_unlock(pw("pw")).unwrap();
         let roots = vec![f.dir.path().to_path_buf()];
         let found = f.core.vault_find_files(roots).unwrap();
         assert_eq!(found.len(), 1);
@@ -2832,7 +2894,9 @@ mod tests {
             "{status:?}"
         );
         assert!(folder.join("v.kdbx").is_file());
-        f.core.sync_disconnect_secondary().unwrap();
+        f.core
+            .sync_disconnect_secondary(f.core.session.unlocked_incarnation().unwrap())
+            .unwrap();
         assert_eq!(f.core.sync_status().unwrap(), SecondaryStatus::Off);
         assert_eq!(f.core.settings.get().secondary_folder, None);
         assert!(folder.join("v.kdbx").is_file(), "the copy is left in place");

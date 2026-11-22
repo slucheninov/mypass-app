@@ -64,9 +64,12 @@ where
 }
 
 /// `Locked` / `NoVault` unless the vault is open: checked before a dialog opens or a grant is
-/// consumed, so a locked app never asks the user for a file.
-pub fn ensure_unlocked(core: &mypass_session::AppCore) -> Result<(), ApiError> {
-    core.session.with_db(|_| ()).map_err(ApiError::from)
+/// consumed, so a locked app never asks the user for a file. Returns the unlocked session's
+/// incarnation: a command that writes later (on a worker, behind another lock) passes it to the
+/// write, which re-checks it at its commit point, so a lock, or a lock and a new unlock, landing
+/// in between refuses the write instead of letting it through.
+pub fn ensure_unlocked(core: &mypass_session::AppCore) -> Result<u64, ApiError> {
+    core.session.unlocked_incarnation().map_err(ApiError::from)
 }
 
 #[cfg(test)]

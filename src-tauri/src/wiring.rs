@@ -177,11 +177,13 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     core.clipboard
         .set_cleared_sink(Arc::new(EmitCleared(handle.clone())));
     let sync_handle = handle.clone();
-    core.secondary
-        .add_observer(Arc::new(move |status: &mypass_session::SecondaryStatus| {
+    core.secondary.add_observer(Arc::new(
+        move |_status: &mypass_session::SecondaryStatus| {
+            // Payload-free: every webview hears it; the settings window re-reads `sync_status`.
             // A window that is gone is not an error of the backend.
-            let _ = SyncStatusChanged(status.clone()).emit(&sync_handle);
-        }));
+            let _ = SyncStatusChanged.emit(&sync_handle);
+        },
+    ));
     let storage_handle = handle.clone();
     core.session
         .add_storage_observer(Arc::new(move |status: &mypass_session::StorageStatus| {

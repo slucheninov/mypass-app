@@ -16,7 +16,7 @@ const MAIN: &[&str] = &[
     "browser_pairing_status",
     "browser_proposal_take",
     "device_unlock_consume_extension_request",
-    "device_unlock_status",
+    "device_unlock_offer",
     "draft_clear",
     "draft_save",
     "draft_versions",
@@ -89,6 +89,7 @@ const SETTINGS: &[&str] = &[
     "browser_status",
     "browser_unregister_host",
     "device_unlock_configure",
+    "device_unlock_offer",
     "device_unlock_status",
     "settings_get",
     "settings_get_public",
@@ -116,7 +117,7 @@ const TRAY_PANEL: &[&str] = &[
     "app_quit",
     "app_record_activity",
     "app_show_main",
-    "device_unlock_status",
+    "device_unlock_offer",
     "entry_copy",
     "entry_recent",
     "entry_touch",
@@ -147,6 +148,7 @@ const SETTINGS_GATED: &[&str] = &[
     "browser_status",
     "browser_unregister_host",
     "device_unlock_configure",
+    "device_unlock_status",
     "settings_get",
     "settings_login_item_status",
     "settings_update",
@@ -172,8 +174,8 @@ const SETTINGS_UNGATED: &[(&str, &str)] = &[
         "the Unlock button of the locked placeholder",
     ),
     (
-        "device_unlock_status",
-        "the unlock screens of the main window and the tray panel offer Touch ID with it",
+        "device_unlock_offer",
+        "whether and how an unlock screen offers device unlock; read-only, no toggles or reason",
     ),
     (
         "settings_get_public",
@@ -372,6 +374,8 @@ fn gated_settings_commands_check_the_session_first() {
         } else {
             first
         };
+        // A command that writes later keeps the incarnation for its commit point.
+        let gate = gate.strip_prefix("let incarnation = ").unwrap_or(gate);
         assert!(
             gate.starts_with("super::ensure_unlocked(&") || gate.starts_with("ensure_unlocked(&"),
             "{name} must call ensure_unlocked first, found `{gate}`"
@@ -391,6 +395,36 @@ fn ungated_settings_commands_do_not_return_the_full_settings() {
         assert!(
             !signature_and_body.contains("settings_get()"),
             "{name} reads the full settings without the gate"
+        );
+    }
+}
+
+/// Main-window commands the unlock screen uses in any session state that touch settings: listing
+/// the recent vaults and removing one. Removal while not unlocked changes only that list (never
+/// the startup vault; see `AppCore::vault_forget`).
+const UNLOCK_SCREEN_SETTINGS_EXCEPTIONS: &[(&str, &str)] = &[
+    (
+        "vault_recent",
+        "the unlock and open screens list the recent vaults before any vault is unlocked",
+    ),
+    (
+        "vault_forget",
+        "the open screen removes a recent vault; while not unlocked only the list changes",
+    ),
+];
+
+#[test]
+fn the_unlock_screen_settings_exceptions_are_main_window_only_and_open() {
+    for (name, why) in UNLOCK_SCREEN_SETTINGS_EXCEPTIONS {
+        assert!(!why.is_empty());
+        for (label, commands) in window_commands() {
+            assert_eq!(commands.contains(name), label == "main", "{label}: {name}");
+        }
+        let body = command_body(name);
+        let body = body.split("\n}\n").next().unwrap();
+        assert!(
+            !body.contains("ensure_unlocked"),
+            "{name} is documented as open on the unlock screen"
         );
     }
 }

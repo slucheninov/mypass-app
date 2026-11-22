@@ -19,7 +19,12 @@ function publicPart(full: Settings_Serialize): PublicSettings {
  * The settings as one window sees them. The full settings (`value`) are read and kept only while
  * the vault is unlocked, as the backend serves them only then; a lock drops them. `public` (theme,
  * language, shortcut hints, the update flag) is what every window renders in any session state,
- * so a locked window still follows the appearance and language.
+ * so a locked window still follows the appearance and language. `SettingsChanged` carries only the
+ * public part: an unlocked window re-reads the full settings when it arrives.
+ *
+ * Every answer is tagged with the lock epoch it was asked in: one that arrives after a lock (or a
+ * lock and a new unlock) is dropped, and the public part is read again when the window leaves the
+ * unlocked state, so an optimistic theme or language that was never confirmed does not stay.
  */
 class SettingsStore {
   value = $state<Settings_Serialize | null>(null);
@@ -37,8 +42,8 @@ class SettingsStore {
     // Registered before the first await, so the session's first answer is never missed.
     this.#offSession?.();
     this.#offSession = session.onChange((next) => {
-      if (next === "unlocked") void this.load().catch(() => {});
-      else this.#drop();
+      if (next !== "unlocked") this.#drop();
+      void this.load().catch(() => {});
     });
     this.#subscribed ??= events.settingsChanged.listen((e) => this.#adoptEvent(e.payload)).then((off) => {
       this.#unlisten = off;
@@ -61,15 +66,15 @@ class SettingsStore {
   /** The full settings while unlocked, otherwise the public part only. */
   async load(): Promise<void> {
     const seq = ++this.#seq;
+    const epoch = session.lockEpoch;
     if (session.status.state === "unlocked") {
-      const epoch = session.lockEpoch;
       const next = await api.settingsGet();
       // A lock that landed meanwhile has the last word: nothing read before it is kept.
-      if (seq !== this.#seq || session.status.state !== "unlocked" || session.lockEpoch !== epoch) return;
+      if (seq !== this.#seq || !this.#current(epoch)) return;
       this.#adopt(next);
     } else {
       const next = await api.settingsGetPublic();
-      if (seq !== this.#seq) return;
+      if (seq !== this.#seq || epoch !== session.lockEpoch) return;
       this.#adoptPublic(next);
     }
   }
@@ -77,26 +82,32 @@ class SettingsStore {
   /** Sends a patch. Theme and language show at once; a failed update puts the old ones back. */
   async update(patch: SettingsPatch_Deserialize): Promise<void> {
     const before = this.value;
+    const epoch = session.lockEpoch;
     if (before && (patch.theme || patch.language)) {
       this.#applyAppearance(patch.theme ?? before.theme, patch.language ?? before.language);
     }
     try {
       const next = await api.settingsUpdate(patch);
+      // An answer from before a lock is not this session's: the lock already re-read the public part.
+      if (!this.#current(epoch)) return;
       this.#seq++;
-      if (session.status.state === "unlocked") this.#adopt(next);
-      else this.#adoptPublic(publicPart(next));
+      this.#adopt(next);
     } catch (e) {
-      // Revert only when nothing newer arrived meanwhile.
-      if (before && this.value === before) this.#applyAppearance(before.theme, before.language);
+      // Revert only when nothing newer arrived meanwhile; after a lock the public re-read decides.
+      if (before && this.value === before && this.#current(epoch)) this.#applyAppearance(before.theme, before.language);
       throw e;
     }
   }
 
-  /** A broadcast carries the full settings; a window that is not unlocked keeps only the public part. */
-  #adoptEvent(next: Settings_Serialize): void {
+  #current(epoch: number): boolean {
+    return session.status.state === "unlocked" && session.lockEpoch === epoch;
+  }
+
+  /** A broadcast carries the public part; an unlocked window re-reads the full settings. */
+  #adoptEvent(next: PublicSettings): void {
     this.#seq++;
-    if (session.status.state === "unlocked") this.#adopt(next);
-    else this.#adoptPublic(publicPart(next));
+    this.#adoptPublic(next);
+    if (session.status.state === "unlocked") void this.load().catch(() => {});
   }
 
   #adopt(next: Settings_Serialize): void {
@@ -109,7 +120,7 @@ class SettingsStore {
     this.#applyAppearance(next.theme, next.language);
   }
 
-  /** Forgets the full settings (lock, vault closed); the appearance stays as it is. */
+  /** Forgets the full settings (lock, vault closed); the caller re-reads the public part. */
   #drop(): void {
     this.#seq++;
     this.value = null;

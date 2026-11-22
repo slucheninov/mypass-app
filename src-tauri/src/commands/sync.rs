@@ -25,9 +25,9 @@ pub async fn sync_now(state: State<'_, AppState>) -> Result<SecondaryStatus, Api
 #[tauri::command]
 #[specta::specta]
 pub async fn sync_disconnect_secondary(state: State<'_, AppState>) -> Result<(), ApiError> {
-    super::ensure_unlocked(&state.0)?;
+    let incarnation = super::ensure_unlocked(&state.0)?;
     let core = state.0.clone();
-    blocking(move || core.sync_disconnect_secondary()).await
+    blocking(move || core.sync_disconnect_secondary(incarnation)).await
 }
 
 /// The kept vault copies, for display. Listing deletes nothing; while the vault is unlocked

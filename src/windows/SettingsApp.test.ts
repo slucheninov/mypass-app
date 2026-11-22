@@ -56,7 +56,7 @@ describe("SettingsApp", () => {
       "thirtyMinutes",
     );
     fake.state.settings = { ...fake.state.settings, autoLockIdleTimeout: "oneHour", lockOnScreenLock: false };
-    await fake.emit("settingsChanged", structuredClone(fake.state.settings));
+    await fake.changeSettings({});
     await waitFor(() =>
       expect((screen.getByRole("combobox", { name: "Lock after inactivity" }) as HTMLSelectElement).value).toBe("oneHour"),
     );
@@ -199,12 +199,13 @@ describe("SettingsApp while the vault is not unlocked", () => {
     expect(settings.value).toBeNull();
   });
 
-  it("ignores full settings broadcast while locked", async () => {
+  it("a settings broadcast while locked carries and reads nothing beyond the public part", async () => {
     const { fake } = await renderSettingsApp({ session: "locked" });
-    await fake.emit("settingsChanged", { ...structuredClone(fake.state.settings), clipboardClearSeconds: 45 });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await fake.changeSettings({ clipboardClearSeconds: 45, theme: "dark" });
+    await waitFor(() => expect(settings.public?.theme).toBe("dark"));
     expect(settings.value).toBeNull();
     expect(screen.queryByRole("tablist")).toBeNull();
+    expect(calls(fake, "settingsGet")).toHaveLength(0);
   });
 
   it("loads the panes after an unlock", async () => {

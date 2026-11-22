@@ -554,12 +554,12 @@ impl SettingsStore {
         let _ = self.persist(&guard);
     }
 
-    /// Removes `path` from the recent list and clears `vault_path` when it equals `path`.
-    /// Persisting is best effort.
-    pub fn forget_vault(&self, path: &str) {
+    /// Removes `path` from the recent list and, with `clear_startup`, clears `vault_path` when
+    /// it equals `path`. Persisting is best effort.
+    pub fn forget_vault(&self, path: &str, clear_startup: bool) {
         let mut guard = lock(&self.0.settings);
         guard.recent_vaults.retain(|p| p != path);
-        if guard.vault_path.as_deref() == Some(path) {
+        if clear_startup && guard.vault_path.as_deref() == Some(path) {
             guard.vault_path = None;
         }
         let _ = self.persist(&guard);
@@ -1201,11 +1201,16 @@ mod tests {
                 ..SettingsPatch::default()
             })
             .unwrap();
-        store.forget_vault("/a.kdbx");
+        store.forget_vault("/a.kdbx", true);
         let s = store.get();
         assert_eq!(s.recent_vaults, vec!["/b.kdbx".to_owned()]);
         assert_eq!(s.vault_path.as_deref(), Some("/b.kdbx"));
-        store.forget_vault("/b.kdbx");
+        store.forget_vault("/b.kdbx", false);
+        let s = store.get();
+        assert!(s.recent_vaults.is_empty());
+        assert_eq!(s.vault_path.as_deref(), Some("/b.kdbx"));
+        store.remember_vault("/b.kdbx");
+        store.forget_vault("/b.kdbx", true);
         let s = store.get();
         assert!(s.recent_vaults.is_empty());
         assert_eq!(s.vault_path, None);

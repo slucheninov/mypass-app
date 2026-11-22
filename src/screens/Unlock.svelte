@@ -22,7 +22,7 @@
     let off: (() => void) | undefined;
     const consume = async () => {
       if (await api.deviceUnlockConsumeExtensionRequest()) {
-        await device.refresh();
+        await device.refreshOffer();
         if (active) await device.unlock();
       }
     };

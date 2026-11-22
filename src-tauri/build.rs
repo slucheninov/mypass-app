@@ -63,6 +63,7 @@ fn main() {
         "browser_status",
         "device_unlock_configure",
         "device_unlock_consume_extension_request",
+        "device_unlock_offer",
         "device_unlock_status",
         "draft_clear",
         "draft_save",

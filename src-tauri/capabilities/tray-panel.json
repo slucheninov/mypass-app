@@ -11,7 +11,7 @@
     "allow-app-quit",
     "allow-app-record-activity",
     "allow-app-show-main",
-    "allow-device-unlock-status",
+    "allow-device-unlock-offer",
     "allow-entry-copy",
     "allow-entry-recent",
     "allow-entry-touch",

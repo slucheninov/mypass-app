@@ -565,7 +565,7 @@ describe("review fixes", () => {
     await user.type(field(), "1");
     expect(field().value).toBe("1");
     fake.state.settings = { ...fake.state.settings, theme: "dark" };
-    await fake.emit("settingsChanged", structuredClone(fake.state.settings));
+    await fake.changeSettings({});
     await waitFor(() => expect(settings.value?.theme).toBe("dark"));
     expect(field().value).toBe("1");
   });
@@ -576,7 +576,7 @@ describe("review fixes", () => {
       ...fake.state.settings,
       generator: { length: 33, lowercase: true, uppercase: true, digits: true, symbols: false },
     };
-    await fake.emit("settingsChanged", structuredClone(fake.state.settings));
+    await fake.changeSettings({});
     await waitFor(() => expect(field().value).toBe("33"));
     expect(screen.getByRole("switch", { name: "Symbols" }).getAttribute("aria-checked")).toBe("false");
   });

@@ -183,6 +183,7 @@ export const api = {
   vaultLocationProbe: wrap(commands.vaultLocationProbe),
   vaultLocationChange: wrap(commands.vaultLocationChange),
   deviceUnlockStatus: wrap(commands.deviceUnlockStatus),
+  deviceUnlockOffer: wrap(commands.deviceUnlockOffer),
   deviceUnlockConfigure: wrap(commands.deviceUnlockConfigure),
   deviceUnlockConsumeExtensionRequest: commands.deviceUnlockConsumeExtensionRequest,
   vaultUnlockDevice: wrap(commands.vaultUnlockDevice),

@@ -3,13 +3,13 @@
   import { t } from "../lib/i18n/index.svelte";
   import Button from "../lib/ui/Button.svelte";
   let { variant = "main" }: { variant?: "main" | "panel" } = $props();
-  const status = $derived(device.status);
+  const offer = $derived(device.offer);
 </script>
-{#if status?.available && status.canOfferNow}
+{#if offer?.canOfferNow && offer.label}
   <Button variant={variant === "main" ? "primary" : "plain"} disabled={device.pending} onclick={() => void device.unlock()}>
-    {status.touchIdEnabled && status.macPasswordEnabled ? t("Unlock with Touch ID or Mac password") : status.touchIdEnabled ? t("Unlock with Touch ID") : t("Unlock with Mac password")}
+    {offer.label === "touchIdOrMacPassword" ? t("Unlock with Touch ID or Mac password") : offer.label === "touchId" ? t("Unlock with Touch ID") : t("Unlock with Mac password")}
   </Button>
-{:else if status?.reason === "deviceWindowExpired" || status?.reason === "accountWindowExpired"}
+{:else if offer?.label === "masterPasswordRequired"}
   <p>{t("Enter your master password to use Touch ID again.")}</p>
 {/if}
 {#if device.error}<p role="alert">{device.error}</p>{/if}

@@ -62,6 +62,7 @@ pub fn commands() -> Commands<tauri::Wry> {
         browser::browser_status,
         browser::browser_unregister_host,
         device::device_unlock_status,
+        device::device_unlock_offer,
         device::device_unlock_configure,
         device::device_unlock_consume_extension_request,
         update::update_status,

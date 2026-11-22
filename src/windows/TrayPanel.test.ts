@@ -221,7 +221,7 @@ describe("tray panel, unlocked list", () => {
       await waitFor(() => expect(root.dataset.theme).toBe("dark"));
       await act(() => emit(TauriEvent.WINDOW_THEME_CHANGED, "light"));
       expect(root.dataset.theme).toBe("light");
-      await act(() => fake.emit("settingsChanged", { ...fake.state.settings, theme: "dark" }));
+      await act(() => fake.changeSettings({ theme: "dark" }));
       expect(root.dataset.theme).toBe("light");
     } finally {
       unmount();
