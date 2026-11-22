@@ -556,7 +556,10 @@ mod tests {
                 "opener:allow-open-url",
             ]
         );
-        assert_eq!(sorted("tray-panel"), ["core:event:default"]);
+        assert_eq!(
+            sorted("tray-panel"),
+            ["core:event:default", "core:window:allow-theme"]
+        );
         assert_eq!(
             sorted("settings"),
             [

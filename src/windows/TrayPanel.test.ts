@@ -1,3 +1,5 @@
+import { emit, TauriEvent } from "@tauri-apps/api/event";
+import { mockWindows } from "@tauri-apps/api/mocks";
 import { act, screen, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
@@ -207,6 +209,24 @@ describe("tray panel, unlocked list", () => {
       expect(calls(fake, "trayPanelFit")[0]?.args.height).toBeGreaterThan(0);
       expect(document.documentElement.dataset.material).toBe("solid");
     });
+  });
+
+  it("the panel uses its native window theme and follows native theme changes", async () => {
+    mockWindows("tray-panel");
+    const { fake, unmount } = await renderTrayPanel({
+      plugins: { "plugin:window|theme": () => "dark" },
+    }, (f) => { f.state.settings.theme = "light"; });
+    const root = document.documentElement;
+    try {
+      await waitFor(() => expect(root.dataset.theme).toBe("dark"));
+      await act(() => emit(TauriEvent.WINDOW_THEME_CHANGED, "light"));
+      expect(root.dataset.theme).toBe("light");
+      await act(() => fake.emit("settingsChanged", { ...fake.state.settings, theme: "dark" }));
+      expect(root.dataset.theme).toBe("light");
+    } finally {
+      unmount();
+    }
+    expect(root.dataset.theme).toBeUndefined();
   });
 
   it("the panel uses an opaque solid fallback, system font and system accent", () => {

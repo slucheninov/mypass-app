@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount, tick } from "svelte";
   import { api } from "../lib/api";
   import { events, type EntrySummary } from "../lib/bindings";
@@ -84,7 +85,27 @@
   onMount(() => {
     const root = document.documentElement;
     root.dataset.material = "solid";
+    // WebView2 shares its preferred colour scheme across the app's webviews.
+    // The tray follows its own native window theme.
+    root.dataset.theme = "light";
     let gone = false;
+    let offTheme: (() => void) | undefined;
+    void (async () => {
+      const win = getCurrentWindow();
+      let changed = false;
+      const unlisten = await win.onThemeChanged(({ payload }) => {
+        if (gone) return;
+        changed = true;
+        root.dataset.theme = payload;
+      });
+      if (gone) {
+        quietly(unlisten);
+        return;
+      }
+      offTheme = unlisten;
+      const theme = await win.theme();
+      if (!gone && !changed && theme) root.dataset.theme = theme;
+    })().catch(() => {});
     let frame = 0;
     const fit = () => {
       if (frame !== 0) return;
@@ -123,6 +144,8 @@
       observer?.disconnect();
       cancelAnimationFrame(frame);
       delete root.dataset.material;
+      delete root.dataset.theme;
+      if (offTheme) quietly(offTheme);
       if (off) quietly(off);
       offHidden();
       window.removeEventListener("blur", clearOnHide);
@@ -258,7 +281,6 @@
 
 <style>
   :global(html[data-material]) {
-    color-scheme: light dark;
     overflow-y: auto;
     scrollbar-width: thin;
   }

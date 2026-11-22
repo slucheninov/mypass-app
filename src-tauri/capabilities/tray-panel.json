@@ -5,6 +5,7 @@
   "windows": ["tray-panel"],
   "permissions": [
     "core:event:default",
+    "core:window:allow-theme",
     "allow-app-info",
     "allow-app-open-settings",
     "allow-app-quit",
