@@ -10,11 +10,13 @@ import { renderSettingsApp } from "./test/settingsApp";
 import { FIXTURE_MASTER_PASSWORD } from "./test/fixtures";
 import { expectNoAxeViolations } from "./test/axe";
 
-it("device unlock is offered without prompting on mount and presses once", async () => {
+// Touch ID first (automatic prompt, Touch ID view) is pinned by src/touchIdFirst.test.ts. With only
+// the Mac password enabled the screen stays as before: a button, no prompt on mount.
+it("mac password device unlock is offered without prompting on mount and presses once", async () => {
   const { fake, container } = await renderMainApp({ deviceUnlockAvailable: true }, f => {
-    Object.assign(f.state.device, { enrolled: true, touchIdEnabled: true, canOfferNow: true, reason: null });
+    Object.assign(f.state.device, { enrolled: true, macPasswordEnabled: true, canOfferNow: true, reason: null });
   });
-  const button = await screen.findByRole("button", { name: "Unlock with Touch ID" });
+  const button = await screen.findByRole("button", { name: "Unlock with Mac password" });
   expect(calls(fake, "vaultUnlockDevice")).toHaveLength(0);
   // The lock screen reads only the offer; the full status is gated behind an unlock.
   expect(calls(fake, "deviceUnlockOffer").length).toBeGreaterThan(0);
@@ -116,24 +118,48 @@ it("location picker probes and uses the refreshed token", async () => {
 it.each([
   [true, false, "Unlock with Touch ID"], [false, true, "Unlock with Mac password"], [true, true, "Unlock with Touch ID or Mac password"],
 ] as const)("device labels follow the enabled modes %s %s", async (touchIdEnabled, macPasswordEnabled, label) => {
-  await renderMainApp({ deviceUnlockAvailable: true }, f => Object.assign(f.state.device, { touchIdEnabled, macPasswordEnabled, canOfferNow: true }));
+  await renderMainApp({ deviceUnlockAvailable: true }, f => {
+    Object.assign(f.state.device, { touchIdEnabled, macPasswordEnabled, canOfferNow: true });
+    // Touch ID first prompts by itself; a cancel keeps the Touch ID view with its button.
+    f.handlers.vaultUnlockDevice = () => { throw { code: "cancelled", message: "" }; };
+  });
   expect(await screen.findByRole("button", { name: label })).toBeTruthy();
 });
-it("fresh extension unlock request prompts once; consumed false event does nothing", async () => {
+it("fresh extension unlock request uses an automatic biometric prompt", async () => {
   const { fake } = await renderMainApp({ deviceUnlockAvailable: true }, f => {
-    Object.assign(f.state.device, { touchIdEnabled: true, canOfferNow: true });
+    Object.assign(f.state.device, { touchIdEnabled: true, macPasswordEnabled: true, canOfferNow: true });
     f.state.extensionUnlockRequested = true;
   });
   await waitFor(() => expect(calls(fake, "vaultUnlockDevice")).toHaveLength(1));
+  expect(calls(fake, "vaultUnlockDevice")[0]?.args).toEqual({ reasonKey: "Unlock MyPass", automatic: true });
   await fake.emit("unlockRequestedEvent", null);
   expect(calls(fake, "vaultUnlockDevice")).toHaveLength(1);
 });
+it("a browser unlock request leaves the password form when only Mac password is available", async () => {
+  const { fake, unmount } = await renderMainApp({ deviceUnlockAvailable: true }, f => {
+    Object.assign(f.state.device, { macPasswordEnabled: true, canOfferNow: true, biometrics: false });
+  });
+  await screen.findByRole("button", { name: "Unlock with Mac password" });
+  fake.state.extensionUnlockRequested = true;
+  const reads = calls(fake, "deviceUnlockOffer").length;
+  await act(async () => {
+    await fake.emit("unlockRequestedEvent", null);
+    await waitFor(() => expect(calls(fake, "deviceUnlockOffer").length).toBeGreaterThan(reads));
+  });
+  await waitFor(() => expect(fake.state.extensionUnlockRequested).toBe(false));
+  try {
+    expect(calls(fake, "vaultUnlockDevice")).toHaveLength(0);
+    expect(screen.getByLabelText("Master password")).toBeTruthy();
+  } finally {
+    unmount();
+  }
+});
 it.each(["cancelled", "invalidated", "lockout"] as const)("device unlock %s keeps password fallback", async code => {
   const { fake } = await renderMainApp({ deviceUnlockAvailable: true }, f => {
-    Object.assign(f.state.device, { touchIdEnabled: true, canOfferNow: true });
+    Object.assign(f.state.device, { macPasswordEnabled: true, canOfferNow: true });
     f.handlers.vaultUnlockDevice = () => { throw { code, message: "untrusted backend text" }; };
   });
-  await userEvent.click(await screen.findByRole("button", { name: "Unlock with Touch ID" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Unlock with Mac password" }));
   await waitFor(() => expect(calls(fake, "vaultUnlockDevice")).toHaveLength(1));
   if (code === "cancelled") expect(screen.queryByRole("alert")).toBeNull();
   else expect((await screen.findByRole("alert")).textContent).toBe(code === "invalidated" ? "Device unlock was reset. Enter your master password." : "Too many attempts. Use your master password.");
@@ -142,10 +168,10 @@ it.each(["cancelled", "invalidated", "lockout"] as const)("device unlock %s keep
 it("pending device prompt ignores repeated presses", async () => {
   let release: (() => void) | undefined;
   const { fake } = await renderMainApp({ deviceUnlockAvailable: true }, f => {
-    Object.assign(f.state.device, { touchIdEnabled: true, canOfferNow: true });
+    Object.assign(f.state.device, { macPasswordEnabled: true, canOfferNow: true });
     f.handlers.vaultUnlockDevice = async () => { await new Promise<void>(resolve => release = resolve); return f.state.session; };
   });
-  const button = await screen.findByRole("button", { name: "Unlock with Touch ID" });
+  const button = await screen.findByRole("button", { name: "Unlock with Mac password" });
   await userEvent.dblClick(button);
   expect(calls(fake, "vaultUnlockDevice")).toHaveLength(1);
   expect((button as HTMLButtonElement).disabled).toBe(true);

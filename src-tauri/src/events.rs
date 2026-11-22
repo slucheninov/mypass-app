@@ -12,6 +12,10 @@ pub struct SessionChanged(pub SessionStatus);
 #[derive(Serialize, Deserialize, specta::Type, tauri_specta::Event, Clone, Debug)]
 pub struct VaultChanged;
 
+/// Device unlock attempts changed for the locked vault.
+#[derive(Serialize, Deserialize, specta::Type, tauri_specta::Event, Clone, Debug)]
+pub struct DeviceUnlockChanged;
+
 /// The save state changed.
 #[derive(Serialize, specta::Type, tauri_specta::Event, Clone, Debug)]
 pub struct SaveStateChanged(pub SaveStatus);

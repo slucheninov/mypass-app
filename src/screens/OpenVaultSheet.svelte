@@ -9,6 +9,7 @@
   import Modal from "../lib/ui/Modal.svelte";
   import PasswordField from "../lib/ui/PasswordField.svelte";
   import { fileNameOf, folderOf } from "./vault-status";
+  import VaultLocation from "./VaultLocation.svelte";
 
   let { path, onclose }: { path: string; onclose: () => void } = $props();
 
@@ -45,7 +46,7 @@
   <form id={formId} onsubmit={submit} aria-busy={busy}>
     {#if folder}
       <!-- One line, cut at the end; the full path is in the tooltip. -->
-      <span class="folder" title={folder}><Icon name="folder" size={13} /><span class="path">{folder}</span></span>
+      <span class="folder"><Icon name="folder" size={13} /><span class="path"><VaultLocation {path} /></span></span>
     {/if}
     <PasswordField
       bind:this={field}

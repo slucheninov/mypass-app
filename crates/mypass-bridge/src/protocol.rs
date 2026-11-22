@@ -372,6 +372,9 @@ pub enum Request {
     },
     UnlockWithDevice {
         token: String,
+        /// The popup started this prompt by itself on opening (Touch ID first).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        automatic: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pairing: Option<String>,
     },
@@ -448,11 +451,22 @@ pub enum Response {
         retry_after_secs: u64,
     },
     DeviceUnlockUnavailable,
+    /// The device prompt did not recognize the user; `device_failures` counts such prompts across
+    /// the app in this lock spell.
+    DeviceNotRecognized {
+        device_failures: u32,
+    },
     UnlockCancelled,
     UnlockInApp,
     UnlockOptions {
         device_unlock: bool,
         touch_id: bool,
+        #[serde(default)]
+        device_failures: u32,
+        #[serde(default)]
+        device_blocked: bool,
+        #[serde(default)]
+        device_prompt_in_flight: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         retry_after_secs: Option<u64>,
     },
@@ -893,6 +907,29 @@ mod unlock_protocol_tests {
     }
 
     #[test]
+    fn unlock_with_device_reads_the_optional_automatic_flag() {
+        let explicit: Request =
+            serde_json::from_value(json!({"type": "unlockWithDevice", "token": "t"})).unwrap();
+        assert!(matches!(
+            explicit,
+            Request::UnlockWithDevice {
+                automatic: false,
+                ..
+            }
+        ));
+        let wire = json!({"type": "unlockWithDevice", "token": "t", "automatic": true});
+        let automatic: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert!(matches!(
+            automatic,
+            Request::UnlockWithDevice {
+                automatic: true,
+                ..
+            }
+        ));
+        assert_eq!(serde_json::to_value(automatic).unwrap(), wire);
+    }
+
+    #[test]
     fn debug_of_unlock_with_password_never_contains_the_password() {
         let sentinel = "hunter2-\u{1f511}";
         let request = Request::UnlockWithPassword {
@@ -930,6 +967,10 @@ mod unlock_protocol_tests {
                 json!({"type": "deviceUnlockUnavailable"}),
             ),
             (
+                Response::DeviceNotRecognized { device_failures: 2 },
+                json!({"type": "deviceNotRecognized", "deviceFailures": 2}),
+            ),
+            (
                 Response::UnlockCancelled,
                 json!({"type": "unlockCancelled"}),
             ),
@@ -938,9 +979,13 @@ mod unlock_protocol_tests {
                 Response::UnlockOptions {
                     device_unlock: true,
                     touch_id: true,
+                    device_failures: 1,
+                    device_blocked: true,
+                    device_prompt_in_flight: true,
                     retry_after_secs: None,
                 },
-                json!({"type": "unlockOptions", "deviceUnlock": true, "touchId": true}),
+                json!({"type": "unlockOptions", "deviceUnlock": true, "touchId": true,
+                    "deviceFailures": 1, "deviceBlocked": true, "devicePromptInFlight": true}),
             ),
         ];
         for (response, wire) in cases {

@@ -51,7 +51,8 @@ impl Default for RelayOptions {
     fn default() -> Self {
         Self {
             connect_timeout: Duration::from_secs(5),
-            drain_timeout: Duration::from_secs(75),
+            // Allow the full device prompt, cancellation and vault open to finish.
+            drain_timeout: Duration::from_secs(135),
             max_frame: MAX_FRAME_BYTES,
         }
     }

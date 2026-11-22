@@ -233,7 +233,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       endpointStore: "developmentFile",
       canReinstallHost: true,
     },
-    device: { available: deviceUnlockAvailable, biometrics: deviceUnlockAvailable, enrolled: false, touchIdEnabled: false, macPasswordEnabled: false, canOfferNow: false, reason: "disabled" },
+    device: { available: deviceUnlockAvailable, biometrics: deviceUnlockAvailable, enrolled: false, touchIdEnabled: false, macPasswordEnabled: false, canOfferNow: false, reason: "disabled", deviceFailures: 0, deviceBlocked: false },
     extensionUnlockRequested: false,
     update: { status: { state: "idle" }, banner: null },
     browserReinstall: [],
@@ -294,7 +294,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
     shortcutShow: state.settings.shortcutShow,
     updateCheckEnabled: state.settings.updateCheckEnabled,
   });
-  /** Like Rust's `DeviceUnlockService::offer`: the button and its label, nothing more. */
+  /** Like Rust's `DeviceUnlockService::offer`: the button and the current unlock flow. */
   const deviceOffer = (): DeviceUnlockOffer_Serialize => {
     const d = state.device;
     const canOfferNow = d.available && d.canOfferNow;
@@ -302,7 +302,13 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       : d.touchIdEnabled && d.macPasswordEnabled ? "touchIdOrMacPassword" as const
         : d.touchIdEnabled ? "touchId" as const : "macPassword" as const;
     const expired = d.reason === "deviceWindowExpired" || d.reason === "accountWindowExpired";
-    return { canOfferNow, label: expired ? "masterPasswordRequired" : method };
+    return {
+      canOfferNow,
+      label: expired ? "masterPasswordRequired" : method,
+      touchIdAvailable: canOfferNow && d.biometrics && d.touchIdEnabled,
+      deviceFailures: d.deviceFailures,
+      deviceBlocked: d.deviceBlocked,
+    };
   };
   const findEntry = (id: string) => {
     const found = state.entries.find((e) => e.summary.id === id);
@@ -444,6 +450,9 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
   const pickedFiles = new Map<string, PickedFile>();
 
   const setSession = (next: SessionStatus_Serialize) => {
+    if (state.session.state !== next.state || state.session.vaultPath !== next.vaultPath) {
+      Object.assign(state.device, { deviceFailures: 0, deviceBlocked: false });
+    }
     state.session = next;
     publish("sessionChanged", structuredClone(next));
     return structuredClone(next);
@@ -474,6 +483,7 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       version: "0.0.0-test",
       os,
       deviceUnlockAvailable,
+      homeDir: os === "windows" ? "C:\\Users\\someone" : "/Users/someone",
     }),
     // Like Rust: taken at most once, and only while unlocked (locked, the request keeps waiting).
     appTakeNewEntry: () => {

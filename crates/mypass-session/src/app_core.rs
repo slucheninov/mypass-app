@@ -80,6 +80,8 @@ pub enum ErrorCode {
     /// The CSV file has no content.
     CsvEmpty,
     Cancelled,
+    // The device prompt rejected a finger or password.
+    AuthenticationFailed,
     Lockout,
     Invalidated,
     NotEnrolledOnDevice,
@@ -92,8 +94,7 @@ pub enum ErrorCode {
     MigrationSourceInvalid,
     MigrationSameFile,
     MigrationValidationFailed,
-    /// A retained vault copy was not deleted: the id is stale, or the copy no longer verifies
-    /// (`message` names the reason, such as `changed`, `liveVaultMissing` or `staleId`).
+    // The code covers stale IDs and copies that no longer verify. See the message for the reason.
     RetainedCopyRefused,
     Internal,
 }
@@ -155,6 +156,9 @@ impl From<PlatformError> for ApiError {
             PlatformError::Failed(m) => Self::new(C::Internal, m.clone()),
             PlatformError::SecretStoreTampered => Self::new(C::Internal, e.to_string()),
             PlatformError::Cancelled => Self::new(C::Cancelled, String::new()),
+            PlatformError::AuthenticationFailed => {
+                Self::new(C::AuthenticationFailed, String::new())
+            }
             PlatformError::Lockout => Self::new(C::Lockout, String::new()),
             PlatformError::Invalidated => Self::new(C::Invalidated, String::new()),
             PlatformError::NotEnrolledOnDevice => Self::new(C::NotEnrolledOnDevice, String::new()),
@@ -450,6 +454,7 @@ impl AppCore {
         AppInfo {
             version: env!("CARGO_PKG_VERSION").to_owned(),
             os: std::env::consts::OS.to_owned(),
+            home_dir: self.paths().home().to_string_lossy().into_owned(),
             device_unlock_available: self.platform.device_unlock.availability()
                 != DeviceUnlockAvailability::Unavailable,
         }
@@ -1563,6 +1568,10 @@ mod tests {
     fn platform_error_to_api_error_covers_device_unlock_variants() {
         let cases = [
             (PlatformError::Cancelled, ErrorCode::Cancelled),
+            (
+                PlatformError::AuthenticationFailed,
+                ErrorCode::AuthenticationFailed,
+            ),
             (PlatformError::Lockout, ErrorCode::Lockout),
             (PlatformError::Invalidated, ErrorCode::Invalidated),
             (
@@ -1920,6 +1929,7 @@ mod tests {
         let f = fx();
         let info = f.core.app_info();
         assert!(info.device_unlock_available, "the fake has Touch ID");
+        assert_eq!(info.home_dir, f.core.paths().home().to_string_lossy());
         assert_eq!(info.os, std::env::consts::OS);
         assert!(!info.version.is_empty());
         let unsupported = core_with(

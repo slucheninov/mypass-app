@@ -31,7 +31,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `src-tauri` (package `mypass-app`, lib `mypass_app_lib`) | implemented | The Tauri 2 app shell: the typed commands and events (`tauri-specta`), capabilities, native file dialogs, plugins, tray, global hotkeys, single instance, quit flow, native-side i18n; a workspace member listed explicitly |
 | `mypass-bridge` | implemented | Browser bridge protocol, codec, endpoint, relay and loopback server (`server` feature, off for the host); the passkey service (`passkeys`) |
 | `mypass-host` | implemented | Native messaging host binary; never links the session, core or KDBX crates |
-| `extension/` | implemented | The Chromium extension (Manifest V3 JavaScript, vendored `vendor/jsQR.js`), with its 58 Node suites in `extension/tests/`, run by `scripts/test-extension.sh`; its text lives in `extension/_locales/{en,uk,ru,de}/messages.json` (`chrome.i18n`, read through `shared/i18n.js`, `en` is the default locale), pinned by `tests/locales.test.js` |
+| `extension/` | implemented | The Chromium extension (Manifest V3 JavaScript, vendored `vendor/jsQR.js`), with its 59 Node suites in `extension/tests/`, run by `scripts/test-extension.sh`; its text lives in `extension/_locales/{en,uk,ru,de}/messages.json` (`chrome.i18n`, read through `shared/i18n.js`, `en` is the default locale), pinned by `tests/locales.test.js` |
 
 ## Repo layout
 
@@ -58,7 +58,7 @@ on RustCrypto primitives; there is no hand-rolled crypto.
 | `scripts/make-tray-icons.mjs` | Generates the tray icons from `scripts/key-shape.mjs`: the macOS 18 pt @2x template `src-tauri/icons/tray-template.png` and the green Windows `tray-windows.png`. A Node test compares the committed pixels with the generator |
 | `scripts/convert-xcstrings.mjs` | One-time converter of the old app's String Catalogs; its output (`src/lib/i18n/locales/{en,uk,ru}.json`, `src-tauri/resources/macos/{en,uk,ru}.lproj/InfoPlist.strings`) is then the hand-edited source of truth; `de.json` and `de.lproj` were written by hand and never went through it |
 | `.github/` | Workflows (`ci.yml`, `codeql.yml`), Dependabot config, issue forms, pull request template |
-| `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts), the Stage 2b UI walk-through and the Stage 3 browser bridge checklist (M1 to M14) and the Stage 4 passkey checklist (P1 to P13), Stage 5 checks (S1 to S21), cutover (C1 to C10) Stage 6 Windows checks (W1 to W17), the extension popup and page checks (E1 to E11), the person checks (PR1 to PR8), the social sign-in checks (SG1 to SG6) and the form fill fixes (FX1 to FX4) |
+| `RUN.md` | The Ukrainian manual checklist: checks that cannot be automated (tray, quit dialog, hotkey conflicts), the Stage 2b UI walk-through and the Stage 3 browser bridge checklist (M1 to M14) and the Stage 4 passkey checklist (P1 to P13), Stage 5 checks (S1 to S22), cutover (C1 to C10) Stage 6 Windows checks (W1 to W17), the extension popup and page checks (E1 to E12), the person checks (PR1 to PR8), the social sign-in checks (SG1 to SG6) and the form fill fixes (FX1 to FX4) |
 | `docs/implementation/ROADMAP.md` | The only tracked document under `docs/`: unfinished work |
 | `LICENSE`, `THIRD_PARTY_NOTICES.md` | Apache-2.0 and the notices for vendored data and linked crates |
 
@@ -374,6 +374,19 @@ change is done.
   - **Residual risk (owner-accepted).** Settings are global app settings, not vault data: anyone with access to the
     OS session can still create or open another vault and change them there, or edit `settings.json`. The gate
     protects against casual access through the UI of a locked app.
+- **Touch ID first.** The main window and tray read the live device-unlock offer on show and on the
+  payload-free `device-unlock-changed` signal. With live biometrics, the unlock card prompts on show
+  when focused, excluding a lock in the foreground until the window is shown again. The popup reads
+  `unlockOptions` when opened and on its locked poll, and sends at most one automatic request per
+  opening. Automatic requests use the biometrics-only policy. Explicit device-unlock buttons may
+  use the broader policy selected by the settings.
+  The Rust `PromptCoordinator` keeps the native slot until evaluation returns. A lock, unlock or
+  vault switch revokes the result's session authorization independently of the slot. Automatic
+  requests also observe `AUTOMATIC_PROMPT_DEBOUNCE` (2 s after a prompt ends).
+  The session counts rejected prompts across all surfaces. Three failures require an explicit
+  retry or the master password. Terminal device errors suppress device unlock for that locked
+  vault. The count and terminal state reset on unlock or vault switch. The popup observes the
+  outcome of a prompt from a closed popup through its locked poll.
 - **Browser bridge.** Three hops: the extension talks to `mypass-host` (native messaging, one host process per
   message), the host to the app's loopback server (`127.0.0.1`, `mypass_bridge::server`, thread per connection, no async
   runtime). The host never links the session, core or KDBX crates. Each launch draws a fresh token and port and

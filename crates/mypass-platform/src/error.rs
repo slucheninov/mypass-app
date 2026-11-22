@@ -21,6 +21,10 @@ pub enum PlatformError {
     /// The user dismissed the device-unlock prompt.
     #[error("cancelled by the user")]
     Cancelled,
+    /// The prompt did not recognize the user (`LAErrorAuthenticationFailed`: the fingerprint or
+    /// the password was rejected). The enrolment stays; the user may try again.
+    #[error("authentication failed")]
+    AuthenticationFailed,
     /// Device unlock is locked out after too many failed attempts.
     #[error("too many attempts")]
     Lockout,

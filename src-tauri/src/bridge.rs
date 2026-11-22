@@ -1010,6 +1010,95 @@ mod tests {
     }
 
     #[test]
+    fn desktop_and_browser_share_one_failure_count() {
+        for surfaces in [["Main", "Main", "Tray"], ["Browser", "Browser", "Main"]] {
+            let f = fixture(true);
+            let handle = f.handle();
+            let secret = pair(&f);
+            let request = |kind| {
+                ask(
+                    &handle,
+                    &serde_json::json!({"type": kind, "pairing": secret}),
+                )
+            };
+            let core = &f.w.core;
+            let device = &core.device_unlock;
+            let platform = &f.w.fake.device_unlock;
+            device
+                .configure(Some(secrecy::SecretString::from("pw")), true, false)
+                .unwrap();
+            core.vault_lock().unwrap();
+            for (n, surface) in surfaces.into_iter().enumerate() {
+                platform.fail_next_unlock(PlatformError::AuthenticationFailed);
+                if surface == "Browser" {
+                    let result = request("unlockWithDevice");
+                    assert_eq!(result["type"], "deviceNotRecognized");
+                    assert_eq!(result["deviceFailures"], n + 1);
+                } else {
+                    let error = device.unlock_with_device(surface).unwrap_err();
+                    assert_eq!(
+                        error.code,
+                        mypass_session::app_core::ErrorCode::AuthenticationFailed
+                    );
+                }
+                assert_eq!(device.status().device_failures as usize, n + 1);
+                let options = request("getUnlockOptions");
+                assert_eq!(options["deviceFailures"], n + 1);
+                assert_eq!(options["retryAfterSecs"], serde_json::Value::Null);
+                f.w.clock.advance(Duration::from_secs(2));
+            }
+            let result = ask(
+                &handle,
+                &serde_json::json!({
+                    "type": "unlockWithDevice", "automatic": true, "pairing": secret
+                }),
+            );
+            assert_eq!(result["type"], "unlockCancelled");
+            assert!(device.unlock_with_device_automatically("Tray").is_err());
+            assert_eq!(platform.evaluation_count(), 3);
+            core.vault_unlock(secrecy::SecretString::from("pw"))
+                .unwrap();
+            core.vault_lock().unwrap();
+            assert_eq!(request("getUnlockOptions")["deviceFailures"], 0);
+        }
+    }
+
+    #[test]
+    fn browser_options_follow_a_desktop_lockout_until_the_next_lock_spell() {
+        let f = fixture(true);
+        let handle = f.handle();
+        let secret = pair(&f);
+        let options = || {
+            ask(
+                &handle,
+                &serde_json::json!({"type": "getUnlockOptions", "pairing": secret}),
+            )
+        };
+        let core = &f.w.core;
+        core.device_unlock
+            .configure(Some(secrecy::SecretString::from("pw")), true, true)
+            .unwrap();
+        core.vault_lock().unwrap();
+        assert_eq!(options()["deviceUnlock"], true);
+        f.w.fake
+            .device_unlock
+            .fail_next_unlock(PlatformError::Lockout);
+        let error = core.device_unlock.unlock_with_device("Main").unwrap_err();
+        assert_eq!(error.code, mypass_session::app_core::ErrorCode::Lockout);
+        let blocked = options();
+        assert_eq!(blocked["deviceBlocked"], true);
+        assert_eq!(blocked["deviceUnlock"], false);
+        assert!(core.device_unlock.status().device_blocked);
+        assert!(core.device_unlock.unlock_with_device("Tray").is_err());
+        assert_eq!(f.w.fake.device_unlock.evaluation_count(), 1);
+        core.vault_unlock(secrecy::SecretString::from("pw"))
+            .unwrap();
+        core.vault_lock().unwrap();
+        assert_eq!(options()["deviceBlocked"], false);
+        assert_eq!(options()["deviceUnlock"], true);
+    }
+
+    #[test]
     fn host_registration_failure_does_not_stop_the_server() {
         let f = unstarted(true, Some(PathBuf::from("/nonexistent/mypass-host")));
         f.w.fake
@@ -1126,7 +1215,7 @@ mod tests {
         assert!(!f.w.core.device_unlock.consume_extension_request());
         f.w.core
             .device_unlock
-            .unlock_with_device("Unlock MyPass")
+            .unlock_with_device_automatically("Unlock MyPass")
             .unwrap();
         assert_eq!(f.w.fake.device_unlock.evaluation_count(), 1);
         f.handle().service.handle(Request::RequestUnlock {

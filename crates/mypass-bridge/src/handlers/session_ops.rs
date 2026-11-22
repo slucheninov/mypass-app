@@ -54,7 +54,11 @@ pub(crate) fn unlock_with_password(ctx: &Ctx<'_>, password: WirePassword) -> Res
     }
 }
 
-pub(crate) fn unlock_with_device(ctx: &Ctx<'_>) -> Response {
+/// One device prompt for the popup. A request while another bridge prompt is in flight, or within
+/// two seconds of the last one starting, is answered `unlockCancelled` without a prompt (a popup
+/// reopened during a prompt never starts a second one and never counts a failure). A prompt that
+/// did not recognize the user answers `deviceNotRecognized` with the lock spell's count.
+pub(crate) fn unlock_with_device(ctx: &Ctx<'_>, automatic: bool) -> Response {
     if ctx.deps.session.is_unlocked() {
         return Response::UnlockNotNeeded;
     }
@@ -63,7 +67,7 @@ pub(crate) fn unlock_with_device(ctx: &Ctx<'_>) -> Response {
             if ctx.deps.session.is_unlocked() {
                 return Response::UnlockNotNeeded;
             }
-            match ctx.deps.unlocker.unlock_with_device() {
+            match ctx.deps.unlocker.unlock_with_device(automatic) {
                 Ok(()) => {
                     ctx.throttle.reset();
                     Response::Unlocked
@@ -71,6 +75,9 @@ pub(crate) fn unlock_with_device(ctx: &Ctx<'_>) -> Response {
                 Err(UnlockFailure::Cancelled) => Response::UnlockCancelled,
                 Err(UnlockFailure::DeviceUnavailable) => Response::DeviceUnlockUnavailable,
                 Err(UnlockFailure::InApp) => Response::UnlockInApp,
+                Err(UnlockFailure::NotRecognized) => Response::DeviceNotRecognized {
+                    device_failures: ctx.deps.session.device_unlock_attempts().failures,
+                },
                 Err(UnlockFailure::WrongPassword | UnlockFailure::Failed) => error("unlock_failed"),
             }
         })
@@ -79,9 +86,13 @@ pub(crate) fn unlock_with_device(ctx: &Ctx<'_>) -> Response {
 
 pub(crate) fn get_unlock_options(ctx: &Ctx<'_>) -> Response {
     let offer = ctx.deps.unlocker.device_offer();
+    let attempts = ctx.deps.session.device_unlock_attempts();
     Response::UnlockOptions {
-        device_unlock: offer.offered && !ctx.deps.session.is_unlocked(),
+        device_unlock: offer.offered && !attempts.blocked && !ctx.deps.session.is_unlocked(),
         touch_id: offer.touch_id,
+        device_failures: attempts.failures,
+        device_blocked: attempts.blocked,
+        device_prompt_in_flight: offer.prompt_in_flight,
         retry_after_secs: ctx.throttle.retry_after_secs(),
     }
 }

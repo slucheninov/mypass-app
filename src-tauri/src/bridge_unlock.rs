@@ -40,19 +40,23 @@ impl VaultUnlocker for AppUnlocker {
             .map_err(|error| map_password_error(error.code))
     }
 
-    fn unlock_with_device(&self) -> Result<(), UnlockFailure> {
+    fn unlock_with_device(&self, automatic: bool) -> Result<(), UnlockFailure> {
         let reason = crate::i18n::t(self.core.settings.get().language, "Unlock MyPass", &[]);
-        self.core
-            .device_unlock
-            .unlock_with_device(&reason)
-            .map_err(|error| map_device_error(error.code))
+        let device = &self.core.device_unlock;
+        if automatic {
+            device.unlock_with_device_automatically(&reason)
+        } else {
+            device.unlock_with_device(&reason)
+        }
+        .map_err(|error| map_device_error(error.code))
     }
 
     fn device_offer(&self) -> DeviceOffer {
-        let status = self.core.device_unlock.status();
+        let offer = self.core.device_unlock.offer();
         DeviceOffer {
-            offered: status.can_offer_now,
-            touch_id: status.biometrics && status.touch_id_enabled,
+            offered: offer.can_offer_now,
+            touch_id: offer.touch_id_available,
+            prompt_in_flight: self.core.device_unlock.prompts().is_in_flight(),
         }
     }
 }
@@ -82,6 +86,7 @@ fn map_device_error(code: ErrorCode) -> UnlockFailure {
         | ErrorCode::Invalidated
         | ErrorCode::NotEnrolledOnDevice => UnlockFailure::DeviceUnavailable,
         ErrorCode::NoVault => UnlockFailure::InApp,
+        ErrorCode::AuthenticationFailed => UnlockFailure::NotRecognized,
         _ => UnlockFailure::Failed,
     }
 }
@@ -92,7 +97,6 @@ mod tests {
     use super::*;
     use crate::testing::{open_world, pw, shared_world, world};
     use mypass_bridge::relay::RelayOptions;
-    use mypass_session::device_unlock::PROMPT_STALE_AFTER;
     use mypass_session::vault_files::ProcessLookup;
     use std::path::PathBuf;
 
@@ -186,6 +190,11 @@ mod tests {
                 UnlockFailure::DeviceUnavailable,
             ),
             (ErrorCode::NoVault, UnlockFailure::InApp),
+            // A rejected finger is counted in the locked session.
+            (
+                ErrorCode::AuthenticationFailed,
+                UnlockFailure::NotRecognized,
+            ),
             (ErrorCode::Internal, UnlockFailure::Failed),
         ] {
             assert_eq!(map_device_error(code), failure);
@@ -193,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn device_offer_comes_from_device_unlock_status() {
+    fn device_offer_comes_from_read_only_unlock_offer() {
         let w = shared_world(true);
         w.core.vault_lock().unwrap();
         let unlocker = AppUnlocker::new(w.core.clone());
@@ -201,7 +210,36 @@ mod tests {
     }
 
     #[test]
+    fn a_rejected_finger_is_not_recognized_and_an_automatic_prompt_right_after_is_cancelled() {
+        let w = shared_world(true);
+        w.core
+            .device_unlock
+            .configure(Some(pw("pw")), true, false)
+            .unwrap();
+        w.core.vault_lock().unwrap();
+        let unlocker = AppUnlocker::new(w.core.clone());
+        w.fake
+            .device_unlock
+            .fail_next_unlock(mypass_platform::PlatformError::AuthenticationFailed);
+        assert_eq!(
+            unlocker.unlock_with_device(false),
+            Err(UnlockFailure::NotRecognized)
+        );
+        assert_eq!(w.fake.device_unlock.evaluation_count(), 1);
+        // The popup's automatic prompt within the app's debounce is refused without a prompt.
+        assert_eq!(
+            unlocker.unlock_with_device(true),
+            Err(UnlockFailure::Cancelled)
+        );
+        assert_eq!(w.fake.device_unlock.evaluation_count(), 1);
+        // An explicit press still prompts.
+        assert_eq!(unlocker.unlock_with_device(false), Ok(()));
+        assert_eq!(w.fake.device_unlock.evaluation_count(), 2);
+        assert_eq!(w.core.session.status().state, SessionState::Unlocked);
+    }
+
+    #[test]
     fn relay_drain_outlasts_the_device_prompt() {
-        assert!(RelayOptions::default().drain_timeout > PROMPT_STALE_AFTER);
+        assert!(RelayOptions::default().drain_timeout > mypass_platform::DEVICE_UNLOCK_TIMEOUT);
     }
 }

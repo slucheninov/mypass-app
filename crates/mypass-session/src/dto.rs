@@ -878,6 +878,7 @@ pub struct AppInfo {
     pub os: String,
     /// Device unlock (Touch ID, account password) can be used on this platform.
     pub device_unlock_available: bool,
+    pub home_dir: String,
 }
 
 /// The launch-at-login state, mirrored from `mypass_platform::LoginItemStatus` so the platform

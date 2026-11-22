@@ -7,8 +7,8 @@
 
 use crate::bridge::{build_state, TauriBridgeEvents};
 use crate::events::{
-    ClipboardClearedEvent, SaveStateChanged, SessionChanged, StorageStatusChanged,
-    SyncStatusChanged, VaultChanged,
+    ClipboardClearedEvent, DeviceUnlockChanged, SaveStateChanged, SessionChanged,
+    StorageStatusChanged, SyncStatusChanged, VaultChanged,
 };
 use crate::files::{FileGrants, TauriFilePicker};
 use crate::hotkeys::ConflictGate;
@@ -29,6 +29,7 @@ use tauri_specta::Event;
 pub enum Outgoing {
     Session(SessionStatus),
     Vault,
+    DeviceUnlock,
     Save(SaveStatus),
 }
 
@@ -37,6 +38,7 @@ pub fn outgoing(event: &SessionEvent) -> Outgoing {
     match event {
         SessionEvent::StateChanged(status) => Outgoing::Session(status.clone()),
         SessionEvent::VaultChanged => Outgoing::Vault,
+        SessionEvent::DeviceUnlockChanged => Outgoing::DeviceUnlock,
         SessionEvent::SaveChanged(status) => Outgoing::Save(status.clone()),
     }
 }
@@ -58,7 +60,7 @@ pub fn tray_reaction(event: &SessionEvent) -> TrayReaction {
             TrayReaction::HideNow
         }
         SessionEvent::StateChanged(_) | SessionEvent::VaultChanged => TrayReaction::Refresh,
-        SessionEvent::SaveChanged(_) => TrayReaction::None,
+        SessionEvent::SaveChanged(_) | SessionEvent::DeviceUnlockChanged => TrayReaction::None,
     }
 }
 
@@ -67,6 +69,7 @@ fn emit(handle: &AppHandle, out: Outgoing) {
     let _ = match out {
         Outgoing::Session(status) => SessionChanged(status).emit(handle),
         Outgoing::Vault => VaultChanged.emit(handle),
+        Outgoing::DeviceUnlock => DeviceUnlockChanged.emit(handle),
         Outgoing::Save(status) => SaveStateChanged(status).emit(handle),
     };
 }

@@ -115,6 +115,18 @@
   "deviceUnlockUnavailable": {
     "message": "Touch ID недоступен. Введите мастер-пароль."
   },
+  "touchIdCaption": {
+    "message": "Приложите палец к Touch ID"
+  },
+  "touchIdFailedThreeTimes": {
+    "message": "Touch ID не распознал отпечаток 3 раза. Введите мастер-пароль."
+  },
+  "tryTouchIdAgain": {
+    "message": "Попробовать Touch ID снова"
+  },
+  "deviceNotRecognized": {
+    "message": "Не распознано. Попробуйте ещё раз."
+  },
   "startingMyPass": {
     "message": "Запуск MyPass…"
   },

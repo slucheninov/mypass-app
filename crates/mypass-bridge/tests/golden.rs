@@ -321,6 +321,7 @@ fn request_cases() -> Vec<(Request, &'static str)> {
         (
             Request::UnlockWithDevice {
                 token: t(),
+                automatic: false,
                 pairing: None,
             },
             r#"{"type":"unlockWithDevice","token":"tok-1"}"#,
@@ -996,15 +997,22 @@ fn response_cases() -> Vec<(Response, Value)> {
             Response::DeviceUnlockUnavailable,
             json!({"type":"deviceUnlockUnavailable"}),
         ),
+        (
+            Response::DeviceNotRecognized { device_failures: 1 },
+            json!({"type":"deviceNotRecognized","deviceFailures":1}),
+        ),
         (Response::UnlockCancelled, json!({"type":"unlockCancelled"})),
         (Response::UnlockInApp, json!({"type":"unlockInApp"})),
         (
             Response::UnlockOptions {
                 device_unlock: true,
                 touch_id: true,
+                device_failures: 0,
+                device_blocked: false,
+                device_prompt_in_flight: false,
                 retry_after_secs: None,
             },
-            json!({"type":"unlockOptions","deviceUnlock":true,"touchId":true}),
+            json!({"type":"unlockOptions","deviceUnlock":true,"touchId":true,"deviceFailures":0,"deviceBlocked":false,"devicePromptInFlight":false}),
         ),
     ]
 }

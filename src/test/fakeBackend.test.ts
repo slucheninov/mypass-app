@@ -89,7 +89,7 @@ describe("fake backend", () => {
     renderWithBackend(MainApp, {}, fake);
     expect(await commands.appInfo()).toEqual({
       status: "ok",
-      data: { version: expect.any(String), os: "windows", deviceUnlockAvailable: true },
+      data: { version: expect.any(String), os: "windows", deviceUnlockAvailable: true, homeDir: "C:\\Users\\someone" },
     });
     // The main window's event bridge takes the startup hotkey conflicts and the pending new-entry
     // request when it mounts (the order of the two depends on listener registration).

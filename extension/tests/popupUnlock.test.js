@@ -140,9 +140,9 @@ test('locked poll tick keeps typed password, error, reveal and focus', async () 
 });
 
 test('device button only appears when offered and uses the correct label', async () => {
+  // Touch ID itself is offered through the Touch ID view (popupTouchIdFirst.test.js).
   for (const [options, label] of [
     [{ deviceUnlock: false, touchId: true }, null],
-    [{ deviceUnlock: true, touchId: true }, 'Unlock with Touch ID'],
     [{ deviceUnlock: true, touchId: false }, 'Unlock with system password'],
   ]) {
     const h = lockedPopup({ options });
@@ -150,12 +150,17 @@ test('device button only appears when offered and uses the correct label', async
     assert.equal(h.el('unlock-device-btn').hidden, label === null);
     if (label) assert.equal(h.el('unlock-device-btn').textContent, label);
   }
+  const h = lockedPopup({ options: { deviceUnlock: true, touchId: true }, device: () => undefined });
+  await flush();
+  assert.equal(h.el('unlock-device-btn').hidden, true);
+  assert.equal(h.el('touch-id-view').hidden, false);
+  assert.equal(h.el('touch-id-btn').textContent, 'Unlock with Touch ID');
 });
 
 test('cancelled device unlock is silent and an unavailable device hides the button', async () => {
   let response = { type: 'unlockCancelled' };
   const h = lockedPopup({
-    options: { deviceUnlock: true, touchId: true },
+    options: { deviceUnlock: true, touchId: false },
     device: () => response,
   });
   await flush();
@@ -168,6 +173,7 @@ test('cancelled device unlock is silent and an unavailable device hides the butt
   await flush();
   assert.equal(h.el('unlock-device-btn').hidden, true);
   assert.match(h.el('unlock-error').textContent, /Use your master password/);
+  assert.equal(h.el('try-touch-id-btn').hidden, true);
 });
 
 test('reveal toggles the password input type and pressed state', async () => {

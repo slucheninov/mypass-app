@@ -5,7 +5,7 @@
   let { variant = "main" }: { variant?: "main" | "panel" } = $props();
   const offer = $derived(device.offer);
 </script>
-{#if offer?.canOfferNow && offer.label}
+{#if offer?.canOfferNow && offer.label && !device.blocked}
   <Button variant={variant === "main" ? "primary" : "plain"} disabled={device.pending} onclick={() => void device.unlock()}>
     {offer.label === "touchIdOrMacPassword" ? t("Unlock with Touch ID or Mac password") : offer.label === "touchId" ? t("Unlock with Touch ID") : t("Unlock with Mac password")}
   </Button>

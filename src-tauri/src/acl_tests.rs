@@ -167,7 +167,10 @@ const SETTINGS_GATED: &[&str] = &[
 /// Settings-window commands that stay open while the vault is not unlocked, each with the reason.
 /// None of them returns or changes a setting that matters to security.
 const SETTINGS_UNGATED: &[(&str, &str)] = &[
-    ("app_info", "the version and platform, read by every window"),
+    (
+        "app_info",
+        "version and platform information, including the home directory used in locked vault path labels",
+    ),
     ("app_record_activity", "a no-op while locked"),
     (
         "app_show_main",
@@ -175,7 +178,7 @@ const SETTINGS_UNGATED: &[(&str, &str)] = &[
     ),
     (
         "device_unlock_offer",
-        "whether and how an unlock screen offers device unlock; read-only, no toggles or reason",
+        "read-only unlock screen availability, label and prompt outcomes",
     ),
     (
         "settings_get_public",
