@@ -1073,6 +1073,8 @@ export function createFakeBackend(opts: FakeBackendOptions = {}): FakeBackend {
       setSession({ ...state.session, state: "unlocked", lockReason: null });
       return structuredClone(state.session);
     },
+    trayPanelFit: () => "native",
+    trayPanelHide: () => null,
     updateStatus: () => structuredClone(state.update),
     updateCheckNow: () => { state.update.status = { state: "upToDate", checkedAt: 1_700_000_000_000 }; publish("updateChanged", structuredClone(state.update)); return structuredClone(state.update); },
     updateDismiss: () => { state.update.banner = null; publish("updateChanged", structuredClone(state.update)); return null; },

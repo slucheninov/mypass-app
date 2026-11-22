@@ -47,6 +47,8 @@ export const commands = {
 	deviceUnlockConfigure: (password: string | null, touchId: boolean, macPassword: boolean) => typedError<DeviceUnlockStatus_Serialize, ApiError>(__TAURI_INVOKE("device_unlock_configure", { password, touchId, macPassword })),
 	deviceUnlockConsumeExtensionRequest: () => __TAURI_INVOKE<boolean>("device_unlock_consume_extension_request"),
 	updateStatus: () => __TAURI_INVOKE<UpdateStatus_Serialize>("update_status"),
+	trayPanelFit: (height: number | null) => typedError<PanelMaterial, ApiError>(__TAURI_INVOKE("tray_panel_fit", { height })),
+	trayPanelHide: () => typedError<null, ApiError>(__TAURI_INVOKE("tray_panel_hide")),
 	updateCheckNow: () => typedError<UpdateStatus_Serialize, ApiError>(__TAURI_INVOKE("update_check_now")),
 	updateDismiss: () => typedError<null, ApiError>(__TAURI_INVOKE("update_dismiss")),
 	updateOpenRelease: () => typedError<null, ApiError>(__TAURI_INVOKE("update_open_release")),
@@ -1044,6 +1046,9 @@ export type PairingChallengeEvent_Deserialize = PairingChallengeDto | null;
  *  the code the user types into the extension).
  */
 export type PairingChallengeEvent_Serialize = PairingChallengeDto | null;
+
+/**  Whether the panel can leave the webview background transparent. */
+export type PanelMaterial = "native" | "solid";
 
 /**
  *  The passkey of an entry as shown after an explicit click: [`PasskeyMeta`] plus the credential

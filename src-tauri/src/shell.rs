@@ -331,6 +331,38 @@ pub struct PanelRect {
 /// Gap kept between the panel and the monitor edge or the tray icon.
 const PANEL_MARGIN: f64 = 8.0;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelAnchor {
+    Top,
+    Bottom,
+}
+
+#[cfg(any(windows, test))]
+pub fn panel_anchor(panel_top: f64, tray_top: f64) -> PanelAnchor {
+    if panel_top < tray_top {
+        PanelAnchor::Bottom
+    } else {
+        PanelAnchor::Top
+    }
+}
+
+pub fn fit_panel_height(requested: f64, work_height: f64) -> f64 {
+    use crate::tray::{MAX_PANEL_HEIGHT, MIN_PANEL_HEIGHT};
+
+    if !requested.is_finite() {
+        return MIN_PANEL_HEIGHT;
+    }
+    let max = (work_height - 2.0 * PANEL_MARGIN).clamp(MIN_PANEL_HEIGHT, MAX_PANEL_HEIGHT);
+    requested.clamp(MIN_PANEL_HEIGHT, max)
+}
+
+pub fn refit_panel_y(top: f64, old_h: f64, new_h: f64, anchor: PanelAnchor) -> f64 {
+    match anchor {
+        PanelAnchor::Top => top,
+        PanelAnchor::Bottom => top + old_h - new_h,
+    }
+}
+
 /// Clamp without the panic of `f64::clamp` on an inverted range (a panel larger than the
 /// monitor pins to the lower bound).
 fn clamp_to(value: f64, low: f64, high: f64) -> f64 {
@@ -508,6 +540,31 @@ mod tests {
     use mypass_platform::testing::FakeLaunchAtLogin;
     use mypass_platform::{PlatformError, PlatformResult};
     use mypass_session::settings::{IdleTimeout, Language, Settings, Theme};
+
+    #[test]
+    fn fit_clamps_to_min_max_and_the_work_area() {
+        assert_eq!(fit_panel_height(10.0, 900.0), 80.0);
+        assert_eq!(fit_panel_height(300.0, 900.0), 300.0);
+        assert_eq!(fit_panel_height(900.0, 900.0), 640.0);
+        assert_eq!(fit_panel_height(500.0, 400.0), 384.0);
+        assert_eq!(fit_panel_height(f64::NAN, 900.0), 80.0);
+        assert_eq!(fit_panel_height(100.0, 50.0), 80.0);
+    }
+
+    #[test]
+    fn refit_keeps_the_anchored_edge() {
+        assert_eq!(refit_panel_y(100.0, 200.0, 300.0, PanelAnchor::Top), 100.0);
+        assert_eq!(
+            refit_panel_y(500.0, 200.0, 300.0, PanelAnchor::Bottom),
+            400.0
+        );
+    }
+
+    #[test]
+    fn panel_anchor_is_bottom_above_the_icon() {
+        assert_eq!(panel_anchor(400.0, 1040.0), PanelAnchor::Bottom);
+        assert_eq!(panel_anchor(30.0, 0.0), PanelAnchor::Top);
+    }
 
     #[test]
     fn effects_empty_when_nothing_changed() {

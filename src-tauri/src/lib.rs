@@ -38,7 +38,7 @@ fn app_context() -> tauri::Context<tauri::Wry> {
 /// Every command, in one place (the tests read their names from here).
 pub fn commands() -> Commands<tauri::Wry> {
     use commands::{app, attachment, backup, browser, draft, entry, generator, group, import};
-    use commands::{device, platform, settings, sidebar, sync, update, vault};
+    use commands::{device, platform, settings, sidebar, sync, tray, update, vault};
     collect_commands![
         app::app_info,
         app::app_new_entry,
@@ -66,6 +66,8 @@ pub fn commands() -> Commands<tauri::Wry> {
         device::device_unlock_configure,
         device::device_unlock_consume_extension_request,
         update::update_status,
+        tray::tray_panel_fit,
+        tray::tray_panel_hide,
         update::update_check_now,
         update::update_dismiss,
         update::update_open_release,
@@ -296,8 +298,10 @@ mod tests {
         assert_eq!(panel["visible"], false);
         assert_eq!(panel["alwaysOnTop"], true);
         assert_eq!(panel["skipTaskbar"], true);
-        assert_eq!(panel["width"], 340);
-        assert_eq!(panel["height"], 520);
+        assert_eq!(panel["width"], 300);
+        assert_eq!(panel["transparent"], true);
+        assert_eq!(panel["shadow"], true);
+        assert_eq!(conf["app"]["macOSPrivateApi"], true);
     }
 
     pub(super) fn command_names() -> Vec<String> {

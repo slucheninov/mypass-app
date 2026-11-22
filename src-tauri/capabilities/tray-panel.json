@@ -21,6 +21,8 @@
     "allow-entry-touch",
     "allow-platform-keyboard-layout",
     "allow-settings-get",
+    "allow-tray-panel-fit",
+    "allow-tray-panel-hide",
     "allow-update-open-release",
     "allow-update-status",
     "allow-vault-lock",

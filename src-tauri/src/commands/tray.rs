@@ -3,9 +3,37 @@
 //! The tray panel lists recent entries and restricts reads to live entries and its compact UI's
 //! fields. The caller label comes from the runtime and its capability controls each command.
 
-use crate::tray::PANEL_WINDOW;
+use crate::tray::{PanelMaterial, PANEL_WINDOW};
 use mypass_session::dto::FieldRef;
 use mypass_session::{ApiError, AppCore, ErrorCode};
+
+fn panel_caller(label: &str) -> Result<(), ApiError> {
+    if label == PANEL_WINDOW {
+        Ok(())
+    } else {
+        Err(ApiError {
+            code: ErrorCode::InvalidInput,
+            message: "this command is only available to the tray panel".into(),
+        })
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn tray_panel_fit(
+    window: tauri::WebviewWindow,
+    height: f64,
+) -> Result<PanelMaterial, ApiError> {
+    panel_caller(window.label())?;
+    crate::shell_runtime::fit_panel(&window, height).map_err(|e| super::internal(e.to_string()))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn tray_panel_hide(window: tauri::WebviewWindow) -> Result<(), ApiError> {
+    panel_caller(window.label())?;
+    window.hide().map_err(|e| super::internal(e.to_string()))
+}
 
 /// The fields the tray panel shows and copies: the user name, the password, the first website and
 /// the one-time code.
@@ -53,6 +81,17 @@ mod tests {
     use super::*;
     use crate::commands::app::{MAIN_WINDOW, SETTINGS_WINDOW};
     use crate::testing::open_world;
+
+    #[test]
+    fn panel_commands_refuse_other_windows() {
+        assert!(panel_caller(PANEL_WINDOW).is_ok());
+        for label in [MAIN_WINDOW, SETTINGS_WINDOW, "unknown"] {
+            assert_eq!(
+                panel_caller(label).unwrap_err().code,
+                ErrorCode::InvalidInput
+            );
+        }
+    }
 
     #[test]
     fn the_tray_panel_cannot_read_an_entry_in_the_recycle_bin() {

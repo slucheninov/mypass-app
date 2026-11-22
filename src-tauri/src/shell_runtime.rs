@@ -19,10 +19,14 @@ use crate::lifecycle::{
     sync_login_item_report, ExitGate, ExitOutcome, ExitRequest, ExternalWatcher, QuitPort,
     QuitWorkerGuard, ShellTarget, TrayRefresher, EXTERNAL_POLL,
 };
-use crate::shell::{close_action, current_os, show_main, themed_windows, CloseAction, PanelRect};
+use crate::shell::{
+    close_action, current_os, fit_panel_height, refit_panel_y, show_main, themed_windows,
+    CloseAction, PanelAnchor, PanelRect,
+};
 use crate::state::{AppState, EditorDirty, ShellState};
 use crate::tray::{
-    action_for_id, separator_before, TrayAction, TrayMenuModel, PANEL_WINDOW, TRAY_ID,
+    action_for_id, choose_panel_material, separator_before, PanelMaterial, TrayAction,
+    TrayMenuModel, TrayOs, PANEL_WIDTH, PANEL_WINDOW, TRAY_ID,
 };
 use mypass_platform::Subscription;
 use mypass_session::settings::{Language, Settings, Theme};
@@ -30,7 +34,10 @@ use mypass_session::{AppCore, LockReason};
 use std::sync::{Arc, Mutex, PoisonError};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, PhysicalPosition, RunEvent, Runtime, Window, WindowEvent, Wry};
+use tauri::{
+    AppHandle, Manager, PhysicalPosition, PhysicalSize, RunEvent, Runtime, WebviewWindow, Window,
+    WindowEvent, Wry,
+};
 use tauri_plugin_dialog::{
     DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult,
 };
@@ -99,7 +106,7 @@ fn create_tray(app: &AppHandle, model: &TrayMenuModel) -> tauri::Result<()> {
                 toggle_panel(tray.app_handle(), rect, position);
             }
         });
-    // One upright key: a template on macOS (the menu bar tints it), a green key on Windows.
+    // One tilted key: a template on macOS (the menu bar tints it), a green key on Windows.
     let custom =
         crate::tray::tray_icon_png(crate::tray::TrayOs::current()).and_then(|(png, template)| {
             tauri::image::Image::from_bytes(png)
@@ -167,6 +174,91 @@ fn run_tray_action(app: &AppHandle, action: TrayAction) {
         // The one quit entry point, shared with the tray panel's `app_quit`.
         TrayAction::Quit => crate::commands::app::request_quit(app),
     }
+}
+
+/// The material is chosen before the window is shown and stays fixed for its lifetime.
+struct PanelState {
+    anchor: Mutex<PanelAnchor>,
+    material: PanelMaterial,
+}
+
+fn apply_panel_effect(panel: &WebviewWindow, effect: tauri::window::Effect) -> bool {
+    // Tauri's set_effects only reports whether it could post the work to the main thread.
+    // Setup is already on that thread, so use its underlying library to check the result.
+    use tauri::window::Effect;
+    match effect {
+        #[cfg(target_os = "macos")]
+        Effect::Menu => window_vibrancy::apply_vibrancy(
+            panel,
+            window_vibrancy::NSVisualEffectMaterial::Menu,
+            Some(window_vibrancy::NSVisualEffectState::Active),
+            Some(crate::tray::PANEL_RADIUS),
+        )
+        .is_ok(),
+        #[cfg(windows)]
+        Effect::Acrylic => window_vibrancy::apply_acrylic(panel, None).is_ok(),
+        #[cfg(windows)]
+        Effect::Mica => window_vibrancy::apply_mica(panel, None).is_ok(),
+        _ => false,
+    }
+}
+
+fn setup_panel(app: &AppHandle) {
+    let Some(panel) = app.get_webview_window(PANEL_WINDOW) else {
+        return;
+    };
+    let material = choose_panel_material(TrayOs::current(), |effect| {
+        apply_panel_effect(&panel, effect)
+    });
+    if material == PanelMaterial::Solid {
+        let shade = if panel.theme().ok() == Some(tauri::Theme::Dark) {
+            32
+        } else {
+            246
+        };
+        let _ = panel.set_background_color(Some(tauri::window::Color(shade, shade, shade, 255)));
+    }
+    app.manage(PanelState {
+        anchor: Mutex::new(PanelAnchor::Top),
+        material,
+    });
+}
+
+fn record_panel_anchor(app: &AppHandle, anchor: PanelAnchor) {
+    if let Some(state) = app.try_state::<PanelState>() {
+        *state.anchor.lock().unwrap_or_else(PoisonError::into_inner) = anchor;
+    }
+}
+
+pub fn fit_panel(panel: &WebviewWindow, height: f64) -> tauri::Result<PanelMaterial> {
+    let state = panel.try_state::<PanelState>();
+    let (anchor, material) = state.map_or((PanelAnchor::Top, PanelMaterial::Solid), |state| {
+        let anchor = *state.anchor.lock().unwrap_or_else(PoisonError::into_inner);
+        (anchor, state.material)
+    });
+    let scale = panel.scale_factor()?;
+    let work_height = panel
+        .current_monitor()?
+        .map_or(crate::tray::MAX_PANEL_HEIGHT + 16.0, |monitor| {
+            f64::from(monitor.work_area().size.height) / scale
+        });
+    let size = PhysicalSize::new(
+        (PANEL_WIDTH * scale).round() as u32,
+        (fit_panel_height(height, work_height) * scale).round() as u32,
+    );
+    if size != panel.inner_size()? {
+        let old_height = f64::from(panel.outer_size()?.height);
+        let position = panel.outer_position()?;
+        panel.set_size(size)?;
+        let top = refit_panel_y(
+            f64::from(position.y),
+            old_height,
+            f64::from(size.height),
+            anchor,
+        );
+        panel.set_position(PhysicalPosition::new(position.x, top.round() as i32))?;
+    }
+    Ok(material)
 }
 
 /// Left click on the icon: toggle the panel, placed under the icon inside the monitor. `click` is
@@ -242,6 +334,7 @@ fn place_panel_windows(app: &AppHandle, panel: &tauri::WebviewWindow, tray: taur
             height,
             scale,
         );
+        record_panel_anchor(app, crate::shell::panel_anchor(y, at.y));
         let _ = panel.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
         let _ = panel.set_size(tauri::PhysicalSize::new(
             width.round() as u32,
@@ -329,6 +422,7 @@ fn place_panel(
         primary,
         (panel_size.width, panel_size.height),
     ) {
+        record_panel_anchor(app, PanelAnchor::Top);
         let _ = panel.set_position(LogicalPosition::new(x, y));
     }
 }
@@ -559,6 +653,7 @@ pub fn start(app: &tauri::App) {
     start_external_poll(watcher.clone(), core.scheduler(), EXTERNAL_POLL);
     app.manage(watcher);
 
+    setup_panel(&handle);
     apply_theme_to_windows(&handle, settings.theme);
     // The icon itself is applied at `RunEvent::Ready`, after the framework's own dev-mode icon.
     app.manage(AppIconState::default());

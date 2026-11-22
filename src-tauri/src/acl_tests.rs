@@ -124,6 +124,8 @@ const TRAY_PANEL: &[&str] = &[
     "entry_touch",
     "platform_keyboard_layout",
     "settings_get",
+    "tray_panel_fit",
+    "tray_panel_hide",
     "update_open_release",
     "update_status",
     "vault_lock",
@@ -215,6 +217,7 @@ fn tray_panel_cannot_configure_device_move_vault_read_passkeys_or_take_proposals
             // The tray panel only queries recents.
             "allow-entry-list",
             "allow-tray-search",
+            "core:window:allow-hide",
         ] {
             assert_ne!(id, forbidden);
         }

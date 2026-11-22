@@ -9,6 +9,7 @@
     "devUrl": "http://localhost:1420"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "label": "main",
@@ -22,9 +23,11 @@
       {
         "label": "tray-panel",
         "title": "MyPass",
-        "width": 340,
-        "height": 520,
+        "width": 300,
+        "height": 360,
         "decorations": false,
+        "transparent": true,
+        "shadow": true,
         "visible": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,

@@ -186,6 +186,8 @@ export const api = {
   deviceUnlockConfigure: wrap(commands.deviceUnlockConfigure),
   deviceUnlockConsumeExtensionRequest: commands.deviceUnlockConsumeExtensionRequest,
   vaultUnlockDevice: wrap(commands.vaultUnlockDevice),
+  trayPanelFit: wrap(commands.trayPanelFit),
+  trayPanelHide: wrap(commands.trayPanelHide),
   updateStatus: commands.updateStatus,
   updateCheckNow: wrap(commands.updateCheckNow),
   updateDismiss: wrap(commands.updateDismiss),
