@@ -104,6 +104,16 @@ fn request_cases() -> Vec<(Request, &'static str)> {
             r#"{"type":"fillAddress","token":"tok-1","id":"a1","url":"https://x.example"}"#,
         ),
         (
+            Request::FillPerson {
+                token: t(),
+                id: s("p1"),
+                url: s("https://x.example"),
+                address_id: None,
+                pairing: None,
+            },
+            r#"{"type":"fillPerson","token":"tok-1","id":"p1","url":"https://x.example"}"#,
+        ),
+        (
             Request::FillCredential {
                 token: t(),
                 id: s("c1"),
@@ -346,9 +356,24 @@ fn every_request_case_has_golden_json() {
 }
 
 #[test]
+fn fill_person_carries_the_picked_address_id() {
+    let golden = r#"{"type":"fillPerson","token":"tok-1","id":"p1","url":"https://x.example","addressId":"a1"}"#;
+    let request = Request::FillPerson {
+        token: s("tok-1"),
+        id: s("p1"),
+        url: s("https://x.example"),
+        address_id: so("a1"),
+        pairing: None,
+    };
+    assert_eq!(serde_json::from_str::<Request>(golden).unwrap(), request);
+    let encoded = serde_json::to_value(&request).unwrap();
+    assert!(json_eq(&encoded, &serde_json::from_str(golden).unwrap()));
+}
+
+#[test]
 fn request_types_are_distinct_and_match_the_tags() {
     let set: BTreeSet<&str> = REQUEST_TYPES.iter().copied().collect();
-    assert_eq!(set.len(), 32);
+    assert_eq!(set.len(), 33);
     assert_eq!(set.len(), variant_count("Request"));
     let tags: BTreeSet<String> = request_cases()
         .iter()
@@ -522,6 +547,7 @@ fn optional_fields_are_omitted_not_null() {
             url: None,
             entry_type: None,
             identifiers: vec![],
+            address_ids: vec![],
         })
         .unwrap(),
     );
@@ -625,9 +651,10 @@ fn optional_fields_are_omitted_not_null() {
         url: None,
         entry_type: None,
         identifiers: vec![],
+        address_ids: vec![],
     })
     .unwrap();
-    for key in ["url", "entryType", "identifiers"] {
+    for key in ["url", "entryType", "identifiers", "addressIds"] {
         assert!(summary.get(key).is_none(), "{key} must be omitted");
     }
 }
@@ -703,6 +730,20 @@ fn summary(identifiers: Vec<String>) -> ExtensionCredentialSummary {
         url: so("https://example.com"),
         entry_type: so("Login"),
         identifiers,
+        address_ids: vec![],
+    }
+}
+
+fn person() -> ExtensionPerson {
+    ExtensionPerson {
+        id: s("p1"),
+        label: s("Me"),
+        full_name: s("Ada Lovelace"),
+        given_name: s("Ada"),
+        middle_name: s("King"),
+        family_name: s("Lovelace"),
+        email: s("a@example.com"),
+        birth_date: s("1815-12-10"),
     }
 }
 
@@ -767,6 +808,20 @@ fn response_cases() -> Vec<(Response, Value)> {
                 address: Box::new(address()),
             },
             json!({"type":"address","address":{"id":"a1","label":"Home","fullName":"Ada Lovelace","givenName":"Ada","familyName":"Lovelace","organization":"Org","addressLine1":"1 Main St","addressLine2":"Apt 2","city":"London","region":"LDN","postalCode":"N1","countryCode":"GB","countryName":"United Kingdom","phone":"+44","email":"a@example.com"}}),
+        ),
+        (
+            Response::Person {
+                person: Box::new(person()),
+                address: None,
+            },
+            json!({"type":"person","person":{"id":"p1","label":"Me","fullName":"Ada Lovelace","givenName":"Ada","middleName":"King","familyName":"Lovelace","email":"a@example.com","birthDate":"1815-12-10"}}),
+        ),
+        (
+            Response::Person {
+                person: Box::new(person()),
+                address: Some(Box::new(address())),
+            },
+            json!({"type":"person","person":{"id":"p1","label":"Me","fullName":"Ada Lovelace","givenName":"Ada","middleName":"King","familyName":"Lovelace","email":"a@example.com","birthDate":"1815-12-10"},"address":{"id":"a1","label":"Home","fullName":"Ada Lovelace","givenName":"Ada","familyName":"Lovelace","organization":"Org","addressLine1":"1 Main St","addressLine2":"Apt 2","city":"London","region":"LDN","postalCode":"N1","countryCode":"GB","countryName":"United Kingdom","phone":"+44","email":"a@example.com"}}),
         ),
         (
             Response::Credential {
@@ -1113,6 +1168,10 @@ fn debug_output_prints_the_tag_only() {
         Response::Address {
             address: Box::new(address()),
         },
+        Response::Person {
+            person: Box::new(person()),
+            address: Some(Box::new(address())),
+        },
         Response::CredentialList {
             credentials: vec![summary(vec![s("+1555")])],
         },
@@ -1139,6 +1198,7 @@ fn debug_output_prints_the_tag_only() {
         text.push_str(&format!("{r:?} "));
     }
     text.push_str(&format!("{:?}", address()));
+    text.push_str(&format!("{:?}", person()));
     assert!(text.contains("Request::FillCredential { .. }"));
     assert!(text.contains("Response::Paired { .. }"));
     for leak in [
@@ -1150,6 +1210,8 @@ fn debug_output_prints_the_tag_only() {
         "JBSWY",
         "112233",
         "Lovelace",
+        "King",
+        "1815",
         "a@example.com",
         "1 Main",
         "+44",

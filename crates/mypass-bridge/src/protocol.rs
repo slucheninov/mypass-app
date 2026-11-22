@@ -13,13 +13,14 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 /// The wire `type` of every [`Request`] variant, in declaration order.
-pub const REQUEST_TYPES: [&str; 32] = [
+pub const REQUEST_TYPES: [&str; 33] = [
     "getCredentials",
     "getFavorites",
     "listEntries",
     "searchEntries",
     "createEntry",
     "fillAddress",
+    "fillPerson",
     "fillCredential",
     "getTotp",
     "proposeSaveLogin",
@@ -165,6 +166,17 @@ pub enum Request {
         token: String,
         id: String,
         url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pairing: Option<String>,
+    },
+    /// A Person entry and one Address entry for a form: `address_id` names the address the user
+    /// picked (any live Address entry); absent, the person's first live linked address is used.
+    FillPerson {
+        token: String,
+        id: String,
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        address_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pairing: Option<String>,
     },
@@ -375,6 +387,13 @@ pub enum Response {
     Address {
         address: Box<ExtensionAddress>,
     },
+    /// The person and the address to fill with it (none when the person links no live address
+    /// and none was picked).
+    Person {
+        person: Box<ExtensionPerson>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        address: Option<Box<ExtensionAddress>>,
+    },
     Credential {
         username: String,
         password: String,
@@ -471,6 +490,27 @@ pub struct ExtensionCredentialSummary {
     pub entry_type: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub identifiers: Vec<String>,
+    /// A person's linked Address entries as wire ids, in the person's order (the first is the
+    /// default). Only person browse rows carry it; the ids may name entries that are gone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub address_ids: Vec<String>,
+}
+
+/// A person entry as the extension fills it into a form. `full_name` is the given and family
+/// names joined (the middle name has its own field). `Debug` hides every value and the values are
+/// wiped on drop.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionPerson {
+    pub id: String,
+    pub label: String,
+    pub full_name: String,
+    pub given_name: String,
+    pub middle_name: String,
+    pub family_name: String,
+    pub email: String,
+    /// ISO `YYYY-MM-DD`, or empty.
+    pub birth_date: String,
 }
 
 /// An address entry as the extension fills it into a form.
@@ -717,6 +757,25 @@ impl Drop for ProposalExtraField {
     }
 }
 
+impl fmt::Debug for ExtensionPerson {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExtensionPerson").finish_non_exhaustive()
+    }
+}
+
+impl Drop for ExtensionPerson {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.label.zeroize();
+        self.full_name.zeroize();
+        self.given_name.zeroize();
+        self.middle_name.zeroize();
+        self.family_name.zeroize();
+        self.email.zeroize();
+        self.birth_date.zeroize();
+    }
+}
+
 impl fmt::Debug for ExtensionAddress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ExtensionAddress").finish_non_exhaustive()
@@ -818,8 +877,8 @@ mod unlock_protocol_tests {
     }
 
     #[test]
-    fn request_types_lists_32_names_ending_with_the_unlock_requests() {
-        assert_eq!(REQUEST_TYPES.len(), 32);
+    fn request_types_lists_33_names_ending_with_the_unlock_requests() {
+        assert_eq!(REQUEST_TYPES.len(), 33);
         assert!(REQUEST_TYPES.ends_with(&[
             "unlockWithPassword",
             "unlockWithDevice",

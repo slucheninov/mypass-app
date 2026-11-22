@@ -335,6 +335,13 @@ pub(crate) fn all_requests(pairing: Option<&str>) -> Vec<Request> {
             url: s(),
             pairing: p(),
         },
+        Request::FillPerson {
+            token: t(),
+            id: s(),
+            url: s(),
+            address_id: None,
+            pairing: p(),
+        },
         Request::FillCredential {
             token: t(),
             id: s(),

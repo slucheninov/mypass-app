@@ -258,6 +258,7 @@ impl PasskeyHandler for PasskeyService {
             | Request::SearchEntries { .. }
             | Request::CreateEntry { .. }
             | Request::FillAddress { .. }
+            | Request::FillPerson { .. }
             | Request::FillCredential { .. }
             | Request::GetTotp { .. }
             | Request::ProposeSaveLogin { .. }

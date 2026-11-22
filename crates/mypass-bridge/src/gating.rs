@@ -20,6 +20,7 @@ impl Request {
             | Self::SearchEntries { token, .. }
             | Self::CreateEntry { token, .. }
             | Self::FillAddress { token, .. }
+            | Self::FillPerson { token, .. }
             | Self::FillCredential { token, .. }
             | Self::GetTotp { token, .. }
             | Self::ProposeSaveLogin { token, .. }
@@ -59,6 +60,7 @@ impl Request {
             | Self::SearchEntries { pairing, .. }
             | Self::CreateEntry { pairing, .. }
             | Self::FillAddress { pairing, .. }
+            | Self::FillPerson { pairing, .. }
             | Self::FillCredential { pairing, .. }
             | Self::GetTotp { pairing, .. }
             | Self::ProposeSaveLogin { pairing, .. }
@@ -95,6 +97,7 @@ impl Request {
             Self::SearchEntries { .. } => "searchEntries",
             Self::CreateEntry { .. } => "createEntry",
             Self::FillAddress { .. } => "fillAddress",
+            Self::FillPerson { .. } => "fillPerson",
             Self::FillCredential { .. } => "fillCredential",
             Self::GetTotp { .. } => "getTotp",
             Self::ProposeSaveLogin { .. } => "proposeSaveLogin",
@@ -143,6 +146,7 @@ impl Request {
             | Self::SearchEntries { .. }
             | Self::CreateEntry { .. }
             | Self::FillAddress { .. }
+            | Self::FillPerson { .. }
             | Self::FillCredential { .. }
             | Self::GetTotp { .. }
             | Self::ProposeSaveLogin { .. }
@@ -185,6 +189,7 @@ impl Request {
             // `passkeyGetApprove`, `requestUnlock`, the list and search screens and the
             // generator): none of these can fire on a page's own timing.
             Self::FillAddress { .. }
+            | Self::FillPerson { .. }
             | Self::FillCredential { .. }
             | Self::GetTotp { .. }
             | Self::ProposeSaveLogin { .. }
@@ -236,6 +241,7 @@ impl Request {
             | Self::SearchEntries { .. }
             | Self::CreateEntry { .. }
             | Self::FillAddress { .. }
+            | Self::FillPerson { .. }
             | Self::FillCredential { .. }
             | Self::GetTotp { .. }
             | Self::ProposeSaveLogin { .. }
@@ -279,6 +285,7 @@ impl Request {
             | Self::SearchEntries { .. }
             | Self::CreateEntry { .. }
             | Self::FillAddress { .. }
+            | Self::FillPerson { .. }
             | Self::FillCredential { .. }
             | Self::GetTotp { .. }
             | Self::ProposeSaveLogin { .. }
@@ -322,6 +329,7 @@ impl Response {
             | Self::Paired { .. }
             | Self::CredentialList { .. }
             | Self::Address { .. }
+            | Self::Person { .. }
             | Self::Credential { .. }
             | Self::Totp { .. }
             | Self::SaveProposalAccepted
@@ -433,6 +441,7 @@ mod tests {
     fn resets_timer_set_is_exactly_the_spec_list() {
         let yes = [
             "fillAddress",
+            "fillPerson",
             "fillCredential",
             "getTotp",
             "proposeSaveLogin",
@@ -467,7 +476,7 @@ mod tests {
             "openApp",
             "getUnlockOptions",
         ];
-        assert_eq!(yes.len() + no.len(), 32);
+        assert_eq!(yes.len() + no.len(), 33);
         assert_eq!(names_where(Request::resets_auto_lock_timer), sorted(&yes));
         let others = names_where(|r| !r.resets_auto_lock_timer());
         assert_eq!(others, sorted(&no));
@@ -477,7 +486,7 @@ mod tests {
     fn pairing_required_for_all_but_the_two_handshake_requests() {
         let no = names_where(|r| !r.requires_pairing());
         assert_eq!(no, vec!["completePairing", "startPairing"]);
-        assert_eq!(names_where(Request::requires_pairing).len(), 30);
+        assert_eq!(names_where(Request::requires_pairing).len(), 31);
     }
 
     #[test]
@@ -509,9 +518,9 @@ mod tests {
     }
 
     #[test]
-    fn name_matches_serde_tag_for_all_32() {
+    fn name_matches_serde_tag_for_all_33() {
         let all = all_requests(None);
-        assert_eq!(all.len(), 32);
+        assert_eq!(all.len(), 33);
         for (r, expected) in all.iter().zip(REQUEST_TYPES) {
             assert_eq!(r.name(), expected);
             let v = serde_json::to_value(r).unwrap();

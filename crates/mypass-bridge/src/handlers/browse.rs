@@ -70,6 +70,7 @@ fn category<'a>(db: &'a Database, name: &str) -> Option<Vec<&'a Entry>> {
         "codes" => |e| e.otp_source().is_some(),
         "passkeys" => |e| e.has_passkey(),
         "addresses" => |e| e.entry_type() == EntryType::Address,
+        "people" => |e| e.entry_type() == EntryType::Person,
         "cards" => |e| e.entry_type() == EntryType::Card,
         "notes" => |e| e.entry_type() == EntryType::Notes,
         _ => return None,
@@ -345,6 +346,48 @@ mod tests {
         assert_eq!(rows[0].id, wire_id(ids.c));
         assert_eq!(rows[0].username, "Alice Example");
         assert_eq!(rows[0].entry_type.as_deref(), Some("Address"));
+    }
+
+    #[test]
+    fn list_entries_people_rows_carry_email_and_links_but_no_person_values() {
+        let (mut db, ids) = crate::testing::sample_database();
+        let now = mypass_kdbx::Timestamp::now();
+        let root = db.root_id();
+        let mut p = mypass_kdbx::Entry::new(now);
+        p.set_field("Title", "Me", false);
+        p.set_field("MyPass.EntryType", "Person", false);
+        p.set_field("MyPass.Person.givenName", "Alice", true);
+        p.set_field("MyPass.Person.familyName", "Example", true);
+        p.set_field("MyPass.Person.email", "alice@example.org", true);
+        p.set_field("MyPass.Person.birthDate", "1990-02-03", true);
+        let links = format!("{},not-a-uuid", ids.c.hyphenated());
+        p.set_field("MyPass.Person.addressIds", &links, true);
+        let person = p.uuid;
+        db.add_entry(root, p, now).unwrap();
+        let mut q = mypass_kdbx::Entry::new(now);
+        q.set_field("Title", "Bob", false);
+        q.set_field("MyPass.EntryType", "Person", false);
+        q.set_field("MyPass.Person.givenName", "Bob", true);
+        q.set_field("MyPass.Person.familyName", "Smith", true);
+        db.add_entry(root, q, now).unwrap();
+        let f = fx_with_db(Arc::new(RecordingPasskeys::default()), db);
+        let r = send(&f, list("people"));
+        let rows = credential_rows(&r);
+        assert_eq!(rows.len(), 2);
+        let me = rows.iter().find(|c| c.id == wire_id(person)).unwrap();
+        assert_eq!(me.username, "alice@example.org");
+        assert_eq!(me.entry_type.as_deref(), Some("Person"));
+        assert_eq!(me.address_ids, [wire_id(ids.c)]);
+        let bob = rows.iter().find(|c| c.title == "Bob").unwrap();
+        assert_eq!(bob.username, "Bob Smith");
+        assert!(bob.address_ids.is_empty());
+        // A row never carries the birth date; persons are not credentials.
+        assert!(!serde_json::to_string(&r).unwrap().contains("1990"));
+        assert!(
+            credential_rows(&send(&f, creds("https://github.com/login")))
+                .iter()
+                .all(|c| c.entry_type.as_deref() != Some("Person"))
+        );
     }
 
     #[test]

@@ -123,6 +123,9 @@ mod tests {
             FieldRef::CardNumber,
             FieldRef::CardCvv,
             FieldRef::Address { name: "x".into() },
+            FieldRef::Person {
+                name: "email".into(),
+            },
             FieldRef::Custom { key: "x".into() },
         ] {
             assert_eq!(

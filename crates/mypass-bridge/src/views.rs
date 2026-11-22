@@ -9,12 +9,12 @@
 use mypass_core::entry_ext::{EntryExt, EntryType};
 use mypass_kdbx::Entry;
 use mypass_session::fields::EntryFields;
-use mypass_session::queries::address_of;
+use mypass_session::queries::{address_of, person_of};
 use mypass_session::session::SessionError;
 use uuid::Uuid;
 
 use crate::pairing::PairingError;
-use crate::protocol::{ExtensionAddress, ExtensionCredentialSummary, Response};
+use crate::protocol::{ExtensionAddress, ExtensionCredentialSummary, ExtensionPerson, Response};
 
 /// The id of an entry as the extension sees it: uppercase, hyphenated (the Swift `uuidString`).
 #[must_use]
@@ -64,6 +64,7 @@ pub fn summary(entry: &Entry) -> ExtensionCredentialSummary {
         url: None,
         entry_type: None,
         identifiers: identifiers(entry),
+        address_ids: Vec::new(),
     }
 }
 
@@ -72,6 +73,7 @@ fn entry_type_name(t: EntryType) -> &'static str {
     match t {
         EntryType::Login => "Login",
         EntryType::Address => "Address",
+        EntryType::Person => "Person",
         EntryType::Card => "Card",
         EntryType::Notes => "Notes",
         EntryType::Files => "Files",
@@ -79,13 +81,28 @@ fn entry_type_name(t: EntryType) -> &'static str {
 }
 
 /// A browse row: the match row plus the saved URL (omitted when empty) and the entry type. The
-/// username of an address is its full name.
+/// username of an address is its full name; the username of a person is its email (else its full
+/// name), and a person row carries its linked address ids.
 #[must_use]
 pub fn browse_summary(entry: &Entry) -> ExtensionCredentialSummary {
     let mut row = summary(entry);
     let kind = entry.entry_type();
     if kind == EntryType::Address {
         row.username = std::mem::take(&mut address_of(entry).full_name);
+    }
+    if kind == EntryType::Person {
+        let mut p = person_of(entry);
+        row.username = if p.email.trim().is_empty() {
+            p.full_name()
+        } else {
+            std::mem::take(&mut p.email)
+        };
+        row.address_ids = p
+            .address_ids
+            .iter()
+            .filter_map(|id| parse_wire_id(id))
+            .map(wire_id)
+            .collect();
     }
     let url = entry.field("URL").unwrap_or("");
     row.url = (!url.is_empty()).then(|| url.to_owned());
@@ -114,6 +131,27 @@ pub fn address(entry: &Entry) -> ExtensionAddress {
         country_name: std::mem::take(&mut a.country_name),
         phone: std::mem::take(&mut a.phone),
         email: std::mem::take(&mut a.email),
+    }
+}
+
+/// The person an entry carries, with its wire id. The full name is the given and family names.
+#[must_use]
+pub fn person(entry: &Entry) -> ExtensionPerson {
+    let mut p = person_of(entry);
+    let full_name = [p.given_name.trim(), p.family_name.trim()]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    ExtensionPerson {
+        id: wire_id(entry.uuid),
+        label: std::mem::take(&mut p.label),
+        full_name,
+        given_name: std::mem::take(&mut p.given_name),
+        middle_name: std::mem::take(&mut p.middle_name),
+        family_name: std::mem::take(&mut p.family_name),
+        email: std::mem::take(&mut p.email),
+        birth_date: std::mem::take(&mut p.birth_date),
     }
 }
 
