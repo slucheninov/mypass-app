@@ -180,6 +180,23 @@ async function run() {
   assert.deepEqual(await request({ type: 'getIdentityList' }, popup), { type: 'error', code: 'app_not_running' },
     'the popup sees a failed listing as it came');
 
+  // 51 addresses: the popup lists them all, and so do both address pickers; only the inline
+  // panel shows at most 50 rows.
+  reset();
+  const many = Array.from({ length: 51 }, (_, i) => ({ id: `A-${i + 1}`, title: `Address ${i + 1}`, username: '' }));
+  nativeReply = (message) => message.category === 'people'
+    ? { type: 'credentialList', credentials: [{ id: 'P-1', title: 'Ada', username: '', addressIds: ['A-51'] }] }
+    : { type: 'credentialList', credentials: many };
+  const popupMany = await request({ type: 'getIdentityList' }, popup);
+  assert.equal(popupMany.entries.length, 51, 'one person and the 50 addresses it does not link');
+  assert.equal(popupMany.addresses.length, 51);
+  assert.ok(popupMany.addresses.some((row) => row.id === 'A-51'), 'the 51st address stays in the popup picker');
+  assert.deepEqual(popupMany.entries[0].addressIds, ['A-51'], 'a link to the 51st address survives');
+  const inlineMany = await request({ type: 'getIdentitySuggestions', url: page }, content());
+  assert.equal(inlineMany.entries.length, 50);
+  assert.equal(inlineMany.addresses.length, 51, 'the inline address picker gets every address');
+  assert.deepEqual(inlineMany.entries[0].addressIds, ['A-51']);
+
   // The popup renders the list as credential rows; person rows are Person entries.
   const rows = identityListAsCredentials(popupList).credentials;
   assert.deepEqual(rows.map((row) => [row.id, row.entryType]), [['P-1', 'Person'], ['P-2', 'Person'], ['A-3', 'Address']]);

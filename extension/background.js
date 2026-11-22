@@ -1168,7 +1168,6 @@ async function nativePersonFill(id, addressId, url) {
 function identityRows(response, kind) {
   return response.credentials
     .filter((entry) => entry && isIdentityId(entry.id) && typeof entry.title === "string")
-    .slice(0, IDENTITY_LIST_LIMIT)
     .map((entry) => {
       const row = {
         id: entry.id,
@@ -1186,7 +1185,9 @@ function identityRows(response, kind) {
 }
 
 // People first, then the addresses no person links to; `addresses` holds every address, for the
-// person rows' address picker. A person's links keep only addresses this list has.
+// person rows' address picker. A person's links keep only addresses this list has. Only the inline
+// panel (`raw` false) shows at most IDENTITY_LIST_LIMIT rows; the popup lists every entry, and the
+// address pickers (popup and inline) always get every address.
 async function identityList(raw) {
   // `raw` (the popup) gets a failed listing back as it came, so the popup can tell a missing
   // host or a stopped app apart, as it does for every other listing.
@@ -1207,9 +1208,10 @@ async function identityList(raw) {
     person.addressIds = person.addressIds.map((id) => known.get(id.toLowerCase())).filter(Boolean);
     for (const id of person.addressIds) linked.add(id);
   }
+  const entries = [...persons, ...addresses.filter((row) => !linked.has(row.id))];
   return {
     type: "identityList",
-    entries: [...persons, ...addresses.filter((row) => !linked.has(row.id))],
+    entries: raw ? entries : entries.slice(0, IDENTITY_LIST_LIMIT),
     addresses,
   };
 }
