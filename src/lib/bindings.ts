@@ -699,10 +699,18 @@ export type EntryEditModel_Deserialize = {
 	 */
 	restore?: boolean,
 	/**
-	 *  The social sign-in method (`None`: none). Changing it drops the recorded last use; the
-	 *  same provider keeps it. `serde(default)` keeps older stored drafts loadable.
+	 *  The social sign-in method the editor shows (`None`: none). Informational only, ignored on
+	 *  save: `sign_in_edit` says what a save changes. `serde(default)` keeps older stored drafts
+	 *  loadable.
 	 */
 	signInProvider?: SignInProvider | null,
+	/**
+	 *  What a save does to the social sign-in method: `unchanged` (the default) leaves the stored
+	 *  fields alone, so a method the browser recorded while the editor was open survives a save
+	 *  of other fields; `set` stores a provider (another one drops the recorded last use, the
+	 *  same one keeps it); `clear` removes it.
+	 */
+	signInEdit?: SignInEdit,
 };
 
 /**
@@ -751,10 +759,18 @@ export type EntryEditModel_Serialize = {
 	 */
 	restore: boolean,
 	/**
-	 *  The social sign-in method (`None`: none). Changing it drops the recorded last use; the
-	 *  same provider keeps it. `serde(default)` keeps older stored drafts loadable.
+	 *  The social sign-in method the editor shows (`None`: none). Informational only, ignored on
+	 *  save: `sign_in_edit` says what a save changes. `serde(default)` keeps older stored drafts
+	 *  loadable.
 	 */
 	signInProvider?: SignInProvider,
+	/**
+	 *  What a save does to the social sign-in method: `unchanged` (the default) leaves the stored
+	 *  fields alone, so a method the browser recorded while the editor was open survives a save
+	 *  of other fields; `set` stores a provider (another one drops the recorded last use, the
+	 *  same one keeps it); `clear` removes it.
+	 */
+	signInEdit: SignInEdit,
 };
 
 export type EntryQuery = {
@@ -1689,6 +1705,15 @@ export type SignInDto_Serialize = {
 	provider: SignInProvider,
 	lastUsed?: number | null,
 };
+
+/**  How a save changes the social sign-in method of an entry. */
+export type SignInEdit = 
+/**  The editor did not touch it: the stored fields are kept as they are on disk. */
+{ op: "unchanged" } | 
+/**  The user picked this provider. */
+{ op: "set"; provider: SignInProvider } | 
+/**  The user picked "none". */
+{ op: "clear" };
 
 /**  A social sign-in provider MyPass recognises. */
 export type SignInProvider = "google" | "facebook" | "apple" | "microsoft" | "github";

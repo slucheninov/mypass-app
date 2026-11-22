@@ -15,7 +15,7 @@
 
 use crate::dto::{
     timestamp_ms, AddressDto, AttachmentMeta, AttachmentOp, CardEdit, CustomFieldEdit,
-    EntryEditModel, EntryTypeDto, FieldRef, HistoryItem, HistoryReveal, PersonDto,
+    EntryEditModel, EntryTypeDto, FieldRef, HistoryItem, HistoryReveal, PersonDto, SignInEdit,
 };
 use crate::fields::{
     bin_id, is_valid_birth_date, require_not_history, EntryFields, ADDRESS_FIELDS, ADDRESS_LABELS,
@@ -124,6 +124,7 @@ pub fn new_model(entry_type: EntryTypeDto, group_id: Uuid) -> EntryEditModel {
         passkey_ref: None,
         restore: false,
         sign_in_provider: None,
+        sign_in_edit: SignInEdit::Unchanged,
     }
 }
 
@@ -238,6 +239,7 @@ pub fn edit_model(db: &Database, id: Uuid) -> Result<EntryEditModel, SessionErro
         passkey_ref: passkey_fingerprint(entry),
         restore: false,
         sign_in_provider: sign_in_of(entry).map(|s| s.provider),
+        sign_in_edit: SignInEdit::Unchanged,
     })
 }
 
@@ -546,8 +548,14 @@ fn apply(
         }
     }
 
-    // The sign-in method has its own select; its two reserved fields survive the rebuild above.
-    set_sign_in_provider(entry, model.sign_in_provider);
+    // The sign-in method has its own select; its reserved fields survive the rebuild above and
+    // change only when the user picked something. `unchanged` writes nothing, so a method the
+    // browser recorded after the editor opened is never overwritten by a stale model.
+    match model.sign_in_edit {
+        SignInEdit::Unchanged => {}
+        SignInEdit::Set { provider } => set_sign_in_provider(entry, Some(provider)),
+        SignInEdit::Clear => set_sign_in_provider(entry, None),
+    }
 
     // The passkey is removed only on an explicit request, after the field rebuild above (which
     // keeps every reserved `KPEX_PASSKEY_*` field), and inside `update_entry`, so the history
@@ -3534,7 +3542,9 @@ mod tests {
         let id = f.create(|m| {
             m.title = "example.com".into();
             m.urls = vec!["https://example.com".into()];
-            m.sign_in_provider = Some(SignInProvider::Google);
+            m.sign_in_edit = SignInEdit::Set {
+                provider: SignInProvider::Google,
+            };
         });
         let e = f.entry(id);
         assert_eq!(e.field(SIGN_IN_PROVIDER), Some("google"));
@@ -3583,10 +3593,14 @@ mod tests {
         assert!(row.flags.is_empty(), "{:?}", row.flags);
 
         // Another provider drops the date; none removes both fields.
-        f.edit(id, |m| m.sign_in_provider = Some(SignInProvider::Github));
+        f.edit(id, |m| {
+            m.sign_in_edit = SignInEdit::Set {
+                provider: SignInProvider::Github,
+            }
+        });
         assert_eq!(f.entry(id).field(SIGN_IN_PROVIDER), Some("github"));
         assert_eq!(f.entry(id).field(SIGN_IN_LAST_USED), None);
-        f.edit(id, |m| m.sign_in_provider = None);
+        f.edit(id, |m| m.sign_in_edit = SignInEdit::Clear);
         let e = f.entry(id);
         assert_eq!(e.field(SIGN_IN_PROVIDER), None);
         let rows = f.db(|d| list_entries(d, &q, SearchScope::App));
@@ -3603,7 +3617,73 @@ mod tests {
         let f = fx();
         let mut json = serde_json::to_value(new_model(EntryTypeDto::Login, f.root)).unwrap();
         json.as_object_mut().unwrap().remove("signInProvider");
+        json.as_object_mut().unwrap().remove("signInEdit");
         let model: EntryEditModel = serde_json::from_value(json).unwrap();
         assert_eq!(model.sign_in_provider, None);
+        assert_eq!(model.sign_in_edit, SignInEdit::Unchanged);
+    }
+
+    #[test]
+    fn sign_in_edit_has_a_tagged_wire_shape() {
+        assert_eq!(
+            serde_json::to_value(SignInEdit::Unchanged).unwrap(),
+            serde_json::json!({"op": "unchanged"})
+        );
+        assert_eq!(
+            serde_json::to_value(SignInEdit::Set {
+                provider: crate::sign_in::SignInProvider::Apple
+            })
+            .unwrap(),
+            serde_json::json!({"op": "set", "provider": "apple"})
+        );
+        assert_eq!(
+            serde_json::to_value(SignInEdit::Clear).unwrap(),
+            serde_json::json!({"op": "clear"})
+        );
+    }
+
+    #[test]
+    fn a_stale_editor_save_keeps_a_sign_in_the_browser_recorded_meanwhile() {
+        use crate::sign_in::{record_sign_in, SignInProvider, SIGN_IN_LAST_USED, SIGN_IN_PROVIDER};
+        let f = fx();
+        let id = f.create(|m| {
+            m.title = "example.com".into();
+            m.urls = vec!["https://example.com".into()];
+        });
+        // The editor opens: no sign-in method yet.
+        let mut stale = f.model(id);
+        assert_eq!(stale.sign_in_provider, None);
+        // Meanwhile the browser records a click on "Sign in with Google".
+        f.session
+            .mutate(|db, now| {
+                db.update_entry(id, now, |e| record_sign_in(e, SignInProvider::Google, NOW))?;
+                Ok(())
+            })
+            .unwrap();
+        // The editor saves a title edit from the model it opened with.
+        stale.title = "Example".into();
+        save_entry(&f.session, stale).unwrap();
+        let e = f.entry(id);
+        assert_eq!(e.field("Title"), Some("Example"));
+        assert_eq!(e.field(SIGN_IN_PROVIDER), Some("google"));
+        assert!(e.field(SIGN_IN_LAST_USED).is_some());
+
+        // An explicit pick still wins over what the browser recorded.
+        let mut m = f.model(id);
+        m.sign_in_edit = SignInEdit::Set {
+            provider: SignInProvider::Apple,
+        };
+        f.session
+            .mutate(|db, now| {
+                db.update_entry(id, now, |e| record_sign_in(e, SignInProvider::Github, NOW))?;
+                Ok(())
+            })
+            .unwrap();
+        save_entry(&f.session, m).unwrap();
+        assert_eq!(f.entry(id).field(SIGN_IN_PROVIDER), Some("apple"));
+        let mut m = f.model(id);
+        m.sign_in_edit = SignInEdit::Clear;
+        save_entry(&f.session, m).unwrap();
+        assert_eq!(f.entry(id).field(SIGN_IN_PROVIDER), None);
     }
 }

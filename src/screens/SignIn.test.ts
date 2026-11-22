@@ -98,7 +98,7 @@ describe("sign-in method", () => {
     await user().selectOptions(select, "apple");
     await user().click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(calls(fake, "entrySave")).toHaveLength(1));
-    expect(calls(fake, "entrySave")[0]!.args.model.signInProvider).toBe("apple");
+    expect(calls(fake, "entrySave")[0]!.args.model.signInEdit).toEqual({ op: "set", provider: "apple" });
   });
 
   it("editor_none_clears_the_method", async () => {
@@ -107,7 +107,18 @@ describe("sign-in method", () => {
     await user().selectOptions(screen.getByRole("combobox", { name: "Sign-in method" }), "");
     await user().click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(calls(fake, "entrySave")).toHaveLength(1));
-    expect(calls(fake, "entrySave")[0]!.args.model.signInProvider ?? null).toBeNull();
+    expect(calls(fake, "entrySave")[0]!.args.model.signInEdit).toEqual({ op: "clear" });
+  });
+
+  it("editor_save_without_a_pick_leaves_the_method_unchanged", async () => {
+    const fake = backendWith([SIGN_IN_ONLY]);
+    await openEdit(fake, SIGN_IN_ONLY.id);
+    // The browser records another method while the editor is open.
+    fake.state.entries.find((e) => e.summary.id === SIGN_IN_ONLY.id)!.summary.signInProvider = "github";
+    await user().click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(calls(fake, "entrySave")).toHaveLength(1));
+    expect(calls(fake, "entrySave")[0]!.args.model.signInEdit).toEqual({ op: "unchanged" });
+    expect(fake.state.entries.find((e) => e.summary.id === SIGN_IN_ONLY.id)!.summary.signInProvider).toBe("github");
   });
 });
 

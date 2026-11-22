@@ -95,7 +95,13 @@
       label={t("Sign-in method")}
       value={model.signInProvider ?? ""}
       options={signInOptions}
-      onchange={(v) => (model.signInProvider = v === "" ? undefined : (v as SignInProvider))}
+      onchange={(v) => {
+        // The pick is recorded as an explicit edit: a save without one leaves the stored method
+        // alone, so a sign-in the browser recorded while the editor was open is kept.
+        const provider = v === "" ? undefined : (v as SignInProvider);
+        model.signInProvider = provider;
+        model.signInEdit = provider ? { op: "set", provider } : { op: "clear" };
+      }}
     />
   </div>
 
