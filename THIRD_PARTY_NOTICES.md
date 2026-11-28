@@ -481,7 +481,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `tauri-runtime-wry` | 2.12.3 | Apache-2.0 OR MIT |
 | `tauri-specta` | 2.0.0-rc.26 | MIT |
 | `tauri-specta-macros` | 2.0.0-rc.26 | MIT |
-| `tauri-utils` | 2.10.2 | Apache-2.0 OR MIT |
+| `tauri-utils` | 2.10.4 | Apache-2.0 OR MIT |
 | `tempfile` | 3.27.0 | MIT OR Apache-2.0 |
 | `tendril` | 0.5.1 | MIT OR Apache-2.0 |
 | `thiserror` | 1.0.69 | MIT OR Apache-2.0 |
@@ -671,7 +671,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `string_cache_codegen` | 0.6.1 | MIT OR Apache-2.0 |
 | `system-deps` | 6.2.2 | MIT OR Apache-2.0 |
 | `target-lexicon` | 0.12.16 | Apache-2.0 WITH LLVM-exception |
-| `tauri-build` | 2.7.4 | Apache-2.0 OR MIT |
+| `tauri-build` | 2.7.5 | Apache-2.0 OR MIT |
 | `tauri-plugin` | 2.7.2 | Apache-2.0 OR MIT |
 | `tauri-winres` | 0.3.7 | MIT |
 | `tinyvec` | 1.13.3 | Zlib OR Apache-2.0 OR MIT |
