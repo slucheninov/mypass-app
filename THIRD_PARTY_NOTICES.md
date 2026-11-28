@@ -524,7 +524,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `utf8-zero` | 0.8.1 | MIT OR Apache-2.0 |
 | `utf8_iter` | 1.1.0 | Apache-2.0 OR MIT |
 | `utf_types` | 1.0.0 | Apache-2.0 OR MIT |
-| `uuid` | 1.29.2 | Apache-2.0 OR MIT |
+| `uuid` | 1.29.3 | Apache-2.0 OR MIT |
 | `walkdir` | 2.5.0 | Unlicense/MIT |
 | `want` | 0.3.2 | MIT |
 | `wasi` | 0.11.1+wasi-snapshot-preview1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
