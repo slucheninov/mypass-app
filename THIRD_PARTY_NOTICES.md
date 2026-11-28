@@ -373,7 +373,7 @@ LGPL alternative is not selected. Crate archives contain the full component lice
 | `pin-project-lite` | 0.2.17 | Apache-2.0 OR MIT |
 | `piper` | 0.2.5 | MIT OR Apache-2.0 |
 | `pkcs8` | 0.11.0 | Apache-2.0 OR MIT |
-| `plist` | 1.10.3 | MIT |
+| `plist` | 1.10.4 | MIT |
 | `png` | 0.18.1 | MIT OR Apache-2.0 |
 | `polling` | 3.11.0 | Apache-2.0 OR MIT |
 | `poly1305` | 0.9.1 | Apache-2.0 OR MIT |
